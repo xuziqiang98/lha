@@ -595,12 +595,19 @@ impl SessionConfiguration {
         provider: ModelProviderInfo,
         model: String,
     ) {
+        let provider_changed =
+            self.original_config_do_not_use.model_provider_id != model_provider_id;
+        let model_changed = self.collaboration_mode.model() != model.as_str();
         self.provider = provider.clone();
         self.collaboration_mode =
             self.collaboration_mode
                 .with_updates(Some(model.clone()), None, None);
 
         let mut config = (*self.original_config_do_not_use).clone();
+        if provider_changed || model_changed {
+            config.model_context_window = None;
+            config.model_auto_compact_token_limit = None;
+        }
         config.model_provider_id = model_provider_id.clone();
         config.model_provider = provider.clone();
         config.model = Some(model);
@@ -6174,6 +6181,12 @@ mod tests {
         provider.base_url = Some("https://example.com/v2".to_string());
         provider.experimental_bearer_token = Some("sk-updated".to_string());
         provider.wire_api = crate::WireApi::Chat;
+        {
+            let mut state = session.state.lock().await;
+            state
+                .session_configuration
+                .set_learned_model_context_window(64_000, 60_800);
+        }
 
         session
             .switch_provider_and_model(
@@ -6187,6 +6200,8 @@ mod tests {
         assert_eq!(config.model_provider_id, "custom-provider");
         assert_eq!(config.model_provider, provider);
         assert_eq!(config.model.as_deref(), Some("custom-model"));
+        assert_eq!(config.model_context_window, None);
+        assert_eq!(config.model_auto_compact_token_limit, None);
         assert_eq!(
             config
                 .model_providers
@@ -6212,6 +6227,47 @@ mod tests {
         assert_eq!(
             turn_context.client.config().model.as_deref(),
             Some("custom-model")
+        );
+        assert_eq!(turn_context.client.config().model_context_window, None);
+        assert_eq!(
+            turn_context.client.config().model_auto_compact_token_limit,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn switch_provider_and_model_preserves_context_window_for_same_target() {
+        let (session, turn_context) = make_session_and_context().await;
+        let provider = turn_context.client.get_provider();
+        {
+            let mut state = session.state.lock().await;
+            state
+                .session_configuration
+                .set_learned_model_context_window(64_000, 60_800);
+        }
+
+        session
+            .switch_provider_and_model(
+                turn_context.client.config().model_provider_id.clone(),
+                provider,
+                turn_context.client.get_model(),
+            )
+            .await;
+
+        let config = session.get_config().await;
+        assert_eq!(config.model_context_window, Some(64_000));
+        assert_eq!(config.model_auto_compact_token_limit, Some(60_800));
+
+        let turn_context = session
+            .new_default_turn_with_sub_id("same-provider-and-model".to_string())
+            .await;
+        assert_eq!(
+            turn_context.client.config().model_context_window,
+            Some(64_000)
+        );
+        assert_eq!(
+            turn_context.client.config().model_auto_compact_token_limit,
+            Some(60_800)
         );
     }
 

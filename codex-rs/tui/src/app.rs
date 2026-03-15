@@ -709,6 +709,8 @@ impl App {
         provider: ModelProviderInfo,
         model: &str,
     ) {
+        let provider_changed = self.config.model_provider_id != provider_id;
+        let model_changed = self.chat_widget.current_model() != model;
         if let Some(thread_id) = self.chat_widget.thread_id() {
             match self.server.get_thread(thread_id).await {
                 Ok(thread) => {
@@ -734,6 +736,10 @@ impl App {
                 .await;
         }
 
+        if provider_changed || model_changed {
+            self.config.model_context_window = None;
+            self.config.model_auto_compact_token_limit = None;
+        }
         self.config.model_provider_id = provider_id.to_string();
         self.config.model_provider = provider;
         self.config.model = Some(model.to_string());
