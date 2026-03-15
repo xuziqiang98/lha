@@ -3525,6 +3525,47 @@ async fn single_reasoning_option_skips_selection() {
 }
 
 #[tokio::test]
+async fn no_reasoning_options_persist_none_effort() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let preset = ModelPreset {
+        id: "custom-model".to_string(),
+        model: "custom-model".to_string(),
+        display_name: "custom-model".to_string(),
+        description: "Configured model from config.toml.".to_string(),
+        default_reasoning_effort: ReasoningEffortConfig::None,
+        supported_reasoning_efforts: Vec::new(),
+        supports_personality: false,
+        is_default: false,
+        upgrade: None,
+        show_in_picker: true,
+        supported_in_api: true,
+    };
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !popup.contains("Select Reasoning Level"),
+        "expected reasoning selection popup to be skipped"
+    );
+
+    let mut events = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        events.push(ev);
+    }
+
+    assert!(
+        events.iter().any(|ev| matches!(
+            ev,
+            AppEvent::PersistModelSelection { model, effort }
+                if model == "custom-model" && effort.is_none()
+        )),
+        "expected no reasoning options to persist model selection with no effort; events: {events:?}"
+    );
+}
+
+#[tokio::test]
 async fn model_picker_with_no_reasoning_options_dismisses_after_selection() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 

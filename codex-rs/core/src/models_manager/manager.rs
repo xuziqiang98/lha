@@ -504,10 +504,8 @@ impl ModelsManager {
 
         let model_info =
             model_info::with_config_overrides(model_info::find_model_info_for_slug(model), config);
-        let default_reasoning_effort = config
-            .model_reasoning_effort
-            .or(model_info.default_reasoning_level)
-            .unwrap_or(ReasoningEffort::Medium);
+        let default_reasoning_effort =
+            configured_model_default_reasoning_effort(config, &model_info);
         let supports_personality = model_info.supports_personality();
 
         Some(ModelPreset {
@@ -540,10 +538,8 @@ impl ModelsManager {
 
         let model_info =
             model_info::with_config_overrides(model_info::find_model_info_for_slug(model), config);
-        let default_reasoning_effort = config
-            .model_reasoning_effort
-            .or(model_info.default_reasoning_level)
-            .unwrap_or(ReasoningEffort::Medium);
+        let default_reasoning_effort =
+            configured_model_default_reasoning_effort(config, &model_info);
         let supports_personality = model_info.supports_personality();
 
         ModelPreset {
@@ -564,7 +560,25 @@ impl ModelsManager {
     fn config_toml(&self, config: &Config) -> Option<ConfigToml> {
         config.config_layer_stack.effective_config().try_into().ok()
     }
+}
 
+fn configured_model_default_reasoning_effort(
+    config: &Config,
+    model_info: &ModelInfo,
+) -> ReasoningEffort {
+    config
+        .model_reasoning_effort
+        .or(model_info.default_reasoning_level)
+        .unwrap_or({
+            if model_info.supported_reasoning_levels.is_empty() {
+                ReasoningEffort::None
+            } else {
+                ReasoningEffort::Medium
+            }
+        })
+}
+
+impl ModelsManager {
     pub fn is_configured_custom_model(
         model: &str,
         config: &Config,
@@ -1266,6 +1280,11 @@ model = "mock-model"
             picker_models[0].description,
             "Configured model from config.toml."
         );
+        assert_eq!(
+            picker_models[0].default_reasoning_effort,
+            ReasoningEffort::None
+        );
+        assert!(picker_models[0].supported_reasoning_efforts.is_empty());
         assert!(picker_models[0].is_default);
         assert!(picker_models[0].show_in_picker);
     }
