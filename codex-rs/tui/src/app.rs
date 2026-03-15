@@ -668,7 +668,7 @@ impl App {
 
         self.config.config_layer_stack = reloaded.config_layer_stack.clone();
         self.config.model_providers = reloaded.model_providers.clone();
-        self.activate_runtime_provider(provider_id, provider, model)
+        self.activate_runtime_provider(provider_id, provider, model, true)
             .await;
 
         Ok(())
@@ -708,6 +708,7 @@ impl App {
         provider_id: &str,
         provider: ModelProviderInfo,
         model: &str,
+        refresh_context_limits: bool,
     ) {
         let provider_changed = self.config.model_provider_id != provider_id;
         let model_changed = self.chat_widget.current_model() != model;
@@ -736,9 +737,23 @@ impl App {
                 .await;
         }
 
-        if provider_changed || model_changed {
-            self.config.model_context_window = None;
-            self.config.model_auto_compact_token_limit = None;
+        if refresh_context_limits || provider_changed || model_changed {
+            match self.config.resolve_model_context_limits(provider_id, model) {
+                Ok((model_context_window, model_auto_compact_token_limit)) => {
+                    self.config.model_context_window = model_context_window;
+                    self.config.model_auto_compact_token_limit = model_auto_compact_token_limit;
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        %err,
+                        provider_id,
+                        model,
+                        "failed to resolve target model context limits; clearing stale learned values"
+                    );
+                    self.config.model_context_window = None;
+                    self.config.model_auto_compact_token_limit = None;
+                }
+            }
         }
         self.config.model_provider_id = provider_id.to_string();
         self.config.model_provider = provider;
@@ -776,7 +791,7 @@ impl App {
         let provider_id = self.resolve_model_provider_for_model(&model)?;
         let provider = self.runtime_provider_for_id(&provider_id)?;
 
-        self.activate_runtime_provider(&provider_id, provider, &model)
+        self.activate_runtime_provider(&provider_id, provider, &model, false)
             .await;
         self.apply_model_selection_to_runtime(&model, effort);
 
@@ -3476,6 +3491,7 @@ experimental_bearer_token = "sk-b"
 [profiles.saved]
 model = "model-b"
 model_provider = "provider_b"
+model_context_window = 64_000
 "#,
         )
         .expect("write config");
@@ -3485,6 +3501,8 @@ model_provider = "provider_b"
             .build()
             .await
             .expect("reload config");
+        app.active_profile = Some("saved".to_string());
+        app.config.active_profile = Some("saved".to_string());
         app.chat_widget.sync_provider_config(&app.config, true);
         app.chat_widget.set_model("model-a");
 
@@ -3500,10 +3518,20 @@ model_provider = "provider_b"
             app.config.model_reasoning_effort,
             Some(ReasoningEffortConfig::High)
         );
+        assert_eq!(app.config.model_context_window, Some(64_000));
+        assert_eq!(app.config.model_auto_compact_token_limit, None);
         assert_eq!(app.chat_widget.current_model(), "model-b");
         assert_eq!(
             app.chat_widget.current_reasoning_effort(),
             Some(ReasoningEffortConfig::High)
+        );
+        assert_eq!(
+            app.chat_widget.config_ref().model_context_window,
+            Some(64_000)
+        );
+        assert_eq!(
+            app.chat_widget.config_ref().model_auto_compact_token_limit,
+            None
         );
 
         let config_toml: ConfigToml = app
@@ -3512,8 +3540,122 @@ model_provider = "provider_b"
             .effective_config()
             .try_into()
             .expect("config toml");
-        assert_eq!(config_toml.model.as_deref(), Some("model-b"));
-        assert_eq!(config_toml.model_provider.as_deref(), Some("provider_b"));
+        assert_eq!(config_toml.model.as_deref(), Some("model-a"));
+        assert_eq!(config_toml.model_provider.as_deref(), Some("provider_a"));
+        assert_eq!(
+            config_toml
+                .profiles
+                .get("saved")
+                .and_then(|profile| profile.model.as_deref()),
+            Some("model-b")
+        );
+        assert_eq!(
+            config_toml
+                .profiles
+                .get("saved")
+                .and_then(|profile| profile.model_provider.as_deref()),
+            Some("provider_b")
+        );
+    }
+
+    #[tokio::test]
+    async fn persist_model_selection_reloads_profile_context_limits_after_save() {
+        let mut app = make_test_app().await;
+        let config_path = app.config.codex_home.join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"model = "model-a"
+model_provider = "provider_a"
+
+[model_providers.provider_a]
+name = "provider_a"
+base_url = "https://example.com/a"
+wire_api = "chat"
+experimental_bearer_token = "sk-a"
+
+[model_providers.provider_b]
+name = "provider_b"
+base_url = "https://example.com/b"
+wire_api = "chat"
+experimental_bearer_token = "sk-b"
+
+[profiles.saved]
+model = "model-a"
+model_provider = "provider_a"
+model_context_window = 64_000
+
+[profiles.target]
+model = "model-b"
+model_provider = "provider_b"
+"#,
+        )
+        .expect("write config");
+
+        app.config = ConfigBuilder::default()
+            .codex_home(app.config.codex_home.clone())
+            .build()
+            .await
+            .expect("reload config");
+        app.active_profile = Some("saved".to_string());
+        app.config.active_profile = Some("saved".to_string());
+        app.chat_widget.sync_provider_config(&app.config, true);
+        app.chat_widget.set_model("model-a");
+
+        let provider_id = app
+            .persist_model_selection("model-b".to_string(), Some(ReasoningEffortConfig::High))
+            .await
+            .expect("persist model selection");
+
+        assert_eq!(provider_id, "provider_b");
+        assert_eq!(app.config.model_provider_id, "provider_b");
+        assert_eq!(app.config.model.as_deref(), Some("model-b"));
+        assert_eq!(
+            app.config.model_reasoning_effort,
+            Some(ReasoningEffortConfig::High)
+        );
+        assert_eq!(app.config.model_context_window, Some(64_000));
+        assert_eq!(app.config.model_auto_compact_token_limit, None);
+        assert_eq!(app.chat_widget.current_model(), "model-b");
+        assert_eq!(
+            app.chat_widget.current_reasoning_effort(),
+            Some(ReasoningEffortConfig::High)
+        );
+        assert_eq!(
+            app.chat_widget.config_ref().model_context_window,
+            Some(64_000)
+        );
+        assert_eq!(
+            app.chat_widget.config_ref().model_auto_compact_token_limit,
+            None
+        );
+
+        let config_toml: ConfigToml = app
+            .config
+            .config_layer_stack
+            .effective_config()
+            .try_into()
+            .expect("config toml");
+        assert_eq!(
+            config_toml
+                .profiles
+                .get("saved")
+                .and_then(|profile| profile.model.as_deref()),
+            Some("model-b")
+        );
+        assert_eq!(
+            config_toml
+                .profiles
+                .get("saved")
+                .and_then(|profile| profile.model_provider.as_deref()),
+            Some("provider_b")
+        );
+        assert_eq!(
+            config_toml
+                .profiles
+                .get("saved")
+                .and_then(|profile| profile.model_context_window),
+            Some(64_000)
+        );
     }
 
     #[tokio::test]
@@ -3594,6 +3736,7 @@ experimental_bearer_token = "sk-b"
 [profiles.saved]
 model = "model-b"
 model_provider = "provider_b"
+model_context_window = 64_000
 "#,
         )
         .expect("write config");
@@ -3603,6 +3746,8 @@ model_provider = "provider_b"
             .build()
             .await
             .expect("reload config");
+        app.active_profile = Some("saved".to_string());
+        app.config.active_profile = Some("saved".to_string());
         app.chat_widget.sync_provider_config(&app.config, true);
         app.chat_widget.set_model("model-a");
         app.config.codex_home = config_path;
@@ -3624,10 +3769,20 @@ model_provider = "provider_b"
             app.config.model_reasoning_effort,
             Some(ReasoningEffortConfig::High)
         );
+        assert_eq!(app.config.model_context_window, Some(64_000));
+        assert_eq!(app.config.model_auto_compact_token_limit, None);
         assert_eq!(app.chat_widget.current_model(), "model-b");
         assert_eq!(
             app.chat_widget.current_reasoning_effort(),
             Some(ReasoningEffortConfig::High)
+        );
+        assert_eq!(
+            app.chat_widget.config_ref().model_context_window,
+            Some(64_000)
+        );
+        assert_eq!(
+            app.chat_widget.config_ref().model_auto_compact_token_limit,
+            None
         );
     }
 }
