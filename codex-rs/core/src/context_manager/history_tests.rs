@@ -763,6 +763,52 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id() {
     );
 }
 
+#[test]
+fn normalize_drops_empty_call_id_output_but_keeps_raw_history_until_normalized() {
+    let items = vec![
+        ResponseItem::LocalShellCall {
+            id: None,
+            call_id: None,
+            status: LocalShellStatus::Completed,
+            action: LocalShellAction::Exec(LocalShellExecAction {
+                command: vec!["echo".to_string(), "hi".to_string()],
+                timeout_ms: None,
+                working_directory: None,
+                env: None,
+                user: None,
+            }),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: String::new(),
+            output: FunctionCallOutputPayload {
+                content: "LocalShellCall without call_id or id".to_string(),
+                ..Default::default()
+            },
+        },
+    ];
+    let mut h = create_history_with_items(items.clone());
+
+    assert_eq!(h.raw_items(), items);
+
+    h.normalize_history();
+
+    assert_eq!(
+        h.raw_items(),
+        vec![ResponseItem::LocalShellCall {
+            id: None,
+            call_id: None,
+            status: LocalShellStatus::Completed,
+            action: LocalShellAction::Exec(LocalShellExecAction {
+                command: vec!["echo".to_string(), "hi".to_string()],
+                timeout_ms: None,
+                working_directory: None,
+                env: None,
+                user: None,
+            }),
+        }]
+    );
+}
+
 #[cfg(not(debug_assertions))]
 #[test]
 fn normalize_removes_orphan_function_call_output() {

@@ -595,12 +595,33 @@ impl SessionConfiguration {
         provider: ModelProviderInfo,
         model: String,
     ) {
+        let provider_changed =
+            self.original_config_do_not_use.model_provider_id != model_provider_id;
+        let model_changed = self.collaboration_mode.model() != model.as_str();
         self.provider = provider.clone();
         self.collaboration_mode =
             self.collaboration_mode
                 .with_updates(Some(model.clone()), None, None);
 
         let mut config = (*self.original_config_do_not_use).clone();
+        if provider_changed || model_changed {
+            match config.resolve_model_context_limits(&model_provider_id, &model) {
+                Ok((model_context_window, model_auto_compact_token_limit)) => {
+                    config.model_context_window = model_context_window;
+                    config.model_auto_compact_token_limit = model_auto_compact_token_limit;
+                }
+                Err(err) => {
+                    warn!(
+                        %err,
+                        model_provider_id,
+                        model,
+                        "failed to resolve target model context limits; clearing stale learned values"
+                    );
+                    config.model_context_window = None;
+                    config.model_auto_compact_token_limit = None;
+                }
+            }
+        }
         config.model_provider_id = model_provider_id.clone();
         config.model_provider = provider.clone();
         config.model = Some(model);
@@ -5878,29 +5899,8 @@ mod tests {
             .expect("load default test config")
     }
 
-    fn otel_manager(
-        conversation_id: ThreadId,
-        config: &Config,
-        model_info: &ModelInfo,
-        session_source: SessionSource,
-    ) -> OtelManager {
-        OtelManager::new(
-            conversation_id,
-            ModelsManager::get_model_offline(config.model.as_deref()).as_str(),
-            model_info.slug.as_str(),
-            None,
-            Some("test@test.com".to_string()),
-            Some(AuthMode::Chatgpt),
-            false,
-            "test".to_string(),
-            session_source,
-        )
-    }
-
-    pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
+    async fn make_session_and_context_for_config(config: Config) -> (Session, TurnContext) {
         let (tx_event, _rx_event) = async_channel::unbounded();
-        let codex_home = tempfile::tempdir().expect("create temp dir");
-        let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
         let conversation_id = ThreadId::default();
         let auth_manager =
@@ -6012,6 +6012,31 @@ mod tests {
         };
 
         (session, turn_context)
+    }
+
+    fn otel_manager(
+        conversation_id: ThreadId,
+        config: &Config,
+        model_info: &ModelInfo,
+        session_source: SessionSource,
+    ) -> OtelManager {
+        OtelManager::new(
+            conversation_id,
+            ModelsManager::get_model_offline(config.model.as_deref()).as_str(),
+            model_info.slug.as_str(),
+            None,
+            Some("test@test.com".to_string()),
+            Some(AuthMode::Chatgpt),
+            false,
+            "test".to_string(),
+            session_source,
+        )
+    }
+
+    pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let config = build_test_config(codex_home.path()).await;
+        make_session_and_context_for_config(config).await
     }
 
     // Like make_session_and_context, but returns Arc<Session> and the event receiver
@@ -6174,6 +6199,12 @@ mod tests {
         provider.base_url = Some("https://example.com/v2".to_string());
         provider.experimental_bearer_token = Some("sk-updated".to_string());
         provider.wire_api = crate::WireApi::Chat;
+        {
+            let mut state = session.state.lock().await;
+            state
+                .session_configuration
+                .set_learned_model_context_window(64_000, 60_800);
+        }
 
         session
             .switch_provider_and_model(
@@ -6187,6 +6218,8 @@ mod tests {
         assert_eq!(config.model_provider_id, "custom-provider");
         assert_eq!(config.model_provider, provider);
         assert_eq!(config.model.as_deref(), Some("custom-model"));
+        assert_eq!(config.model_context_window, None);
+        assert_eq!(config.model_auto_compact_token_limit, None);
         assert_eq!(
             config
                 .model_providers
@@ -6212,6 +6245,102 @@ mod tests {
         assert_eq!(
             turn_context.client.config().model.as_deref(),
             Some("custom-model")
+        );
+        assert_eq!(turn_context.client.config().model_context_window, None);
+        assert_eq!(
+            turn_context.client.config().model_auto_compact_token_limit,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn switch_provider_and_model_uses_target_model_context_limits() {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let config_path = codex_home.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"model = "gpt-5"
+model_provider = "openai"
+
+[profiles."_provider.openai.custom-model"]
+model = "custom-model"
+model_provider = "openai"
+model_context_window = 64_000
+"#,
+        )
+        .expect("write config");
+
+        let config = build_test_config(codex_home.path()).await;
+        let (session, turn_context) = make_session_and_context_for_config(config).await;
+        let provider = turn_context.client.get_provider();
+        {
+            let mut state = session.state.lock().await;
+            state
+                .session_configuration
+                .set_learned_model_context_window(32_000, 30_400);
+        }
+
+        session
+            .switch_provider_and_model(
+                turn_context.client.config().model_provider_id.clone(),
+                provider.clone(),
+                "custom-model".to_string(),
+            )
+            .await;
+
+        let config = session.get_config().await;
+        assert_eq!(config.model_provider_id, "openai");
+        assert_eq!(config.model_provider, provider);
+        assert_eq!(config.model.as_deref(), Some("custom-model"));
+        assert_eq!(config.model_context_window, Some(64_000));
+        assert_eq!(config.model_auto_compact_token_limit, Some(60_800));
+
+        let turn_context = session
+            .new_default_turn_with_sub_id("configured-provider-and-model".to_string())
+            .await;
+        assert_eq!(
+            turn_context.client.config().model_context_window,
+            Some(64_000)
+        );
+        assert_eq!(
+            turn_context.client.config().model_auto_compact_token_limit,
+            Some(60_800)
+        );
+    }
+
+    #[tokio::test]
+    async fn switch_provider_and_model_preserves_context_window_for_same_target() {
+        let (session, turn_context) = make_session_and_context().await;
+        let provider = turn_context.client.get_provider();
+        {
+            let mut state = session.state.lock().await;
+            state
+                .session_configuration
+                .set_learned_model_context_window(64_000, 60_800);
+        }
+
+        session
+            .switch_provider_and_model(
+                turn_context.client.config().model_provider_id.clone(),
+                provider,
+                turn_context.client.get_model(),
+            )
+            .await;
+
+        let config = session.get_config().await;
+        assert_eq!(config.model_context_window, Some(64_000));
+        assert_eq!(config.model_auto_compact_token_limit, Some(60_800));
+
+        let turn_context = session
+            .new_default_turn_with_sub_id("same-provider-and-model".to_string())
+            .await;
+        assert_eq!(
+            turn_context.client.config().model_context_window,
+            Some(64_000)
+        );
+        assert_eq!(
+            turn_context.client.config().model_auto_compact_token_limit,
+            Some(60_800)
         );
     }
 

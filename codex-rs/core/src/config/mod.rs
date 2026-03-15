@@ -472,6 +472,65 @@ impl ConfigBuilder {
 }
 
 impl Config {
+    #[doc(hidden)]
+    pub fn resolve_model_context_limits(
+        &self,
+        model_provider_id: &str,
+        model: &str,
+    ) -> std::io::Result<(Option<i64>, Option<i64>)> {
+        let mut config_toml: ConfigToml = self
+            .config_layer_stack
+            .effective_config()
+            .try_into()
+            .map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("failed to deserialize effective config: {err}"),
+                )
+            })?;
+        let matching_active_profile =
+            self.active_profile_name_for_model_limits(&config_toml, model_provider_id, model);
+        if self.active_profile.is_some() && matching_active_profile.is_none() {
+            config_toml.profile = None;
+        }
+        let config = Self::load_config_with_layer_stack(
+            config_toml,
+            ConfigOverrides {
+                model: Some(model.to_string()),
+                cwd: Some(self.cwd.clone()),
+                model_provider: Some(model_provider_id.to_string()),
+                config_profile: matching_active_profile,
+                ..Default::default()
+            },
+            self.codex_home.clone(),
+            self.config_layer_stack.clone(),
+        )?;
+        Ok((
+            config.model_context_window,
+            config.model_auto_compact_token_limit,
+        ))
+    }
+
+    fn active_profile_name_for_model_limits(
+        &self,
+        config_toml: &ConfigToml,
+        model_provider_id: &str,
+        model: &str,
+    ) -> Option<String> {
+        let active_profile_name = self.active_profile.as_deref()?;
+        let active_profile = config_toml.profiles.get(active_profile_name)?;
+        let model_matches = active_profile
+            .model
+            .as_deref()
+            .is_none_or(|profile_model| profile_model == model);
+        let provider_matches = active_profile
+            .model_provider
+            .as_deref()
+            .is_none_or(|profile_provider| profile_provider == model_provider_id);
+
+        (model_matches && provider_matches).then(|| active_profile_name.to_string())
+    }
+
     /// This is the preferred way to create an instance of [Config].
     pub async fn load_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
@@ -2752,6 +2811,63 @@ profile = "project"
 
         assert_eq!(config.model_context_window, Some(64_000));
         assert_eq!(config.model_auto_compact_token_limit, Some(60_800));
+
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_model_context_limits_ignores_non_matching_active_profile_context_window()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "selected".to_string(),
+            ConfigProfile {
+                model: Some("gpt-5".to_string()),
+                model_provider: Some("openai".to_string()),
+                model_context_window: Some(96_000),
+                ..Default::default()
+            },
+        );
+        profiles.insert(
+            generated_provider_profile_name("openai", "custom-model"),
+            ConfigProfile {
+                model: Some("custom-model".to_string()),
+                model_provider: Some("openai".to_string()),
+                model_context_window: Some(64_000),
+                ..Default::default()
+            },
+        );
+        let cfg = ConfigToml {
+            model: Some("gpt-5".to_string()),
+            model_provider: Some("openai".to_string()),
+            profile: Some("selected".to_string()),
+            profiles,
+            ..Default::default()
+        };
+
+        let config_layer_stack = ConfigLayerStack::new(
+            vec![crate::config_loader::ConfigLayerEntry::new(
+                codex_app_server_protocol::ConfigLayerSource::User {
+                    file: AbsolutePathBuf::try_from(config_path)?,
+                },
+                toml::Value::try_from(cfg.clone()).expect("serialize config"),
+            )],
+            crate::config_loader::ConfigRequirements::default(),
+            crate::config_loader::ConfigRequirementsToml::default(),
+        )?;
+        let config = Config::load_config_with_layer_stack(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+            config_layer_stack,
+        )?;
+
+        assert_eq!(
+            config.resolve_model_context_limits("openai", "custom-model")?,
+            (Some(64_000), Some(60_800))
+        );
 
         Ok(())
     }

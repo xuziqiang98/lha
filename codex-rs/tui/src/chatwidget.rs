@@ -5178,6 +5178,8 @@ impl ChatWidget {
     pub(crate) fn sync_provider_config(&mut self, config: &Config, update_active_provider: bool) {
         self.config.config_layer_stack = config.config_layer_stack.clone();
         self.config.model = config.model.clone();
+        self.config.model_context_window = config.model_context_window;
+        self.config.model_auto_compact_token_limit = config.model_auto_compact_token_limit;
         self.config.model_providers = config.model_providers.clone();
         if update_active_provider {
             self.config.model_provider_id = config.model_provider_id.clone();

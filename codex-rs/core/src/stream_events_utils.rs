@@ -249,3 +249,49 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn response_input_to_response_item_keeps_empty_function_call_output_id() {
+        let input = ResponseInputItem::FunctionCallOutput {
+            call_id: String::new(),
+            output: FunctionCallOutputPayload::default(),
+        };
+
+        assert_eq!(
+            response_input_to_response_item(&input),
+            Some(ResponseItem::FunctionCallOutput {
+                call_id: String::new(),
+                output: FunctionCallOutputPayload::default(),
+            })
+        );
+    }
+
+    #[test]
+    fn response_input_to_response_item_keeps_function_call_output_with_id() {
+        let input = ResponseInputItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload {
+                content: "done".to_string(),
+                success: Some(true),
+                ..Default::default()
+            },
+        };
+
+        assert_eq!(
+            response_input_to_response_item(&input),
+            Some(ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: "done".to_string(),
+                    success: Some(true),
+                    ..Default::default()
+                },
+            })
+        );
+    }
+}
