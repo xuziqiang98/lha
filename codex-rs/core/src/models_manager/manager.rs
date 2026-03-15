@@ -218,6 +218,10 @@ impl ModelsManager {
 
     // todo(aibrahim): look if we can tighten it to pub(crate)
     /// Look up model metadata, applying remote overrides and config adjustments.
+    ///
+    /// Bundled/remote models are the first source of truth for online model metadata. The
+    /// handwritten `model_info.rs` entries remain as the offline fallback for slugs that are not
+    /// present in bundled/remote metadata.
     pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
         let remote = self
             .get_remote_models(config)
