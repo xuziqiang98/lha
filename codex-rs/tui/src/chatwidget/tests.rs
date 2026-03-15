@@ -3151,6 +3151,7 @@ async fn model_picker_without_auth_shows_only_configured_custom_model() {
             base_url: "https://example.test/v1".to_string(),
             api_key: "sk-test".to_string(),
             model: "mock-model".to_string(),
+            model_context_window: None,
         }],
     )
     .await;
@@ -3192,6 +3193,7 @@ async fn model_picker_without_auth_shows_all_models_saved_in_config_toml() {
                 base_url: "https://example.test/v1".to_string(),
                 api_key: "sk-test".to_string(),
                 model: "mock-model".to_string(),
+                model_context_window: None,
             },
             CustomProviderConfig {
                 provider_id: "mock_provider".to_string(),
@@ -3199,6 +3201,7 @@ async fn model_picker_without_auth_shows_all_models_saved_in_config_toml() {
                 base_url: "https://example.test/v1".to_string(),
                 api_key: "sk-test".to_string(),
                 model: "deepseek-r1".to_string(),
+                model_context_window: None,
             },
             CustomProviderConfig {
                 provider_id: "other_provider".to_string(),
@@ -3206,6 +3209,7 @@ async fn model_picker_without_auth_shows_all_models_saved_in_config_toml() {
                 base_url: "https://example.test/v1".to_string(),
                 api_key: "sk-test".to_string(),
                 model: "claude-sonnet".to_string(),
+                model_context_window: None,
             },
         ],
     )
@@ -3247,6 +3251,7 @@ async fn model_picker_with_chatgpt_auth_shows_full_list_and_config_models() {
                 base_url: "https://example.test/v1".to_string(),
                 api_key: "sk-test".to_string(),
                 model: "mock-model".to_string(),
+                model_context_window: None,
             },
             CustomProviderConfig {
                 provider_id: "mock_provider".to_string(),
@@ -3254,6 +3259,7 @@ async fn model_picker_with_chatgpt_auth_shows_full_list_and_config_models() {
                 base_url: "https://example.test/v1".to_string(),
                 api_key: "sk-test".to_string(),
                 model: "deepseek-r1".to_string(),
+                model_context_window: None,
             },
         ],
     )
@@ -3686,7 +3692,7 @@ async fn providers_command_opens_provider_wizard() {
         "expected provider wizard to be shown:\n{popup}"
     );
     assert!(
-        popup.contains("Step 1/5: Provider ID"),
+        popup.contains("Step 1/6: Provider ID"),
         "expected provider wizard to start on provider id:\n{popup}"
     );
 }

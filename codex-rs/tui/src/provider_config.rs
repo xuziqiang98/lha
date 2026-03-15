@@ -25,6 +25,7 @@ pub(crate) enum ApiProviderWizardStep {
     BaseUrl,
     ApiKey,
     Model,
+    ContextWindow,
 }
 
 impl ApiProviderWizardStep {
@@ -35,6 +36,7 @@ impl ApiProviderWizardStep {
             Self::BaseUrl => 3,
             Self::ApiKey => 4,
             Self::Model => 5,
+            Self::ContextWindow => 6,
         }
     }
 
@@ -45,6 +47,7 @@ impl ApiProviderWizardStep {
             Self::BaseUrl => "Base URL",
             Self::ApiKey => "API Key",
             Self::Model => "Model",
+            Self::ContextWindow => "Context Window",
         }
     }
 
@@ -55,6 +58,7 @@ impl ApiProviderWizardStep {
             Self::BaseUrl => "https://example.com/v1",
             Self::ApiKey => "Paste or type your API key",
             Self::Model => "gpt-4.1",
+            Self::ContextWindow => "Optional, e.g. 128000",
         }
     }
 
@@ -65,6 +69,7 @@ impl ApiProviderWizardStep {
             Self::BaseUrl => Some(Self::WireApi),
             Self::ApiKey => Some(Self::BaseUrl),
             Self::Model => Some(Self::ApiKey),
+            Self::ContextWindow => Some(Self::Model),
         }
     }
 
@@ -74,7 +79,8 @@ impl ApiProviderWizardStep {
             Self::WireApi => Some(Self::BaseUrl),
             Self::BaseUrl => Some(Self::ApiKey),
             Self::ApiKey => Some(Self::Model),
-            Self::Model => None,
+            Self::Model => Some(Self::ContextWindow),
+            Self::ContextWindow => None,
         }
     }
 }
@@ -130,6 +136,7 @@ pub(crate) struct ApiKeyInputState {
     pub(crate) base_url: String,
     pub(crate) api_key: String,
     pub(crate) model: String,
+    pub(crate) model_context_window: String,
     pub(crate) step: ApiProviderWizardStep,
     pub(crate) validating: bool,
     pub(crate) error: Option<String>,
@@ -142,6 +149,7 @@ pub(crate) struct CustomProviderConfig {
     pub(crate) base_url: String,
     pub(crate) api_key: String,
     pub(crate) model: String,
+    pub(crate) model_context_window: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -166,6 +174,7 @@ pub(crate) fn current_step_value_mut(state: &mut ApiKeyInputState) -> Option<&mu
         ApiProviderWizardStep::BaseUrl => Some(&mut state.base_url),
         ApiProviderWizardStep::ApiKey => Some(&mut state.api_key),
         ApiProviderWizardStep::Model => Some(&mut state.model),
+        ApiProviderWizardStep::ContextWindow => Some(&mut state.model_context_window),
     }
 }
 
@@ -176,6 +185,9 @@ pub(crate) fn validate_current_step(state: &ApiKeyInputState) -> Result<(), Stri
         ApiProviderWizardStep::BaseUrl => validate_base_url(state.base_url.trim()),
         ApiProviderWizardStep::ApiKey => validate_non_empty(state.api_key.trim(), "API key"),
         ApiProviderWizardStep::Model => validate_non_empty(state.model.trim(), "Model"),
+        ApiProviderWizardStep::ContextWindow => {
+            validate_context_window(state.model_context_window.trim())
+        }
     }
 }
 
@@ -208,6 +220,27 @@ fn validate_base_url(base_url: &str) -> Result<(), String> {
     }
 }
 
+fn validate_context_window(value: &str) -> Result<(), String> {
+    let _ = parse_context_window(value)?;
+    Ok(())
+}
+
+fn parse_context_window(value: &str) -> Result<Option<i64>, String> {
+    if value.is_empty() {
+        return Ok(None);
+    }
+
+    let normalized = value.replace('_', "");
+    let parsed = normalized
+        .parse::<i64>()
+        .map_err(|_| "Context Window must be a positive integer".to_string())?;
+    if parsed <= 0 {
+        return Err("Context Window must be a positive integer".to_string());
+    }
+
+    Ok(Some(parsed))
+}
+
 pub(crate) fn snapshot_custom_provider_config(
     state: &ApiKeyInputState,
 ) -> Result<CustomProviderConfig, String> {
@@ -215,6 +248,7 @@ pub(crate) fn snapshot_custom_provider_config(
     let base_url = state.base_url.trim().to_string();
     let api_key = state.api_key.trim().to_string();
     let model = state.model.trim().to_string();
+    let model_context_window = parse_context_window(state.model_context_window.trim())?;
 
     validate_provider_id(&provider_id)?;
     validate_base_url(&base_url)?;
@@ -227,6 +261,7 @@ pub(crate) fn snapshot_custom_provider_config(
         base_url,
         api_key,
         model,
+        model_context_window,
     })
 }
 
@@ -316,8 +351,7 @@ async fn validate_custom_provider_config(config: &CustomProviderConfig) -> Resul
 
 pub(crate) fn build_custom_provider_edits(config: &CustomProviderConfig) -> Vec<ConfigEdit> {
     let profile_name = generated_profile_name(&config.provider_id, &config.model);
-
-    vec![
+    let mut edits = vec![
         ConfigEdit::SetPath {
             segments: vec!["model_provider".to_string()],
             value: value(config.provider_id.clone()),
@@ -378,7 +412,31 @@ pub(crate) fn build_custom_provider_edits(config: &CustomProviderConfig) -> Vec<
             segments: vec!["profiles".to_string(), profile_name, "model".to_string()],
             value: value(config.model.clone()),
         },
-    ]
+    ];
+
+    match config.model_context_window {
+        Some(model_context_window) => {
+            edits.push(ConfigEdit::SetPath {
+                segments: vec!["model_context_window".to_string()],
+                value: value(model_context_window),
+            });
+            edits.push(ConfigEdit::SetPath {
+                segments: vec![
+                    "profiles".to_string(),
+                    generated_profile_name(&config.provider_id, &config.model),
+                    "model_context_window".to_string(),
+                ],
+                value: value(model_context_window),
+            });
+        }
+        None => {
+            edits.push(ConfigEdit::ClearPath {
+                segments: vec!["model_context_window".to_string()],
+            });
+        }
+    }
+
+    edits
 }
 
 #[cfg(test)]
@@ -397,6 +455,7 @@ mod tests {
             base_url: "https://example.com/v1".to_string(),
             api_key: "sk-test".to_string(),
             model: "gpt-test".to_string(),
+            model_context_window: None,
         };
 
         ConfigEditsBuilder::new(codex_home.path())
@@ -435,6 +494,7 @@ model = "gpt-test"
                 base_url: "https://example.com/v1".to_string(),
                 api_key: "sk-old".to_string(),
                 model: "gpt-test".to_string(),
+                model_context_window: None,
             }))
             .apply_blocking()
             .expect("write initial config");
@@ -446,6 +506,7 @@ model = "gpt-test"
                 base_url: "https://example.com/chat".to_string(),
                 api_key: "sk-new".to_string(),
                 model: "gpt-other".to_string(),
+                model_context_window: None,
             }))
             .apply_blocking()
             .expect("write updated config");
@@ -493,6 +554,7 @@ model = "gpt-test"
                 base_url: "https://example.com/v1".to_string(),
                 api_key: "sk-old".to_string(),
                 model: "gpt-test".to_string(),
+                model_context_window: None,
             }))
             .apply_blocking()
             .expect("write initial config");
@@ -504,6 +566,7 @@ model = "gpt-test"
                 base_url: "https://example.com/chat".to_string(),
                 api_key: "sk-new".to_string(),
                 model: "gpt-test".to_string(),
+                model_context_window: None,
             }))
             .apply_blocking()
             .expect("rewrite same pair");
@@ -572,6 +635,7 @@ X-Test = "1"
                 base_url: "https://example.com/chat".to_string(),
                 api_key: "sk-new".to_string(),
                 model: "gpt-other".to_string(),
+                model_context_window: None,
             }))
             .apply_blocking()
             .expect("rewrite provider");
@@ -606,6 +670,129 @@ X-Test = "1"
         assert_eq!(
             doc["profiles"]["_provider.custom_1.gpt-other"]["model"].as_str(),
             Some("gpt-other")
+        );
+    }
+
+    #[test]
+    fn custom_provider_edits_write_context_window_when_set() {
+        let codex_home = tempdir().expect("temp dir");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits(&CustomProviderConfig {
+                provider_id: "custom_1".to_string(),
+                wire_api: ApiProviderWireApi::Responses,
+                base_url: "https://example.com/v1".to_string(),
+                api_key: "sk-test".to_string(),
+                model: "gpt-test".to_string(),
+                model_context_window: Some(128_000),
+            }))
+            .apply_blocking()
+            .expect("write config");
+
+        let raw = std::fs::read_to_string(codex_home.path().join("config.toml")).unwrap();
+        let doc = raw.parse::<DocumentMut>().expect("parse config");
+        assert_eq!(doc["model_context_window"].as_integer(), Some(128_000));
+        assert_eq!(
+            doc["profiles"]["_provider.custom_1.gpt-test"]["model_context_window"].as_integer(),
+            Some(128_000)
+        );
+    }
+
+    #[test]
+    fn resaving_same_provider_model_with_blank_context_window_clears_top_level_and_preserves_profile()
+     {
+        let codex_home = tempdir().expect("temp dir");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits(&CustomProviderConfig {
+                provider_id: "custom_1".to_string(),
+                wire_api: ApiProviderWireApi::Responses,
+                base_url: "https://example.com/v1".to_string(),
+                api_key: "sk-old".to_string(),
+                model: "gpt-test".to_string(),
+                model_context_window: Some(64_000),
+            }))
+            .apply_blocking()
+            .expect("write initial config");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits(&CustomProviderConfig {
+                provider_id: "custom_1".to_string(),
+                wire_api: ApiProviderWireApi::Chat,
+                base_url: "https://example.com/chat".to_string(),
+                api_key: "sk-new".to_string(),
+                model: "gpt-test".to_string(),
+                model_context_window: None,
+            }))
+            .apply_blocking()
+            .expect("rewrite same pair");
+
+        let raw = std::fs::read_to_string(codex_home.path().join("config.toml")).unwrap();
+        let doc = raw.parse::<DocumentMut>().expect("parse config");
+        assert!(doc.get("model_context_window").is_none());
+        assert_eq!(
+            doc["profiles"]["_provider.custom_1.gpt-test"]["model_context_window"].as_integer(),
+            Some(64_000)
+        );
+    }
+
+    #[test]
+    fn saving_different_model_with_blank_context_window_clears_stale_top_level_value() {
+        let codex_home = tempdir().expect("temp dir");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits(&CustomProviderConfig {
+                provider_id: "custom_1".to_string(),
+                wire_api: ApiProviderWireApi::Responses,
+                base_url: "https://example.com/v1".to_string(),
+                api_key: "sk-old".to_string(),
+                model: "gpt-test".to_string(),
+                model_context_window: Some(64_000),
+            }))
+            .apply_blocking()
+            .expect("write initial config");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits(&CustomProviderConfig {
+                provider_id: "custom_2".to_string(),
+                wire_api: ApiProviderWireApi::Chat,
+                base_url: "https://example.com/chat".to_string(),
+                api_key: "sk-new".to_string(),
+                model: "gpt-other".to_string(),
+                model_context_window: None,
+            }))
+            .apply_blocking()
+            .expect("rewrite different pair");
+
+        let raw = std::fs::read_to_string(codex_home.path().join("config.toml")).unwrap();
+        let doc = raw.parse::<DocumentMut>().expect("parse config");
+        assert!(doc.get("model_context_window").is_none());
+        assert_eq!(
+            doc["profiles"]["_provider.custom_1.gpt-test"]["model_context_window"].as_integer(),
+            Some(64_000)
+        );
+        assert!(
+            doc["profiles"]["_provider.custom_2.gpt-other"]
+                .get("model_context_window")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn context_window_validation_accepts_blank_and_rejects_invalid_values() {
+        assert_eq!(parse_context_window("").unwrap(), None);
+        assert_eq!(parse_context_window("128_000").unwrap(), Some(128_000));
+        assert_eq!(
+            parse_context_window("abc").unwrap_err(),
+            "Context Window must be a positive integer"
+        );
+        assert_eq!(
+            parse_context_window("0").unwrap_err(),
+            "Context Window must be a positive integer"
+        );
+        assert_eq!(
+            parse_context_window("-1").unwrap_err(),
+            "Context Window must be a positive integer"
         );
     }
 }

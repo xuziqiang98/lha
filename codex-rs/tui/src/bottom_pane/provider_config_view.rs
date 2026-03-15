@@ -81,6 +81,7 @@ impl ProviderConfigView {
             ApiProviderWizardStep::BaseUrl => state.base_url.clone(),
             ApiProviderWizardStep::ApiKey => state.api_key.clone(),
             ApiProviderWizardStep::Model => state.model.clone(),
+            ApiProviderWizardStep::ContextWindow => state.model_context_window.clone(),
         };
         drop(state);
         self.textarea.set_text_clearing_elements(&text);
@@ -300,7 +301,7 @@ impl Renderable for ProviderConfigView {
             },
             &state,
         );
-        let intro_min_height = if state.validating { 12 } else { 10 };
+        let intro_min_height = if state.validating { 13 } else { 11 };
         intro_min_height + input_height + 5
     }
 
@@ -311,7 +312,7 @@ impl Renderable for ProviderConfigView {
 
         let state = read_state(&self.state).clone();
         let input_height = self.input_height(area, &state);
-        let intro_min_height = if state.validating { 12 } else { 10 };
+        let intro_min_height = if state.validating { 13 } else { 11 };
         let [intro_area, _spacer_area, input_area, footer_area] = Layout::vertical([
             Constraint::Min(intro_min_height),
             Constraint::Length(1),
@@ -323,7 +324,7 @@ impl Renderable for ProviderConfigView {
         let mut intro_lines: Vec<Line> = vec![
             vec!["> ".into(), "Configure a custom API provider".bold()].into(),
             "".into(),
-            format!("  Step {}/5: {}", state.step.index(), state.step.title()).into(),
+            format!("  Step {}/6: {}", state.step.index(), state.step.title()).into(),
             "  This saves the provider and model to ~/.codey/config.toml.".into(),
             "".into(),
             format!(
@@ -341,6 +342,11 @@ impl Renderable for ProviderConfigView {
             format!(
                 "  Model: {}",
                 display_optional_value(&state.model, "<not set>")
+            )
+            .into(),
+            format!(
+                "  Context Window: {}",
+                display_optional_value(&state.model_context_window, "<not set>")
             )
             .into(),
         ];
@@ -423,7 +429,7 @@ impl Renderable for ProviderConfigView {
         let mut footer_lines: Vec<Line> = vec![
             if state.validating {
                 "  Saving...".dim().into()
-            } else if state.step == ApiProviderWizardStep::Model {
+            } else if state.step.next().is_none() {
                 "  Press Enter to validate and save".dim().into()
             } else {
                 "  Press Enter to continue".dim().into()
@@ -451,7 +457,7 @@ impl Renderable for ProviderConfigView {
         }
 
         let input_height = self.input_height(area, &state);
-        let intro_min_height = if state.validating { 12 } else { 10 };
+        let intro_min_height = if state.validating { 13 } else { 11 };
         let textarea_rect = Rect {
             x: area.x.saturating_add(1),
             y: area.y.saturating_add(intro_min_height).saturating_add(2),
@@ -523,6 +529,26 @@ mod tests {
 
         view.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(state_snapshot(&view).step, ApiProviderWizardStep::WireApi);
+    }
+
+    #[test]
+    fn provider_wizard_reaches_optional_context_window_step() {
+        let mut view = test_view();
+
+        assert!(view.handle_paste("custom_1".to_string()));
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(view.handle_paste("https://example.com/v1".to_string()));
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(view.handle_paste("sk-test".to_string()));
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(view.handle_paste("gpt-test".to_string()));
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            state_snapshot(&view).step,
+            ApiProviderWizardStep::ContextWindow
+        );
     }
 
     #[test]

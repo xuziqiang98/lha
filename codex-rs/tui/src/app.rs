@@ -3300,6 +3300,7 @@ mod tests {
             base_url: "https://example.com/chat".to_string(),
             api_key: "sk-new".to_string(),
             model: "gpt-other".to_string(),
+            model_context_window: None,
         };
         std::fs::write(
             &config_path,
@@ -3396,6 +3397,7 @@ X-Test = "1"
             base_url: "https://example.com/v1".to_string(),
             api_key: "sk-test".to_string(),
             model: "gpt-test".to_string(),
+            model_context_window: None,
         };
         ConfigEditsBuilder::new(&app.config.codex_home)
             .with_edits(build_custom_provider_edits(&saved))
@@ -3430,6 +3432,166 @@ X-Test = "1"
     }
 
     #[tokio::test]
+    async fn custom_provider_save_applies_context_window_to_runtime_and_profile() {
+        let mut app = make_test_app().await;
+        let saved = CustomProviderConfig {
+            provider_id: "custom_1".to_string(),
+            wire_api: ApiProviderWireApi::Responses,
+            base_url: "https://example.com/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "gpt-test".to_string(),
+            model_context_window: Some(128_000),
+        };
+        ConfigEditsBuilder::new(&app.config.codex_home)
+            .with_edits(build_custom_provider_edits(&saved))
+            .apply()
+            .await
+            .expect("persist provider save");
+
+        app.handle_custom_provider_configured(saved).await;
+
+        assert_eq!(app.config.model_provider_id, "custom_1");
+        assert_eq!(app.config.model.as_deref(), Some("gpt-test"));
+        assert_eq!(app.config.model_context_window, Some(128_000));
+        assert_eq!(app.chat_widget.current_model(), "gpt-test");
+        assert_eq!(
+            app.chat_widget.config_ref().model_context_window,
+            Some(128_000)
+        );
+
+        let config_toml: ConfigToml = app
+            .config
+            .config_layer_stack
+            .effective_config()
+            .try_into()
+            .expect("config toml");
+        assert_eq!(config_toml.model_context_window, Some(128_000));
+        assert_eq!(
+            config_toml
+                .profiles
+                .get(generated_profile_name("custom_1", "gpt-test").as_str())
+                .and_then(|profile| profile.model_context_window),
+            Some(128_000)
+        );
+    }
+
+    #[tokio::test]
+    async fn custom_provider_save_preserves_existing_context_window_when_left_blank() {
+        let mut app = make_test_app().await;
+        let initial = CustomProviderConfig {
+            provider_id: "custom_1".to_string(),
+            wire_api: ApiProviderWireApi::Responses,
+            base_url: "https://example.com/v1".to_string(),
+            api_key: "sk-old".to_string(),
+            model: "gpt-test".to_string(),
+            model_context_window: Some(64_000),
+        };
+        let saved = CustomProviderConfig {
+            provider_id: "custom_1".to_string(),
+            wire_api: ApiProviderWireApi::Chat,
+            base_url: "https://example.com/chat".to_string(),
+            api_key: "sk-new".to_string(),
+            model: "gpt-test".to_string(),
+            model_context_window: None,
+        };
+        ConfigEditsBuilder::new(&app.config.codex_home)
+            .with_edits(build_custom_provider_edits(&initial))
+            .apply()
+            .await
+            .expect("persist initial provider save");
+        ConfigEditsBuilder::new(&app.config.codex_home)
+            .with_edits(build_custom_provider_edits(&saved))
+            .apply()
+            .await
+            .expect("persist updated provider save");
+
+        app.handle_custom_provider_configured(saved).await;
+
+        assert_eq!(app.config.model_provider_id, "custom_1");
+        assert_eq!(app.config.model.as_deref(), Some("gpt-test"));
+        assert_eq!(app.config.model_context_window, Some(64_000));
+        assert_eq!(
+            app.chat_widget.config_ref().model_context_window,
+            Some(64_000)
+        );
+
+        let config_toml: ConfigToml = app
+            .config
+            .config_layer_stack
+            .effective_config()
+            .try_into()
+            .expect("config toml");
+        assert_eq!(config_toml.model_context_window, None);
+        assert_eq!(
+            config_toml
+                .profiles
+                .get(generated_profile_name("custom_1", "gpt-test").as_str())
+                .and_then(|profile| profile.model_context_window),
+            Some(64_000)
+        );
+    }
+
+    #[tokio::test]
+    async fn custom_provider_save_clears_stale_global_context_window_for_new_blank_model() {
+        let mut app = make_test_app().await;
+        let initial = CustomProviderConfig {
+            provider_id: "custom_1".to_string(),
+            wire_api: ApiProviderWireApi::Responses,
+            base_url: "https://example.com/v1".to_string(),
+            api_key: "sk-old".to_string(),
+            model: "gpt-test".to_string(),
+            model_context_window: Some(64_000),
+        };
+        let saved = CustomProviderConfig {
+            provider_id: "custom_2".to_string(),
+            wire_api: ApiProviderWireApi::Chat,
+            base_url: "https://example.com/chat".to_string(),
+            api_key: "sk-new".to_string(),
+            model: "gpt-other".to_string(),
+            model_context_window: None,
+        };
+        ConfigEditsBuilder::new(&app.config.codex_home)
+            .with_edits(build_custom_provider_edits(&initial))
+            .apply()
+            .await
+            .expect("persist initial provider save");
+        ConfigEditsBuilder::new(&app.config.codex_home)
+            .with_edits(build_custom_provider_edits(&saved))
+            .apply()
+            .await
+            .expect("persist updated provider save");
+
+        app.handle_custom_provider_configured(saved).await;
+
+        assert_eq!(app.config.model_provider_id, "custom_2");
+        assert_eq!(app.config.model.as_deref(), Some("gpt-other"));
+        assert_eq!(app.config.model_context_window, None);
+        assert_eq!(app.chat_widget.config_ref().model_context_window, None);
+
+        let config_toml: ConfigToml = app
+            .config
+            .config_layer_stack
+            .effective_config()
+            .try_into()
+            .expect("config toml");
+        assert_eq!(config_toml.model_context_window, None);
+        assert_eq!(
+            config_toml
+                .profiles
+                .get(generated_profile_name("custom_1", "gpt-test").as_str())
+                .and_then(|profile| profile.model_context_window),
+            Some(64_000)
+        );
+        assert_eq!(
+            config_toml
+                .profiles
+                .get(generated_profile_name("custom_2", "gpt-other").as_str())
+                .and_then(|profile| profile.model_context_window),
+            None
+        );
+    }
+
+    #[tokio::test]
     async fn custom_provider_save_switches_active_thread_provider_and_model() {
         let mut app = make_test_app().await;
         let new_thread = app
@@ -3448,6 +3610,7 @@ X-Test = "1"
             base_url: "https://example.com/v1".to_string(),
             api_key: "sk-test".to_string(),
             model: "gpt-test".to_string(),
+            model_context_window: None,
         };
         ConfigEditsBuilder::new(&app.config.codex_home)
             .with_edits(build_custom_provider_edits(&saved))

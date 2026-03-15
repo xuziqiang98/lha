@@ -466,7 +466,7 @@ impl AuthModeWidget {
 
     fn render_api_key_entry(&self, area: Rect, buf: &mut Buffer, state: &ApiKeyInputState) {
         let input_height = self.api_key_entry_input_height(area.width, state);
-        let intro_min_height = if state.validating { 12 } else { 10 };
+        let intro_min_height = if state.validating { 13 } else { 11 };
         let [intro_area, _spacer_area, input_area, footer_area] = Layout::vertical([
             Constraint::Min(intro_min_height),
             Constraint::Length(1),
@@ -478,7 +478,7 @@ impl AuthModeWidget {
         let mut intro_lines: Vec<Line> = vec![
             vec!["> ".into(), "Configure a custom API provider".bold()].into(),
             "".into(),
-            format!("  Step {}/5: {}", state.step.index(), state.step.title()).into(),
+            format!("  Step {}/6: {}", state.step.index(), state.step.title()).into(),
             "  This will be written to ~/.codey/config.toml and used as the default provider."
                 .into(),
             "".into(),
@@ -497,6 +497,11 @@ impl AuthModeWidget {
             format!(
                 "  Model: {}",
                 display_optional_value(&state.model, "<not set>")
+            )
+            .into(),
+            format!(
+                "  Context Window: {}",
+                display_optional_value(&state.model_context_window, "<not set>")
             )
             .into(),
         ];
@@ -573,7 +578,7 @@ impl AuthModeWidget {
         let mut footer_lines: Vec<Line> = vec![
             if state.validating {
                 "  Saving...".dim().into()
-            } else if state.step == ApiProviderWizardStep::Model {
+            } else if state.step.next().is_none() {
                 "  Press Enter to validate and save".dim().into()
             } else {
                 "  Press Enter to continue".dim().into()
@@ -787,7 +792,11 @@ impl AuthModeWidget {
                             base_url: config.base_url,
                             api_key: config.api_key,
                             model: config.model,
-                            step: ApiProviderWizardStep::Model,
+                            model_context_window: config
+                                .model_context_window
+                                .map(|value| value.to_string())
+                                .unwrap_or_default(),
+                            step: ApiProviderWizardStep::ContextWindow,
                             validating: false,
                             error: Some(err),
                         });
@@ -807,6 +816,7 @@ impl AuthModeWidget {
             ApiProviderWizardStep::BaseUrl => state.base_url.clone(),
             ApiProviderWizardStep::ApiKey => mask_secret(&state.api_key),
             ApiProviderWizardStep::Model => state.model.clone(),
+            ApiProviderWizardStep::ContextWindow => state.model_context_window.clone(),
         }
     }
 
@@ -1048,6 +1058,7 @@ mod tests {
             base_url: "https://example.com/v1".to_string(),
             api_key: "sk-test".to_string(),
             model: "gpt-test".to_string(),
+            model_context_window: None,
         });
 
         assert_eq!(widget.error.as_deref(), Some(API_KEY_DISABLED_MESSAGE));
@@ -1075,7 +1086,8 @@ mod tests {
             base_url: " https://example.com/v1/ ".to_string(),
             api_key: " secret ".to_string(),
             model: " model-x ".to_string(),
-            step: ApiProviderWizardStep::Model,
+            model_context_window: " 128_000 ".to_string(),
+            step: ApiProviderWizardStep::ContextWindow,
             validating: false,
             error: None,
         };
@@ -1090,6 +1102,7 @@ mod tests {
                 base_url: "https://example.com/v1/".to_string(),
                 api_key: "secret".to_string(),
                 model: "model-x".to_string(),
+                model_context_window: Some(128_000),
             }
         );
     }
@@ -1106,17 +1119,17 @@ mod tests {
             .map(|row| row_text(&buf, row, area.width))
             .collect::<Vec<String>>();
 
-        let model_row = lines
+        let context_row = lines
             .iter()
-            .position(|line| line.contains("  Model: <not set>"))
-            .expect("model summary row");
+            .position(|line| line.contains("  Context Window: <not set>"))
+            .expect("context window summary row");
         let border_row = lines
             .iter()
             .position(|line| line.starts_with("╭Provider ID"))
             .expect("input border row");
 
-        assert_eq!(border_row, model_row + 2);
-        assert_eq!(lines[model_row + 1], "");
+        assert_eq!(border_row, context_row + 2);
+        assert_eq!(lines[context_row + 1], "");
     }
 
     #[test]
@@ -1141,6 +1154,7 @@ mod tests {
             base_url: "https://example.com/v1".to_string(),
             api_key: "sk-test".to_string(),
             model: "gpt-test".to_string(),
+            model_context_window: None,
         };
 
         ConfigEditsBuilder::new(codex_home.path())
