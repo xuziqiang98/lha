@@ -4233,7 +4233,7 @@ impl ChatWidget {
         }
         if choices.is_empty() {
             choices.push(EffortChoice {
-                stored: Some(default_effort),
+                stored: (default_effort != ReasoningEffortConfig::None).then_some(default_effort),
                 display: default_effort,
             });
         }

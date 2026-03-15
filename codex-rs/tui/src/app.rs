@@ -3822,6 +3822,92 @@ model_provider = "provider_b"
     }
 
     #[tokio::test]
+    async fn persist_model_selection_clears_reasoning_effort_when_none_passed() {
+        let mut app = make_test_app().await;
+        let config_path = app.config.codex_home.join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"model = "model-a"
+model_provider = "provider_a"
+
+[model_providers.provider_a]
+name = "provider_a"
+base_url = "https://example.com/a"
+wire_api = "chat"
+experimental_bearer_token = "sk-a"
+
+[model_providers.provider_b]
+name = "provider_b"
+base_url = "https://example.com/b"
+wire_api = "chat"
+experimental_bearer_token = "sk-b"
+
+[profiles.saved]
+model = "model-a"
+model_provider = "provider_a"
+model_reasoning_effort = "high"
+
+[profiles.target]
+model = "model-b"
+model_provider = "provider_b"
+"#,
+        )
+        .expect("write config");
+
+        app.config = ConfigBuilder::default()
+            .codex_home(app.config.codex_home.clone())
+            .build()
+            .await
+            .expect("reload config");
+        app.active_profile = Some("saved".to_string());
+        app.config.active_profile = Some("saved".to_string());
+        app.chat_widget.sync_provider_config(&app.config, true);
+        app.chat_widget.set_model("model-a");
+        app.chat_widget
+            .set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+        let provider_id = app
+            .persist_model_selection("model-b".to_string(), None)
+            .await
+            .expect("persist model selection");
+
+        assert_eq!(provider_id, "provider_b");
+        assert_eq!(app.config.model_provider_id, "provider_b");
+        assert_eq!(app.config.model.as_deref(), Some("model-b"));
+        assert_eq!(app.config.model_reasoning_effort, None);
+        assert_eq!(app.chat_widget.current_model(), "model-b");
+        assert_eq!(app.chat_widget.current_reasoning_effort(), None);
+
+        let config_toml: ConfigToml = app
+            .config
+            .config_layer_stack
+            .effective_config()
+            .try_into()
+            .expect("config toml");
+        assert_eq!(
+            config_toml
+                .profiles
+                .get("saved")
+                .and_then(|profile| profile.model.as_deref()),
+            Some("model-b")
+        );
+        assert_eq!(
+            config_toml
+                .profiles
+                .get("saved")
+                .and_then(|profile| profile.model_provider.as_deref()),
+            Some("provider_b")
+        );
+        assert_eq!(
+            config_toml
+                .profiles
+                .get("saved")
+                .and_then(|profile| profile.model_reasoning_effort),
+            None
+        );
+    }
+
+    #[tokio::test]
     async fn persist_model_selection_rejects_ambiguous_provider_mapping() {
         let mut app = make_test_app().await;
         let config_path = app.config.codex_home.join("config.toml");

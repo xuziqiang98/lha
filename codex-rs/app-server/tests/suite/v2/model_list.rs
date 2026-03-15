@@ -338,7 +338,7 @@ async fn list_models_without_auth_returns_only_configured_custom_model() -> Resu
             display_name: "mock-model".to_string(),
             description: "Configured model from config.toml.".to_string(),
             supported_reasoning_efforts: vec![],
-            default_reasoning_effort: ReasoningEffort::Medium,
+            default_reasoning_effort: ReasoningEffort::None,
             supports_personality: false,
             is_default: true,
         }]
