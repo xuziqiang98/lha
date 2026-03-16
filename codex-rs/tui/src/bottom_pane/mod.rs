@@ -246,6 +246,17 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_footer_info(
+        &mut self,
+        model_name: String,
+        reasoning_effort: Option<String>,
+        cwd: String,
+    ) {
+        self.composer
+            .set_footer_info(model_name, reasoning_effort, cwd);
+        self.request_redraw();
+    }
+
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
         self.composer.set_personality_command_enabled(enabled);
         self.request_redraw();

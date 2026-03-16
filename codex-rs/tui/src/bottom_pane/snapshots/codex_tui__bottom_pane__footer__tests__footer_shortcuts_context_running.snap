@@ -2,4 +2,4 @@
 source: tui/src/bottom_pane/footer.rs
 expression: terminal.backend()
 ---
-"  ? for shortcuts                                             72% context left  "
+"  gpt-5.4 high · 72% left · ~/Workspace/codey                                   "

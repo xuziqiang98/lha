@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 5180
 expression: term.backend().vt100().screen().contents()
 ---
 
@@ -41,4 +42,4 @@ expression: term.backend().vt100().screen().contents()
 
 › Summarize recent commits
 
-  tab to queue message                                       100% context left
+  gpt-5.2-codex · 100% left · ~/Workspace/codey/codex-rs/tui
