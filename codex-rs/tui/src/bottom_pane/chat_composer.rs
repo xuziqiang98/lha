@@ -108,12 +108,8 @@ use super::footer::CollaborationModeIndicator;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::SummaryLeft;
-use super::footer::can_show_left_with_context;
-use super::footer::context_window_line;
 use super::footer::esc_hint_mode;
 use super::footer::footer_height;
-use super::footer::footer_hint_items_width;
-use super::footer::footer_line_width;
 use super::footer::inset_footer_hint_area;
 use super::footer::render_context_right;
 use super::footer::render_footer_from_props;
@@ -279,6 +275,9 @@ pub(crate) struct ChatComposer {
     footer_flash: Option<FooterFlash>,
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
+    footer_model_name: String,
+    footer_reasoning_effort: Option<String>,
+    footer_cwd: String,
     skills: Option<Vec<SkillMetadata>>,
     connectors_snapshot: Option<ConnectorsSnapshot>,
     dismissed_mention_popup_token: Option<String>,
@@ -369,6 +368,9 @@ impl ChatComposer {
             footer_flash: None,
             context_window_percent: None,
             context_window_used_tokens: None,
+            footer_model_name: "loading".to_string(),
+            footer_reasoning_effort: None,
+            footer_cwd: String::new(),
             skills: None,
             connectors_snapshot: None,
             dismissed_mention_popup_token: None,
@@ -446,7 +448,7 @@ impl ChatComposer {
         let footer_props = self.footer_props();
         let footer_hint_height = self
             .custom_footer_height()
-            .unwrap_or_else(|| footer_height(footer_props));
+            .unwrap_or_else(|| footer_height(&footer_props));
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         let popup_constraint = match &self.active_popup {
@@ -2394,11 +2396,13 @@ impl ChatComposer {
             use_shift_enter_hint: self.use_shift_enter_hint,
             is_task_running: self.is_task_running,
             quit_shortcut_key: self.quit_shortcut_key,
-            steer_enabled: self.steer_enabled,
             collaboration_modes_enabled: self.collaboration_modes_enabled,
             is_wsl,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
+            model_name: self.footer_model_name.clone(),
+            reasoning_effort: self.footer_reasoning_effort.clone(),
+            cwd: self.footer_cwd.clone(),
         }
     }
 
@@ -2790,6 +2794,24 @@ impl ChatComposer {
         self.context_window_used_tokens = used_tokens;
     }
 
+    pub(crate) fn set_footer_info(
+        &mut self,
+        model_name: String,
+        reasoning_effort: Option<String>,
+        cwd: String,
+    ) {
+        if self.footer_model_name == model_name
+            && self.footer_reasoning_effort == reasoning_effort
+            && self.footer_cwd == cwd
+        {
+            return;
+        }
+
+        self.footer_model_name = model_name;
+        self.footer_reasoning_effort = reasoning_effort;
+        self.footer_cwd = cwd;
+    }
+
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
         self.esc_backtrack_hint = show;
         if show {
@@ -2838,7 +2860,7 @@ impl Renderable for ChatComposer {
         let footer_props = self.footer_props();
         let footer_hint_height = self
             .custom_footer_height()
-            .unwrap_or_else(|| footer_height(footer_props));
+            .unwrap_or_else(|| footer_height(&footer_props));
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + 1;
@@ -2875,30 +2897,9 @@ impl ChatComposer {
                 let footer_props = self.footer_props();
                 let show_cycle_hint =
                     !footer_props.is_task_running && self.collaboration_mode_indicator.is_some();
-                let show_shortcuts_hint = match footer_props.mode {
-                    FooterMode::ComposerEmpty => !self.is_in_paste_burst(),
-                    FooterMode::QuitShortcutReminder
-                    | FooterMode::ShortcutOverlay
-                    | FooterMode::EscHint
-                    | FooterMode::ComposerHasDraft => false,
-                };
-                let show_queue_hint = match footer_props.mode {
-                    FooterMode::ComposerHasDraft => {
-                        footer_props.is_task_running && footer_props.steer_enabled
-                    }
-                    FooterMode::QuitShortcutReminder
-                    | FooterMode::ComposerEmpty
-                    | FooterMode::ShortcutOverlay
-                    | FooterMode::EscHint => false,
-                };
-                let context_line = context_window_line(
-                    footer_props.context_window_percent,
-                    footer_props.context_window_used_tokens,
-                );
-                let context_width = context_line.width() as u16;
                 let custom_height = self.custom_footer_height();
                 let footer_hint_height =
-                    custom_height.unwrap_or_else(|| footer_height(footer_props));
+                    custom_height.unwrap_or_else(|| footer_height(&footer_props));
                 let footer_spacing = Self::footer_spacing(footer_hint_height);
                 let hint_rect = if footer_spacing > 0 && footer_hint_height > 0 {
                     let [_, hint_rect] = Layout::vertical([
@@ -2910,24 +2911,6 @@ impl ChatComposer {
                 } else {
                     popup_rect
                 };
-                let left_width = if self.footer_flash_visible() {
-                    self.footer_flash
-                        .as_ref()
-                        .map(|flash| flash.line.width() as u16)
-                        .unwrap_or(0)
-                } else if let Some(items) = self.footer_hint_override.as_ref() {
-                    footer_hint_items_width(items)
-                } else {
-                    footer_line_width(
-                        footer_props,
-                        self.collaboration_mode_indicator,
-                        show_cycle_hint,
-                        show_shortcuts_hint,
-                        show_queue_hint,
-                    )
-                };
-                let can_show_left_and_context =
-                    can_show_left_with_context(hint_rect, left_width, context_width);
                 let has_override =
                     self.footer_flash_visible() || self.footer_hint_override.is_some();
                 let single_line_layout = if has_override {
@@ -2935,17 +2918,11 @@ impl ChatComposer {
                 } else {
                     match footer_props.mode {
                         FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft => {
-                            // Both of these modes render the single-line footer style (with
-                            // either the shortcuts hint or the optional queue hint). We still
-                            // want the single-line collapse rules so the mode label can win over
-                            // the context indicator on narrow widths.
                             Some(single_line_footer_layout(
                                 hint_rect,
-                                context_width,
+                                &footer_props,
                                 self.collaboration_mode_indicator,
                                 show_cycle_hint,
-                                show_shortcuts_hint,
-                                show_queue_hint,
                             ))
                         }
                         FooterMode::EscHint
@@ -2953,37 +2930,27 @@ impl ChatComposer {
                         | FooterMode::ShortcutOverlay => None,
                     }
                 };
-                let show_context = if matches!(
-                    footer_props.mode,
-                    FooterMode::EscHint
-                        | FooterMode::QuitShortcutReminder
-                        | FooterMode::ShortcutOverlay
-                ) {
-                    false
-                } else {
-                    single_line_layout
-                        .as_ref()
-                        .map(|(_, show_context)| *show_context)
-                        .unwrap_or(can_show_left_and_context)
-                };
 
-                if let Some((summary_left, _)) = single_line_layout {
+                if let Some((summary_left, right_line)) = single_line_layout {
                     match summary_left {
                         SummaryLeft::Default => {
                             render_footer_from_props(
                                 hint_rect,
                                 buf,
-                                footer_props,
+                                footer_props.clone(),
                                 self.collaboration_mode_indicator,
                                 show_cycle_hint,
-                                show_shortcuts_hint,
-                                show_queue_hint,
+                                false,
+                                false,
                             );
                         }
                         SummaryLeft::Custom(line) => {
                             render_footer_line(hint_rect, buf, line);
                         }
                         SummaryLeft::None => {}
+                    }
+                    if let Some(line) = right_line.as_ref() {
+                        render_context_right(hint_rect, buf, line);
                     }
                 } else if self.footer_flash_visible() {
                     if let Some(flash) = self.footer_flash.as_ref() {
@@ -2998,13 +2965,9 @@ impl ChatComposer {
                         footer_props,
                         self.collaboration_mode_indicator,
                         show_cycle_hint,
-                        show_shortcuts_hint,
-                        show_queue_hint,
+                        false,
+                        false,
                     );
-                }
-
-                if show_context {
-                    render_context_right(hint_rect, buf, &context_line);
                 }
             }
         }
@@ -3153,7 +3116,7 @@ mod tests {
         let mut hint_row: Option<(u16, String)> = None;
         for y in 0..area.height {
             let row = row_to_string(y);
-            if row.contains("? for shortcuts") {
+            if row.contains("100% left") {
                 hint_row = Some((y, row));
                 break;
             }
@@ -3280,7 +3243,7 @@ mod tests {
         );
         setup(&mut composer);
         let footer_props = composer.footer_props();
-        let footer_lines = footer_height(footer_props);
+        let footer_lines = footer_height(&footer_props);
         let footer_spacing = ChatComposer::footer_spacing(footer_lines);
         let height = footer_lines + footer_spacing + 8;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -3359,6 +3322,11 @@ mod tests {
             composer.set_collaboration_modes_enabled(true);
             composer.set_collaboration_mode_indicator(indicator);
             composer.set_context_window(Some(context_percent), None);
+            composer.set_footer_info(
+                "gpt-5.4".to_string(),
+                Some("high".to_string()),
+                "~/Workspace/codey".to_string(),
+            );
         }
 
         // Empty textarea, code mode idle: shortcuts hint and cycle hint are available.

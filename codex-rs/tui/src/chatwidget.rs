@@ -183,6 +183,7 @@ use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
+use crate::status::format_directory_display;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 mod interrupts;
@@ -2317,6 +2318,7 @@ impl ChatWidget {
                 ),
         );
         widget.update_collaboration_mode_indicator();
+        widget.update_footer_info();
 
         widget
             .bottom_pane
@@ -2596,6 +2598,7 @@ impl ChatWidget {
                 ),
         );
         widget.update_collaboration_mode_indicator();
+        widget.update_footer_info();
 
         widget
     }
@@ -5115,6 +5118,7 @@ impl ChatWidget {
             self.active_collaboration_mask = None;
             self.update_collaboration_mode_indicator();
             self.refresh_model_display();
+            self.update_footer_info();
             self.request_redraw();
         }
         if feature == Feature::Personality {
@@ -5168,6 +5172,8 @@ impl ChatWidget {
         {
             mask.reasoning_effort = Some(effort);
         }
+        self.update_footer_info();
+        self.request_redraw();
     }
 
     /// Set the personality in the widget's config copy.
@@ -5185,6 +5191,7 @@ impl ChatWidget {
             self.config.model_provider_id = config.model_provider_id.clone();
             self.config.model_provider = config.model_provider.clone();
         }
+        self.update_footer_info();
         self.request_redraw();
     }
 
@@ -5204,6 +5211,8 @@ impl ChatWidget {
             mask.model = Some(model.to_string());
         }
         self.refresh_model_display();
+        self.update_footer_info();
+        self.request_redraw();
     }
 
     pub(crate) fn current_model(&self) -> &str {
@@ -5350,6 +5359,18 @@ impl ChatWidget {
         self.bottom_pane.set_collaboration_mode_indicator(indicator);
     }
 
+    fn update_footer_info(&mut self) {
+        let reasoning_effort = self
+            .effective_reasoning_effort()
+            .map(Self::reasoning_effort_label)
+            .map(str::to_string);
+        self.bottom_pane.set_footer_info(
+            self.model_display_name().to_string(),
+            reasoning_effort,
+            format_directory_display(&self.config.cwd, None),
+        );
+    }
+
     fn personality_label(personality: Personality) -> &'static str {
         match personality {
             Personality::Friendly => "Friendly",
@@ -5389,6 +5410,7 @@ impl ChatWidget {
         self.active_collaboration_mask = Some(mask);
         self.update_collaboration_mode_indicator();
         self.refresh_model_display();
+        self.update_footer_info();
         self.request_redraw();
     }
 
