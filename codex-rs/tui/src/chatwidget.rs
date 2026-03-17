@@ -475,6 +475,10 @@ pub(crate) struct ChatWidget {
     current_collaboration_mode: CollaborationMode,
     /// The currently active collaboration mask, if any.
     active_collaboration_mask: Option<CollaborationModeMask>,
+    /// User-selected reasoning effort overrides keyed by collaboration mode.
+    ///
+    /// A missing key means "use the preset default for this mode".
+    reasoning_effort_overrides: HashMap<ModeKind, Option<ReasoningEffortConfig>>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     otel_manager: OtelManager,
@@ -2247,6 +2251,7 @@ impl ChatWidget {
             config,
             skills_all: Vec::new(),
             skills_initial_state: None,
+            reasoning_effort_overrides: HashMap::new(),
             current_collaboration_mode,
             active_collaboration_mask,
             auth_manager,
@@ -2393,6 +2398,7 @@ impl ChatWidget {
             config,
             skills_all: Vec::new(),
             skills_initial_state: None,
+            reasoning_effort_overrides: HashMap::new(),
             current_collaboration_mode,
             active_collaboration_mask,
             auth_manager,
@@ -2527,6 +2533,7 @@ impl ChatWidget {
             config,
             skills_all: Vec::new(),
             skills_initial_state: None,
+            reasoning_effort_overrides: HashMap::new(),
             current_collaboration_mode,
             active_collaboration_mask,
             auth_manager,
@@ -5171,6 +5178,12 @@ impl ChatWidget {
             && let Some(mask) = self.active_collaboration_mask.as_mut()
         {
             mask.reasoning_effort = Some(effort);
+            if let Some(mode) = mask
+                .mode
+                .filter(|mode| Self::stores_effort_override_for(*mode))
+            {
+                self.reasoning_effort_overrides.insert(mode, effort);
+            }
         }
         self.update_footer_info();
         self.request_redraw();
@@ -5292,6 +5305,52 @@ impl ChatWidget {
             .unwrap_or(ModeKind::Custom)
     }
 
+    fn stores_effort_override_for(mode: ModeKind) -> bool {
+        matches!(mode, ModeKind::Plan | ModeKind::Code)
+    }
+
+    fn model_for_mask<'a>(&'a self, mask: &'a CollaborationModeMask) -> &'a str {
+        mask.model
+            .as_deref()
+            .unwrap_or_else(|| self.current_collaboration_mode.model())
+    }
+
+    fn model_supports_reasoning_effort(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffortConfig>,
+    ) -> bool {
+        let Some(effort) = effort else {
+            return true;
+        };
+
+        self.models_manager
+            .try_list_picker_models(&self.config)
+            .ok()
+            .and_then(|models| models.into_iter().find(|preset| preset.model == model))
+            .is_some_and(|preset| {
+                preset
+                    .supported_reasoning_efforts
+                    .iter()
+                    .any(|option| option.effort == effort)
+            })
+    }
+
+    fn apply_reasoning_effort_override(
+        &self,
+        mut mask: CollaborationModeMask,
+    ) -> CollaborationModeMask {
+        if let Some(mode) = mask
+            .mode
+            .filter(|mode| Self::stores_effort_override_for(*mode))
+            && let Some(effort) = self.reasoning_effort_overrides.get(&mode)
+            && self.model_supports_reasoning_effort(self.model_for_mask(&mask), *effort)
+        {
+            mask.reasoning_effort = Some(*effort);
+        }
+        mask
+    }
+
     fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
         if !self.collaboration_modes_enabled() {
             return self.current_collaboration_mode.reasoning_effort();
@@ -5407,7 +5466,7 @@ impl ChatWidget {
         if !self.collaboration_modes_enabled() {
             return;
         }
-        self.active_collaboration_mask = Some(mask);
+        self.active_collaboration_mask = Some(self.apply_reasoning_effort_override(mask));
         self.update_collaboration_mode_indicator();
         self.refresh_model_display();
         self.update_footer_info();
