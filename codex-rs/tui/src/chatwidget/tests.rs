@@ -83,6 +83,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
+use dirs::home_dir;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 #[cfg(target_os = "windows")]
@@ -108,6 +109,17 @@ async fn test_config() -> Config {
         .build()
         .await
         .expect("config")
+}
+
+fn stable_snapshot_cwd() -> PathBuf {
+    let mut cwd = home_dir().expect("home directory");
+    cwd.push("Workspace/codey/codex-rs/tui");
+    cwd
+}
+
+fn apply_stable_snapshot_cwd(chat: &mut ChatWidget) {
+    chat.config.cwd = stable_snapshot_cwd();
+    chat.update_footer_info();
 }
 
 fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> ConstraintError {
@@ -824,6 +836,7 @@ async fn make_chatwidget_manual(
         config: cfg,
         current_collaboration_mode,
         active_collaboration_mask: None,
+        reasoning_effort_overrides: HashMap::new(),
         auth_manager,
         models_manager,
         otel_manager,
@@ -2482,6 +2495,137 @@ async fn set_reasoning_effort_updates_active_collaboration_mask() {
 
     assert_eq!(chat.current_reasoning_effort(), None);
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+}
+
+#[tokio::test]
+async fn plan_effort_override_survives_mode_switch() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let code_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Code)
+            .expect("expected code collaboration mask");
+    chat.set_collaboration_mask(code_mask);
+
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::High)
+    );
+}
+
+#[tokio::test]
+async fn plan_effort_override_is_restored_for_supported_model() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+    chat.set_model("gpt-5.2-codex");
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Low));
+
+    let code_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Code)
+            .expect("expected code collaboration mask");
+    chat.set_collaboration_mask(code_mask);
+
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.current_model(), "gpt-5.2-codex");
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::Low)
+    );
+}
+
+#[tokio::test]
+async fn plan_effort_override_is_not_restored_for_unsupported_model() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+    chat.set_model("gpt-5.2-codex");
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Low));
+
+    let code_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Code)
+            .expect("expected code collaboration mask");
+    chat.set_collaboration_mask(code_mask);
+    chat.set_model("gpt-5.1-codex-mini");
+
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.current_model(), "gpt-5.1-codex-mini");
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::Medium)
+    );
+}
+
+#[tokio::test]
+async fn plan_explicit_default_effort_survives_mode_switch() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+    chat.set_reasoning_effort(None);
+
+    let code_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Code)
+            .expect("expected code collaboration mask");
+    chat.set_collaboration_mask(code_mask);
+
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.current_reasoning_effort(), None);
+}
+
+#[tokio::test]
+async fn plan_without_user_override_still_uses_preset_medium() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::Medium)
+    );
 }
 
 #[tokio::test]
@@ -4298,6 +4442,7 @@ async fn status_widget_and_approval_modal_snapshot() {
 #[tokio::test]
 async fn status_widget_active_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    apply_stable_snapshot_cwd(&mut chat);
     // Activate the status indicator by simulating a task start.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
@@ -4326,6 +4471,7 @@ async fn status_widget_active_snapshot() {
 #[tokio::test]
 async fn mcp_startup_header_booting_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    apply_stable_snapshot_cwd(&mut chat);
     chat.show_welcome_banner = false;
 
     chat.handle_codex_event(Event {
@@ -5088,6 +5234,7 @@ async fn deltas_then_same_final_message_are_rendered_snapshot() {
 #[tokio::test]
 async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    apply_stable_snapshot_cwd(&mut chat);
     chat.handle_codex_event(Event {
         id: "t1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
@@ -5106,7 +5253,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
             path: "diff_render.rs".into(),
         },
     ];
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let cwd = stable_snapshot_cwd();
     chat.handle_codex_event(Event {
         id: "c1".into(),
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
@@ -5276,6 +5423,7 @@ printf 'fenced within fenced\n'
 #[tokio::test]
 async fn chatwidget_tall() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    apply_stable_snapshot_cwd(&mut chat);
     chat.thread_id = Some(ThreadId::new());
     chat.handle_codex_event(Event {
         id: "t1".into(),
@@ -5303,6 +5451,7 @@ async fn chatwidget_tall() {
 #[tokio::test]
 async fn review_queues_user_messages_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    apply_stable_snapshot_cwd(&mut chat);
     chat.thread_id = Some(ThreadId::new());
 
     chat.handle_codex_event(Event {
