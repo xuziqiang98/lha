@@ -1671,6 +1671,27 @@ mod tests {
         assert_eq!(&tool_names, &expected_tools,);
     }
 
+    fn assert_default_model_tools(
+        model_slug: &str,
+        features: &Features,
+        web_search_mode: Option<WebSearchMode>,
+        default_shell_tool: &'static str,
+        remaining_tools: &[&str],
+    ) {
+        let expected_tools = if cfg!(windows) {
+            std::iter::once(default_shell_tool)
+                .chain(remaining_tools.iter().copied())
+                .collect::<Vec<_>>()
+        } else {
+            std::iter::once("exec_command")
+                .chain(std::iter::once("write_stdin"))
+                .chain(remaining_tools.iter().copied())
+                .collect::<Vec<_>>()
+        };
+
+        assert_model_tools(model_slug, features, web_search_mode, &expected_tools);
+    }
+
     #[test]
     fn web_search_mode_cached_sets_external_web_access_false() {
         let config = test_config();
@@ -1719,12 +1740,12 @@ mod tests {
     fn test_build_specs_gpt5_codex_default() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5-codex",
             &features,
             Some(WebSearchMode::Cached),
+            "shell_command",
             &[
-                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1741,12 +1762,12 @@ mod tests {
     fn test_build_specs_gpt51_codex_default() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5.1-codex",
             &features,
             Some(WebSearchMode::Cached),
+            "shell_command",
             &[
-                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1811,12 +1832,12 @@ mod tests {
     fn test_codex_mini_defaults() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "codex-mini-latest",
             &features,
             Some(WebSearchMode::Cached),
+            "local_shell",
             &[
-                "local_shell",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1832,12 +1853,12 @@ mod tests {
     fn test_codex_5_1_mini_defaults() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5.1-codex-mini",
             &features,
             Some(WebSearchMode::Cached),
+            "shell_command",
             &[
-                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1854,12 +1875,12 @@ mod tests {
     fn test_gpt_5_defaults() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5",
             &features,
             Some(WebSearchMode::Cached),
+            "shell",
             &[
-                "shell",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
@@ -1875,12 +1896,12 @@ mod tests {
     fn test_gpt_5_1_defaults() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
-        assert_model_tools(
+        assert_default_model_tools(
             "gpt-5.1",
             &features,
             Some(WebSearchMode::Cached),
+            "shell_command",
             &[
-                "shell_command",
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
