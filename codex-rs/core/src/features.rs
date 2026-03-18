@@ -407,6 +407,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::UnifiedExec,
+        key: "unified_exec",
+        stage: Stage::Stable,
+        default_enabled: !cfg!(windows),
+    },
+    FeatureSpec {
         id: Feature::WebSearchRequest,
         key: "web_search_request",
         stage: Stage::Deprecated,
@@ -416,17 +422,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::WebSearchCached,
         key: "web_search_cached",
         stage: Stage::Deprecated,
-        default_enabled: false,
-    },
-    // Experimental program. Rendered in the `/experimental` menu for users.
-    FeatureSpec {
-        id: Feature::UnifiedExec,
-        key: "unified_exec",
-        stage: Stage::Experimental {
-            name: "Background terminal",
-            menu_description: "Run long-running terminal commands in the background.",
-            announcement: "NEW! Try Background terminals for long-running commands. Enable in /experimental!",
-        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -624,4 +619,22 @@ pub fn maybe_push_unstable_features_warning(
         id: "".to_owned(),
         msg: EventMsg::Warning(WarningEvent { message }),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Feature;
+    use super::Stage;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn unified_exec_is_stable_and_enabled_by_default_off_windows() {
+        let stage = Feature::UnifiedExec.stage();
+
+        assert_eq!(Stage::Stable, stage);
+        assert_eq!(!cfg!(windows), Feature::UnifiedExec.default_enabled());
+        assert_eq!(None, stage.experimental_menu_name());
+        assert_eq!(None, stage.experimental_menu_description());
+        assert_eq!(None, stage.experimental_announcement());
+    }
 }
