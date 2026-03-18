@@ -42,6 +42,7 @@ use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::ItemCompletedEvent;
 use codex_core::protocol::McpStartupCompleteEvent;
 use codex_core::protocol::McpStartupStatus;
 use codex_core::protocol::McpStartupUpdateEvent;
@@ -70,6 +71,8 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
+use codex_protocol::items::ContextCompactionItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::parse_command::ParsedCommand;
@@ -262,6 +265,204 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
     assert_eq!(stored_message, message);
     assert_eq!(stored_elements, text_elements);
     assert_eq!(stored_images, local_images);
+}
+
+#[tokio::test]
+async fn status_shows_live_context_compact_count() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().expect("rollout file");
+    let configured = codex_core::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "compact-1".into(),
+        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: conversation_id,
+            turn_id: "turn-1".to_string(),
+            item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
+        }),
+    });
+    drain_insert_history(&mut rx);
+
+    let status = status_output_text(&mut chat, &mut rx);
+    assert!(
+        status
+            .lines()
+            .any(|line| line.contains("Context compact:") && line.contains("1")),
+        "expected context compact count in status, got {status:?}"
+    );
+}
+
+#[tokio::test]
+async fn status_resume_restores_context_compact_count_from_replay() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().expect("rollout file");
+    let configured = codex_core::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: Some(vec![
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id: conversation_id,
+                turn_id: "turn-1".to_string(),
+                item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
+            }),
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id: conversation_id,
+                turn_id: "turn-2".to_string(),
+                item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
+            }),
+        ]),
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    let status = status_output_text(&mut chat, &mut rx);
+    assert!(
+        status
+            .lines()
+            .any(|line| line.contains("Context compact:") && line.contains("2")),
+        "expected replayed compact count in status, got {status:?}"
+    );
+}
+
+#[tokio::test]
+async fn status_fork_resume_counts_only_child_thread_compactions() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let parent_thread_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().expect("rollout file");
+    let configured = codex_core::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: Some(parent_thread_id),
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: Some(vec![
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id: parent_thread_id,
+                turn_id: "turn-parent-1".to_string(),
+                item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
+            }),
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id: parent_thread_id,
+                turn_id: "turn-parent-2".to_string(),
+                item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
+            }),
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id: conversation_id,
+                turn_id: "turn-child-1".to_string(),
+                item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
+            }),
+        ]),
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    let status = status_output_text(&mut chat, &mut rx);
+    assert!(
+        status
+            .lines()
+            .any(|line| line.contains("Context compact:") && line.contains("1")),
+        "expected only child-thread compactions to be counted, got {status:?}"
+    );
+}
+
+#[tokio::test]
+async fn legacy_context_compacted_event_does_not_increment_count() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().expect("rollout file");
+    let configured = codex_core::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "compact-1".into(),
+        msg: EventMsg::ContextCompacted(codex_core::protocol::ContextCompactedEvent {}),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let transcript = lines_to_single_string(cells.last().expect("expected compacted message"));
+    assert!(
+        transcript.contains("Context compacted"),
+        "expected transcript message, got {transcript:?}"
+    );
+
+    let status = status_output_text(&mut chat, &mut rx);
+    assert!(
+        status
+            .lines()
+            .any(|line| line.contains("Context compact:") && line.contains("0")),
+        "expected legacy event not to increment count, got {status:?}"
+    );
 }
 
 #[tokio::test]
@@ -869,6 +1070,7 @@ async fn make_chatwidget_manual(
         thread_id: None,
         thread_name: None,
         forked_from: None,
+        context_compact_count: 0,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
@@ -990,6 +1192,16 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
         s.push('\n');
     }
     s
+}
+
+fn status_output_text(
+    chat: &mut ChatWidget,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> String {
+    chat.add_status_output();
+    let cells = drain_insert_history(rx);
+    let lines = cells.last().expect("expected /status history cell");
+    lines_to_single_string(lines)
 }
 
 fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {

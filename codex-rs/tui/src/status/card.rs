@@ -74,10 +74,12 @@ struct StatusHistoryCell {
     thread_name: Option<String>,
     session_id: Option<String>,
     forked_from: Option<String>,
+    context_compact_count: usize,
     token_usage: StatusTokenUsageData,
     rate_limits: StatusRateLimitData,
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn new_status_output(
     config: &Config,
@@ -94,6 +96,41 @@ pub(crate) fn new_status_output(
     collaboration_mode: Option<&str>,
     reasoning_effort_override: Option<Option<ReasoningEffort>>,
 ) -> CompositeHistoryCell {
+    new_status_output_with_context_compact_count(
+        config,
+        auth_manager,
+        token_info,
+        total_usage,
+        session_id,
+        thread_name,
+        forked_from,
+        rate_limits,
+        plan_type,
+        now,
+        model_name,
+        collaboration_mode,
+        reasoning_effort_override,
+        0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn new_status_output_with_context_compact_count(
+    config: &Config,
+    auth_manager: &AuthManager,
+    token_info: Option<&TokenUsageInfo>,
+    total_usage: &TokenUsage,
+    session_id: &Option<ThreadId>,
+    thread_name: Option<String>,
+    forked_from: Option<ThreadId>,
+    rate_limits: Option<&RateLimitSnapshotDisplay>,
+    plan_type: Option<PlanType>,
+    now: DateTime<Local>,
+    model_name: &str,
+    collaboration_mode: Option<&str>,
+    reasoning_effort_override: Option<Option<ReasoningEffort>>,
+    context_compact_count: usize,
+) -> CompositeHistoryCell {
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
     let card = StatusHistoryCell::new(
         config,
@@ -109,6 +146,7 @@ pub(crate) fn new_status_output(
         model_name,
         collaboration_mode,
         reasoning_effort_override,
+        context_compact_count,
     );
 
     CompositeHistoryCell::new(vec![Box::new(command), Box::new(card)])
@@ -130,6 +168,7 @@ impl StatusHistoryCell {
         model_name: &str,
         collaboration_mode: Option<&str>,
         reasoning_effort_override: Option<Option<ReasoningEffort>>,
+        context_compact_count: usize,
     ) -> Self {
         let mut config_entries = vec![
             ("workdir", config.cwd.display().to_string()),
@@ -217,6 +256,7 @@ impl StatusHistoryCell {
             thread_name,
             session_id,
             forked_from,
+            context_compact_count,
             token_usage,
             rate_limits,
         }
@@ -419,6 +459,7 @@ impl HistoryCell for StatusHistoryCell {
         if self.token_usage.context_window.is_some() {
             push_label(&mut labels, &mut seen, "Context window");
         }
+        push_label(&mut labels, &mut seen, "Context compact");
 
         if self.show_limits {
             self.collect_rate_limit_labels(&mut seen, &mut labels);
@@ -492,6 +533,10 @@ impl HistoryCell for StatusHistoryCell {
         if let Some(spans) = self.context_window_spans() {
             lines.push(formatter.line("Context window", spans));
         }
+        lines.push(formatter.line(
+            "Context compact",
+            vec![Span::from(self.context_compact_count.to_string())],
+        ));
 
         if self.show_limits {
             lines.extend(self.rate_limit_lines(available_inner_width, &formatter));

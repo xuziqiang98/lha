@@ -527,6 +527,7 @@ pub(crate) struct ChatWidget {
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
+    context_compact_count: usize,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -805,6 +806,7 @@ impl ChatWidget {
         self.thread_id = Some(event.session_id);
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
+        self.context_compact_count = 0;
         self.current_rollout_path = event.rollout_path.clone();
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
@@ -2284,6 +2286,7 @@ impl ChatWidget {
             thread_id: None,
             thread_name: None,
             forked_from: None,
+            context_compact_count: 0,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
@@ -2431,6 +2434,7 @@ impl ChatWidget {
             thread_id: None,
             thread_name: None,
             forked_from: None,
+            context_compact_count: 0,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
             plan_delta_buffer: String::new(),
@@ -2566,6 +2570,7 @@ impl ChatWidget {
             thread_id: None,
             thread_name: None,
             forked_from: None,
+            context_compact_count: 0,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
@@ -3492,6 +3497,11 @@ impl ChatWidget {
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_) => {}
             EventMsg::ItemCompleted(event) => {
+                if let codex_protocol::items::TurnItem::ContextCompaction(_) = &event.item
+                    && self.thread_id == Some(event.thread_id)
+                {
+                    self.context_compact_count += 1;
+                }
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = event.item {
                     self.on_plan_item_completed(plan_item.text);
                 }
@@ -3657,7 +3667,7 @@ impl ChatWidget {
             .unwrap_or(&default_usage);
         let collaboration_mode = self.collaboration_mode_label();
         let reasoning_effort_override = Some(self.effective_reasoning_effort());
-        self.add_to_history(crate::status::new_status_output(
+        self.add_to_history(crate::status::new_status_output_with_context_compact_count(
             &self.config,
             self.auth_manager.as_ref(),
             token_info,
@@ -3671,6 +3681,7 @@ impl ChatWidget {
             self.model_display_name(),
             collaboration_mode,
             reasoning_effort_override,
+            self.context_compact_count,
         ));
     }
 
