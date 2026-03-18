@@ -12,6 +12,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_core::protocol::EventMsg;
 use pretty_assertions::assert_eq;
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -20,6 +21,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_conversation_creates_new_rollout() -> Result<()> {
     let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path())?;
 
     let preview = "Hello A";
     let conversation_id = create_fake_rollout(
@@ -137,4 +139,19 @@ async fn fork_conversation_creates_new_rollout() -> Result<()> {
     );
 
     Ok(())
+}
+
+fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(config_toml, config_contents())
+}
+
+fn config_contents() -> &'static str {
+    r#"model = "o3"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+[features]
+remote_models = false
+"#
 }
