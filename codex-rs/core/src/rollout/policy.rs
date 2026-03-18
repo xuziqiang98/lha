@@ -52,7 +52,11 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
             // Plan items are derived from streaming tags and are not part of the
             // raw ResponseItem history, so we persist their completion to replay
             // them on resume without bloating rollouts with every item lifecycle.
-            matches!(event.item, codex_protocol::items::TurnItem::Plan(_))
+            matches!(
+                event.item,
+                codex_protocol::items::TurnItem::Plan(_)
+                    | codex_protocol::items::TurnItem::ContextCompaction(_)
+            )
         }
         EventMsg::Error(_)
         | EventMsg::Warning(_)
@@ -108,5 +112,42 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::CollabWaitingEnd(_)
         | EventMsg::CollabCloseBegin(_)
         | EventMsg::CollabCloseEnd(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_persist_event_msg;
+    use crate::protocol::EventMsg;
+    use crate::protocol::ItemCompletedEvent;
+    use codex_protocol::ThreadId;
+    use codex_protocol::items::ContextCompactionItem;
+    use codex_protocol::items::PlanItem;
+    use codex_protocol::items::TurnItem;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn persists_context_compaction_item_completed_events() {
+        let event = EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
+        });
+
+        assert_eq!(should_persist_event_msg(&event), true);
+    }
+
+    #[test]
+    fn still_persists_plan_item_completed_events() {
+        let event = EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            item: TurnItem::Plan(PlanItem {
+                id: "plan-1".to_string(),
+                text: "plan".to_string(),
+            }),
+        });
+
+        assert_eq!(should_persist_event_msg(&event), true);
     }
 }
