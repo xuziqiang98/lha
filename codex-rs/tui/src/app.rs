@@ -11,6 +11,11 @@ use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use crate::changelog::ChangelogOutput;
+use crate::changelog::DirectorySnapshot;
+use crate::changelog::get_git_changelog;
+use crate::changelog::get_non_git_changelog;
+use crate::changelog::git_repo_root;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
 use crate::cwd_prompt::CwdPromptAction;
@@ -86,6 +91,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -101,6 +107,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::watch;
 use toml::Value as TomlValue;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
@@ -556,6 +563,7 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
+    non_git_changelog_baselines: HashMap<PathBuf, Arc<NonGitBaselineTracker>>,
 }
 
 #[derive(Default)]
@@ -563,6 +571,38 @@ struct WindowsSandboxState {
     setup_started_at: Option<Instant>,
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
+}
+
+#[derive(Debug)]
+struct NonGitBaselineTracker {
+    result: watch::Sender<Option<Result<Arc<DirectorySnapshot>, String>>>,
+}
+
+impl NonGitBaselineTracker {
+    fn store(&self, result: Result<Arc<DirectorySnapshot>, String>) {
+        self.result.send_replace(Some(result));
+    }
+
+    async fn wait_ready(&self) -> Result<Arc<DirectorySnapshot>, String> {
+        let mut receiver = self.result.subscribe();
+
+        loop {
+            if let Some(result) = receiver.borrow().clone() {
+                return result;
+            }
+
+            receiver.changed().await.map_err(|_| {
+                "changelog baseline tracker closed before a result was produced".to_string()
+            })?;
+        }
+    }
+}
+
+impl Default for NonGitBaselineTracker {
+    fn default() -> Self {
+        let (result, _) = watch::channel(None);
+        Self { result }
+    }
 }
 
 fn normalize_harness_overrides_for_cwd(
@@ -583,6 +623,108 @@ fn normalize_harness_overrides_for_cwd(
 }
 
 impl App {
+    async fn ensure_non_git_changelog_baseline(&mut self, cwd: PathBuf) -> Result<(), String> {
+        if self.non_git_changelog_baselines.contains_key(&cwd) {
+            return Ok(());
+        }
+
+        if git_repo_root(&cwd)
+            .await
+            .map_err(|err| err.to_string())?
+            .is_some()
+        {
+            return Ok(());
+        }
+
+        let tracker = Arc::new(NonGitBaselineTracker::default());
+        self.non_git_changelog_baselines
+            .insert(cwd.clone(), tracker.clone());
+
+        tokio::spawn(async move {
+            let result = crate::changelog::capture_directory_snapshot(cwd)
+                .await
+                .map(Arc::new)
+                .map_err(|err| err.to_string());
+            tracker.store(result);
+        });
+
+        Ok(())
+    }
+
+    async fn request_changelog(&mut self) {
+        let cwd = self.config.cwd.clone();
+        let tx = self.app_event_tx.clone();
+
+        match git_repo_root(&cwd).await {
+            Ok(Some(_)) => {
+                tokio::spawn(async move {
+                    let result = get_git_changelog(&cwd)
+                        .await
+                        .and_then(|output| {
+                            output.ok_or_else(|| io::Error::other("git changelog unavailable"))
+                        })
+                        .map_err(|err| err.to_string());
+                    tx.send(AppEvent::ChangelogResult(result));
+                });
+                return;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                self.app_event_tx
+                    .send(AppEvent::ChangelogResult(Err(err.to_string())));
+                return;
+            }
+        }
+
+        if let Err(err) = self.ensure_non_git_changelog_baseline(cwd.clone()).await {
+            self.app_event_tx.send(AppEvent::ChangelogResult(Err(err)));
+            return;
+        }
+
+        let Some(tracker) = self.non_git_changelog_baselines.get(&cwd).cloned() else {
+            self.app_event_tx
+                .send(AppEvent::ChangelogResult(Err(format!(
+                    "missing changelog baseline for {}",
+                    cwd.display()
+                ))));
+            return;
+        };
+
+        tokio::spawn(async move {
+            let result = match tracker.wait_ready().await {
+                Ok(baseline) => get_non_git_changelog(&cwd, baseline.as_ref())
+                    .await
+                    .map_err(|err| err.to_string()),
+                Err(err) => Err(err),
+            };
+            tx.send(AppEvent::ChangelogResult(result));
+        });
+    }
+
+    fn insert_history_cell(&mut self, cell: Box<dyn HistoryCell>, tui: &mut tui::Tui) {
+        let cell: Arc<dyn HistoryCell> = cell.into();
+        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+            t.insert_cell(cell.clone());
+            tui.frame_requester().schedule_frame();
+        }
+        self.transcript_cells.push(cell.clone());
+        let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+        if !display.is_empty() {
+            if !cell.is_stream_continuation() {
+                if self.has_emitted_history_lines {
+                    display.insert(0, Line::from(""));
+                } else {
+                    self.has_emitted_history_lines = true;
+                }
+            }
+            if self.overlay.is_some() {
+                self.deferred_history_lines.extend(display);
+            } else {
+                tui.insert_history_lines(display);
+            }
+        }
+    }
+
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
         tui: &mut tui::Tui,
@@ -1307,7 +1449,19 @@ impl App {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            non_git_changelog_baselines: HashMap::new(),
         };
+
+        if let Err(err) = app
+            .ensure_non_git_changelog_baseline(app.config.cwd.clone())
+            .await
+        {
+            tracing::warn!(
+                cwd = %app.config.cwd.display(),
+                %err,
+                "failed to prewarm changelog baseline"
+            );
+        }
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -1566,6 +1720,16 @@ impl App {
                                 self.config = resume_config;
                                 tui.set_notification_method(self.config.tui_notification_method);
                                 self.file_search.update_search_dir(self.config.cwd.clone());
+                                if let Err(err) = self
+                                    .ensure_non_git_changelog_baseline(self.config.cwd.clone())
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        cwd = %self.config.cwd.display(),
+                                        %err,
+                                        "failed to prewarm changelog baseline after cwd switch"
+                                    );
+                                }
                                 let init = self.chatwidget_init_for_forked_or_resumed_thread(
                                     tui,
                                     self.config.clone(),
@@ -1656,32 +1820,7 @@ impl App {
 
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::InsertHistoryCell(cell) => {
-                let cell: Arc<dyn HistoryCell> = cell.into();
-                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_cell(cell.clone());
-                    tui.frame_requester().schedule_frame();
-                }
-                self.transcript_cells.push(cell.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
-                if !display.is_empty() {
-                    // Only insert a separating blank line for new cells that are not
-                    // part of an ongoing stream. Streaming continuations should not
-                    // accrue extra blank lines between chunks.
-                    if !cell.is_stream_continuation() {
-                        if self.has_emitted_history_lines {
-                            display.insert(0, Line::from(""));
-                        } else {
-                            self.has_emitted_history_lines = true;
-                        }
-                    }
-                    if self.overlay.is_some() {
-                        self.deferred_history_lines.extend(display);
-                    } else {
-                        tui.insert_history_lines(display);
-                    }
-                }
-            }
+            AppEvent::InsertHistoryCell(cell) => self.insert_history_cell(cell, tui),
             AppEvent::StartCommitAnimation => {
                 if self
                     .commit_anim_running
@@ -1719,6 +1858,9 @@ impl App {
             AppEvent::CodexOp(op) => {
                 self.chat_widget.submit_op(op);
             }
+            AppEvent::RequestChangelog => {
+                self.request_changelog().await;
+            }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
                 self.chat_widget.on_diff_complete();
@@ -1735,6 +1877,37 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::ChangelogResult(result) => match result {
+                Ok(ChangelogOutput::Entries {
+                    display_root,
+                    entries,
+                }) => {
+                    if entries.is_empty() {
+                        self.insert_history_cell(
+                            Box::new(history_cell::new_info_event(
+                                "No changes detected.".to_string(),
+                                None,
+                            )),
+                            tui,
+                        );
+                    } else {
+                        self.insert_history_cell(
+                            Box::new(history_cell::new_changelog_output(
+                                entries,
+                                &self.config.cwd,
+                                &display_root,
+                            )),
+                            tui,
+                        );
+                    }
+                }
+                Err(err) => self.insert_history_cell(
+                    Box::new(history_cell::new_error_event(format!(
+                        "Failed to collect changelog: {err}"
+                    ))),
+                    tui,
+                ),
+            },
             AppEvent::OpenAppLink {
                 title,
                 description,
@@ -2794,6 +2967,104 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn non_git_baseline_tracker_wait_ready_returns_stored_result() {
+        let tracker = NonGitBaselineTracker::default();
+        tracker.store(Err("boom".to_string()));
+
+        assert_eq!(tracker.wait_ready().await, Err("boom".to_string()));
+    }
+
+    #[tokio::test]
+    async fn non_git_baseline_tracker_wait_ready_wakes_after_store() {
+        let tracker = Arc::new(NonGitBaselineTracker::default());
+        let waiting_tracker = tracker.clone();
+        let wait_task = tokio::spawn(async move { waiting_tracker.wait_ready().await });
+
+        tokio::task::yield_now().await;
+        tracker.store(Err("later".to_string()));
+
+        let result = time::timeout(Duration::from_secs(1), wait_task)
+            .await
+            .expect("wait task should complete")
+            .expect("wait task should not panic");
+        assert_eq!(result, Err("later".to_string()));
+    }
+
+    #[tokio::test]
+    async fn request_changelog_uses_session_baseline_outside_git() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let temp_dir = tempdir().expect("tempdir");
+        let cwd = temp_dir.path().to_path_buf();
+        let path = cwd.join("tracked.txt");
+        std::fs::write(&path, "before").expect("write initial file");
+        app.config.cwd = cwd.clone();
+
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.ensure_non_git_changelog_baseline(cwd.clone())
+            .await
+            .expect("prepare baseline");
+        let tracker = app
+            .non_git_changelog_baselines
+            .get(&cwd)
+            .cloned()
+            .expect("baseline tracker");
+        tracker.wait_ready().await.expect("baseline ready");
+        std::fs::write(&path, "after").expect("update file");
+
+        app.request_changelog().await;
+
+        let event = time::timeout(std::time::Duration::from_secs(2), app_event_rx.recv())
+            .await
+            .expect("wait for changelog result")
+            .expect("result event");
+
+        match event {
+            AppEvent::ChangelogResult(Ok(ChangelogOutput::Entries {
+                display_root,
+                entries,
+            })) => {
+                assert_eq!(display_root, cwd);
+                assert_eq!(
+                    entries,
+                    vec![crate::changelog::ChangelogEntry {
+                        kind: crate::changelog::ChangelogKind::Modified,
+                        path,
+                    }]
+                );
+            }
+            other => panic!("expected changelog result, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn request_changelog_missing_cwd_reports_error_event() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let temp_dir = tempdir().expect("tempdir");
+        let missing_cwd = temp_dir.path().join("missing");
+        app.config.cwd = missing_cwd.clone();
+
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.request_changelog().await;
+
+        let event = time::timeout(Duration::from_secs(2), app_event_rx.recv())
+            .await
+            .expect("wait for changelog error")
+            .expect("result event");
+
+        match event {
+            AppEvent::ChangelogResult(Err(err)) => {
+                assert!(
+                    !err.is_empty(),
+                    "expected changelog setup failure to produce a message"
+                );
+            }
+            other => panic!("expected changelog error result, got {other:?}"),
+        }
+    }
+
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
@@ -2839,6 +3110,7 @@ mod tests {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            non_git_changelog_baselines: HashMap::new(),
         }
     }
 
@@ -2892,6 +3164,7 @@ mod tests {
                 primary_thread_id: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
+                non_git_changelog_baselines: HashMap::new(),
             },
             rx,
             op_rx,
