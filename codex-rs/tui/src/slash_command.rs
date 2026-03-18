@@ -31,6 +31,7 @@ pub enum SlashCommand {
     Collab,
     Agent,
     // Undo,
+    Changelog,
     Diff,
     Mention,
     Status,
@@ -71,6 +72,7 @@ impl SlashCommand {
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent => "switch the active agent thread",
+            SlashCommand::Changelog => "show added, modified, and deleted files",
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
@@ -108,6 +110,7 @@ impl SlashCommand {
             | SlashCommand::Review
             | SlashCommand::Logout => false,
             SlashCommand::Diff
+            | SlashCommand::Changelog
             | SlashCommand::Rename
             | SlashCommand::Mention
             | SlashCommand::Skills

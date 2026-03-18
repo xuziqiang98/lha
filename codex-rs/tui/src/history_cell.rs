@@ -10,6 +10,9 @@
 //! bumps the active-cell revision tracked by `ChatWidget`, so the cache key changes whenever the
 //! rendered transcript output can change.
 
+use crate::changelog::ChangelogEntry;
+use crate::changelog::ChangelogKind;
+use crate::changelog::format_changelog_path;
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -1752,6 +1755,41 @@ pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHist
     PlainHistoryCell { lines }
 }
 
+pub(crate) fn new_changelog_output(
+    entries: Vec<ChangelogEntry>,
+    cwd: &Path,
+    display_root: &Path,
+) -> PlainHistoryCell {
+    let mut lines: Vec<Line<'static>> = vec!["Changed files".bold().into()];
+
+    for (kind, title, marker) in [
+        (ChangelogKind::Added, "Added", "A"),
+        (ChangelogKind::Modified, "Modified", "M"),
+        (ChangelogKind::Deleted, "Deleted", "D"),
+    ] {
+        let grouped: Vec<&ChangelogEntry> =
+            entries.iter().filter(|entry| entry.kind == kind).collect();
+        if grouped.is_empty() {
+            continue;
+        }
+
+        lines.push(Line::from(""));
+        lines.push(format!("{title} ({})", grouped.len()).bold().into());
+
+        for entry in grouped {
+            let marker = match kind {
+                ChangelogKind::Added => marker.green(),
+                ChangelogKind::Modified => marker.cyan(),
+                ChangelogKind::Deleted => marker.red(),
+            };
+            let path = format_changelog_path(&entry.path, cwd, display_root);
+            lines.push(vec!["  └ ".into(), marker, " ".dim(), path.dim()].into());
+        }
+    }
+
+    PlainHistoryCell { lines }
+}
+
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // Use a hair space (U+200A) to create a subtle, near-invisible separation
     // before the text. VS16 is intentionally omitted to keep spacing tighter
@@ -2144,6 +2182,73 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines(u16::MAX))
+    }
+
+    #[test]
+    fn changelog_output_groups_entries_and_formats_paths() {
+        let home = home_dir().expect("home directory");
+        let cwd = Path::new("/repo/project");
+        let repo_root = Path::new("/repo/project");
+        let lines = new_changelog_output(
+            vec![
+                ChangelogEntry {
+                    kind: ChangelogKind::Added,
+                    path: PathBuf::from("/repo/project/src/main.rs"),
+                },
+                ChangelogEntry {
+                    kind: ChangelogKind::Modified,
+                    path: home.join("notes/todo.md"),
+                },
+                ChangelogEntry {
+                    kind: ChangelogKind::Deleted,
+                    path: PathBuf::from("/opt/shared/old.txt"),
+                },
+            ],
+            cwd,
+            repo_root,
+        )
+        .display_lines(80);
+
+        assert_eq!(
+            render_lines(&lines),
+            vec![
+                "Changed files".to_string(),
+                "".to_string(),
+                "Added (1)".to_string(),
+                "  └ A ./src/main.rs".to_string(),
+                "".to_string(),
+                "Modified (1)".to_string(),
+                "  └ M ~/notes/todo.md".to_string(),
+                "".to_string(),
+                "Deleted (1)".to_string(),
+                "  └ D /opt/shared/old.txt".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn changelog_output_uses_repo_relative_paths_outside_cwd() {
+        let cwd = Path::new("/repo/project/app");
+        let repo_root = Path::new("/repo/project");
+        let lines = new_changelog_output(
+            vec![ChangelogEntry {
+                kind: ChangelogKind::Modified,
+                path: PathBuf::from("/repo/project/shared/lib.rs"),
+            }],
+            cwd,
+            repo_root,
+        )
+        .display_lines(80);
+
+        assert_eq!(
+            render_lines(&lines),
+            vec![
+                "Changed files".to_string(),
+                "".to_string(),
+                "Modified (1)".to_string(),
+                "  └ M ../shared/lib.rs".to_string(),
+            ]
+        );
     }
 
     fn image_block(data: &str) -> ContentBlock {

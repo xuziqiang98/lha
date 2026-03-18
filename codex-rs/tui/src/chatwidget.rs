@@ -2964,6 +2964,9 @@ impl ChatWidget {
                     tx.send(AppEvent::DiffResult(text));
                 });
             }
+            SlashCommand::Changelog => {
+                self.app_event_tx.send(AppEvent::RequestChangelog);
+            }
             SlashCommand::Mention => {
                 self.insert_str("@");
             }

@@ -58,6 +58,7 @@ mod app_backtrack;
 mod app_event;
 mod app_event_sender;
 mod bottom_pane;
+mod changelog;
 mod chatwidget;
 mod cli;
 mod clipboard_paste;

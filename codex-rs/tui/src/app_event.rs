@@ -19,6 +19,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 
 use crate::bottom_pane::ApprovalRequest;
+use crate::changelog::ChangelogOutput;
 use crate::history_cell::HistoryCell;
 use crate::provider_config::CustomProviderConfig;
 
@@ -101,6 +102,12 @@ pub(crate) enum AppEvent {
 
     /// Result of computing a `/diff` command.
     DiffResult(String),
+
+    /// Request computation of a `/changelog` command.
+    RequestChangelog,
+
+    /// Result of computing a `/changelog` command.
+    ChangelogResult(Result<ChangelogOutput, String>),
 
     /// Open the app link view in the bottom pane.
     OpenAppLink {

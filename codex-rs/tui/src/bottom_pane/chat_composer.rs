@@ -4127,6 +4127,36 @@ mod tests {
         assert!(matches!(result, InputResult::Command(SlashCommand::Diff)));
     }
 
+    #[test]
+    fn bare_changelog_dispatches_command() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.textarea.set_text_clearing_elements("/changelog");
+        composer.textarea.set_cursor("/changelog".len());
+        composer
+            .paste_burst
+            .begin_with_retro_grabbed(String::new(), Instant::now());
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(
+            result,
+            InputResult::Command(SlashCommand::Changelog)
+        ));
+    }
+
     /// Behavior: if a burst is buffering text and the user presses a non-char key, flush the
     /// buffered burst *before* applying that key so the buffer cannot get stuck.
     #[test]
@@ -4701,6 +4731,45 @@ mod tests {
                 panic!("expected command dispatch after Tab completion, got literal queue")
             }
             InputResult::None => panic!("expected Command result for '/diff'"),
+        }
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn slash_changelog_completed_with_tab_dispatches_command() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        type_chars_humanlike(&mut composer, &['/', 'c', 'h', 'a']);
+        let (_res, _redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(composer.textarea.text(), "/changelog ");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Command(cmd) => assert_eq!(cmd.command(), "changelog"),
+            InputResult::CommandWithArgs(_, _) => {
+                panic!("expected command dispatch without args for '/changelog'")
+            }
+            InputResult::Submitted { text, .. } => {
+                panic!("expected command dispatch after Tab completion, got literal submit: {text}")
+            }
+            InputResult::Queued { .. } => {
+                panic!("expected command dispatch after Tab completion, got literal queue")
+            }
+            InputResult::None => panic!("expected Command result for '/changelog'"),
         }
         assert!(composer.textarea.is_empty());
     }
