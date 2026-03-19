@@ -1110,6 +1110,15 @@ impl App {
     }
 
     fn open_agent_picker(&mut self) {
+        let has_non_primary_agent_thread = self
+            .thread_event_channels
+            .keys()
+            .any(|thread_id| Some(*thread_id) != self.primary_thread_id);
+        if !self.config.features.enabled(Feature::Collab) && !has_non_primary_agent_thread {
+            self.chat_widget.open_multi_agent_enable_prompt();
+            return;
+        }
+
         if self.thread_event_channels.is_empty() {
             self.chat_widget
                 .add_info_message("No agents available yet.".to_string(), None);
@@ -2888,6 +2897,7 @@ mod tests {
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ConfigToml;
     use codex_core::config::edit::ConfigEditsBuilder;
+    use codex_core::features::Feature;
     use codex_core::models_manager::manager::ModelsManager;
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::Event;
@@ -2898,6 +2908,7 @@ mod tests {
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
     use codex_protocol::user_input::TextElement;
+    use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
@@ -3062,6 +3073,51 @@ mod tests {
                 );
             }
             other => panic!("expected changelog error result, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn open_agent_picker_prompts_to_enable_multi_agent_when_disabled() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        app.open_agent_picker();
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match app_event_rx.try_recv() {
+            Ok(AppEvent::UpdateFeatureFlags { updates }) => {
+                assert_eq!(updates, vec![(Feature::Collab, true)]);
+            }
+            other => panic!("expected UpdateFeatureFlags event, got {other:?}"),
+        }
+        let cell = match app_event_rx.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+            other => panic!("expected InsertHistoryCell event, got {other:?}"),
+        };
+        let rendered = cell
+            .display_lines(120)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Multi-agent will be enabled in the next session."));
+    }
+
+    #[tokio::test]
+    async fn open_agent_picker_allows_existing_agent_threads_when_feature_is_disabled() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        let thread_id = ThreadId::new();
+        app.thread_event_channels
+            .insert(thread_id, ThreadEventChannel::new(4));
+
+        app.open_agent_picker();
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match app_event_rx.try_recv() {
+            Ok(AppEvent::SelectAgentThread(id)) => assert_eq!(id, thread_id),
+            other => panic!("expected SelectAgentThread event, got {other:?}"),
         }
     }
 

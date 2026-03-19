@@ -2230,6 +2230,7 @@ pub enum CommandExecutionStatus {
 pub enum CollabAgentTool {
     SpawnAgent,
     SendInput,
+    ResumeAgent,
     Wait,
     CloseAgent,
 }

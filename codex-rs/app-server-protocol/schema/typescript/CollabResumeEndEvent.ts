@@ -4,7 +4,7 @@
 import type { AgentStatus } from "./AgentStatus";
 import type { ThreadId } from "./ThreadId";
 
-export type CollabCloseEndEvent = { 
+export type CollabResumeEndEvent = { 
 /**
  * Identifier for the collab tool call.
  */
@@ -26,7 +26,6 @@ receiver_agent_nickname: string | null,
  */
 receiver_agent_role: string | null, 
 /**
- * Last known status of the receiver agent reported to the sender agent before
- * the close.
+ * Last known status of the receiver agent reported to the sender agent.
  */
 status: AgentStatus, };

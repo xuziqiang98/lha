@@ -544,6 +544,56 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
         }
+        EventMsg::CollabResumeBegin(begin_event) => {
+            let item = ThreadItem::CollabAgentToolCall {
+                id: begin_event.call_id,
+                tool: CollabAgentTool::ResumeAgent,
+                status: V2CollabToolCallStatus::InProgress,
+                sender_thread_id: begin_event.sender_thread_id.to_string(),
+                receiver_thread_ids: vec![begin_event.receiver_thread_id.to_string()],
+                prompt: None,
+                agents_states: HashMap::new(),
+            };
+            let notification = ItemStartedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemStarted(notification))
+                .await;
+        }
+        EventMsg::CollabResumeEnd(end_event) => {
+            let status = match &end_event.status {
+                codex_protocol::protocol::AgentStatus::Errored(_)
+                | codex_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
+                _ => V2CollabToolCallStatus::Completed,
+            };
+            let receiver_id = end_event.receiver_thread_id.to_string();
+            let agents_states = [(
+                receiver_id.clone(),
+                V2CollabAgentStatus::from(end_event.status),
+            )]
+            .into_iter()
+            .collect();
+            let item = ThreadItem::CollabAgentToolCall {
+                id: end_event.call_id,
+                tool: CollabAgentTool::ResumeAgent,
+                status,
+                sender_thread_id: end_event.sender_thread_id.to_string(),
+                receiver_thread_ids: vec![receiver_id],
+                prompt: None,
+                agents_states,
+            };
+            let notification = ItemCompletedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(notification))
+                .await;
+        }
         EventMsg::CollabCloseBegin(begin_event) => {
             let item = ThreadItem::CollabAgentToolCall {
                 id: begin_event.call_id,

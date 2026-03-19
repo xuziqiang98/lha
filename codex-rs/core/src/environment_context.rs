@@ -13,11 +13,23 @@ use std::path::PathBuf;
 pub(crate) struct EnvironmentContext {
     pub cwd: Option<PathBuf>,
     pub shell: Shell,
+    pub subagents: Option<String>,
 }
 
 impl EnvironmentContext {
     pub fn new(cwd: Option<PathBuf>, shell: Shell) -> Self {
-        Self { cwd, shell }
+        Self {
+            cwd,
+            shell,
+            subagents: None,
+        }
+    }
+
+    pub fn with_subagents(mut self, subagents: String) -> Self {
+        if !subagents.is_empty() {
+            self.subagents = Some(subagents);
+        }
+        self
     }
 
     /// Compares two environment contexts, ignoring the shell. Useful when
@@ -28,9 +40,10 @@ impl EnvironmentContext {
             cwd,
             // should compare all fields except shell
             shell: _,
+            subagents,
         } = other;
 
-        self.cwd == *cwd
+        self.cwd == *cwd && self.subagents == *subagents
     }
 
     pub fn diff(before: &TurnContext, after: &TurnContext, shell: &Shell) -> Self {
@@ -66,6 +79,11 @@ impl EnvironmentContext {
 
         let shell_name = self.shell.name();
         lines.push(format!("  <shell>{shell_name}</shell>"));
+        if let Some(subagents) = self.subagents {
+            lines.push("  <subagents>".to_string());
+            lines.extend(subagents.lines().map(|line| format!("    {line}")));
+            lines.push("  </subagents>".to_string());
+        }
         lines.push(ENVIRONMENT_CONTEXT_CLOSE_TAG.to_string());
         lines.join("\n")
     }
