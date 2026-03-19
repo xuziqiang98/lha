@@ -18,6 +18,14 @@ sender_thread_id: ThreadId,
  */
 receiver_thread_id: ThreadId, 
 /**
+ * User-facing nickname of the receiver agent, if known.
+ */
+receiver_agent_nickname: string | null, 
+/**
+ * Role label of the receiver agent, if known.
+ */
+receiver_agent_role: string | null, 
+/**
  * Prompt sent from the sender to the receiver. Can be empty to prevent CoT
  * leaking at the beginning.
  */

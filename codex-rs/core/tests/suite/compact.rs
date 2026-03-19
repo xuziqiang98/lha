@@ -5,6 +5,7 @@ use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
+use codex_core::config::generated_provider_profile_name;
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
@@ -2959,9 +2960,15 @@ async fn unknown_chat_model_adjacent_probe_failure_persists_learned_window() {
         .expect("read config.toml");
     let config_toml: codex_core::config::ConfigToml =
         toml::from_str(&raw_config).expect("parse config.toml");
+    let profile_name = test.config.active_profile.clone().unwrap_or_else(|| {
+        generated_provider_profile_name(
+            test.config.model_provider_id.as_str(),
+            "unknown-chat-model",
+        )
+    });
     let profile = config_toml
         .profiles
-        .get("_provider.openai.unknown-chat-model")
-        .expect("generated provider-profile");
+        .get(&profile_name)
+        .expect("persisted profile");
     assert_eq!(profile.model_context_window, Some(32_000));
 }

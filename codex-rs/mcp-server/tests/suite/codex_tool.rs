@@ -402,7 +402,11 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
     );
 
     let requests = server.received_requests().await.unwrap();
-    let request = requests[0].body_json::<serde_json::Value>()?;
+    let request = requests
+        .iter()
+        .find(|request| request.method == "POST" && request.url.path() == "/v1/chat/completions")
+        .ok_or_else(|| anyhow::anyhow!("expected POST request to /v1/chat/completions"))?
+        .body_json::<serde_json::Value>()?;
     let instructions = request["messages"][0]["content"].as_str().unwrap();
     assert!(instructions.starts_with("You are a helpful assistant."));
 

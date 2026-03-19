@@ -47,6 +47,8 @@ use codex_core::protocol::CollabAgentSpawnBeginEvent;
 use codex_core::protocol::CollabAgentSpawnEndEvent;
 use codex_core::protocol::CollabCloseBeginEvent;
 use codex_core::protocol::CollabCloseEndEvent;
+use codex_core::protocol::CollabResumeBeginEvent;
+use codex_core::protocol::CollabResumeEndEvent;
 use codex_core::protocol::CollabWaitingBeginEvent;
 use codex_core::protocol::CollabWaitingEndEvent;
 use codex_protocol::models::WebSearchAction;
@@ -147,6 +149,8 @@ impl EventProcessorWithJsonOutput {
             }
             protocol::EventMsg::CollabWaitingBegin(ev) => self.handle_collab_wait_begin(ev),
             protocol::EventMsg::CollabWaitingEnd(ev) => self.handle_collab_wait_end(ev),
+            protocol::EventMsg::CollabResumeBegin(ev) => self.handle_collab_resume_begin(ev),
+            protocol::EventMsg::CollabResumeEnd(ev) => self.handle_collab_resume_end(ev),
             protocol::EventMsg::CollabCloseBegin(ev) => self.handle_collab_close_begin(ev),
             protocol::EventMsg::CollabCloseEnd(ev) => self.handle_collab_close_end(ev),
             protocol::EventMsg::PatchApplyBegin(ev) => self.handle_patch_apply_begin(ev),
@@ -528,6 +532,35 @@ impl EventProcessorWithJsonOutput {
             receiver_thread_ids,
             None,
             agents_states,
+            status,
+        )
+    }
+
+    fn handle_collab_resume_begin(&mut self, ev: &CollabResumeBeginEvent) -> Vec<ThreadEvent> {
+        self.start_collab_tool_call(
+            &ev.call_id,
+            CollabTool::ResumeAgent,
+            ev.sender_thread_id.to_string(),
+            vec![ev.receiver_thread_id.to_string()],
+            None,
+        )
+    }
+
+    fn handle_collab_resume_end(&mut self, ev: &CollabResumeEndEvent) -> Vec<ThreadEvent> {
+        let receiver_id = ev.receiver_thread_id.to_string();
+        let agent_state = CollabAgentState::from(ev.status.clone());
+        let status = if is_collab_failure(&ev.status) {
+            CollabToolCallStatus::Failed
+        } else {
+            CollabToolCallStatus::Completed
+        };
+        self.finish_collab_tool_call(
+            &ev.call_id,
+            CollabTool::ResumeAgent,
+            ev.sender_thread_id.to_string(),
+            vec![receiver_id.clone()],
+            None,
+            [(receiver_id, agent_state)].into_iter().collect(),
             status,
         )
     }

@@ -324,6 +324,10 @@ impl ThreadManagerState {
             .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))
     }
 
+    pub(crate) async fn list_thread_ids(&self) -> Vec<ThreadId> {
+        self.threads.read().await.keys().copied().collect()
+    }
+
     /// Send an operation to a thread by ID.
     pub(crate) async fn send_op(&self, thread_id: ThreadId, op: Op) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
@@ -411,6 +415,41 @@ impl ThreadManagerState {
         )
         .await?;
         self.finalize_thread_spawn(codex, thread_id).await
+    }
+
+    pub(crate) async fn spawn_thread_with_initial_history_and_source(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        agent_control: AgentControl,
+        session_source: SessionSource,
+    ) -> CodexResult<NewThread> {
+        self.spawn_thread_with_source(
+            config,
+            initial_history,
+            Arc::clone(&self.auth_manager),
+            agent_control,
+            session_source,
+            Vec::new(),
+        )
+        .await
+    }
+
+    pub(crate) async fn resume_thread_from_rollout_with_source(
+        &self,
+        config: Config,
+        rollout_path: PathBuf,
+        agent_control: AgentControl,
+        session_source: SessionSource,
+    ) -> CodexResult<NewThread> {
+        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        self.spawn_thread_with_initial_history_and_source(
+            config,
+            initial_history,
+            agent_control,
+            session_source,
+        )
+        .await
     }
 
     async fn finalize_thread_spawn(

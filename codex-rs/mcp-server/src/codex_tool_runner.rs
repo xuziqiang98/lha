@@ -375,6 +375,8 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::CollabAgentInteractionEnd(_)
                     | EventMsg::CollabWaitingBegin(_)
                     | EventMsg::CollabWaitingEnd(_)
+                    | EventMsg::CollabResumeBegin(_)
+                    | EventMsg::CollabResumeEnd(_)
                     | EventMsg::CollabCloseBegin(_)
                     | EventMsg::CollabCloseEnd(_)
                     | EventMsg::DeprecationNotice(_) => {

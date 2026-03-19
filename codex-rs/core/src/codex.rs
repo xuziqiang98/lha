@@ -2033,10 +2033,15 @@ impl Session {
                 .into(),
             );
         }
-        items.push(ResponseItem::from(EnvironmentContext::new(
-            Some(turn_context.cwd.clone()),
-            shell.as_ref().clone(),
-        )));
+        let subagents = self
+            .services
+            .agent_control
+            .format_environment_context_subagents(self.conversation_id)
+            .await;
+        items.push(ResponseItem::from(
+            EnvironmentContext::new(Some(turn_context.cwd.clone()), shell.as_ref().clone())
+                .with_subagents(subagents),
+        ));
         items
     }
 
@@ -3836,24 +3841,25 @@ async fn learn_dynamic_context_window(
     let profile = active_profile.unwrap_or_else(|| {
         generated_provider_profile_name(model_provider_id.as_str(), model.as_str())
     });
+    let profile_segments =
+        |segment: &str| vec!["profiles".to_string(), profile.clone(), segment.to_string()];
     let mut edits = vec![ConfigEdit::SetPath {
-        segments: vec!["model_context_window".to_string()],
+        segments: profile_segments("model_context_window"),
         value: value(context_window),
     }];
 
     if write_generated_profile {
         edits.push(ConfigEdit::SetPath {
-            segments: vec!["model".to_string()],
+            segments: profile_segments("model"),
             value: value(model.clone()),
         });
         edits.push(ConfigEdit::SetPath {
-            segments: vec!["model_provider".to_string()],
+            segments: profile_segments("model_provider"),
             value: value(model_provider_id),
         });
     }
 
     if let Err(err) = ConfigEditsBuilder::new(codex_home.as_path())
-        .with_profile(Some(profile.as_str()))
         .with_edits(edits)
         .apply()
         .await

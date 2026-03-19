@@ -30,6 +30,7 @@ pub enum SlashCommand {
     Plan,
     Collab,
     Agent,
+    MultiAgents,
     // Undo,
     Changelog,
     Diff,
@@ -71,7 +72,7 @@ impl SlashCommand {
             SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Collab => "change collaboration mode (experimental)",
-            SlashCommand::Agent => "switch the active agent thread",
+            SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
             SlashCommand::Changelog => "show added, modified, and deleted files",
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
@@ -125,7 +126,7 @@ impl SlashCommand {
             SlashCommand::TestApproval => true,
             SlashCommand::Plan => true,
             SlashCommand::Collab => true,
-            SlashCommand::Agent => true,
+            SlashCommand::Agent | SlashCommand::MultiAgents => true,
         }
     }
 
@@ -143,4 +144,30 @@ pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
         .filter(|command| command.is_visible())
         .map(|c| (c.command(), c))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use std::str::FromStr;
+
+    #[test]
+    fn multi_agents_alias_parses() {
+        assert_eq!(
+            SlashCommand::from_str("multi-agents").expect("parse alias"),
+            SlashCommand::MultiAgents
+        );
+    }
+
+    #[test]
+    fn built_in_commands_include_multi_agents_alias() {
+        assert!(
+            built_in_slash_commands()
+                .into_iter()
+                .any(|(command, slash_command)| {
+                    command == "multi-agents" && slash_command == SlashCommand::MultiAgents
+                })
+        );
+    }
 }

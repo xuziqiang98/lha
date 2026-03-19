@@ -273,6 +273,7 @@
       "enum": [
         "spawnAgent",
         "sendInput",
+        "resumeAgent",
         "wait",
         "closeAgent"
       ],
@@ -737,6 +738,20 @@
           "properties": {
             "thread_spawn": {
               "properties": {
+                "agent_nickname": {
+                  "default": null,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "agent_role": {
+                  "default": null,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "depth": {
                   "format": "int32",
                   "type": "integer"

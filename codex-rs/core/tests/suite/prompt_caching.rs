@@ -51,6 +51,14 @@ fn sse_completed(id: &str) -> String {
     load_sse_fixture_with_id("../fixtures/completed_template.json", id)
 }
 
+fn default_shell_tools(shell_tool: &str) -> Vec<String> {
+    if cfg!(windows) {
+        vec![shell_tool.to_string()]
+    } else {
+        vec!["exec_command".to_string(), "write_stdin".to_string()]
+    }
+}
+
 fn assert_tool_names(body: &serde_json::Value, expected_names: &[&str]) {
     assert_eq!(
         body["tools"]
@@ -131,20 +139,22 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let expected_tools_names = vec![
-        "shell_command",
-        "list_mcp_resources",
-        "list_mcp_resource_templates",
-        "read_mcp_resource",
-        "update_plan",
-        "request_user_input",
-        "apply_patch",
-        "web_search",
-        "view_image",
-    ];
+    let expected_tools_names = default_shell_tools("shell_command")
+        .into_iter()
+        .chain([
+            "list_mcp_resources".to_string(),
+            "list_mcp_resource_templates".to_string(),
+            "read_mcp_resource".to_string(),
+            "update_plan".to_string(),
+            "request_user_input".to_string(),
+            "apply_patch".to_string(),
+            "web_search".to_string(),
+            "view_image".to_string(),
+        ])
+        .collect::<Vec<_>>();
     let body0 = req1.single_request().body_json();
 
-    let expected_instructions = if expected_tools_names.contains(&"apply_patch") {
+    let expected_instructions = if expected_tools_names.contains(&"apply_patch".to_string()) {
         base_instructions
     } else {
         [base_instructions, APPLY_PATCH_TOOL_INSTRUCTIONS.to_string()].join("\n")
@@ -154,6 +164,10 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         body0["instructions"],
         serde_json::json!(expected_instructions),
     );
+    let expected_tools_names = expected_tools_names
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
     assert_tool_names(&body0, &expected_tools_names);
 
     let body1 = req2.single_request().body_json();

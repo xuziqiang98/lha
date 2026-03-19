@@ -6,6 +6,8 @@ use crate::protocol::Event;
 use crate::protocol::Op;
 use crate::protocol::Submission;
 use codex_protocol::config_types::Personality;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
@@ -73,6 +75,25 @@ impl CodexThread {
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.codex.thread_config_snapshot().await
+    }
+
+    pub(crate) async fn flush_rollout(&self) {
+        self.codex.session.flush_rollout().await;
+    }
+
+    pub(crate) async fn inject_user_message_without_turn(&self, message: String) {
+        let turn_context = self.codex.session.new_default_turn().await;
+        let item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText { text: message }],
+            end_turn: None,
+        };
+        self.codex
+            .session
+            .record_conversation_items(&turn_context, &[item])
+            .await;
+        self.codex.session.flush_rollout().await;
     }
 
     pub async fn update_model_provider(&self, provider: ModelProviderInfo) {

@@ -11,6 +11,8 @@ use codex_core::protocol::CollabAgentSpawnBeginEvent;
 use codex_core::protocol::CollabAgentSpawnEndEvent;
 use codex_core::protocol::CollabCloseBeginEvent;
 use codex_core::protocol::CollabCloseEndEvent;
+use codex_core::protocol::CollabResumeBeginEvent;
+use codex_core::protocol::CollabResumeEndEvent;
 use codex_core::protocol::CollabWaitingBeginEvent;
 use codex_core::protocol::CollabWaitingEndEvent;
 use codex_core::protocol::DeprecationNoticeEvent;
@@ -625,6 +627,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 new_thread_id,
                 prompt,
                 status,
+                ..
             }) => {
                 let success = new_thread_id.is_some() && !is_collab_status_failure(&status);
                 let title_style = if success { self.green } else { self.red };
@@ -662,6 +665,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 receiver_thread_id,
                 prompt,
                 status,
+                ..
             }) => {
                 let success = !is_collab_status_failure(&status);
                 let title_style = if success { self.green } else { self.red };
@@ -680,6 +684,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 sender_thread_id: _,
                 receiver_thread_ids,
                 call_id,
+                ..
             }) => {
                 ts_msg!(
                     self,
@@ -696,6 +701,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 sender_thread_id: _,
                 call_id,
                 statuses,
+                ..
             }) => {
                 if statuses.is_empty() {
                     ts_msg!(
@@ -748,12 +754,50 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 sender_thread_id: _,
                 receiver_thread_id,
                 status,
+                ..
             }) => {
                 let success = !is_collab_status_failure(&status);
                 let title_style = if success { self.green } else { self.red };
                 let title = format!(
                     "{} {}:",
                     format_collab_invocation("close_agent", &call_id, None),
+                    format_collab_status(&status)
+                );
+                ts_msg!(self, "{}", title.style(title_style));
+                eprintln!(
+                    "  receiver: {}",
+                    receiver_thread_id.to_string().style(self.dimmed)
+                );
+            }
+            EventMsg::CollabResumeBegin(CollabResumeBeginEvent {
+                call_id,
+                sender_thread_id: _,
+                receiver_thread_id,
+                ..
+            }) => {
+                ts_msg!(
+                    self,
+                    "{} {}",
+                    "collab".style(self.magenta),
+                    format_collab_invocation("resume_agent", &call_id, None).style(self.bold)
+                );
+                eprintln!(
+                    "  receiver: {}",
+                    receiver_thread_id.to_string().style(self.dimmed)
+                );
+            }
+            EventMsg::CollabResumeEnd(CollabResumeEndEvent {
+                call_id,
+                sender_thread_id: _,
+                receiver_thread_id,
+                status,
+                ..
+            }) => {
+                let success = !is_collab_status_failure(&status);
+                let title_style = if success { self.green } else { self.red };
+                let title = format!(
+                    "{} {}:",
+                    format_collab_invocation("resume_agent", &call_id, None),
                     format_collab_status(&status)
                 );
                 ts_msg!(self, "{}", title.style(title_style));

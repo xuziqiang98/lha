@@ -111,7 +111,7 @@ pub enum Feature {
     PowershellUtf8,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
     EnableRequestCompression,
-    /// Enable collab tools.
+    /// Enable multi-agent collaboration tools.
     Collab,
     /// Enable apps.
     Apps,
@@ -514,8 +514,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     FeatureSpec {
         id: Feature::Collab,
-        key: "collab",
-        stage: Stage::UnderDevelopment,
+        key: "multi_agent",
+        stage: Stage::Experimental {
+            name: "Multi-agents",
+            menu_description: "Ask Codex to spawn multiple agents to parallelize the work and win in efficiency.",
+            announcement: "NEW: Multi-agents can now be spawned by Codex. Enable in /experimental and restart Codex!",
+        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -625,6 +629,7 @@ pub fn maybe_push_unstable_features_warning(
 mod tests {
     use super::Feature;
     use super::Stage;
+    use super::feature_for_key;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -636,5 +641,11 @@ mod tests {
         assert_eq!(None, stage.experimental_menu_name());
         assert_eq!(None, stage.experimental_menu_description());
         assert_eq!(None, stage.experimental_announcement());
+    }
+
+    #[test]
+    fn collab_is_legacy_alias_for_multi_agent() {
+        assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
+        assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
     }
 }
