@@ -532,6 +532,16 @@ pub(crate) struct ChatWidget {
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
     context_compact_count: usize,
+    // Structured compactions are counted by item id so multiple compactions in the same turn
+    // are all reflected in `/status`.
+    counted_context_compaction_item_ids: HashSet<String>,
+    // Live legacy `ContextCompacted` events are emitted immediately after their structured
+    // counterpart and reuse the same outer event id, so we track how many should be suppressed.
+    pending_live_legacy_context_compactions: HashMap<String, usize>,
+    // Replay does not provide outer event ids; we therefore suppress only the next legacy compact
+    // event(s) that correspond to replayed structured compactions, including parent-thread events
+    // during fork replay.
+    pending_replay_legacy_context_compactions: usize,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -811,6 +821,9 @@ impl ChatWidget {
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
         self.context_compact_count = 0;
+        self.counted_context_compaction_item_ids.clear();
+        self.pending_live_legacy_context_compactions.clear();
+        self.pending_replay_legacy_context_compactions = 0;
         self.current_rollout_path = event.rollout_path.clone();
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
@@ -2326,6 +2339,9 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             context_compact_count: 0,
+            counted_context_compaction_item_ids: HashSet::new(),
+            pending_live_legacy_context_compactions: HashMap::new(),
+            pending_replay_legacy_context_compactions: 0,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
@@ -2474,6 +2490,9 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             context_compact_count: 0,
+            counted_context_compaction_item_ids: HashSet::new(),
+            pending_live_legacy_context_compactions: HashMap::new(),
+            pending_replay_legacy_context_compactions: 0,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
             plan_delta_buffer: String::new(),
@@ -2610,6 +2629,9 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             context_compact_count: 0,
+            counted_context_compaction_item_ids: HashSet::new(),
+            pending_live_legacy_context_compactions: HashMap::new(),
+            pending_replay_legacy_context_compactions: 0,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
@@ -3389,6 +3411,13 @@ impl ChatWidget {
             self.restore_retry_status_header_if_present();
         }
 
+        if from_replay
+            && self.pending_replay_legacy_context_compactions > 0
+            && !matches!(&msg, EventMsg::ContextCompacted(_))
+        {
+            self.pending_replay_legacy_context_compactions = 0;
+        }
+
         match msg {
             EventMsg::AgentMessageDelta(_)
             | EventMsg::PlanDelta(_)
@@ -3517,7 +3546,7 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request, from_replay)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
+            EventMsg::ContextCompacted(_) => self.on_context_compacted(id),
             EventMsg::CollabAgentSpawnBegin(_) => {}
             EventMsg::CollabAgentSpawnEnd(ev) => self.on_collab_event(collab::spawn_end(ev)),
             EventMsg::CollabAgentInteractionBegin(_) => {}
@@ -3538,16 +3567,70 @@ impl ChatWidget {
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_) => {}
             EventMsg::ItemCompleted(event) => {
-                if let codex_protocol::items::TurnItem::ContextCompaction(_) = &event.item
-                    && self.thread_id == Some(event.thread_id)
-                {
-                    self.context_compact_count += 1;
+                if let codex_protocol::items::TurnItem::ContextCompaction(_) = &event.item {
+                    // Replay omits the outer event id, but legacy compact events still follow
+                    // structured compaction events in order. Reserve a suppression slot even for
+                    // parent-thread compactions so fork replay does not misattribute them.
+                    if id.is_none() {
+                        self.pending_replay_legacy_context_compactions += 1;
+                    }
+
+                    if self.thread_id == Some(event.thread_id) {
+                        let item_id = event.item.id();
+                        if self.counted_context_compaction_item_ids.insert(item_id) {
+                            self.context_compact_count += 1;
+                            if let Some(event_id) = id.as_ref() {
+                                *self
+                                    .pending_live_legacy_context_compactions
+                                    .entry(event_id.clone())
+                                    .or_default() += 1;
+                            }
+                        }
+                    }
                 }
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = event.item {
                     self.on_plan_item_completed(plan_item.text);
                 }
             }
         }
+    }
+
+    fn on_context_compacted(&mut self, id: Option<String>) {
+        match id {
+            Some(event_id) => {
+                // Live legacy compaction notifications are compatibility echoes of structured
+                // compaction items. Consume a pending echo when present; otherwise treat it as a
+                // standalone legacy compact and count it.
+                let mut remove_entry = false;
+                let should_increment = if let Some(pending) = self
+                    .pending_live_legacy_context_compactions
+                    .get_mut(&event_id)
+                {
+                    *pending = pending.saturating_sub(1);
+                    remove_entry = *pending == 0;
+                    false
+                } else {
+                    true
+                };
+                if remove_entry {
+                    self.pending_live_legacy_context_compactions
+                        .remove(&event_id);
+                }
+                if should_increment {
+                    self.context_compact_count += 1;
+                }
+            }
+            None => {
+                // Replay has no event id, so suppress only the next expected legacy echo.
+                if self.pending_replay_legacy_context_compactions > 0 {
+                    self.pending_replay_legacy_context_compactions -= 1;
+                } else {
+                    self.context_compact_count += 1;
+                }
+            }
+        }
+
+        self.on_agent_message("Context compacted".to_owned());
     }
 
     fn on_entered_review_mode(&mut self, review: ReviewRequest, from_replay: bool) {
