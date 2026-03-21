@@ -1,5 +1,7 @@
 use crate::agent::AgentStatus;
 use crate::agent::guards::Guards;
+use crate::agent::role::DEFAULT_ROLE_NAME;
+use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -20,6 +22,7 @@ use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::watch;
 
+const AGENT_NAMES: &str = include_str!("agent_names.txt");
 const FORKED_SPAWN_AGENT_OUTPUT_MESSAGE: &str = "You are the newly spawned agent. The prior conversation history was forked from your parent agent. Treat the next user message as your new task, and use the forked history only as background context.";
 
 #[derive(Clone, Debug, Default)]
@@ -42,6 +45,31 @@ fn format_subagent_context_line(agent_id: &str, agent_nickname: Option<&str>) ->
         Some(agent_nickname) => format!("- {agent_id}: {agent_nickname}"),
         None => format!("- {agent_id}"),
     }
+}
+
+fn default_agent_nickname_list() -> Vec<&'static str> {
+    AGENT_NAMES
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+fn agent_nickname_candidates(
+    config: &crate::config::Config,
+    role_name: Option<&str>,
+) -> Vec<String> {
+    let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
+    if let Some(candidates) =
+        resolve_role_config(config, role_name).and_then(|role| role.nickname_candidates.clone())
+    {
+        return candidates;
+    }
+
+    default_agent_nickname_list()
+        .into_iter()
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 /// Control-plane handle for multi-agent operations.
@@ -89,7 +117,8 @@ impl AgentControl {
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
-        let session_source = normalize_thread_spawn_source(session_source, &mut reservation)?;
+        let session_source =
+            normalize_thread_spawn_source(&config, session_source, &mut reservation)?;
         let notification_source = session_source.clone();
 
         let new_thread = match session_source {
@@ -382,6 +411,7 @@ impl AgentControl {
 }
 
 fn normalize_thread_spawn_source(
+    config: &crate::config::Config,
     session_source: Option<SessionSource>,
     reservation: &mut crate::agent::guards::SpawnReservation,
 ) -> CodexResult<Option<SessionSource>> {
@@ -392,8 +422,13 @@ fn normalize_thread_spawn_source(
             agent_nickname,
             agent_role,
         })) => {
-            let reserved_nickname =
-                reservation.reserve_agent_nickname_with_preference(agent_nickname.as_deref())?;
+            let candidate_names = agent_nickname_candidates(config, agent_role.as_deref());
+            let candidate_name_refs: Vec<&str> =
+                candidate_names.iter().map(String::as_str).collect();
+            let reserved_nickname = reservation.reserve_agent_nickname_with_preference(
+                &candidate_name_refs,
+                agent_nickname.as_deref(),
+            )?;
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth,
@@ -429,8 +464,7 @@ async fn restore_thread_spawn_source_for_resume(
         }
         other => Some(other),
     };
-
-    normalize_thread_spawn_source(session_source, reservation)
+    normalize_thread_spawn_source(config, session_source, reservation)
 }
 
 async fn restored_thread_spawn_metadata(

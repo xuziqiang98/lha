@@ -1,8 +1,9 @@
-use crate::agent::AgentRole;
 use crate::agent::AgentStatus;
 use crate::agent::SpawnAgentOptions;
 use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
+use crate::agent::role::DEFAULT_ROLE_NAME;
+use crate::agent::role::apply_role_to_config;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
@@ -98,7 +99,7 @@ mod spawn {
     struct SpawnAgentArgs {
         message: Option<String>,
         items: Option<Vec<UserInput>>,
-        agent_type: Option<AgentRole>,
+        agent_type: Option<String>,
         #[serde(default)]
         fork_context: bool,
     }
@@ -116,12 +117,16 @@ mod spawn {
         arguments: String,
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: SpawnAgentArgs = parse_arguments(&arguments)?;
-        let agent_role = args.agent_type.unwrap_or(AgentRole::Default);
+        let role_name = args
+            .agent_type
+            .as_deref()
+            .map(str::trim)
+            .filter(|role| !role.is_empty());
         let input_items = parse_collab_input(args.message, args.items)?;
         let prompt = input_preview(&input_items);
         let session_source = turn.client.get_session_source();
         let child_depth = next_thread_spawn_depth(&session_source);
-        if exceeds_thread_spawn_depth_limit(child_depth) {
+        if exceeds_thread_spawn_depth_limit(child_depth, turn.client.config().agent_max_depth) {
             return Err(FunctionCallError::RespondToModel(
                 "Agent depth limit reached. Solve the task yourself.".to_string(),
             ));
@@ -137,15 +142,12 @@ mod spawn {
                 .into(),
             )
             .await;
-        let mut config = build_agent_spawn_config(
-            &session.get_base_instructions().await,
-            turn.as_ref(),
-            child_depth,
-        )?;
-        agent_role
-            .apply_to_config(&mut config)
+        let mut config =
+            build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+        apply_role_to_config(&mut config, role_name)
+            .await
             .map_err(FunctionCallError::RespondToModel)?;
-        let role_name = Some(agent_role_name(agent_role));
+        apply_spawn_agent_overrides(&mut config, child_depth);
 
         let result = session
             .services
@@ -156,7 +158,7 @@ mod spawn {
                 Some(thread_spawn_source(
                     session.conversation_id,
                     child_depth,
-                    role_name.as_deref(),
+                    role_name,
                 )),
                 SpawnAgentOptions {
                     fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
@@ -197,6 +199,7 @@ mod spawn {
             )
             .await;
         let new_thread_id = result?;
+        let _role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
 
         let content = serde_json::to_string(&SpawnAgentResult {
             agent_id: new_thread_id.to_string(),
@@ -338,7 +341,7 @@ mod resume_agent {
             .unwrap_or((None, None));
         let session_source = turn.client.get_session_source();
         let child_depth = next_thread_spawn_depth(&session_source);
-        if exceeds_thread_spawn_depth_limit(child_depth) {
+        if exceeds_thread_spawn_depth_limit(child_depth, turn.client.config().agent_max_depth) {
             return Err(FunctionCallError::RespondToModel(
                 "Agent depth limit reached. Solve the task yourself.".to_string(),
             ));
@@ -775,18 +778,12 @@ fn collab_agent_error(agent_id: ThreadId, err: CodexErr) -> FunctionCallError {
     }
 }
 
-fn build_agent_spawn_config(
+pub(crate) fn build_agent_spawn_config(
     base_instructions: &BaseInstructions,
     turn: &TurnContext,
-    child_depth: i32,
 ) -> Result<Config, FunctionCallError> {
     let mut config = build_agent_shared_config(turn)?;
     config.base_instructions = Some(base_instructions.text.clone());
-
-    if exceeds_thread_spawn_depth_limit(child_depth + 1) {
-        config.features.disable(Feature::Collab);
-    }
-
     Ok(config)
 }
 
@@ -795,9 +792,7 @@ fn build_agent_resume_config(
     child_depth: i32,
 ) -> Result<Config, FunctionCallError> {
     let mut config = build_agent_shared_config(turn)?;
-    if exceeds_thread_spawn_depth_limit(child_depth + 1) {
-        config.features.disable(Feature::Collab);
-    }
+    apply_spawn_agent_overrides(&mut config, child_depth);
     config.base_instructions = None;
     Ok(config)
 }
@@ -827,6 +822,12 @@ fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, FunctionCallE
             FunctionCallError::RespondToModel(format!("sandbox_policy is invalid: {err}"))
         })?;
     Ok(config)
+}
+
+fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32) {
+    if child_depth >= config.agent_max_depth {
+        config.features.disable(Feature::Collab);
+    }
 }
 
 fn thread_spawn_source(
@@ -911,21 +912,11 @@ fn build_wait_agent_statuses(
         .collect()
 }
 
-fn agent_role_name(agent_role: AgentRole) -> String {
-    match agent_role {
-        AgentRole::Default => "default".to_string(),
-        AgentRole::Orchestrator => "orchestrator".to_string(),
-        AgentRole::Worker => "worker".to_string(),
-        AgentRole::Explorer => "explorer".to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::CodexAuth;
     use crate::ThreadManager;
-    use crate::agent::MAX_THREAD_SPAWN_DEPTH;
     use crate::built_in_model_providers;
     use crate::client::ModelClient;
     use crate::codex::make_session_and_context;
@@ -1082,10 +1073,11 @@ mod tests {
         let (mut session, mut turn) = make_session_and_context().await;
         let manager = thread_manager();
         session.services.agent_control = manager.agent_control();
+        let max_depth = turn.client.config().agent_max_depth;
 
         let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: session.conversation_id,
-            depth: MAX_THREAD_SPAWN_DEPTH,
+            depth: max_depth,
             agent_nickname: None,
             agent_role: None,
         });
@@ -1419,7 +1411,7 @@ mod tests {
         turn.approval_policy = AskForApproval::Never;
         turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
 
-        let config = build_agent_spawn_config(&base_instructions, &turn, 0).expect("spawn config");
+        let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
         let mut expected = (*turn.client.config()).clone();
         expected.base_instructions = Some(base_instructions.text);
         expected.model = Some(turn.client.get_model());

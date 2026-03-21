@@ -96,6 +96,8 @@ pub use codex_git::GhostSnapshotConfig;
 /// the context window.
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
+pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
+pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 pub const GENERATED_PROVIDER_PROFILE_PREFIX: &str = "_provider.";
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
@@ -272,6 +274,14 @@ pub struct Config {
 
     /// Maximum number of agent threads that can be open concurrently.
     pub agent_max_threads: Option<usize>,
+    /// Maximum runtime in seconds for agent job workers before they are failed.
+    pub agent_job_max_runtime_seconds: Option<u64>,
+
+    /// Maximum nesting depth allowed for spawned agent threads.
+    pub agent_max_depth: i32,
+
+    /// User-defined role declarations keyed by role name.
+    pub agent_roles: BTreeMap<String, AgentRoleConfig>,
 
     /// Directory containing all Codex state (defaults to `~/.codey` but can be
     /// overridden by the `CODEY_HOME` environment variable).
@@ -1142,6 +1152,49 @@ pub struct AgentsToml {
     /// When unset, no limit is enforced.
     #[schemars(range(min = 1))]
     pub max_threads: Option<usize>,
+    /// Maximum nesting depth allowed for spawned agent threads.
+    /// Root sessions start at depth 0.
+    #[schemars(range(min = 1))]
+    pub max_depth: Option<i32>,
+    /// Default maximum runtime in seconds for agent job workers.
+    #[schemars(range(min = 1))]
+    pub job_max_runtime_seconds: Option<u64>,
+
+    /// User-defined role declarations keyed by role name.
+    ///
+    /// Example:
+    /// ```toml
+    /// [agents.researcher]
+    /// description = "Research-focused role."
+    /// config_file = "./agents/researcher.toml"
+    /// nickname_candidates = ["Herodotus", "Ibn Battuta"]
+    /// ```
+    #[serde(default, flatten)]
+    pub roles: BTreeMap<String, AgentRoleToml>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentRoleConfig {
+    /// Human-facing role documentation used in spawn tool guidance.
+    pub description: Option<String>,
+    /// Path to a role-specific config layer.
+    pub config_file: Option<PathBuf>,
+    /// Candidate nicknames for agents spawned with this role.
+    pub nickname_candidates: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AgentRoleToml {
+    /// Human-facing role documentation used in spawn tool guidance.
+    pub description: Option<String>,
+
+    /// Path to a role-specific config layer.
+    /// Relative paths are resolved relative to the `config.toml` that defines them.
+    pub config_file: Option<AbsolutePathBuf>,
+
+    /// Candidate nicknames for agents spawned with this role.
+    pub nickname_candidates: Option<Vec<String>>,
 }
 
 impl From<ToolsToml> for Tools {
@@ -1431,7 +1484,7 @@ impl Config {
         Self::load_config_with_layer_stack(cfg, overrides, codex_home, config_layer_stack)
     }
 
-    fn load_config_with_layer_stack(
+    pub(crate) fn load_config_with_layer_stack(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
         codex_home: PathBuf,
@@ -1614,6 +1667,56 @@ impl Config {
                 "agents.max_threads must be at least 1",
             ));
         }
+        let agent_max_depth = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.max_depth)
+            .unwrap_or(DEFAULT_AGENT_MAX_DEPTH);
+        if agent_max_depth < 1 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.max_depth must be at least 1",
+            ));
+        }
+        let agent_roles = cfg
+            .agents
+            .as_ref()
+            .map(|agents| {
+                agents
+                    .roles
+                    .iter()
+                    .map(|(name, role)| {
+                        (
+                            name.clone(),
+                            AgentRoleConfig {
+                                description: role.description.clone(),
+                                config_file: role.config_file.clone().map(PathBuf::from),
+                                nickname_candidates: role.nickname_candidates.clone(),
+                            },
+                        )
+                    })
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
+        let agent_job_max_runtime_seconds = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.job_max_runtime_seconds)
+            .or(DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS);
+        if agent_job_max_runtime_seconds == Some(0) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.job_max_runtime_seconds must be at least 1",
+            ));
+        }
+        if let Some(max_runtime_seconds) = agent_job_max_runtime_seconds
+            && max_runtime_seconds > i64::MAX as u64
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.job_max_runtime_seconds must fit within a 64-bit signed integer",
+            ));
+        }
 
         let ghost_snapshot = {
             let mut config = GhostSnapshotConfig::default();
@@ -1768,6 +1871,9 @@ impl Config {
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
             agent_max_threads,
+            agent_job_max_runtime_seconds,
+            agent_max_depth,
+            agent_roles,
             codex_home,
             config_layer_stack,
             history,
@@ -2052,6 +2158,80 @@ persistence = "none"
                 max_bytes: None,
             }),
             history_no_persistence_cfg.history
+        );
+    }
+
+    fn load_test_config_from_toml(config_toml: &str) -> std::io::Result<Config> {
+        let cfg =
+            toml::from_str::<ConfigToml>(config_toml).expect("TOML deserialization should succeed");
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let cwd = codex_home.path().to_path_buf();
+        let codex_home_path = codex_home.keep();
+        Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides {
+                cwd: Some(cwd),
+                ..Default::default()
+            },
+            codex_home_path,
+        )
+    }
+
+    #[test]
+    fn agents_config_loads_depth_runtime_and_roles() {
+        let config = load_test_config_from_toml(
+            r#"
+[agents]
+max_depth = 3
+job_max_runtime_seconds = 45
+
+[agents.researcher]
+description = "Research-focused role."
+nickname_candidates = ["Herodotus", "Ibn Battuta"]
+"#,
+        )
+        .expect("config should load");
+
+        assert_eq!(config.agent_max_depth, 3);
+        assert_eq!(config.agent_job_max_runtime_seconds, Some(45));
+        assert_eq!(
+            config.agent_roles.get("researcher"),
+            Some(&AgentRoleConfig {
+                description: Some("Research-focused role.".to_string()),
+                config_file: None,
+                nickname_candidates: Some(
+                    vec!["Herodotus".to_string(), "Ibn Battuta".to_string(),]
+                ),
+            })
+        );
+    }
+
+    #[test]
+    fn agents_config_rejects_invalid_depth() {
+        let err = load_test_config_from_toml(
+            r#"
+[agents]
+max_depth = 0
+"#,
+        )
+        .expect_err("max_depth=0 should fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(err.to_string(), "agents.max_depth must be at least 1");
+    }
+
+    #[test]
+    fn agents_config_rejects_invalid_job_runtime() {
+        let err = load_test_config_from_toml(
+            r#"
+[agents]
+job_max_runtime_seconds = 0
+"#,
+        )
+        .expect_err("job_max_runtime_seconds=0 should fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            err.to_string(),
+            "agents.job_max_runtime_seconds must be at least 1"
         );
     }
 
@@ -4254,6 +4434,9 @@ model_verbosity = "high"
                 project_doc_fallback_filenames: Vec::new(),
                 tool_output_token_limit: None,
                 agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+                agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
+                agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
+                agent_roles: BTreeMap::new(),
                 codex_home: fixture.codex_home(),
                 config_layer_stack: Default::default(),
                 history: History::default(),
@@ -4339,6 +4522,9 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
+            agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
+            agent_roles: BTreeMap::new(),
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
@@ -4439,6 +4625,9 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
+            agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
+            agent_roles: BTreeMap::new(),
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
@@ -4525,6 +4714,9 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
+            agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
+            agent_roles: BTreeMap::new(),
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),

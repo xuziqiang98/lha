@@ -1,6 +1,6 @@
-use crate::agent::AgentRole;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
+use crate::config::AgentRoleConfig;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::tools::handlers::PLAN_TOOL;
@@ -16,6 +16,8 @@ use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -32,12 +34,16 @@ pub(crate) struct ToolsConfig {
     pub collaboration_modes_tools: bool,
     pub request_rule_enabled: bool,
     pub experimental_supported_tools: Vec<String>,
+    pub agent_roles: BTreeMap<String, AgentRoleConfig>,
+    pub agent_jobs_tools: bool,
+    pub agent_jobs_worker_tools: bool,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) model_info: &'a ModelInfo,
     pub(crate) features: &'a Features,
     pub(crate) web_search_mode: Option<WebSearchMode>,
+    pub(crate) session_source: SessionSource,
 }
 
 impl ToolsConfig {
@@ -46,11 +52,20 @@ impl ToolsConfig {
             model_info,
             features,
             web_search_mode,
+            session_source,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
         let request_rule_enabled = features.enabled(Feature::RequestRule);
+        let include_agent_jobs = include_collab_tools;
+        let agent_jobs_worker_tools = include_agent_jobs
+            && matches!(
+                session_source,
+                SessionSource::SubAgent(SubAgentSource::Other(label))
+                    if label.starts_with("agent_job:")
+            );
+        let agent_jobs_tools = include_agent_jobs && !agent_jobs_worker_tools;
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -85,7 +100,15 @@ impl ToolsConfig {
             collaboration_modes_tools: include_collaboration_modes_tools,
             request_rule_enabled,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
+            agent_roles: BTreeMap::new(),
+            agent_jobs_tools,
+            agent_jobs_worker_tools,
         }
+    }
+
+    pub fn with_agent_roles(mut self, agent_roles: BTreeMap<String, AgentRoleConfig>) -> Self {
+        self.agent_roles = agent_roles;
+        self
     }
 }
 
@@ -445,7 +468,7 @@ fn create_view_image_tool() -> ToolSpec {
     })
 }
 
-fn create_spawn_agent_tool() -> ToolSpec {
+fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "message".to_string(),
@@ -460,9 +483,8 @@ fn create_spawn_agent_tool() -> ToolSpec {
         (
             "agent_type".to_string(),
             JsonSchema::String {
-                description: Some(format!(
-                    "Optional agent type ({}). Use an explicit type when delegating.",
-                    AgentRole::enum_values().join(", ")
+                description: Some(crate::agent::role::spawn_tool_spec::build(
+                    &config.agent_roles,
                 )),
             },
         ),
@@ -486,6 +508,131 @@ fn create_spawn_agent_tool() -> ToolSpec {
         parameters: JsonSchema::Object {
             properties,
             required: None,
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_spawn_agents_on_csv_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "csv_path".to_string(),
+        JsonSchema::String {
+            description: Some("Path to the CSV file containing input rows.".to_string()),
+        },
+    );
+    properties.insert(
+        "instruction".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Instruction template to apply to each CSV row. Use {column_name} placeholders to inject values from the row."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "id_column".to_string(),
+        JsonSchema::String {
+            description: Some("Optional column name to use as stable item id.".to_string()),
+        },
+    );
+    properties.insert(
+        "output_csv_path".to_string(),
+        JsonSchema::String {
+            description: Some("Optional output CSV path for exported results.".to_string()),
+        },
+    );
+    properties.insert(
+        "max_concurrency".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Maximum concurrent workers for this job. Defaults to 16 and is capped by config."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "max_workers".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Alias for max_concurrency. Set to 1 to run sequentially.".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "max_runtime_seconds".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Maximum runtime per worker before it is failed. Defaults to config or 1800 seconds."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "output_schema".to_string(),
+        JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: None,
+            additional_properties: None,
+        },
+    );
+    ToolSpec::Function(ResponsesApiTool {
+        name: "spawn_agents_on_csv".to_string(),
+        description: "Process a CSV by spawning one worker sub-agent per row. The instruction string is a template where `{column}` placeholders are replaced with row values. Each worker must call `report_agent_job_result` with a JSON object matching `output_schema` when provided; missing reports are treated as failures. This call blocks until all rows finish and automatically exports results to `output_csv_path` or a default path."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["csv_path".to_string(), "instruction".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_report_agent_job_result_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "job_id".to_string(),
+            JsonSchema::String {
+                description: Some("Agent job id for the currently assigned CSV batch.".to_string()),
+            },
+        ),
+        (
+            "item_id".to_string(),
+            JsonSchema::String {
+                description: Some("Item id for the current CSV row.".to_string()),
+            },
+        ),
+        (
+            "result".to_string(),
+            JsonSchema::Object {
+                properties: BTreeMap::new(),
+                required: None,
+                additional_properties: None,
+            },
+        ),
+        (
+            "stop".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true, request cancellation of the remaining items after recording this result."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+    ToolSpec::Function(ResponsesApiTool {
+        name: "report_agent_job_result".to_string(),
+        description: "Worker-only tool for reporting the JSON result of a single agent-job item. Call this exactly once for the assigned row, then stop."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec![
+                "job_id".to_string(),
+                "item_id".to_string(),
+                "result".to_string(),
+            ]),
             additional_properties: Some(false.into()),
         },
     })
@@ -1346,6 +1493,7 @@ pub(crate) fn build_specs(
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
+    use crate::tools::handlers::BatchJobHandler;
     use crate::tools::handlers::CollabHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
@@ -1487,7 +1635,7 @@ pub(crate) fn build_specs(
 
     if config.collab_tools {
         let collab_handler = Arc::new(CollabHandler);
-        builder.push_spec(create_spawn_agent_tool());
+        builder.push_spec(create_spawn_agent_tool(config));
         builder.push_spec(create_send_input_tool());
         builder.push_spec(create_resume_agent_tool());
         builder.push_spec(create_wait_tool());
@@ -1497,6 +1645,18 @@ pub(crate) fn build_specs(
         builder.register_handler("resume_agent", collab_handler.clone());
         builder.register_handler("wait", collab_handler.clone());
         builder.register_handler("close_agent", collab_handler);
+    }
+
+    if config.agent_jobs_tools || config.agent_jobs_worker_tools {
+        let agent_jobs_handler = Arc::new(BatchJobHandler);
+        if config.agent_jobs_tools {
+            builder.push_spec(create_spawn_agents_on_csv_tool());
+            builder.register_handler("spawn_agents_on_csv", agent_jobs_handler.clone());
+        }
+        if config.agent_jobs_worker_tools {
+            builder.push_spec(create_report_agent_job_result_tool());
+            builder.register_handler("report_agent_job_result", agent_jobs_handler);
+        }
     }
 
     if let Some(mcp_tools) = mcp_tools {
@@ -1644,6 +1804,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&config, None, &[]).build();
 
@@ -1708,6 +1869,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert_contains_tool_names(
@@ -1718,7 +1880,42 @@ mod tests {
                 "resume_agent",
                 "wait",
                 "close_agent",
+                "spawn_agents_on_csv",
             ],
+        );
+    }
+
+    #[test]
+    fn test_build_specs_agent_job_worker_tools_enabled() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Collab);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::SubAgent(SubAgentSource::Other(
+                "agent_job:test".to_string(),
+            )),
+        });
+        let (tools, _) = build_specs(&tools_config, None, &[]).build();
+        assert_contains_tool_names(
+            &tools,
+            &[
+                "spawn_agent",
+                "send_input",
+                "resume_agent",
+                "wait",
+                "close_agent",
+                "report_agent_job_result",
+            ],
+        );
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.spec.name() == "spawn_agents_on_csv"),
+            "worker agents should not expose spawn_agents_on_csv"
         );
     }
 
@@ -1732,6 +1929,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert!(
@@ -1744,6 +1942,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert_contains_tool_names(&tools, &["request_user_input"]);
@@ -1761,6 +1960,7 @@ mod tests {
             model_info: &model_info,
             features,
             web_search_mode,
+            session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
         let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
@@ -1798,6 +1998,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
@@ -1820,6 +2021,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
@@ -2066,6 +2268,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
 
@@ -2088,6 +2291,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
@@ -2107,6 +2311,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
@@ -2138,6 +2343,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(
             &tools_config,
@@ -2234,6 +2440,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -2311,6 +2518,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
         });
 
         let (tools, _) = build_specs(
@@ -2369,6 +2577,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
         });
 
         let (tools, _) = build_specs(
@@ -2424,6 +2633,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
         });
 
         let (tools, _) = build_specs(
@@ -2481,6 +2691,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
         });
 
         let (tools, _) = build_specs(
@@ -2594,6 +2805,7 @@ Examples of valid command strings:
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(
             &tools_config,
