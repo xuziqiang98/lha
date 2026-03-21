@@ -1086,6 +1086,7 @@ mod tests {
             Some(session.services.auth_manager.clone()),
             turn.client.get_model_info(),
             turn.client.dynamic_context_window(),
+            turn.client.chat_role_compatibility(),
             turn.client.get_otel_manager(),
             turn.client.get_provider(),
             turn.client.get_reasoning_effort(),

@@ -1,6 +1,8 @@
 #![allow(clippy::expect_used)]
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 use codex_app_server_protocol::AuthMode;
 use codex_core::ContentItem;
@@ -21,13 +23,30 @@ use codex_protocol::protocol::SessionSource;
 use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
 use futures::StreamExt;
+use pretty_assertions::assert_eq;
 use serde_json::Value;
 use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::Respond;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+
+struct ChatSeqResponder {
+    num_calls: AtomicUsize,
+    responses: Vec<ResponseTemplate>,
+}
+
+impl Respond for ChatSeqResponder {
+    fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+        let idx = self.num_calls.fetch_add(1, Ordering::SeqCst);
+        self.responses
+            .get(idx)
+            .unwrap_or_else(|| panic!("no chat completion response for index {idx}"))
+            .clone()
+    }
+}
 
 async fn run_request(input: Vec<ResponseItem>) -> Value {
     let server = MockServer::start().await;
@@ -131,10 +150,106 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
     }
 }
 
+async fn build_client(provider: ModelProviderInfo) -> ModelClient {
+    let codex_home = match TempDir::new() {
+        Ok(dir) => dir,
+        Err(e) => panic!("failed to create TempDir: {e}"),
+    };
+    let mut config = load_default_config_for_test(&codex_home).await;
+    config.model_provider_id = provider.name.clone();
+    config.model_provider = provider.clone();
+    config.show_raw_agent_reasoning = true;
+    let effort = config.model_reasoning_effort;
+    let summary = config.model_reasoning_summary;
+    let config = Arc::new(config);
+
+    let conversation_id = ThreadId::new();
+    let model = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+    let otel_manager = OtelManager::new(
+        conversation_id,
+        model.as_str(),
+        model_info.slug.as_str(),
+        None,
+        Some("test@test.com".to_string()),
+        Some(AuthMode::ApiKey),
+        false,
+        "test".to_string(),
+        SessionSource::Exec,
+    );
+
+    ModelClient::new(
+        Arc::clone(&config),
+        None,
+        model_info,
+        otel_manager,
+        provider,
+        effort,
+        summary,
+        conversation_id,
+        SessionSource::Exec,
+        TransportManager::new(),
+    )
+}
+
+async fn run_turn(client: &ModelClient, input: Vec<ResponseItem>) -> Result<(), String> {
+    let mut client_session = client.new_session();
+    let mut prompt = Prompt::default();
+    prompt.input = input;
+
+    let mut stream = client_session
+        .stream(&prompt)
+        .await
+        .map_err(|err| err.to_string())?;
+    while let Some(event) = stream.next().await {
+        event.map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+async fn received_chat_requests(server: &MockServer) -> Vec<Value> {
+    let all_requests = server.received_requests().await.expect("received requests");
+    all_requests
+        .iter()
+        .filter(|req| req.method == "POST" && req.url.path().ends_with("/chat/completions"))
+        .map(|req| req.body_json().expect("request json body"))
+        .collect()
+}
+
+fn chat_provider(server: &MockServer, name: &str) -> ModelProviderInfo {
+    ModelProviderInfo {
+        name: name.into(),
+        base_url: Some(format!("{}/v1", server.uri())),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        wire_api: WireApi::Chat,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: Some(0),
+        stream_max_retries: Some(0),
+        stream_idle_timeout_ms: Some(5_000),
+        requires_openai_auth: false,
+        supports_websockets: false,
+    }
+}
+
 fn user_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
         role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        end_turn: None,
+    }
+}
+
+fn developer_message(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
         content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
@@ -333,4 +448,178 @@ async fn suppresses_duplicate_assistant_messages() {
         assistant_messages[0]["content"],
         Value::String("dup".into())
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retries_with_system_role_after_developer_validation_error() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let responses = vec![
+        ResponseTemplate::new(400).set_body_raw(
+            r#"{"error":{"message":"developer is not one of ['system', 'assistant', 'user', 'tool', 'function'] - 'messages.[0].role'","type":"invalid_request_error"}}"#,
+            "application/json",
+        ),
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_raw("data: {\"choices\":[{\"delta\":{}}]}\n\ndata: [DONE]\n\n", "text/event-stream"),
+    ];
+
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ChatSeqResponder {
+            num_calls: AtomicUsize::new(0),
+            responses,
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let client = build_client(chat_provider(&server, "strict-chat")).await;
+    run_turn(
+        &client,
+        vec![
+            developer_message("follow repo rules"),
+            user_message("hello"),
+        ],
+    )
+    .await
+    .expect("turn succeeds after fallback");
+
+    let requests = received_chat_requests(&server).await;
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0]["messages"][1]["role"], "developer");
+    assert_eq!(requests[1]["messages"][1]["role"], "system");
+    assert_eq!(requests[1]["messages"][1]["content"], "follow repo rules");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn learns_strict_provider_for_later_turns() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let responses = vec![
+        ResponseTemplate::new(400).set_body_raw(
+            r#"{"error":{"message":"developer is not one of ['system', 'assistant', 'user', 'tool', 'function'] - 'messages.[0].role'","type":"invalid_request_error"}}"#,
+            "application/json",
+        ),
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_raw("data: {\"choices\":[{\"delta\":{}}]}\n\ndata: [DONE]\n\n", "text/event-stream"),
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_raw("data: {\"choices\":[{\"delta\":{}}]}\n\ndata: [DONE]\n\n", "text/event-stream"),
+    ];
+
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ChatSeqResponder {
+            num_calls: AtomicUsize::new(0),
+            responses,
+        })
+        .expect(3)
+        .mount(&server)
+        .await;
+
+    let client = build_client(chat_provider(&server, "strict-chat")).await;
+    run_turn(
+        &client,
+        vec![developer_message("rules one"), user_message("hello")],
+    )
+    .await
+    .expect("first turn succeeds after fallback");
+    run_turn(
+        &client,
+        vec![developer_message("rules two"), user_message("again")],
+    )
+    .await
+    .expect("second turn succeeds with learned compatibility");
+
+    let requests = received_chat_requests(&server).await;
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0]["messages"][1]["role"], "developer");
+    assert_eq!(requests[1]["messages"][1]["role"], "system");
+    assert_eq!(requests[2]["messages"][1]["role"], "system");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn learns_lenient_provider_supports_developer() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let responses = vec![
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_raw(
+                "data: {\"choices\":[{\"delta\":{}}]}\n\ndata: [DONE]\n\n",
+                "text/event-stream",
+            ),
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_raw(
+                "data: {\"choices\":[{\"delta\":{}}]}\n\ndata: [DONE]\n\n",
+                "text/event-stream",
+            ),
+    ];
+
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ChatSeqResponder {
+            num_calls: AtomicUsize::new(0),
+            responses,
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let client = build_client(chat_provider(&server, "lenient-chat")).await;
+    run_turn(
+        &client,
+        vec![developer_message("rules one"), user_message("hello")],
+    )
+    .await
+    .expect("first turn succeeds");
+    run_turn(
+        &client,
+        vec![developer_message("rules two"), user_message("again")],
+    )
+    .await
+    .expect("second turn succeeds");
+
+    let requests = received_chat_requests(&server).await;
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0]["messages"][1]["role"], "developer");
+    assert_eq!(requests[1]["messages"][1]["role"], "developer");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn does_not_retry_on_other_bad_request_errors() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(400).set_body_raw(
+            r#"{"error":{"message":"some other invalid request","type":"invalid_request_error"}}"#,
+            "application/json",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = build_client(chat_provider(&server, "other-bad-request")).await;
+    let err = run_turn(
+        &client,
+        vec![
+            developer_message("follow repo rules"),
+            user_message("hello"),
+        ],
+    )
+    .await
+    .expect_err("turn should fail without fallback");
+
+    assert!(err.contains("some other invalid request"));
+    let requests = received_chat_requests(&server).await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["messages"][1]["role"], "developer");
 }

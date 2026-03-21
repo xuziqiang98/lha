@@ -11,6 +11,7 @@ use codex_api::ChatClient as ApiChatClient;
 use codex_api::ChatRequestBuilder as ApiChatRequestBuilder;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::CompactionInput as ApiCompactionInput;
+use codex_api::DeveloperRoleHandling;
 use codex_api::Prompt as ApiPrompt;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
@@ -53,11 +54,14 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Error;
 use tokio_tungstenite::tungstenite::Message;
+use tracing::info;
 use tracing::warn;
 
 use crate::AuthManager;
 use crate::auth::CodexAuth;
 use crate::auth::RefreshTokenError;
+use crate::chat_role_compatibility::ChatRoleCompatibility;
+use crate::chat_role_compatibility::ChatRoleCompatibilityState;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
@@ -76,6 +80,7 @@ use crate::model_provider_info::WireApi;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::transport_manager::TransportManager;
+use crate::util::try_parse_error_message;
 
 pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
@@ -87,6 +92,7 @@ struct ModelClientState {
     auth_manager: Option<Arc<AuthManager>>,
     model_info: ModelInfo,
     dynamic_context_window: Option<Arc<Mutex<DynamicContextWindowState>>>,
+    chat_role_compatibility: Option<Arc<Mutex<ChatRoleCompatibilityState>>>,
     otel_manager: OtelManager,
     provider: ModelProviderInfo,
     conversation_id: ThreadId,
@@ -144,6 +150,7 @@ impl ModelClient {
             auth_manager,
             model_info,
             None,
+            None,
             otel_manager,
             provider,
             effort,
@@ -159,6 +166,7 @@ impl ModelClient {
         auth_manager: Option<Arc<AuthManager>>,
         model_info: ModelInfo,
         dynamic_context_window: Option<Arc<Mutex<DynamicContextWindowState>>>,
+        chat_role_compatibility: Option<Arc<Mutex<ChatRoleCompatibilityState>>>,
         otel_manager: OtelManager,
         provider: ModelProviderInfo,
         effort: Option<ReasoningEffortConfig>,
@@ -173,6 +181,7 @@ impl ModelClient {
                 auth_manager,
                 model_info,
                 dynamic_context_window,
+                chat_role_compatibility,
                 otel_manager,
                 provider,
                 conversation_id,
@@ -207,6 +216,30 @@ impl ModelClient {
             model_info.context_window = Some(dynamic_context_window.current_context_window());
         }
         model_info
+    }
+
+    fn chat_role_compatibility_status(&self) -> ChatRoleCompatibility {
+        self.state
+            .chat_role_compatibility
+            .as_ref()
+            .map(|state| {
+                state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .current()
+            })
+            .unwrap_or(ChatRoleCompatibility::Unknown)
+    }
+
+    fn developer_role_handling(&self) -> DeveloperRoleHandling {
+        match self.chat_role_compatibility_status() {
+            ChatRoleCompatibility::Unknown | ChatRoleCompatibility::SupportsDeveloper => {
+                DeveloperRoleHandling::Preserve
+            }
+            ChatRoleCompatibility::RequiresSystemForDeveloper => {
+                DeveloperRoleHandling::DowngradeToSystem
+            }
+        }
     }
 
     pub fn get_model_context_window(&self) -> Option<i64> {
@@ -356,6 +389,11 @@ impl ModelClient {
         self.state.dynamic_context_window.clone()
     }
 
+    #[cfg(test)]
+    pub(crate) fn chat_role_compatibility(&self) -> Option<Arc<Mutex<ChatRoleCompatibilityState>>> {
+        self.state.chat_role_compatibility.clone()
+    }
+
     pub(crate) fn estimated_input_tokens_for_prompt(&self, prompt: &Prompt) -> Option<i64> {
         if self.state.provider.wire_api != WireApi::Chat {
             return None;
@@ -365,6 +403,7 @@ impl ModelClient {
         let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools).ok()?;
         let api_prompt = build_api_prompt(prompt, instructions, tools_json);
         let api_provider = self.state.provider.to_api_provider(None).ok()?;
+        let handling = self.developer_role_handling();
         let request = ApiChatRequestBuilder::new(
             &self.state.model_info.slug,
             &api_prompt.instructions,
@@ -373,6 +412,7 @@ impl ModelClient {
         )
         .conversation_id(Some(self.state.conversation_id.to_string()))
         .session_source(Some(self.state.session_source.clone()))
+        .developer_role_handling(handling)
         .build(&api_provider)
         .ok()?;
 
@@ -429,6 +469,48 @@ impl ModelClient {
 }
 
 impl ModelClientSession {
+    fn chat_role_compatibility_status(&self) -> ChatRoleCompatibility {
+        self.state
+            .chat_role_compatibility
+            .as_ref()
+            .map(|state| {
+                state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .current()
+            })
+            .unwrap_or(ChatRoleCompatibility::Unknown)
+    }
+
+    fn developer_role_handling(&self) -> DeveloperRoleHandling {
+        match self.chat_role_compatibility_status() {
+            ChatRoleCompatibility::Unknown | ChatRoleCompatibility::SupportsDeveloper => {
+                DeveloperRoleHandling::Preserve
+            }
+            ChatRoleCompatibility::RequiresSystemForDeveloper => {
+                DeveloperRoleHandling::DowngradeToSystem
+            }
+        }
+    }
+
+    fn record_chat_role_supports_developer(&self) {
+        if let Some(state) = &self.state.chat_role_compatibility {
+            state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .record_supports_developer();
+        }
+    }
+
+    fn record_chat_role_requires_system(&self) {
+        if let Some(state) = &self.state.chat_role_compatibility {
+            state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .record_requires_system();
+        }
+    }
+
     /// Streams a single model turn using either the Responses or Chat
     /// Completions wire API, depending on the configured provider.
     ///
@@ -676,6 +758,7 @@ impl ModelClientSession {
         let instructions = prompt.base_instructions.text.clone();
         let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
         let api_prompt = build_api_prompt(prompt, instructions, tools_json);
+        let contains_developer_message = prompt_contains_developer_message(&api_prompt.input);
         let conversation_id = self.state.conversation_id.to_string();
         let session_source = self.state.session_source.clone();
 
@@ -695,30 +778,69 @@ impl ModelClientSession {
             let request_provider = api_provider.clone();
             let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
-            let request = ApiChatRequestBuilder::new(
+            let client = ApiChatClient::new(transport, api_provider, api_auth)
+                .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
+
+            let handling = self.developer_role_handling();
+            let request = build_chat_request(
                 &self.state.model_info.slug,
-                &api_prompt.instructions,
-                &api_prompt.input,
-                &api_prompt.tools,
+                &api_prompt,
+                conversation_id.as_str(),
+                &session_source,
+                handling,
+                &request_provider,
             )
-            .conversation_id(Some(conversation_id.clone()))
-            .session_source(Some(session_source.clone()))
-            .build(&request_provider)
             .map_err(map_api_error)?;
             let estimated_input_tokens =
                 estimate_chat_input_tokens_from_request_body(&request.body);
-            let client = ApiChatClient::new(transport, api_provider, api_auth)
-                .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
 
             let stream_result = client.stream_request(request).await;
 
             match stream_result {
-                Ok(stream) => return Ok((stream, estimated_input_tokens)),
+                Ok(stream) => {
+                    if handling == DeveloperRoleHandling::Preserve && contains_developer_message {
+                        self.record_chat_role_supports_developer();
+                    }
+                    return Ok((stream, estimated_input_tokens));
+                }
                 Err(ApiError::Transport(TransportError::Http { status, .. }))
                     if status == StatusCode::UNAUTHORIZED =>
                 {
                     handle_unauthorized(status, &mut auth_recovery).await?;
                     continue;
+                }
+                Err(err)
+                    if handling == DeveloperRoleHandling::Preserve
+                        && contains_developer_message
+                        && is_unsupported_developer_role_error(&err) =>
+                {
+                    info!(
+                        provider = self.state.config.model_provider_id,
+                        "chat provider rejected developer role; retrying with system"
+                    );
+                    self.record_chat_role_requires_system();
+                    let retry_request = build_chat_request(
+                        &self.state.model_info.slug,
+                        &api_prompt,
+                        conversation_id.as_str(),
+                        &session_source,
+                        DeveloperRoleHandling::DowngradeToSystem,
+                        &request_provider,
+                    )
+                    .map_err(map_api_error)?;
+                    let retry_estimated_input_tokens =
+                        estimate_chat_input_tokens_from_request_body(&retry_request.body);
+                    let retry_stream = client.stream_request(retry_request).await;
+                    match retry_stream {
+                        Ok(stream) => return Ok((stream, retry_estimated_input_tokens)),
+                        Err(ApiError::Transport(TransportError::Http { status, .. }))
+                            if status == StatusCode::UNAUTHORIZED =>
+                        {
+                            handle_unauthorized(status, &mut auth_recovery).await?;
+                            continue;
+                        }
+                        Err(err) => return Err(map_api_error(err)),
+                    }
                 }
                 Err(err) => return Err(map_api_error(err)),
             }
@@ -913,6 +1035,50 @@ fn build_responses_headers(
         headers.insert(X_CODEX_TURN_STATE_HEADER, header_value);
     }
     headers
+}
+
+fn build_chat_request(
+    model: &str,
+    prompt: &ApiPrompt,
+    conversation_id: &str,
+    session_source: &SessionSource,
+    developer_role_handling: DeveloperRoleHandling,
+    provider: &codex_api::Provider,
+) -> std::result::Result<codex_api::ChatRequest, ApiError> {
+    ApiChatRequestBuilder::new(model, &prompt.instructions, &prompt.input, &prompt.tools)
+        .conversation_id(Some(conversation_id.to_string()))
+        .session_source(Some(session_source.clone()))
+        .developer_role_handling(developer_role_handling)
+        .build(provider)
+}
+
+fn prompt_contains_developer_message(input: &[ResponseItem]) -> bool {
+    input.iter().any(|item| {
+        matches!(
+            item,
+            ResponseItem::Message { role, .. } if role == "developer"
+        )
+    })
+}
+
+fn is_unsupported_developer_role_error(err: &ApiError) -> bool {
+    let ApiError::Transport(TransportError::Http {
+        status,
+        body: Some(body),
+        ..
+    }) = err
+    else {
+        return false;
+    };
+
+    if *status != StatusCode::BAD_REQUEST {
+        return false;
+    }
+
+    let message = try_parse_error_message(body).to_ascii_lowercase();
+    message.contains("developer is not one of")
+        && message.contains("messages")
+        && message.contains("role")
 }
 
 fn map_response_stream<S>(api_stream: S, otel_manager: OtelManager) -> ResponseStream

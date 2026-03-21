@@ -36,6 +36,7 @@ pub use crate::provider::WireApi;
 pub use crate::provider::is_azure_responses_wire_base_url;
 pub use crate::requests::ChatRequest;
 pub use crate::requests::ChatRequestBuilder;
+pub use crate::requests::DeveloperRoleHandling;
 pub use crate::requests::ResponsesRequest;
 pub use crate::requests::ResponsesRequestBuilder;
 pub use crate::sse::stream_from_fixture;

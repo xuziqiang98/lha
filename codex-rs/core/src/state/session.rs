@@ -7,6 +7,8 @@ use codex_protocol::models::ResponseItem;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use crate::chat_role_compatibility::ChatRoleCompatibilityKey;
+use crate::chat_role_compatibility::ChatRoleCompatibilityState;
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
 use crate::dynamic_context_window::DynamicContextWindowKey;
@@ -22,6 +24,8 @@ pub(crate) struct SessionState {
     pub(crate) history: ContextManager,
     pub(crate) dynamic_context_windows:
         HashMap<DynamicContextWindowKey, Arc<Mutex<DynamicContextWindowState>>>,
+    pub(crate) chat_role_compatibilities:
+        HashMap<ChatRoleCompatibilityKey, Arc<Mutex<ChatRoleCompatibilityState>>>,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
@@ -41,6 +45,7 @@ impl SessionState {
             session_configuration,
             history,
             dynamic_context_windows: HashMap::new(),
+            chat_role_compatibilities: HashMap::new(),
             latest_rate_limits: None,
             server_reasoning_included: false,
             dependency_env: HashMap::new(),
@@ -73,6 +78,16 @@ impl SessionState {
         self.dynamic_context_windows
             .entry(key)
             .or_insert_with(|| Arc::new(Mutex::new(DynamicContextWindowState::new())))
+            .clone()
+    }
+
+    pub(crate) fn get_or_create_chat_role_compatibility(
+        &mut self,
+        key: ChatRoleCompatibilityKey,
+    ) -> Arc<Mutex<ChatRoleCompatibilityState>> {
+        self.chat_role_compatibilities
+            .entry(key)
+            .or_insert_with(|| Arc::new(Mutex::new(ChatRoleCompatibilityState::new())))
             .clone()
     }
 
