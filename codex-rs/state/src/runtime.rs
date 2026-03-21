@@ -1,3 +1,12 @@
+mod agent_jobs;
+
+use crate::AgentJob;
+use crate::AgentJobCreateParams;
+use crate::AgentJobItem;
+use crate::AgentJobItemCreateParams;
+use crate::AgentJobItemStatus;
+use crate::AgentJobProgress;
+use crate::AgentJobStatus;
 use crate::DB_ERROR_METRIC;
 use crate::LogEntry;
 use crate::LogQuery;
@@ -8,6 +17,7 @@ use crate::ThreadMetadataBuilder;
 use crate::ThreadsPage;
 use crate::apply_rollout_item;
 use crate::migrations::MIGRATOR;
+use crate::model::AgentJobRow;
 use crate::model::ThreadRow;
 use crate::model::anchor_from_item;
 use crate::model::datetime_to_epoch_seconds;

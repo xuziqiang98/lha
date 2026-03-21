@@ -1,3 +1,4 @@
+pub(crate) mod agent_jobs;
 pub mod apply_patch;
 pub(crate) mod collab;
 mod dynamic;
@@ -17,6 +18,7 @@ pub use plan::PLAN_TOOL;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
+pub use agent_jobs::BatchJobHandler;
 pub use apply_patch::ApplyPatchHandler;
 pub use collab::CollabHandler;
 pub use dynamic::DynamicToolHandler;

@@ -3,6 +3,7 @@ use crate::error::Result;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use rand::prelude::IndexedRandom;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -29,13 +30,6 @@ struct ActiveAgents {
     used_agent_nicknames: HashSet<String>,
     nickname_reset_count: usize,
 }
-
-/// Initial agent is depth 0.
-pub(crate) const MAX_THREAD_SPAWN_DEPTH: i32 = 1;
-
-const AGENT_NICKNAME_CANDIDATES: &[&str] = &[
-    "Atlas", "Juniper", "Ember", "Lumen", "Nova", "Mica", "Rivet", "Cinder",
-];
 
 fn format_agent_nickname(name: &str, nickname_reset_count: usize) -> String {
     match nickname_reset_count {
@@ -68,8 +62,8 @@ pub(crate) fn next_thread_spawn_depth(session_source: &SessionSource) -> i32 {
     session_depth(session_source).saturating_add(1)
 }
 
-pub(crate) fn exceeds_thread_spawn_depth_limit(depth: i32) -> bool {
-    depth > MAX_THREAD_SPAWN_DEPTH
+pub(crate) fn exceeds_thread_spawn_depth_limit(depth: i32, max_depth: i32) -> bool {
+    depth > max_depth
 }
 
 impl Guards {
@@ -122,7 +116,11 @@ impl Guards {
         }
     }
 
-    fn reserve_agent_nickname(&self, preferred: Option<&str>) -> Option<String> {
+    fn reserve_agent_nickname(
+        &self,
+        candidates: &[&str],
+        preferred: Option<&str>,
+    ) -> Option<String> {
         let mut active_agents = self
             .active_agents
             .lock()
@@ -130,20 +128,21 @@ impl Guards {
         let agent_nickname = if let Some(preferred) = preferred {
             preferred.to_string()
         } else {
-            let next_name = AGENT_NICKNAME_CANDIDATES
+            if candidates.is_empty() {
+                return None;
+            }
+            let available_names = candidates
                 .iter()
                 .map(|name| format_agent_nickname(name, active_agents.nickname_reset_count))
-                .find(|name| !active_agents.used_agent_nicknames.contains(name));
-            if let Some(next_name) = next_name {
-                next_name
+                .filter(|name| !active_agents.used_agent_nicknames.contains(name))
+                .collect::<Vec<_>>();
+            if let Some(name) = available_names.choose(&mut rand::rng()) {
+                name.clone()
             } else {
                 active_agents.used_agent_nicknames.clear();
                 active_agents.nickname_reset_count += 1;
                 format_agent_nickname(
-                    AGENT_NICKNAME_CANDIDATES
-                        .first()
-                        .copied()
-                        .unwrap_or("Agent"),
+                    candidates.choose(&mut rand::rng())?,
                     active_agents.nickname_reset_count,
                 )
             }
@@ -181,17 +180,18 @@ pub(crate) struct SpawnReservation {
 
 impl SpawnReservation {
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn reserve_agent_nickname(&mut self) -> Result<String> {
-        self.reserve_agent_nickname_with_preference(None)
+    pub(crate) fn reserve_agent_nickname(&mut self, candidates: &[&str]) -> Result<String> {
+        self.reserve_agent_nickname_with_preference(candidates, None)
     }
 
     pub(crate) fn reserve_agent_nickname_with_preference(
         &mut self,
+        candidates: &[&str],
         preferred: Option<&str>,
     ) -> Result<String> {
         let agent_nickname = self
             .state
-            .reserve_agent_nickname(preferred)
+            .reserve_agent_nickname(candidates, preferred)
             .ok_or_else(|| {
                 CodexErr::UnsupportedOperation("no available agent nicknames".to_string())
             })?;
@@ -243,7 +243,7 @@ mod tests {
         });
         let child_depth = next_thread_spawn_depth(&session_source);
         assert_eq!(child_depth, 2);
-        assert!(exceeds_thread_spawn_depth_limit(child_depth));
+        assert!(exceeds_thread_spawn_depth_limit(child_depth, 1));
     }
 
     #[test]
@@ -251,7 +251,7 @@ mod tests {
         let session_source = SessionSource::SubAgent(SubAgentSource::Review);
         assert_eq!(session_depth(&session_source), 0);
         assert_eq!(next_thread_spawn_depth(&session_source), 1);
-        assert!(!exceeds_thread_spawn_depth_limit(1));
+        assert!(!exceeds_thread_spawn_depth_limit(1, 1));
     }
 
     #[test]
@@ -339,13 +339,13 @@ mod tests {
         let guards = Arc::new(Guards::default());
         let mut reservation_a = guards.reserve_spawn_slot(Some(2)).expect("reserve slot");
         let first = reservation_a
-            .reserve_agent_nickname()
+            .reserve_agent_nickname(&["Atlas", "Nova"])
             .expect("reserve nickname");
         reservation_a.commit(ThreadId::new());
 
         let mut reservation_b = guards.reserve_spawn_slot(Some(2)).expect("reserve slot");
         let second = reservation_b
-            .reserve_agent_nickname()
+            .reserve_agent_nickname(&["Atlas", "Nova"])
             .expect("reserve nickname");
 
         assert_ne!(first, second);
