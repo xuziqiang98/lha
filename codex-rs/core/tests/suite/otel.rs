@@ -125,6 +125,8 @@ async fn process_sse_emits_failed_event_on_parse_error() {
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
             config.features.disable(Feature::GhostCommit);
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
@@ -168,6 +170,8 @@ async fn process_sse_records_failed_event_when_stream_closes_without_completed()
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
             config.features.disable(Feature::GhostCommit);
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
@@ -231,6 +235,8 @@ async fn process_sse_failed_event_records_response_error_message() {
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
             config.features.disable(Feature::GhostCommit);
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
@@ -340,6 +346,8 @@ async fn process_sse_failed_event_logs_missing_error() {
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
             config.features.disable(Feature::GhostCommit);
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
