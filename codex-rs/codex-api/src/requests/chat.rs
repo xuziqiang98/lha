@@ -19,6 +19,13 @@ pub struct ChatRequest {
     pub headers: HeaderMap,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DeveloperRoleHandling {
+    #[default]
+    Preserve,
+    DowngradeToSystem,
+}
+
 pub struct ChatRequestBuilder<'a> {
     model: &'a str,
     instructions: &'a str,
@@ -26,6 +33,7 @@ pub struct ChatRequestBuilder<'a> {
     tools: &'a [Value],
     conversation_id: Option<String>,
     session_source: Option<SessionSource>,
+    developer_role_handling: DeveloperRoleHandling,
 }
 
 impl<'a> ChatRequestBuilder<'a> {
@@ -42,6 +50,7 @@ impl<'a> ChatRequestBuilder<'a> {
             tools,
             conversation_id: None,
             session_source: None,
+            developer_role_handling: DeveloperRoleHandling::Preserve,
         }
     }
 
@@ -52,6 +61,11 @@ impl<'a> ChatRequestBuilder<'a> {
 
     pub fn session_source(mut self, source: Option<SessionSource>) -> Self {
         self.session_source = source;
+        self
+    }
+
+    pub fn developer_role_handling(mut self, handling: DeveloperRoleHandling) -> Self {
+        self.developer_role_handling = handling;
         self
     }
 
@@ -152,6 +166,10 @@ impl<'a> ChatRequestBuilder<'a> {
         for (idx, item) in input.iter().enumerate() {
             match item {
                 ResponseItem::Message { role, content, .. } => {
+                    let role = match (role.as_str(), self.developer_role_handling) {
+                        ("developer", DeveloperRoleHandling::DowngradeToSystem) => "system",
+                        _ => role.as_str(),
+                    };
                     let mut text = String::new();
                     let mut items: Vec<Value> = Vec::new();
                     let mut saw_image = false;
@@ -360,6 +378,17 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 
+    fn text_message(role: &str, text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: role.to_string(),
+            content: vec![ContentItem::InputText {
+                text: text.to_string(),
+            }],
+            end_turn: None,
+        }
+    }
+
     fn provider() -> Provider {
         Provider {
             name: "openai".to_string(),
@@ -407,14 +436,7 @@ mod tests {
     #[test]
     fn groups_consecutive_tool_calls_into_a_single_assistant_message() {
         let prompt_input = vec![
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "read these".to_string(),
-                }],
-                end_turn: None,
-            },
+            text_message("user", "read these"),
             ResponseItem::FunctionCall {
                 id: None,
                 name: "read_file".to_string(),
@@ -488,5 +510,38 @@ mod tests {
         assert_eq!(messages[4]["tool_call_id"], "call-b");
         assert_eq!(messages[5]["role"], "tool");
         assert_eq!(messages[5]["tool_call_id"], "call-c");
+    }
+
+    #[test]
+    fn preserves_developer_role_by_default() {
+        let prompt_input = vec![text_message("developer", "stay sharp")];
+
+        let req = ChatRequestBuilder::new("gpt-test", "inst", &prompt_input, &[])
+            .build(&provider())
+            .expect("request");
+
+        let messages = req.body["messages"].as_array().expect("messages array");
+        assert_eq!(messages[1]["role"], "developer");
+        assert_eq!(messages[1]["content"], "stay sharp");
+    }
+
+    #[test]
+    fn downgrades_developer_role_to_system_when_requested() {
+        let prompt_input = vec![
+            text_message("user", "hi"),
+            text_message("developer", "follow repo rules"),
+            text_message("assistant", "ok"),
+        ];
+
+        let req = ChatRequestBuilder::new("gpt-test", "inst", &prompt_input, &[])
+            .developer_role_handling(DeveloperRoleHandling::DowngradeToSystem)
+            .build(&provider())
+            .expect("request");
+
+        let messages = req.body["messages"].as_array().expect("messages array");
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[2]["role"], "system");
+        assert_eq!(messages[2]["content"], "follow repo rules");
+        assert_eq!(messages[3]["role"], "assistant");
     }
 }

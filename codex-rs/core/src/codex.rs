@@ -95,6 +95,8 @@ use tracing::trace_span;
 use tracing::warn;
 
 use crate::ModelProviderInfo;
+use crate::chat_role_compatibility::ChatRoleCompatibilityKey;
+use crate::chat_role_compatibility::ChatRoleCompatibilityState;
 use crate::client::ModelClient;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
@@ -720,6 +722,19 @@ impl Session {
         Some(state.get_or_create_dynamic_context_window(key))
     }
 
+    async fn chat_role_compatibility_for_provider(
+        &self,
+        config: &Config,
+    ) -> Option<Arc<std::sync::Mutex<ChatRoleCompatibilityState>>> {
+        if config.model_provider.wire_api != crate::WireApi::Chat {
+            return None;
+        }
+
+        let key = ChatRoleCompatibilityKey::new(config.model_provider_id.clone());
+        let mut state = self.state.lock().await;
+        Some(state.get_or_create_chat_role_compatibility(key))
+    }
+
     pub(crate) async fn codex_home(&self) -> PathBuf {
         let state = self.state.lock().await;
         state.session_configuration.codex_home().clone()
@@ -764,6 +779,7 @@ impl Session {
         per_turn_config: Config,
         model_info: ModelInfo,
         dynamic_context_window: Option<Arc<std::sync::Mutex<DynamicContextWindowState>>>,
+        chat_role_compatibility: Option<Arc<std::sync::Mutex<ChatRoleCompatibilityState>>>,
         conversation_id: ThreadId,
         sub_id: String,
         transport_manager: TransportManager,
@@ -778,6 +794,7 @@ impl Session {
             auth_manager,
             model_info.clone(),
             dynamic_context_window,
+            chat_role_compatibility,
             otel_manager,
             provider,
             session_configuration.collaboration_mode.reasoning_effort(),
@@ -1346,6 +1363,9 @@ impl Session {
         let dynamic_context_window = self
             .dynamic_context_window_for_model(&per_turn_config, &model_info)
             .await;
+        let chat_role_compatibility = self
+            .chat_role_compatibility_for_provider(&per_turn_config)
+            .await;
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.otel_manager,
@@ -1354,6 +1374,7 @@ impl Session {
             per_turn_config,
             model_info,
             dynamic_context_window,
+            chat_role_compatibility,
             self.conversation_id,
             sub_id,
             self.services.transport_manager.clone(),
@@ -3265,12 +3286,16 @@ async fn spawn_review_thread(
     let dynamic_context_window = sess
         .dynamic_context_window_for_model(&per_turn_config, &model_info)
         .await;
+    let chat_role_compatibility = sess
+        .chat_role_compatibility_for_provider(&per_turn_config)
+        .await;
     let per_turn_config = Arc::new(per_turn_config);
     let client = ModelClient::new_with_dynamic_context_window(
         per_turn_config.clone(),
         auth_manager,
         model_info.clone(),
         dynamic_context_window,
+        chat_role_compatibility,
         otel_manager,
         provider,
         per_turn_config.model_reasoning_effort,
@@ -5223,6 +5248,7 @@ mod tests {
             Some(Arc::new(std::sync::Mutex::new(
                 DynamicContextWindowState::new(),
             ))),
+            turn_context.client.chat_role_compatibility(),
             turn_context.client.get_otel_manager(),
             turn_context.client.get_provider(),
             turn_context.client.get_reasoning_effort(),
@@ -5261,6 +5287,7 @@ mod tests {
             Some(Arc::new(std::sync::Mutex::new(
                 DynamicContextWindowState::new(),
             ))),
+            turn_context.client.chat_role_compatibility(),
             turn_context.client.get_otel_manager(),
             turn_context.client.get_provider(),
             turn_context.client.get_reasoning_effort(),
@@ -5301,6 +5328,7 @@ mod tests {
             Some(Arc::new(std::sync::Mutex::new(
                 DynamicContextWindowState::new(),
             ))),
+            turn_context.client.chat_role_compatibility(),
             turn_context.client.get_otel_manager(),
             turn_context.client.get_provider(),
             turn_context.client.get_reasoning_effort(),
@@ -5336,6 +5364,7 @@ mod tests {
             Some(Arc::new(std::sync::Mutex::new(
                 DynamicContextWindowState::new(),
             ))),
+            turn_context.client.chat_role_compatibility(),
             turn_context.client.get_otel_manager(),
             turn_context.client.get_provider(),
             turn_context.client.get_reasoning_effort(),
@@ -5375,6 +5404,7 @@ mod tests {
             Some(Arc::new(std::sync::Mutex::new(
                 DynamicContextWindowState::new(),
             ))),
+            turn_context.client.chat_role_compatibility(),
             turn_context.client.get_otel_manager(),
             turn_context.client.get_provider(),
             turn_context.client.get_reasoning_effort(),
@@ -6003,6 +6033,7 @@ mod tests {
             per_turn_config,
             model_info,
             None,
+            None,
             conversation_id,
             "turn_id".to_string(),
             services.transport_manager.clone(),
@@ -6150,6 +6181,7 @@ mod tests {
             &session_configuration,
             per_turn_config,
             model_info,
+            None,
             None,
             conversation_id,
             "turn_id".to_string(),
