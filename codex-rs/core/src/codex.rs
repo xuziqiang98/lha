@@ -781,6 +781,7 @@ impl Session {
         sub_id: String,
         transport_manager: TransportManager,
     ) -> TurnContext {
+        let wire_api = provider.wire_api;
         let otel_manager = otel_manager.clone().with_model(
             session_configuration.collaboration_mode.model(),
             model_info.slug.as_str(),
@@ -803,6 +804,7 @@ impl Session {
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            wire_api,
             features: &per_turn_config.features,
             web_search_mode: per_turn_config.web_search_mode,
             session_source: session_configuration.session_source.clone(),
@@ -3273,8 +3275,10 @@ async fn spawn_review_thread(
         .disable(crate::features::Feature::WebSearchRequest)
         .disable(crate::features::Feature::WebSearchCached);
     let review_web_search_mode = WebSearchMode::Disabled;
+    let provider = parent_turn_context.client.get_provider();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &review_model_info,
+        wire_api: provider.wire_api,
         features: &review_features,
         web_search_mode: Some(review_web_search_mode),
         session_source: parent_turn_context.client.get_session_source(),
@@ -3282,7 +3286,6 @@ async fn spawn_review_thread(
     .with_agent_roles(config.agent_roles.clone());
 
     let review_prompt = resolved.prompt.clone();
-    let provider = parent_turn_context.client.get_provider();
     let auth_manager = parent_turn_context.client.get_auth_manager();
     let model_info = review_model_info.clone();
 

@@ -4,6 +4,7 @@ use crate::config::AgentRoleConfig;
 use crate::error::CodexErr;
 use crate::features::Feature;
 use crate::features::Features;
+use crate::model_provider_info::WireApi;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
@@ -28,6 +29,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
+    pub wire_api: WireApi,
     pub shell_type: ConfigShellToolType,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
@@ -42,6 +44,7 @@ pub(crate) struct ToolsConfig {
 
 pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) model_info: &'a ModelInfo,
+    pub(crate) wire_api: WireApi,
     pub(crate) features: &'a Features,
     pub(crate) web_search_mode: Option<WebSearchMode>,
     pub(crate) session_source: SessionSource,
@@ -51,6 +54,7 @@ impl ToolsConfig {
     pub fn new(params: &ToolsConfigParams) -> Self {
         let ToolsConfigParams {
             model_info,
+            wire_api,
             features,
             web_search_mode,
             session_source,
@@ -94,6 +98,7 @@ impl ToolsConfig {
         };
 
         Self {
+            wire_api: *wire_api,
             shell_type,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
@@ -110,6 +115,27 @@ impl ToolsConfig {
     pub fn with_agent_roles(mut self, agent_roles: BTreeMap<String, AgentRoleConfig>) -> Self {
         self.agent_roles = agent_roles;
         self
+    }
+}
+
+fn messages_supports_tool(tool: &ToolSpec) -> bool {
+    matches!(tool, ToolSpec::Function(_))
+}
+
+fn maybe_push_spec(builder: &mut ToolRegistryBuilder, config: &ToolsConfig, spec: ToolSpec) {
+    if config.wire_api != WireApi::Messages || messages_supports_tool(&spec) {
+        builder.push_spec(spec);
+    }
+}
+
+fn maybe_push_spec_with_parallel_support(
+    builder: &mut ToolRegistryBuilder,
+    config: &ToolsConfig,
+    spec: ToolSpec,
+    parallel: bool,
+) {
+    if config.wire_api != WireApi::Messages || messages_supports_tool(&spec) {
+        builder.push_spec_with_parallel_support(spec, parallel);
     }
 }
 
@@ -1551,14 +1577,22 @@ pub(crate) fn build_specs(
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
-            builder.push_spec(create_shell_tool(config.request_rule_enabled));
+            maybe_push_spec(
+                &mut builder,
+                config,
+                create_shell_tool(config.request_rule_enabled),
+            );
         }
         ConfigShellToolType::Local => {
-            builder.push_spec(ToolSpec::LocalShell {});
+            maybe_push_spec(&mut builder, config, ToolSpec::LocalShell {});
         }
         ConfigShellToolType::UnifiedExec => {
-            builder.push_spec(create_exec_command_tool(config.request_rule_enabled));
-            builder.push_spec(create_write_stdin_tool());
+            maybe_push_spec(
+                &mut builder,
+                config,
+                create_exec_command_tool(config.request_rule_enabled),
+            );
+            maybe_push_spec(&mut builder, config, create_write_stdin_tool());
             builder.register_handler("exec_command", unified_exec_handler.clone());
             builder.register_handler("write_stdin", unified_exec_handler);
         }
@@ -1578,28 +1612,43 @@ pub(crate) fn build_specs(
         builder.register_handler("shell_command", shell_command_handler);
     }
 
-    builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
-    builder.push_spec_with_parallel_support(create_list_mcp_resource_templates_tool(), true);
-    builder.push_spec_with_parallel_support(create_read_mcp_resource_tool(), true);
+    maybe_push_spec_with_parallel_support(
+        &mut builder,
+        config,
+        create_list_mcp_resources_tool(),
+        true,
+    );
+    maybe_push_spec_with_parallel_support(
+        &mut builder,
+        config,
+        create_list_mcp_resource_templates_tool(),
+        true,
+    );
+    maybe_push_spec_with_parallel_support(
+        &mut builder,
+        config,
+        create_read_mcp_resource_tool(),
+        true,
+    );
     builder.register_handler("list_mcp_resources", mcp_resource_handler.clone());
     builder.register_handler("list_mcp_resource_templates", mcp_resource_handler.clone());
     builder.register_handler("read_mcp_resource", mcp_resource_handler);
 
-    builder.push_spec(PLAN_TOOL.clone());
+    maybe_push_spec(&mut builder, config, PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
 
     if config.collaboration_modes_tools {
-        builder.push_spec(create_request_user_input_tool());
+        maybe_push_spec(&mut builder, config, create_request_user_input_tool());
         builder.register_handler("request_user_input", request_user_input_handler);
     }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
         match apply_patch_tool_type {
             ApplyPatchToolType::Freeform => {
-                builder.push_spec(create_apply_patch_freeform_tool());
+                maybe_push_spec(&mut builder, config, create_apply_patch_freeform_tool());
             }
             ApplyPatchToolType::Function => {
-                builder.push_spec(create_apply_patch_json_tool());
+                maybe_push_spec(&mut builder, config, create_apply_patch_json_tool());
             }
         }
         builder.register_handler("apply_patch", apply_patch_handler);
@@ -1610,7 +1659,7 @@ pub(crate) fn build_specs(
         .contains(&"grep_files".to_string())
     {
         let grep_files_handler = Arc::new(GrepFilesHandler);
-        builder.push_spec_with_parallel_support(create_grep_files_tool(), true);
+        maybe_push_spec_with_parallel_support(&mut builder, config, create_grep_files_tool(), true);
         builder.register_handler("grep_files", grep_files_handler);
     }
 
@@ -1619,7 +1668,7 @@ pub(crate) fn build_specs(
         .contains(&"read_file".to_string())
     {
         let read_file_handler = Arc::new(ReadFileHandler);
-        builder.push_spec_with_parallel_support(create_read_file_tool(), true);
+        maybe_push_spec_with_parallel_support(&mut builder, config, create_read_file_tool(), true);
         builder.register_handler("read_file", read_file_handler);
     }
 
@@ -1629,7 +1678,7 @@ pub(crate) fn build_specs(
         .any(|tool| tool == "list_dir")
     {
         let list_dir_handler = Arc::new(ListDirHandler);
-        builder.push_spec_with_parallel_support(create_list_dir_tool(), true);
+        maybe_push_spec_with_parallel_support(&mut builder, config, create_list_dir_tool(), true);
         builder.register_handler("list_dir", list_dir_handler);
     }
 
@@ -1638,34 +1687,42 @@ pub(crate) fn build_specs(
         .contains(&"test_sync_tool".to_string())
     {
         let test_sync_handler = Arc::new(TestSyncHandler);
-        builder.push_spec_with_parallel_support(create_test_sync_tool(), true);
+        maybe_push_spec_with_parallel_support(&mut builder, config, create_test_sync_tool(), true);
         builder.register_handler("test_sync_tool", test_sync_handler);
     }
 
     match config.web_search_mode {
         Some(WebSearchMode::Cached) => {
-            builder.push_spec(ToolSpec::WebSearch {
-                external_web_access: Some(false),
-            });
+            maybe_push_spec(
+                &mut builder,
+                config,
+                ToolSpec::WebSearch {
+                    external_web_access: Some(false),
+                },
+            );
         }
         Some(WebSearchMode::Live) => {
-            builder.push_spec(ToolSpec::WebSearch {
-                external_web_access: Some(true),
-            });
+            maybe_push_spec(
+                &mut builder,
+                config,
+                ToolSpec::WebSearch {
+                    external_web_access: Some(true),
+                },
+            );
         }
         Some(WebSearchMode::Disabled) | None => {}
     }
 
-    builder.push_spec_with_parallel_support(create_view_image_tool(), true);
+    maybe_push_spec_with_parallel_support(&mut builder, config, create_view_image_tool(), true);
     builder.register_handler("view_image", view_image_handler);
 
     if config.collab_tools {
         let collab_handler = Arc::new(CollabHandler);
-        builder.push_spec(create_spawn_agent_tool(config));
-        builder.push_spec(create_send_input_tool());
-        builder.push_spec(create_resume_agent_tool());
-        builder.push_spec(create_wait_tool());
-        builder.push_spec(create_close_agent_tool());
+        maybe_push_spec(&mut builder, config, create_spawn_agent_tool(config));
+        maybe_push_spec(&mut builder, config, create_send_input_tool());
+        maybe_push_spec(&mut builder, config, create_resume_agent_tool());
+        maybe_push_spec(&mut builder, config, create_wait_tool());
+        maybe_push_spec(&mut builder, config, create_close_agent_tool());
         builder.register_handler("spawn_agent", collab_handler.clone());
         builder.register_handler("send_input", collab_handler.clone());
         builder.register_handler("resume_agent", collab_handler.clone());
@@ -1676,11 +1733,11 @@ pub(crate) fn build_specs(
     if config.agent_jobs_tools || config.agent_jobs_worker_tools {
         let agent_jobs_handler = Arc::new(BatchJobHandler);
         if config.agent_jobs_tools {
-            builder.push_spec(create_spawn_agents_on_csv_tool());
+            maybe_push_spec(&mut builder, config, create_spawn_agents_on_csv_tool());
             builder.register_handler("spawn_agents_on_csv", agent_jobs_handler.clone());
         }
         if config.agent_jobs_worker_tools {
-            builder.push_spec(create_report_agent_job_result_tool());
+            maybe_push_spec(&mut builder, config, create_report_agent_job_result_tool());
             builder.register_handler("report_agent_job_result", agent_jobs_handler);
         }
     }
@@ -1828,6 +1885,7 @@ mod tests {
         features.enable(Feature::CollaborationModes);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            wire_api: WireApi::Responses,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
@@ -1893,6 +1951,7 @@ mod tests {
         features.enable(Feature::CollaborationModes);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            wire_api: WireApi::Responses,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -1912,6 +1971,40 @@ mod tests {
     }
 
     #[test]
+    fn messages_build_specs_only_exposes_function_tools() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
+        features.enable(Feature::Collab);
+        features.enable(Feature::CollaborationModes);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            wire_api: WireApi::Messages,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Live),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
+
+        assert!(
+            tools
+                .iter()
+                .all(|tool| matches!(tool.spec, ToolSpec::Function(_))),
+            "messages wire API should only expose function tools"
+        );
+        assert!(!tools.iter().any(|tool| tool.spec.name() == "web_search"));
+        assert!(!tools.iter().any(|tool| tool.spec.name() == "local_shell"));
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.spec.name() == VIEW_IMAGE_TOOL_NAME)
+        );
+        assert!(!tools.iter().any(|tool| tool.spec.name() == "apply_patch"));
+    }
+
+    #[test]
     fn test_build_specs_agent_job_worker_tools_enabled() {
         let config = test_config();
         let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
@@ -1919,6 +2012,7 @@ mod tests {
         features.enable(Feature::Collab);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            wire_api: WireApi::Responses,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::SubAgent(SubAgentSource::Other(
@@ -1953,6 +2047,7 @@ mod tests {
         features.disable(Feature::CollaborationModes);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            wire_api: WireApi::Responses,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -1966,6 +2061,7 @@ mod tests {
         features.enable(Feature::CollaborationModes);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            wire_api: WireApi::Responses,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -1984,6 +2080,7 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline(model_slug, &config);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            wire_api: WireApi::Responses,
             features,
             web_search_mode,
             session_source: SessionSource::Cli,
@@ -2022,6 +2119,7 @@ mod tests {
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            wire_api: WireApi::Responses,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2045,6 +2143,7 @@ mod tests {
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            wire_api: WireApi::Responses,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
@@ -2292,6 +2391,7 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            wire_api: WireApi::Responses,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
@@ -2315,6 +2415,7 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            wire_api: WireApi::Responses,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2335,6 +2436,7 @@ mod tests {
         let features = Features::with_defaults();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            wire_api: WireApi::Responses,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2367,6 +2469,7 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            wire_api: WireApi::Responses,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
@@ -2464,6 +2567,7 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            wire_api: WireApi::Responses,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2542,6 +2646,7 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            wire_api: WireApi::Responses,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2601,6 +2706,7 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            wire_api: WireApi::Responses,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2657,6 +2763,7 @@ mod tests {
         features.enable(Feature::ApplyPatchFreeform);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            wire_api: WireApi::Responses,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2715,6 +2822,7 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            wire_api: WireApi::Responses,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2829,6 +2937,7 @@ Examples of valid command strings:
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            wire_api: WireApi::Responses,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
