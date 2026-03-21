@@ -183,19 +183,7 @@ impl AuthModeWidget {
     fn api_key_entry_input_height(&self, width: u16, state: &ApiKeyInputState) -> u16 {
         let inner_width = width.saturating_sub(2).max(1);
         match state.step {
-            ApiProviderWizardStep::WireApi => {
-                let content_height = ApiProviderWireApi::all().into_iter().enumerate().fold(
-                    0u16,
-                    |total, (idx, option)| {
-                        let label = format!("  {}. {}", idx + 1, option.label());
-                        let description = format!("     {}", option.description());
-                        total
-                            .saturating_add(Self::wrapped_line_count(&label, inner_width))
-                            .saturating_add(Self::wrapped_line_count(&description, inner_width))
-                    },
-                );
-                content_height.saturating_add(2)
-            }
+            ApiProviderWizardStep::WireApi => 5,
             _ => {
                 let value = self.current_step_value_for_display(state);
                 let content = if value.is_empty() {
@@ -520,10 +508,10 @@ impl AuthModeWidget {
                 let lines = ApiProviderWireApi::all()
                     .into_iter()
                     .enumerate()
-                    .flat_map(|(idx, option)| {
+                    .map(|(idx, option)| {
                         let selected = option == state.wire_api;
                         let prefix = if selected { ">" } else { " " };
-                        let line = if selected {
+                        if selected {
                             vec![
                                 format!("{prefix} {}. ", idx + 1).cyan().dim(),
                                 option.label().cyan(),
@@ -531,13 +519,7 @@ impl AuthModeWidget {
                             .into()
                         } else {
                             format!("  {}. {}", idx + 1, option.label()).into()
-                        };
-                        let description = if selected {
-                            format!("     {}", option.description()).cyan().dim()
-                        } else {
-                            format!("     {}", option.description()).dim()
-                        };
-                        vec![line, description.into()]
+                        }
                     })
                     .collect::<Vec<Line>>();
 
@@ -1127,7 +1109,7 @@ mod tests {
     }
 
     #[test]
-    fn wire_api_entry_uses_dynamic_input_height() {
+    fn wire_api_entry_uses_three_line_input_height() {
         let (widget, _tmp) = widget_custom_provider_entry();
         let state = ApiKeyInputState {
             step: ApiProviderWizardStep::WireApi,
@@ -1136,7 +1118,7 @@ mod tests {
 
         let input_height = widget.api_key_entry_input_height(120, &state);
 
-        assert_eq!(input_height, 8);
+        assert_eq!(input_height, 5);
     }
 
     #[test]
@@ -1145,6 +1127,11 @@ mod tests {
 
         widget.handle_paste("custom_1".to_string());
         widget.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            current_api_key_input_state(&widget).wire_api,
+            ApiProviderWireApi::Chat
+        );
 
         widget.handle_key_event(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
         assert_eq!(
@@ -1168,6 +1155,47 @@ mod tests {
         assert_eq!(
             current_api_key_input_state(&widget).wire_api,
             ApiProviderWireApi::Messages
+        );
+    }
+
+    #[test]
+    fn wire_api_entry_renders_three_options_without_descriptions() {
+        let (mut widget, _tmp) = widget_custom_provider_entry();
+        let area = Rect::new(0, 0, 120, 30);
+        let mut buf = Buffer::empty(area);
+
+        widget.handle_paste("custom_1".to_string());
+        widget.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        widget.render_ref(area, &mut buf);
+
+        let lines = (0..area.height)
+            .map(|row| row_text(&buf, row, area.width))
+            .collect::<Vec<_>>();
+        let wire_api_row = lines
+            .iter()
+            .position(|line| line.starts_with("╭Wire API"))
+            .expect("wire api border row");
+
+        assert_eq!(lines[wire_api_row + 1].contains("chat"), true);
+        assert_eq!(lines[wire_api_row + 2].contains("responses"), true);
+        assert_eq!(lines[wire_api_row + 3].contains("messages"), true);
+        assert_eq!(
+            lines
+                .iter()
+                .any(|line| line.contains("Compatible with chat completions style APIs")),
+            false
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .any(|line| line.contains("Compatible with Responses API style backends")),
+            false
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .any(|line| line.contains("Anthropic-compatible Messages API at /v1/messages")),
+            false
         );
     }
 

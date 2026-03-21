@@ -87,8 +87,8 @@ impl ApiProviderWizardStep {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ApiProviderWireApi {
-    Chat,
     #[default]
+    Chat,
     Responses,
     Messages,
 }
@@ -157,14 +157,6 @@ impl ApiProviderWireApi {
             Self::Chat => "chat",
             Self::Responses => "responses",
             Self::Messages => "messages",
-        }
-    }
-
-    pub(crate) const fn description(self) -> &'static str {
-        match self {
-            Self::Chat => "Compatible with chat completions style APIs",
-            Self::Responses => "Compatible with Responses API style backends",
-            Self::Messages => "Anthropic-compatible Messages API at /v1/messages",
         }
     }
 }
@@ -525,6 +517,7 @@ model = "gpt-test"
 
     #[test]
     fn api_provider_wire_api_messages_helpers_are_consistent() {
+        assert_eq!(ApiProviderWireApi::default(), ApiProviderWireApi::Chat);
         assert_eq!(
             ApiProviderWireApi::all(),
             [
