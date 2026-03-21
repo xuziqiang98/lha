@@ -5,6 +5,7 @@ use crate::auth::AuthManager;
 use crate::auth::AuthMode;
 use crate::config::Config;
 use crate::config::ConfigToml;
+use crate::config::generated_provider_profile_name;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result as CoreResult;
@@ -34,6 +35,7 @@ use tracing::error;
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
+const OPENAI_PROVIDER_ID: &str = "openai";
 
 /// Strategy for refreshing available models.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +57,7 @@ pub struct ModelsManager {
     auth_manager: Arc<AuthManager>,
     etag: RwLock<Option<String>>,
     cache_manager: StdRwLock<ModelsCacheManager>,
+    model_provider_id: StdRwLock<String>,
     provider: StdRwLock<ModelProviderInfo>,
 }
 
@@ -78,6 +81,7 @@ impl ModelsManager {
             auth_manager,
             etag: RwLock::new(None),
             cache_manager: StdRwLock::new(cache_manager),
+            model_provider_id: StdRwLock::new(model_provider_id.to_string()),
             provider: StdRwLock::new(provider),
         }
     }
@@ -97,6 +101,10 @@ impl ModelsManager {
             models_cache_path(&self.codex_home, model_provider_id),
             DEFAULT_MODEL_CACHE_TTL,
         );
+        *self
+            .model_provider_id
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = model_provider_id.to_string();
         *self
             .provider
             .write()
@@ -388,12 +396,17 @@ impl ModelsManager {
         config: &Config,
         available_models: Vec<ModelPreset>,
     ) -> Vec<ModelPreset> {
+        let has_auth = self.auth_manager.get_internal_auth_mode().is_some()
+            || self.provider_snapshot().has_local_auth();
+        let available_models = if has_auth {
+            Self::with_builtin_provider_identity(available_models)
+        } else {
+            available_models
+        };
         let mut picker_models: Vec<ModelPreset> = available_models
             .into_iter()
             .filter(|preset| preset.show_in_picker)
             .collect();
-        let has_auth = self.auth_manager.get_internal_auth_mode().is_some()
-            || self.provider_snapshot().has_local_auth();
 
         let custom_model = self
             .configured_picker_model(config, &picker_models)
@@ -422,11 +435,21 @@ impl ModelsManager {
         config: &Config,
         available_models: Vec<ModelPreset>,
     ) -> Vec<ModelPreset> {
-        let configured_models = self.configured_picker_models(config, &available_models);
-        if !matches!(
+        let chatgpt_auth = matches!(
             self.auth_manager.get_internal_auth_mode(),
             Some(AuthMode::Chatgpt)
-        ) {
+        );
+        let available_models = if chatgpt_auth {
+            Self::with_builtin_provider_identity(available_models)
+        } else {
+            available_models
+        };
+        let configured_models = if chatgpt_auth {
+            self.configured_picker_models(config, &available_models)
+        } else {
+            self.configured_model_switcher_models(config, &available_models)
+        };
+        if !chatgpt_auth {
             return configured_models;
         }
 
@@ -434,7 +457,7 @@ impl ModelsManager {
         for mut configured_model in configured_models {
             if picker_models
                 .iter()
-                .any(|picker_model| picker_model.model == configured_model.model)
+                .any(|picker_model| Self::same_model_identity(picker_model, &configured_model))
             {
                 continue;
             }
@@ -453,37 +476,18 @@ impl ModelsManager {
             return Vec::new();
         };
 
-        let mut seen_models = HashSet::new();
-        let mut configured_models = Vec::new();
-
-        if let Some(model) = config_toml
-            .model
-            .as_deref()
-            .map(str::trim)
-            .filter(|model| !model.is_empty())
-            && seen_models.insert(model.to_string())
-        {
-            configured_models.push(model.to_string());
-        }
-
-        let mut profile_models: Vec<String> = config_toml
-            .profiles
-            .into_values()
-            .filter_map(|profile| profile.model)
-            .map(|model| model.trim().to_string())
-            .filter(|model| !model.is_empty())
-            .collect();
-        profile_models.sort();
-
-        for model in profile_models {
-            if seen_models.insert(model.clone()) {
-                configured_models.push(model);
-            }
-        }
-
-        let mut presets: Vec<ModelPreset> = configured_models
+        let mut presets: Vec<ModelPreset> = self
+            .configured_model_entries(&config_toml)
             .into_iter()
-            .map(|model| self.configured_model_from_config_toml(&model, config, available_models))
+            .map(|(model, provider_id)| {
+                self.configured_model_preset_from_config_toml(
+                    &model,
+                    provider_id.as_deref(),
+                    &config_toml,
+                    config,
+                    available_models,
+                )
+            })
             .collect();
 
         for preset in &mut presets {
@@ -494,6 +498,92 @@ impl ModelsManager {
         }
 
         presets
+    }
+
+    fn configured_model_switcher_models(
+        &self,
+        config: &Config,
+        available_models: &[ModelPreset],
+    ) -> Vec<ModelPreset> {
+        let Some(config_toml) = self.config_toml(config) else {
+            return Vec::new();
+        };
+
+        let mut presets: Vec<ModelPreset> = self
+            .configured_model_entries(&config_toml)
+            .into_iter()
+            .map(|(model, provider_id)| {
+                self.configured_model_preset_from_config_toml(
+                    &model,
+                    provider_id.as_deref(),
+                    &config_toml,
+                    config,
+                    available_models,
+                )
+            })
+            .collect();
+
+        for preset in &mut presets {
+            preset.is_default = false;
+        }
+        if let Some(default) = presets.first_mut() {
+            default.is_default = true;
+        }
+
+        presets
+    }
+
+    fn configured_model_entries(&self, config_toml: &ConfigToml) -> Vec<(String, Option<String>)> {
+        let mut seen_models = HashSet::new();
+        let mut configured_models = Vec::new();
+
+        let top_level_model = config_toml
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|model| !model.is_empty());
+        let top_level_provider_id = config_toml
+            .model_provider
+            .as_deref()
+            .map(str::trim)
+            .filter(|provider_id| !provider_id.is_empty())
+            .map(str::to_string);
+
+        if let Some(model) = top_level_model {
+            let key = (model.to_string(), top_level_provider_id.clone());
+            if seen_models.insert(key) {
+                configured_models.push((model.to_string(), top_level_provider_id));
+            }
+        }
+
+        let mut profile_models: Vec<(String, Option<String>)> = config_toml
+            .profiles
+            .values()
+            .filter_map(|profile| {
+                let model = profile.model.as_deref()?.trim().to_string();
+                if model.is_empty() {
+                    return None;
+                }
+                let provider_id = profile
+                    .model_provider
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|provider_id| !provider_id.is_empty())
+                    .map(str::to_string);
+                Some((model, provider_id))
+            })
+            .collect();
+        profile_models
+            .sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+
+        for (model, provider_id) in profile_models {
+            let key = (model.clone(), provider_id.clone());
+            if seen_models.insert(key) {
+                configured_models.push((model, provider_id));
+            }
+        }
+
+        configured_models
     }
 
     fn configured_picker_model(
@@ -515,6 +605,7 @@ impl ModelsManager {
         Some(ModelPreset {
             id: model.to_string(),
             model: model.to_string(),
+            model_provider_id: None,
             display_name: model.to_string(),
             description: "Configured model from config.toml.".to_string(),
             default_reasoning_effort,
@@ -549,6 +640,7 @@ impl ModelsManager {
         ModelPreset {
             id: model.to_string(),
             model: model.to_string(),
+            model_provider_id: None,
             display_name: model.to_string(),
             description: "Configured model from config.toml.".to_string(),
             default_reasoning_effort,
@@ -559,6 +651,103 @@ impl ModelsManager {
             show_in_picker: true,
             supported_in_api: true,
         }
+    }
+
+    fn configured_model_preset_from_config_toml(
+        &self,
+        model: &str,
+        model_provider_id: Option<&str>,
+        config_toml: &ConfigToml,
+        config: &Config,
+        available_models: &[ModelPreset],
+    ) -> ModelPreset {
+        if let Some(provider_id) = model_provider_id {
+            return self.configured_provider_model_from_config_toml(
+                model,
+                provider_id,
+                config_toml,
+                config,
+                available_models,
+            );
+        }
+
+        self.configured_model_from_config_toml(model, config, available_models)
+    }
+
+    fn configured_provider_model_from_config_toml(
+        &self,
+        model: &str,
+        provider_id: &str,
+        config_toml: &ConfigToml,
+        config: &Config,
+        available_models: &[ModelPreset],
+    ) -> ModelPreset {
+        let id = generated_provider_profile_name(provider_id, model);
+        let description = if config_toml.model_providers.contains_key(provider_id) {
+            format!("User-defined model from {provider_id} provider.")
+        } else {
+            format!("Configured model from {provider_id} provider.")
+        };
+
+        let mut preset = available_models
+            .iter()
+            .find(|candidate| {
+                candidate.model == model
+                    && candidate.model_provider_id.as_deref() == Some(provider_id)
+            })
+            .cloned()
+            .or_else(|| {
+                available_models
+                    .iter()
+                    .find(|candidate| candidate.model == model)
+                    .cloned()
+            })
+            .unwrap_or_else(|| {
+                let model_info = model_info::with_config_overrides(
+                    model_info::find_model_info_for_slug(model),
+                    config,
+                );
+                let default_reasoning_effort =
+                    configured_model_default_reasoning_effort(config, &model_info);
+                let supports_personality = model_info.supports_personality();
+
+                ModelPreset {
+                    id: model.to_string(),
+                    model: model.to_string(),
+                    model_provider_id: None,
+                    display_name: model.to_string(),
+                    description: String::new(),
+                    default_reasoning_effort,
+                    supported_reasoning_efforts: model_info.supported_reasoning_levels,
+                    supports_personality,
+                    is_default: false,
+                    upgrade: None,
+                    show_in_picker: true,
+                    supported_in_api: true,
+                }
+            });
+        preset.id = id;
+        preset.model_provider_id = Some(provider_id.to_string());
+        preset.description = description;
+        preset.show_in_picker = true;
+        preset.is_default = false;
+        preset
+    }
+
+    fn same_model_identity(left: &ModelPreset, right: &ModelPreset) -> bool {
+        left.model == right.model && left.model_provider_id == right.model_provider_id
+    }
+
+    fn with_builtin_provider_identity(available_models: Vec<ModelPreset>) -> Vec<ModelPreset> {
+        available_models
+            .into_iter()
+            .map(|mut preset| {
+                if preset.model_provider_id.is_none() {
+                    preset.model_provider_id = Some(OPENAI_PROVIDER_ID.to_string());
+                }
+                preset
+            })
+            .collect()
     }
 
     fn config_toml(&self, config: &Config) -> Option<ConfigToml> {
@@ -1346,6 +1535,166 @@ model = "deepseek-r1"
     }
 
     #[tokio::test]
+    async fn list_model_switcher_models_without_chatgpt_auth_keeps_same_model_for_custom_providers()
+    {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager = Arc::new(AuthManager::new(
+            codex_home.path().to_path_buf(),
+            false,
+            AuthCredentialsStoreMode::File,
+        ));
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "openai",
+            ModelProviderInfo::create_openai_provider(),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "gpt-5.2"
+model_provider = "provider_a"
+
+[model_providers.provider_a]
+name = "provider_a"
+base_url = "https://example.com/a"
+wire_api = "chat"
+experimental_bearer_token = "sk-a"
+
+[model_providers.provider_b]
+name = "provider_b"
+base_url = "https://example.com/b"
+wire_api = "chat"
+experimental_bearer_token = "sk-b"
+
+[profiles.second]
+model = "gpt-5.2"
+model_provider = "provider_b"
+
+[profiles.duplicate]
+model = "gpt-5.2"
+model_provider = "provider_b"
+"#,
+        )
+        .await;
+
+        let picker_models = manager
+            .list_model_switcher_models(&config, RefreshStrategy::Offline)
+            .await;
+
+        assert_eq!(picker_models.len(), 2);
+        assert_eq!(
+            picker_models
+                .iter()
+                .map(|preset| {
+                    (
+                        preset.model.as_str(),
+                        preset.model_provider_id.as_deref(),
+                        preset.description.as_str(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "gpt-5.2",
+                    Some("provider_a"),
+                    "User-defined model from provider_a provider.",
+                ),
+                (
+                    "gpt-5.2",
+                    Some("provider_b"),
+                    "User-defined model from provider_b provider.",
+                ),
+            ]
+        );
+        assert!(picker_models[0].is_default);
+        assert!(!picker_models[1].is_default);
+        assert!(picker_models.iter().all(|preset| preset.id != preset.model));
+        assert!(
+            picker_models
+                .iter()
+                .all(|preset| !preset.supported_reasoning_efforts.is_empty())
+        );
+    }
+
+    #[tokio::test]
+    async fn list_model_switcher_models_without_chatgpt_auth_preserves_builtin_provider_ids() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager = Arc::new(AuthManager::new(
+            codex_home.path().to_path_buf(),
+            false,
+            AuthCredentialsStoreMode::File,
+        ));
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "openai",
+            ModelProviderInfo::create_openai_provider(),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "gpt-5.2"
+model_provider = "openai"
+
+[profiles.ollama]
+model = "gpt-5.2"
+model_provider = "ollama"
+
+[profiles.lmstudio]
+model = "gpt-5.2"
+model_provider = "lmstudio"
+
+[profiles.duplicate]
+model = "gpt-5.2"
+model_provider = "ollama"
+"#,
+        )
+        .await;
+
+        let picker_models = manager
+            .list_model_switcher_models(&config, RefreshStrategy::Offline)
+            .await;
+
+        assert_eq!(picker_models.len(), 3);
+        assert_eq!(
+            picker_models
+                .iter()
+                .map(|preset| (
+                    preset.id.clone(),
+                    preset.model.clone(),
+                    preset.model_provider_id.clone(),
+                    preset.description.clone(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    generated_provider_profile_name("openai", "gpt-5.2"),
+                    "gpt-5.2".to_string(),
+                    Some("openai".to_string()),
+                    "Configured model from openai provider.".to_string(),
+                ),
+                (
+                    generated_provider_profile_name("lmstudio", "gpt-5.2"),
+                    "gpt-5.2".to_string(),
+                    Some("lmstudio".to_string()),
+                    "Configured model from lmstudio provider.".to_string(),
+                ),
+                (
+                    generated_provider_profile_name("ollama", "gpt-5.2"),
+                    "gpt-5.2".to_string(),
+                    Some("ollama".to_string()),
+                    "Configured model from ollama provider.".to_string(),
+                ),
+            ]
+        );
+        assert!(picker_models[0].is_default);
+        assert!(!picker_models[1].is_default);
+        assert!(!picker_models[2].is_default);
+        assert!(picker_models.iter().all(|preset| preset.id != preset.model));
+    }
+
+    #[tokio::test]
     async fn list_model_switcher_models_with_auth_appends_configured_models() {
         let codex_home = tempdir().expect("temp dir");
         let auth_manager =
@@ -1395,6 +1744,133 @@ model = "deepseek-r1"
             picker_models
                 .iter()
                 .any(|preset| preset.model == "mock-model")
+        );
+    }
+
+    #[tokio::test]
+    async fn list_model_switcher_models_with_chatgpt_auth_keeps_same_model_for_custom_provider() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "openai",
+            ModelProviderInfo::create_openai_provider(),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "gpt-5.2"
+model_provider = "provider_a"
+
+[model_providers.provider_a]
+name = "provider_a"
+base_url = "https://example.com/a"
+wire_api = "chat"
+experimental_bearer_token = "sk-a"
+"#,
+        )
+        .await;
+
+        let picker_models = manager
+            .list_model_switcher_models(&config, RefreshStrategy::Offline)
+            .await;
+
+        let matching_models = picker_models
+            .iter()
+            .filter(|preset| preset.model == "gpt-5.2")
+            .map(|preset| {
+                (
+                    preset.id.clone(),
+                    preset.model_provider_id.clone(),
+                    preset.description.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            matching_models,
+            vec![
+                (
+                    "gpt-5.2".to_string(),
+                    Some("openai".to_string()),
+                    "Latest frontier model with improvements across knowledge, reasoning and coding"
+                        .to_string(),
+                ),
+                (
+                    generated_provider_profile_name("provider_a", "gpt-5.2"),
+                    Some("provider_a".to_string()),
+                    "User-defined model from provider_a provider.".to_string(),
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn list_model_switcher_models_with_chatgpt_auth_keeps_custom_same_slug_when_active() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "openai",
+            ModelProviderInfo::create_openai_provider(),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "gpt-5.2"
+model_provider = "provider_a"
+
+[model_providers.provider_a]
+name = "provider_a"
+base_url = "https://example.com/a"
+wire_api = "chat"
+experimental_bearer_token = "sk-a"
+"#,
+        )
+        .await;
+
+        let provider = config
+            .model_providers
+            .get("provider_a")
+            .cloned()
+            .expect("provider_a should exist in config");
+        manager.switch_provider("provider_a", provider).await;
+
+        let picker_models = manager
+            .list_model_switcher_models(&config, RefreshStrategy::Offline)
+            .await;
+
+        let matching_models = picker_models
+            .iter()
+            .filter(|preset| preset.model == "gpt-5.2")
+            .map(|preset| {
+                (
+                    preset.id.clone(),
+                    preset.model_provider_id.clone(),
+                    preset.description.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            matching_models,
+            vec![
+                (
+                    "gpt-5.2".to_string(),
+                    Some("openai".to_string()),
+                    "Latest frontier model with improvements across knowledge, reasoning and coding"
+                        .to_string(),
+                ),
+                (
+                    generated_provider_profile_name("provider_a", "gpt-5.2"),
+                    Some("provider_a".to_string()),
+                    "User-defined model from provider_a provider.".to_string(),
+                ),
+            ]
         );
     }
 

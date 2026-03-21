@@ -15,6 +15,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
         ModelPreset {
             id: "gpt-5.2-codex".to_string(),
             model: "gpt-5.2-codex".to_string(),
+            model_provider_id: None,
             display_name: "gpt-5.2-codex".to_string(),
             description: "Latest frontier agentic coding model.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
@@ -45,6 +46,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
         ModelPreset {
             id: "gpt-5.1-codex-max".to_string(),
             model: "gpt-5.1-codex-max".to_string(),
+            model_provider_id: None,
             display_name: "gpt-5.1-codex-max".to_string(),
             description: "Codex-optimized flagship for deep and fast reasoning.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
@@ -75,6 +77,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
         ModelPreset {
             id: "gpt-5.1-codex-mini".to_string(),
             model: "gpt-5.1-codex-mini".to_string(),
+            model_provider_id: None,
             display_name: "gpt-5.1-codex-mini".to_string(),
             description: "Optimized for codex. Cheaper, faster, but less capable.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
@@ -98,6 +101,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
         ModelPreset {
             id: "gpt-5.2".to_string(),
             model: "gpt-5.2".to_string(),
+            model_provider_id: None,
             display_name: "gpt-5.2".to_string(),
             description: "Latest frontier model with improvements across knowledge, reasoning and coding".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
@@ -128,6 +132,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
         ModelPreset {
             id: "bengalfox".to_string(),
             model: "bengalfox".to_string(),
+            model_provider_id: None,
             display_name: "bengalfox".to_string(),
             description: "bengalfox".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
@@ -158,6 +163,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
         ModelPreset {
             id: "boomslang".to_string(),
             model: "boomslang".to_string(),
+            model_provider_id: None,
             display_name: "boomslang".to_string(),
             description: "boomslang".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
@@ -189,6 +195,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
         ModelPreset {
             id: "gpt-5-codex".to_string(),
             model: "gpt-5-codex".to_string(),
+            model_provider_id: None,
             display_name: "gpt-5-codex".to_string(),
             description: "Optimized for codex.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
@@ -215,6 +222,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
         ModelPreset {
             id: "gpt-5-codex-mini".to_string(),
             model: "gpt-5-codex-mini".to_string(),
+            model_provider_id: None,
             display_name: "gpt-5-codex-mini".to_string(),
             description: "Optimized for codex. Cheaper, faster, but less capable.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
@@ -237,6 +245,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
         ModelPreset {
             id: "gpt-5.1-codex".to_string(),
             model: "gpt-5.1-codex".to_string(),
+            model_provider_id: None,
             display_name: "gpt-5.1-codex".to_string(),
             description: "Optimized for codex.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
@@ -264,6 +273,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
         ModelPreset {
             id: "gpt-5".to_string(),
             model: "gpt-5".to_string(),
+            model_provider_id: None,
             display_name: "gpt-5".to_string(),
             description: "Broad world knowledge with strong general reasoning.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
@@ -294,6 +304,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
         ModelPreset {
             id: "gpt-5.1".to_string(),
             model: "gpt-5.1".to_string(),
+            model_provider_id: None,
             display_name: "gpt-5.1".to_string(),
             description: "Broad world knowledge with strong general reasoning.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,

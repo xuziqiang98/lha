@@ -487,6 +487,7 @@ async fn handle_model_migration_prompt_if_needed(
                 config.model_reasoning_effort = mapped_effort;
                 app_event_tx.send(AppEvent::PersistModelSelection {
                     model: target_model.clone(),
+                    provider_id: None,
                     effort: mapped_effort,
                 });
             }
@@ -927,10 +928,17 @@ impl App {
     async fn persist_model_selection(
         &mut self,
         model: String,
+        provider_id: Option<String>,
         effort: Option<ReasoningEffortConfig>,
     ) -> std::result::Result<String, String> {
         let profile = self.active_profile.clone();
-        let provider_id = self.resolve_model_provider_for_model(&model)?;
+        let provider_id = match provider_id {
+            Some(provider_id) => {
+                self.runtime_provider_for_id(&provider_id)?;
+                provider_id
+            }
+            None => self.resolve_model_provider_for_model(&model)?,
+        };
         let provider = self.runtime_provider_for_id(&provider_id)?;
 
         self.activate_runtime_provider(&provider_id, provider, &model, false)
@@ -2214,10 +2222,17 @@ impl App {
                     let _ = (preset, mode);
                 }
             }
-            AppEvent::PersistModelSelection { model, effort } => {
+            AppEvent::PersistModelSelection {
+                model,
+                provider_id,
+                effort,
+            } => {
                 let previous_provider_id = self.config.model_provider_id.clone();
                 let profile = self.active_profile.clone();
-                match self.persist_model_selection(model.clone(), effort).await {
+                match self
+                    .persist_model_selection(model.clone(), provider_id, effort)
+                    .await
+                {
                     Ok(provider_id) => {
                         let mut message = format!("Model changed to {model}");
                         if let Some(label) = Self::reasoning_label_for(&model, effort) {
@@ -3999,7 +4014,11 @@ model_context_window = 64_000
         app.chat_widget.set_model("model-a");
 
         let provider_id = app
-            .persist_model_selection("model-b".to_string(), Some(ReasoningEffortConfig::High))
+            .persist_model_selection(
+                "model-b".to_string(),
+                None,
+                Some(ReasoningEffortConfig::High),
+            )
             .await
             .expect("persist model selection");
 
@@ -4094,7 +4113,11 @@ model_provider = "provider_b"
         app.chat_widget.set_model("model-a");
 
         let provider_id = app
-            .persist_model_selection("model-b".to_string(), Some(ReasoningEffortConfig::High))
+            .persist_model_selection(
+                "model-b".to_string(),
+                None,
+                Some(ReasoningEffortConfig::High),
+            )
             .await
             .expect("persist model selection");
 
@@ -4196,7 +4219,7 @@ model_provider = "provider_b"
             .set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
         let provider_id = app
-            .persist_model_selection("model-b".to_string(), None)
+            .persist_model_selection("model-b".to_string(), None, None)
             .await
             .expect("persist model selection");
 
@@ -4277,7 +4300,7 @@ model_provider = "provider_b"
         app.chat_widget.set_model("model-a");
 
         let err = app
-            .persist_model_selection("shared-model".to_string(), None)
+            .persist_model_selection("shared-model".to_string(), None, None)
             .await
             .expect_err("expected ambiguous model selection to fail");
 
@@ -4288,6 +4311,116 @@ model_provider = "provider_b"
         assert_eq!(app.config.model_provider_id, "provider_a");
         assert_eq!(app.config.model.as_deref(), Some("model-a"));
         assert_eq!(app.chat_widget.current_model(), "model-a");
+    }
+
+    #[tokio::test]
+    async fn persist_model_selection_uses_explicit_provider_for_ambiguous_model() {
+        let mut app = make_test_app().await;
+        let config_path = app.config.codex_home.join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"model = "model-a"
+model_provider = "provider_a"
+
+[model_providers.provider_a]
+name = "provider_a"
+base_url = "https://example.com/a"
+wire_api = "chat"
+experimental_bearer_token = "sk-a"
+
+[model_providers.provider_b]
+name = "provider_b"
+base_url = "https://example.com/b"
+wire_api = "chat"
+experimental_bearer_token = "sk-b"
+
+[profiles.first]
+model = "shared-model"
+model_provider = "provider_a"
+
+[profiles.second]
+model = "shared-model"
+model_provider = "provider_b"
+"#,
+        )
+        .expect("write config");
+
+        app.config = ConfigBuilder::default()
+            .codex_home(app.config.codex_home.clone())
+            .build()
+            .await
+            .expect("reload config");
+        app.chat_widget.sync_provider_config(&app.config, true);
+        app.chat_widget.set_model("model-a");
+
+        let provider_id = app
+            .persist_model_selection(
+                "shared-model".to_string(),
+                Some("provider_b".to_string()),
+                None,
+            )
+            .await
+            .expect("persist model selection with explicit provider");
+
+        assert_eq!(provider_id, "provider_b");
+        assert_eq!(app.config.model_provider_id, "provider_b");
+        assert_eq!(app.config.model.as_deref(), Some("shared-model"));
+        assert_eq!(app.chat_widget.current_model(), "shared-model");
+
+        let config_toml: ConfigToml = app
+            .config
+            .config_layer_stack
+            .effective_config()
+            .try_into()
+            .expect("config toml");
+        assert_eq!(config_toml.model.as_deref(), Some("shared-model"));
+        assert_eq!(config_toml.model_provider.as_deref(), Some("provider_b"));
+    }
+
+    #[tokio::test]
+    async fn persist_model_selection_uses_explicit_openai_provider_for_builtin_same_slug() {
+        let mut app = make_test_app().await;
+        let config_path = app.config.codex_home.join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"model = "gpt-5.2"
+model_provider = "provider_a"
+
+[model_providers.provider_a]
+name = "provider_a"
+base_url = "https://example.com/a"
+wire_api = "chat"
+experimental_bearer_token = "sk-a"
+"#,
+        )
+        .expect("write config");
+
+        app.config = ConfigBuilder::default()
+            .codex_home(app.config.codex_home.clone())
+            .build()
+            .await
+            .expect("reload config");
+        app.chat_widget.sync_provider_config(&app.config, true);
+        app.chat_widget.set_model("gpt-5.2");
+
+        let provider_id = app
+            .persist_model_selection("gpt-5.2".to_string(), Some("openai".to_string()), None)
+            .await
+            .expect("persist model selection with explicit openai provider");
+
+        assert_eq!(provider_id, "openai");
+        assert_eq!(app.config.model_provider_id, "openai");
+        assert_eq!(app.config.model.as_deref(), Some("gpt-5.2"));
+        assert_eq!(app.chat_widget.current_model(), "gpt-5.2");
+
+        let config_toml: ConfigToml = app
+            .config
+            .config_layer_stack
+            .effective_config()
+            .try_into()
+            .expect("config toml");
+        assert_eq!(config_toml.model.as_deref(), Some("gpt-5.2"));
+        assert_eq!(config_toml.model_provider.as_deref(), Some("openai"));
     }
 
     #[tokio::test]
@@ -4331,7 +4464,11 @@ model_context_window = 64_000
         app.config.codex_home = config_path;
 
         let err = app
-            .persist_model_selection("model-b".to_string(), Some(ReasoningEffortConfig::High))
+            .persist_model_selection(
+                "model-b".to_string(),
+                None,
+                Some(ReasoningEffortConfig::High),
+            )
             .await
             .expect_err("expected model persistence to fail");
 

@@ -4142,10 +4142,9 @@ impl ChatWidget {
             .filter(|preset| preset.show_in_picker)
             .collect();
 
-        let current_model = self.current_model();
         let current_label = presets
             .iter()
-            .find(|preset| preset.model.as_str() == current_model)
+            .find(|preset| self.is_current_model_preset(preset))
             .map(|preset| preset.display_name.to_string())
             .unwrap_or_else(|| self.model_display_name().to_string());
 
@@ -4166,14 +4165,16 @@ impl ChatWidget {
                 let description =
                     (!preset.description.is_empty()).then_some(preset.description.clone());
                 let model = preset.model.clone();
+                let provider_id = preset.model_provider_id.clone();
                 let actions = Self::model_selection_actions(
-                    model.clone(),
+                    model,
+                    provider_id,
                     Some(preset.default_reasoning_effort),
                 );
                 SelectionItem {
                     name: preset.display_name.clone(),
                     description,
-                    is_current: model.as_str() == current_model,
+                    is_current: self.is_current_model_preset(&preset),
                     is_default: preset.is_default,
                     actions,
                     dismiss_on_select: true,
@@ -4240,10 +4241,10 @@ impl ChatWidget {
         }
 
         let mut items: Vec<SelectionItem> = Vec::new();
-        for preset in presets.into_iter() {
+        for preset in presets.iter().cloned() {
             let description =
                 (!preset.description.is_empty()).then_some(preset.description.to_string());
-            let is_current = preset.model.as_str() == self.current_model();
+            let is_current = self.is_current_model_preset(&preset);
             let requires_reasoning_picker = preset.supported_reasoning_efforts.len() > 1;
             let preset_for_action = preset.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -4322,6 +4323,7 @@ impl ChatWidget {
 
     fn model_selection_actions(
         model_for_action: String,
+        provider_id_for_action: Option<String>,
         effort_for_action: Option<ReasoningEffortConfig>,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
@@ -4330,6 +4332,7 @@ impl ChatWidget {
                 .unwrap_or_else(|| "default".to_string());
             tx.send(AppEvent::PersistModelSelection {
                 model: model_for_action.clone(),
+                provider_id: provider_id_for_action.clone(),
                 effort: effort_for_action,
             });
             tracing::info!(
@@ -4388,9 +4391,9 @@ impl ChatWidget {
 
         if choices.len() == 1 {
             if let Some(effort) = choices.first().and_then(|c| c.stored) {
-                self.apply_model_and_effort(preset.model, Some(effort));
+                self.apply_model_and_effort(preset.model, preset.model_provider_id, Some(effort));
             } else {
-                self.apply_model_and_effort(preset.model, None);
+                self.apply_model_and_effort(preset.model, preset.model_provider_id, None);
             }
             return;
         }
@@ -4404,7 +4407,10 @@ impl ChatWidget {
             .or(Some(default_effort));
 
         let model_slug = preset.model.to_string();
-        let is_current_model = self.current_model() == preset.model.as_str();
+        let is_current_model = self.is_current_model_for_selection(
+            preset.model.as_str(),
+            preset.model_provider_id.as_deref(),
+        );
         let highlight_choice = if is_current_model {
             self.effective_reasoning_effort()
         } else {
@@ -4449,7 +4455,11 @@ impl ChatWidget {
             };
 
             let model_for_action = model_slug.clone();
-            let actions = Self::model_selection_actions(model_for_action, choice.stored);
+            let actions = Self::model_selection_actions(
+                model_for_action,
+                preset.model_provider_id.clone(),
+                choice.stored,
+            );
 
             items.push(SelectionItem {
                 name: effort_label,
@@ -4487,9 +4497,15 @@ impl ChatWidget {
         }
     }
 
-    fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
+    fn apply_model_and_effort(
+        &self,
+        model: String,
+        provider_id: Option<String>,
+        effort: Option<ReasoningEffortConfig>,
+    ) {
         self.app_event_tx.send(AppEvent::PersistModelSelection {
             model: model.clone(),
+            provider_id,
             effort,
         });
         tracing::info!(
@@ -4499,6 +4515,21 @@ impl ChatWidget {
                 .map(|e| e.to_string())
                 .unwrap_or_else(|| "default".to_string())
         );
+    }
+
+    fn is_current_model_preset(&self, preset: &ModelPreset) -> bool {
+        self.is_current_model_for_selection(
+            preset.model.as_str(),
+            preset.model_provider_id.as_deref(),
+        )
+    }
+
+    fn is_current_model_for_selection(&self, model: &str, provider_id: Option<&str>) -> bool {
+        if self.current_model() != model {
+            return false;
+        }
+
+        provider_id.is_none_or(|provider_id| self.config.model_provider_id == provider_id)
     }
 
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).

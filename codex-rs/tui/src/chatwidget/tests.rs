@@ -3782,6 +3782,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
     let preset = |slug: &str, show_in_picker: bool| ModelPreset {
         id: slug.to_string(),
         model: slug.to_string(),
+        model_provider_id: None,
         display_name: slug.to_string(),
         description: format!("{slug} description"),
         default_reasoning_effort: ReasoningEffortConfig::Medium,
@@ -3922,6 +3923,72 @@ async fn model_picker_without_auth_shows_all_models_saved_in_config_toml() {
 }
 
 #[tokio::test]
+async fn model_picker_without_auth_shows_same_model_for_different_custom_providers() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("glm-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.auth_manager = Arc::new(AuthManager::new(
+        chat.config.codex_home.clone(),
+        false,
+        AuthCredentialsStoreMode::File,
+    ));
+    chat.models_manager = Arc::new(ModelsManager::new(
+        chat.config.codex_home.clone(),
+        chat.auth_manager.clone(),
+        chat.config.model_provider_id.as_str(),
+        chat.config.model_provider.clone(),
+    ));
+    reload_chat_config_with_saved_providers(
+        &mut chat,
+        vec![
+            CustomProviderConfig {
+                provider_id: "provider_a".to_string(),
+                wire_api: crate::provider_config::ApiProviderWireApi::Responses,
+                base_url: "https://example.test/a".to_string(),
+                api_key: "sk-test-a".to_string(),
+                model: "glm-5".to_string(),
+                model_context_window: None,
+            },
+            CustomProviderConfig {
+                provider_id: "provider_b".to_string(),
+                wire_api: crate::provider_config::ApiProviderWireApi::Responses,
+                base_url: "https://example.test/b".to_string(),
+                api_key: "sk-test-b".to_string(),
+                model: "glm-5".to_string(),
+                model_context_window: None,
+            },
+        ],
+    )
+    .await;
+    chat.set_model("glm-5");
+
+    chat.open_model_popup();
+
+    let popup = render_bottom_popup(&chat, 110);
+    assert_eq!(
+        popup.matches("glm-5").count(),
+        2,
+        "expected two glm-5 entries:\n{popup}"
+    );
+    assert!(
+        popup.contains("User-defined model from provider_a provider."),
+        "expected provider_a description in picker:\n{popup}"
+    );
+    assert!(
+        popup.contains("User-defined model from provider_b provider."),
+        "expected provider_b description in picker:\n{popup}"
+    );
+    assert_eq!(
+        popup.matches("(current)").count(),
+        1,
+        "expected only one current entry:\n{popup}"
+    );
+    assert!(
+        popup.contains("glm-5 (current)  User-defined model from provider_b provider."),
+        "expected current entry to match active provider:\n{popup}"
+    );
+}
+
+#[tokio::test]
 async fn model_picker_with_chatgpt_auth_shows_full_list_and_config_models() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("mock-model")).await;
     chat.thread_id = Some(ThreadId::new());
@@ -3960,6 +4027,66 @@ async fn model_picker_with_chatgpt_auth_shows_full_list_and_config_models() {
     assert!(
         popup.contains("deepseek-r1"),
         "expected configured models to remain visible with ChatGPT auth:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn model_switcher_with_chatgpt_auth_keeps_builtin_and_custom_same_slug_visible() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.thread_id = Some(ThreadId::new());
+    set_chatgpt_auth(&mut chat);
+    reload_chat_config_with_saved_providers(
+        &mut chat,
+        vec![CustomProviderConfig {
+            provider_id: "provider_a".to_string(),
+            wire_api: crate::provider_config::ApiProviderWireApi::Responses,
+            base_url: "https://example.test/a".to_string(),
+            api_key: "sk-test-a".to_string(),
+            model: "gpt-5.2".to_string(),
+            model_context_window: None,
+        }],
+    )
+    .await;
+    chat.set_model("gpt-5.2");
+
+    let presets = chat
+        .models_manager
+        .try_list_model_switcher_models(&chat.config)
+        .expect("model switcher presets");
+    chat.open_all_models_popup(presets);
+
+    let popup = render_bottom_popup(&chat, 140);
+    let matching_lines = popup
+        .lines()
+        .filter(|line| {
+            line.contains("gpt-5.2")
+                && (line.contains("Latest frontier model with improvements across knowledge, reasoning and coding")
+                    || line.contains("User-defined model from provider_a provider."))
+        })
+        .count();
+
+    assert_eq!(matching_lines, 2, "expected two gpt-5.2 entries:\n{popup}");
+    assert!(
+        popup.contains(
+            "Latest frontier model with improvements across knowledge, reasoning and coding"
+        ),
+        "expected built-in description in picker:\n{popup}"
+    );
+    assert!(
+        popup.contains("User-defined model from provider_a provider."),
+        "expected custom provider description in picker:\n{popup}"
+    );
+    assert_eq!(
+        popup.matches("(current)").count(),
+        1,
+        "expected only one current entry:\n{popup}"
+    );
+    assert!(
+        popup.lines().any(|line| {
+            line.contains("gpt-5.2 (current)")
+                && line.contains("User-defined model from provider_a provider.")
+        }),
+        "expected current entry to match active custom provider:\n{popup}"
     );
 }
 
@@ -4174,6 +4301,7 @@ async fn single_reasoning_option_skips_selection() {
     let preset = ModelPreset {
         id: "model-with-single-reasoning".to_string(),
         model: "model-with-single-reasoning".to_string(),
+        model_provider_id: None,
         display_name: "model-with-single-reasoning".to_string(),
         description: "".to_string(),
         default_reasoning_effort: ReasoningEffortConfig::High,
@@ -4200,7 +4328,11 @@ async fn single_reasoning_option_skips_selection() {
     assert!(
         events.iter().any(|ev| matches!(
             ev,
-            AppEvent::PersistModelSelection { model, effort }
+            AppEvent::PersistModelSelection {
+                model,
+                provider_id: None,
+                effort,
+            }
                 if model == "model-with-single-reasoning"
                     && *effort == Some(ReasoningEffortConfig::High)
         )),
@@ -4216,6 +4348,7 @@ async fn no_reasoning_options_persist_none_effort() {
     let preset = ModelPreset {
         id: "custom-model".to_string(),
         model: "custom-model".to_string(),
+        model_provider_id: None,
         display_name: "custom-model".to_string(),
         description: "Configured model from config.toml.".to_string(),
         default_reasoning_effort: ReasoningEffortConfig::None,
@@ -4242,10 +4375,54 @@ async fn no_reasoning_options_persist_none_effort() {
     assert!(
         events.iter().any(|ev| matches!(
             ev,
-            AppEvent::PersistModelSelection { model, effort }
+            AppEvent::PersistModelSelection {
+                model,
+                provider_id: None,
+                effort,
+            }
                 if model == "custom-model" && effort.is_none()
         )),
         "expected no reasoning options to persist model selection with no effort; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn no_reasoning_options_preserve_provider_identity() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let preset = ModelPreset {
+        id: "gpt-5.2".to_string(),
+        model: "gpt-5.2".to_string(),
+        model_provider_id: Some("openai".to_string()),
+        display_name: "gpt-5.2".to_string(),
+        description:
+            "Latest frontier model with improvements across knowledge, reasoning and coding"
+                .to_string(),
+        default_reasoning_effort: ReasoningEffortConfig::None,
+        supported_reasoning_efforts: Vec::new(),
+        supports_personality: false,
+        is_default: false,
+        upgrade: None,
+        show_in_picker: true,
+        supported_in_api: true,
+    };
+    chat.open_reasoning_popup(preset);
+
+    let mut events = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        events.push(ev);
+    }
+
+    assert!(
+        events.iter().any(|ev| matches!(
+            ev,
+            AppEvent::PersistModelSelection {
+                model,
+                provider_id: Some(provider_id),
+                effort,
+            } if model == "gpt-5.2" && provider_id == "openai" && effort.is_none()
+        )),
+        "expected provider-aware selection to preserve openai provider: {events:?}"
     );
 }
 
@@ -4256,6 +4433,7 @@ async fn model_picker_with_no_reasoning_options_dismisses_after_selection() {
     let preset = ModelPreset {
         id: "custom-model".to_string(),
         model: "custom-model".to_string(),
+        model_provider_id: None,
         display_name: "custom-model".to_string(),
         description: "Configured model from config.toml.".to_string(),
         default_reasoning_effort: ReasoningEffortConfig::Medium,
