@@ -123,7 +123,7 @@ impl ProviderConfigView {
     fn input_height(&self, area: Rect, state: &ApiKeyInputState) -> u16 {
         let inner_width = area.width.saturating_sub(2).max(1);
         match state.step {
-            ApiProviderWizardStep::WireApi => 6,
+            ApiProviderWizardStep::WireApi => 5,
             _ => self
                 .textarea
                 .desired_height(inner_width)
@@ -352,10 +352,10 @@ impl Renderable for ProviderConfigView {
                 let lines = ApiProviderWireApi::all()
                     .into_iter()
                     .enumerate()
-                    .flat_map(|(idx, option)| {
+                    .map(|(idx, option)| {
                         let selected = option == state.wire_api;
                         let prefix = if selected { ">" } else { " " };
-                        let line = if selected {
+                        if selected {
                             vec![
                                 format!("{prefix} {}. ", idx + 1).cyan().dim(),
                                 option.label().cyan(),
@@ -363,13 +363,7 @@ impl Renderable for ProviderConfigView {
                             .into()
                         } else {
                             format!("  {}. {}", idx + 1, option.label()).into()
-                        };
-                        let description = if selected {
-                            format!("     {}", option.description()).cyan().dim()
-                        } else {
-                            format!("     {}", option.description()).dim()
-                        };
-                        vec![line, description.into()]
+                        }
                     })
                     .collect::<Vec<Line>>();
 
@@ -473,6 +467,7 @@ fn mask_secret(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn test_view() -> ProviderConfigView {
@@ -489,6 +484,14 @@ mod tests {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    fn row_text(buf: &Buffer, row: u16, width: u16) -> String {
+        (0..width)
+            .map(|col| buf[(col, row)].symbol())
+            .collect::<String>()
+            .trim_end()
+            .to_string()
     }
 
     #[test]
@@ -543,6 +546,8 @@ mod tests {
         assert_eq!(state_snapshot(&view).provider_id, "custom_1");
 
         view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(state_snapshot(&view).wire_api, ApiProviderWireApi::Chat);
+
         view.handle_key_event(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
         assert_eq!(state_snapshot(&view).wire_api, ApiProviderWireApi::Chat);
 
@@ -563,5 +568,48 @@ mod tests {
 
         view.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert_eq!(state_snapshot(&view).wire_api, ApiProviderWireApi::Messages);
+    }
+
+    #[test]
+    fn wire_api_step_uses_three_single_line_options() {
+        let view = test_view();
+        {
+            let mut state = write_state(&view.state);
+            state.step = ApiProviderWizardStep::WireApi;
+        }
+
+        let area = Rect::new(0, 0, 120, view.desired_height(120));
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let lines = (0..area.height)
+            .map(|row| row_text(&buf, row, area.width))
+            .collect::<Vec<_>>();
+        let wire_api_row = lines
+            .iter()
+            .position(|line| line.starts_with("╭Wire API"))
+            .expect("wire api border row");
+
+        assert_eq!(lines[wire_api_row + 1].contains("chat"), true);
+        assert_eq!(lines[wire_api_row + 2].contains("responses"), true);
+        assert_eq!(lines[wire_api_row + 3].contains("messages"), true);
+        assert_eq!(
+            lines
+                .iter()
+                .any(|line| line.contains("Compatible with chat completions style APIs")),
+            false
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .any(|line| line.contains("Compatible with Responses API style backends")),
+            false
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .any(|line| line.contains("Anthropic-compatible Messages API at /v1/messages")),
+            false
+        );
     }
 }
