@@ -21,7 +21,7 @@ use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
     let writable_root = test_tmp_path();

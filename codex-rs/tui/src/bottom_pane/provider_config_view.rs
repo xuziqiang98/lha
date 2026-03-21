@@ -189,14 +189,14 @@ impl BottomPaneView for ProviderConfigView {
                 KeyCode::Up | KeyCode::Char('k')
                     if state.step == ApiProviderWizardStep::WireApi =>
                 {
-                    state.wire_api = ApiProviderWireApi::Chat;
+                    state.wire_api = state.wire_api.previous();
                     state.error = None;
                     should_request_frame = true;
                 }
                 KeyCode::Down | KeyCode::Char('j')
                     if state.step == ApiProviderWizardStep::WireApi =>
                 {
-                    state.wire_api = ApiProviderWireApi::Responses;
+                    state.wire_api = state.wire_api.next();
                     state.error = None;
                     should_request_frame = true;
                 }
@@ -205,29 +205,14 @@ impl BottomPaneView for ProviderConfigView {
                     state.error = None;
                     should_request_frame = true;
                 }
-                KeyCode::Char('1') if state.step == ApiProviderWizardStep::WireApi => {
-                    state.wire_api = ApiProviderWireApi::Chat;
-                    state.error = None;
-                    should_request_frame = true;
-                }
-                KeyCode::Char('2') if state.step == ApiProviderWizardStep::WireApi => {
-                    state.wire_api = ApiProviderWireApi::Responses;
-                    state.error = None;
-                    should_request_frame = true;
-                }
-                KeyCode::Char('c') | KeyCode::Char('C')
-                    if state.step == ApiProviderWizardStep::WireApi =>
-                {
-                    state.wire_api = ApiProviderWireApi::Chat;
-                    state.error = None;
-                    should_request_frame = true;
-                }
-                KeyCode::Char('r') | KeyCode::Char('R')
-                    if state.step == ApiProviderWizardStep::WireApi =>
-                {
-                    state.wire_api = ApiProviderWireApi::Responses;
-                    state.error = None;
-                    should_request_frame = true;
+                KeyCode::Char(c) if state.step == ApiProviderWizardStep::WireApi => {
+                    if let Some(wire_api) = ApiProviderWireApi::from_shortcut_digit(c)
+                        .or_else(|| ApiProviderWireApi::from_shortcut_letter(c))
+                    {
+                        state.wire_api = wire_api;
+                        state.error = None;
+                        should_request_frame = true;
+                    }
                 }
                 _ if state.step != ApiProviderWizardStep::WireApi => {
                     if key_event
@@ -364,8 +349,7 @@ impl Renderable for ProviderConfigView {
 
         match state.step {
             ApiProviderWizardStep::WireApi => {
-                let options = [ApiProviderWireApi::Chat, ApiProviderWireApi::Responses];
-                let lines = options
+                let lines = ApiProviderWireApi::all()
                     .into_iter()
                     .enumerate()
                     .flat_map(|(idx, option)| {
@@ -435,7 +419,7 @@ impl Renderable for ProviderConfigView {
                 "  Press Enter to continue".dim().into()
             },
             if state.step == ApiProviderWizardStep::WireApi {
-                "  Press 1/2 or Up/Down to choose".dim().into()
+                "  Press 1/2/3 or Up/Down to choose".dim().into()
             } else {
                 "  Type or paste to edit".dim().into()
             },
@@ -567,5 +551,17 @@ mod tests {
             state_snapshot(&view).wire_api,
             ApiProviderWireApi::Responses
         );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
+        assert_eq!(state_snapshot(&view).wire_api, ApiProviderWireApi::Messages);
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        assert_eq!(state_snapshot(&view).wire_api, ApiProviderWireApi::Messages);
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(state_snapshot(&view).wire_api, ApiProviderWireApi::Chat);
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(state_snapshot(&view).wire_api, ApiProviderWireApi::Messages);
     }
 }

@@ -45,6 +45,9 @@ pub enum WireApi {
     /// Regular Chat Completions compatible with `/v1/chat/completions`.
     #[default]
     Chat,
+
+    /// Anthropic-compatible Messages API exposed at `/v1/messages`.
+    Messages,
 }
 
 /// Serializable representation of a provider definition.
@@ -162,6 +165,7 @@ impl ModelProviderInfo {
             wire: match self.wire_api {
                 WireApi::Responses => ApiWireApi::Responses,
                 WireApi::Chat => ApiWireApi::Chat,
+                WireApi::Messages => ApiWireApi::Messages,
             },
             headers,
             retry,
@@ -173,6 +177,7 @@ impl ModelProviderInfo {
         let wire = match self.wire_api {
             WireApi::Responses => ApiWireApi::Responses,
             WireApi::Chat => ApiWireApi::Chat,
+            WireApi::Messages => ApiWireApi::Messages,
         };
 
         is_azure_responses_wire_base_url(wire, &self.name, self.base_url.as_deref())
@@ -278,6 +283,10 @@ impl ModelProviderInfo {
 
     pub fn is_openai(&self) -> bool {
         self.name == OPENAI_PROVIDER_NAME
+    }
+
+    pub fn supports_remote_compaction(&self) -> bool {
+        self.is_openai() && matches!(self.wire_api, WireApi::Responses)
     }
 }
 
@@ -450,5 +459,65 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
         assert_eq!(expected_provider, provider);
+    }
+
+    #[test]
+    fn test_deserialize_messages_model_provider_toml() {
+        let provider_toml = r#"
+name = "Anthropic"
+base_url = "https://api.anthropic.com/v1"
+env_key = "ANTHROPIC_API_KEY"
+wire_api = "messages"
+        "#;
+        let expected_provider = ModelProviderInfo {
+            name: "Anthropic".into(),
+            base_url: Some("https://api.anthropic.com/v1".into()),
+            env_key: Some("ANTHROPIC_API_KEY".into()),
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            wire_api: WireApi::Messages,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        };
+
+        let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+        assert_eq!(expected_provider, provider);
+    }
+
+    #[test]
+    fn openai_responses_provider_supports_remote_compaction() {
+        let provider = ModelProviderInfo::create_openai_provider();
+
+        assert!(provider.supports_remote_compaction());
+    }
+
+    #[test]
+    fn openai_chat_provider_does_not_support_remote_compaction() {
+        let mut provider = ModelProviderInfo::create_openai_provider();
+        provider.wire_api = WireApi::Chat;
+
+        assert!(!provider.supports_remote_compaction());
+    }
+
+    #[test]
+    fn openai_messages_provider_does_not_support_remote_compaction() {
+        let mut provider = ModelProviderInfo::create_openai_provider();
+        provider.wire_api = WireApi::Messages;
+
+        assert!(!provider.supports_remote_compaction());
+    }
+
+    #[test]
+    fn non_openai_responses_provider_does_not_support_remote_compaction() {
+        let mut provider = ModelProviderInfo::create_openai_provider();
+        provider.name = "Anthropic".into();
+
+        assert!(!provider.supports_remote_compaction());
     }
 }

@@ -1299,7 +1299,7 @@ impl App {
         let mut model = thread_manager
             .get_models_manager()
             .get_default_model(&config.model, &config, RefreshStrategy::Offline)
-            .await;
+            .await?;
         let available_models = thread_manager
             .get_models_manager()
             .list_models(&config, RefreshStrategy::Offline)

@@ -28,6 +28,26 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.
 
+## Custom Anthropic provider
+
+You can configure a custom Anthropic-compatible provider with `wire_api = "messages"`:
+
+```toml
+model = "claude-sonnet-4-5"
+
+[model_providers.anthropic]
+name = "Anthropic"
+base_url = "https://api.anthropic.com/v1"
+env_key = "ANTHROPIC_API_KEY"
+wire_api = "messages"
+```
+
+You can also create this kind of provider from the TUI custom provider flows, including `/providers` and the first-run custom provider setup.
+
+`wire_api = "messages"` does not support model discovery yet, so you must configure `model` explicitly.
+
+By default, Codex sends `x-api-key` from `env_key` and injects `anthropic-version = "2023-06-01"` for this wire API. You can override the version header with `http_headers` or `env_http_headers` if needed.
+
 ## Notices
 
 Codex stores "do not show again" flags for some UI prompts under the `[notice]` table.

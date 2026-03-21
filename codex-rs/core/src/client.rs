@@ -12,6 +12,8 @@ use codex_api::ChatRequestBuilder as ApiChatRequestBuilder;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::DeveloperRoleHandling;
+use codex_api::MessagesClient as ApiMessagesClient;
+use codex_api::MessagesRequestBuilder as ApiMessagesRequestBuilder;
 use codex_api::Prompt as ApiPrompt;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
@@ -78,6 +80,7 @@ use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
+use crate::tools::spec::create_tools_json_for_messages_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::transport_manager::TransportManager;
 use crate::util::try_parse_error_message;
@@ -85,6 +88,7 @@ use crate::util::try_parse_error_message;
 pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 const APPROX_CHARS_PER_TOKEN: usize = 4;
+const ANTHROPIC_MESSAGES_MAX_TOKENS: u32 = 8_192;
 
 #[derive(Debug)]
 struct ModelClientState {
@@ -547,6 +551,7 @@ impl ModelClientSession {
                     ))
                 }
             }
+            WireApi::Messages => self.stream_messages_api(prompt).await,
         }
     }
 
@@ -581,6 +586,12 @@ impl ModelClientSession {
     fn build_responses_request(&self, prompt: &Prompt) -> Result<ApiPrompt> {
         let instructions = prompt.base_instructions.text.clone();
         let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
+        Ok(build_api_prompt(prompt, instructions, tools_json))
+    }
+
+    fn build_messages_request(&self, prompt: &Prompt) -> Result<ApiPrompt> {
+        let instructions = prompt.base_instructions.text.clone();
+        let tools_json: Vec<Value> = create_tools_json_for_messages_api(&prompt.tools)?;
         Ok(build_api_prompt(prompt, instructions, tools_json))
     }
 
@@ -841,6 +852,60 @@ impl ModelClientSession {
                         }
                         Err(err) => return Err(map_api_error(err)),
                     }
+                }
+                Err(err) => return Err(map_api_error(err)),
+            }
+        }
+    }
+
+    async fn stream_messages_api(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        if prompt.output_schema.is_some() {
+            return Err(CodexErr::UnsupportedOperation(
+                "output_schema is not supported for Messages API".to_string(),
+            ));
+        }
+
+        let auth_manager = self.state.auth_manager.clone();
+        let api_prompt = self.build_messages_request(prompt)?;
+
+        let mut auth_recovery = auth_manager
+            .as_ref()
+            .map(super::auth::AuthManager::unauthorized_recovery);
+        loop {
+            let auth = match auth_manager.as_ref() {
+                Some(manager) => manager.auth().await,
+                None => None,
+            };
+            let api_provider = self
+                .state
+                .provider
+                .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
+            let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
+            let transport = ReqwestTransport::new(build_reqwest_client());
+            let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
+            let request = ApiMessagesRequestBuilder::new(
+                &self.state.model_info.slug,
+                &api_prompt.instructions,
+                &api_prompt.input,
+                &api_prompt.tools,
+            )
+            .parallel_tool_calls(api_prompt.parallel_tool_calls)
+            .max_tokens(ANTHROPIC_MESSAGES_MAX_TOKENS)
+            .build(&api_provider)
+            .map_err(map_api_error)?;
+            let client = ApiMessagesClient::new(transport, api_provider, api_auth)
+                .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
+
+            let stream_result = client.stream_request(request).await;
+            match stream_result {
+                Ok(stream) => {
+                    return Ok(map_response_stream(stream, self.state.otel_manager.clone()));
+                }
+                Err(ApiError::Transport(TransportError::Http { status, .. }))
+                    if status == StatusCode::UNAUTHORIZED =>
+                {
+                    handle_unauthorized(status, &mut auth_recovery).await?;
+                    continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
             }

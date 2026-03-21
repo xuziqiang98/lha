@@ -11,6 +11,7 @@ use crate::error::CodexErr;
 use crate::error::Result as CoreResult;
 use crate::features::Feature;
 use crate::model_provider_info::ModelProviderInfo;
+use crate::model_provider_info::WireApi;
 use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::models_manager::model_info;
 use crate::models_manager::model_presets::builtin_model_presets;
@@ -74,10 +75,16 @@ impl ModelsManager {
     ) -> Self {
         let cache_path = models_cache_path(&codex_home, model_provider_id);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
+        let remote_models = if Self::provider_uses_model_catalog(&provider) {
+            Self::load_remote_models_from_file().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
         Self {
             codex_home,
             local_models: builtin_model_presets(auth_manager.get_internal_auth_mode()),
-            remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
+            remote_models: RwLock::new(remote_models),
             auth_manager,
             etag: RwLock::new(None),
             cache_manager: StdRwLock::new(cache_manager),
@@ -94,6 +101,7 @@ impl ModelsManager {
     }
 
     pub async fn switch_provider(&self, model_provider_id: &str, provider: ModelProviderInfo) {
+        let uses_model_catalog = Self::provider_uses_model_catalog(&provider);
         *self
             .cache_manager
             .write()
@@ -109,10 +117,15 @@ impl ModelsManager {
             .provider
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = provider;
-        *self.remote_models.write().await =
-            Self::load_remote_models_from_file().unwrap_or_default();
+        *self.remote_models.write().await = if uses_model_catalog {
+            Self::load_remote_models_from_file().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         *self.etag.write().await = None;
-        self.try_load_cache().await;
+        if uses_model_catalog {
+            self.try_load_cache().await;
+        }
     }
 
     /// List all available models, refreshing according to the specified strategy.
@@ -204,9 +217,14 @@ impl ModelsManager {
         model: &Option<String>,
         config: &Config,
         refresh_strategy: RefreshStrategy,
-    ) -> String {
+    ) -> CoreResult<String> {
         if let Some(model) = model.as_ref() {
-            return model.to_string();
+            return Ok(model.to_string());
+        }
+        if self.provider_snapshot().wire_api == WireApi::Messages {
+            return Err(CodexErr::Fatal(
+                "wire_api = \"messages\" requires an explicit model".to_string(),
+            ));
         }
         if let Err(err) = self
             .refresh_available_models(config, refresh_strategy)
@@ -216,12 +234,12 @@ impl ModelsManager {
         }
         let remote_models = self.get_remote_models(config).await;
         let available = self.build_available_models(remote_models);
-        available
+        Ok(available
             .iter()
             .find(|model| model.is_default)
             .or_else(|| available.first())
             .map(|model| model.model.clone())
-            .unwrap_or_default()
+            .unwrap_or_default())
     }
 
     // todo(aibrahim): look if we can tighten it to pub(crate)
@@ -269,6 +287,10 @@ impl ModelsManager {
         config: &Config,
         refresh_strategy: RefreshStrategy,
     ) -> CoreResult<()> {
+        if !Self::provider_uses_model_catalog(&self.provider_snapshot()) {
+            self.clear_remote_model_state().await;
+            return Ok(());
+        }
         if !config.features.enabled(Feature::RemoteModels)
             || self.auth_manager.get_internal_auth_mode() == Some(AuthMode::ApiKey)
         {
@@ -298,6 +320,10 @@ impl ModelsManager {
     async fn fetch_and_update_models(&self) -> CoreResult<()> {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
+        if !Self::provider_uses_model_catalog(&self.provider_snapshot()) {
+            self.clear_remote_model_state().await;
+            return Ok(());
+        }
         let auth = self.auth_manager.auth().await;
         let auth_mode = self.auth_manager.get_internal_auth_mode();
         let provider = self.provider_snapshot();
@@ -353,13 +379,17 @@ impl ModelsManager {
     async fn try_load_cache(&self) -> bool {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.load_cache.duration_ms", &[]);
+        if !Self::provider_uses_model_catalog(&self.provider_snapshot()) {
+            self.clear_remote_model_state().await;
+            return false;
+        }
         let cache = match self.cache_manager_snapshot().load_fresh().await {
             Some(cache) => cache,
             None => return false,
         };
         let models = cache.models.clone();
         *self.etag.write().await = cache.etag.clone();
-        self.apply_remote_models(models.clone()).await;
+        self.apply_remote_models(models).await;
         true
     }
 
@@ -368,7 +398,7 @@ impl ModelsManager {
         remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
 
         let remote_presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
-        let existing_presets = self.local_models.clone();
+        let existing_presets = self.builtin_presets_for_provider();
         let mut merged_presets = ModelPreset::merge(remote_presets, existing_presets);
         let chatgpt_mode = matches!(
             self.auth_manager.get_internal_auth_mode(),
@@ -809,7 +839,9 @@ impl ModelsManager {
     }
 
     async fn get_remote_models(&self, config: &Config) -> Vec<ModelInfo> {
-        if config.features.enabled(Feature::RemoteModels) {
+        if config.features.enabled(Feature::RemoteModels)
+            && Self::provider_uses_model_catalog(&self.provider_snapshot())
+        {
             self.remote_models.read().await.clone()
         } else {
             Vec::new()
@@ -817,7 +849,9 @@ impl ModelsManager {
     }
 
     fn try_get_remote_models(&self, config: &Config) -> Result<Vec<ModelInfo>, TryLockError> {
-        if config.features.enabled(Feature::RemoteModels) {
+        if config.features.enabled(Feature::RemoteModels)
+            && Self::provider_uses_model_catalog(&self.provider_snapshot())
+        {
             Ok(self.remote_models.try_read()?.clone())
         } else {
             Ok(Vec::new())
@@ -829,6 +863,23 @@ impl ModelsManager {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+    }
+
+    fn provider_uses_model_catalog(provider: &ModelProviderInfo) -> bool {
+        !matches!(provider.wire_api, WireApi::Messages)
+    }
+
+    fn builtin_presets_for_provider(&self) -> Vec<ModelPreset> {
+        if Self::provider_uses_model_catalog(&self.provider_snapshot()) {
+            self.local_models.clone()
+        } else {
+            Vec::new()
+        }
+    }
+
+    async fn clear_remote_model_state(&self) {
+        *self.remote_models.write().await = Vec::new();
+        *self.etag.write().await = None;
     }
 
     fn cache_manager_snapshot(&self) -> ModelsCacheManager {
@@ -976,6 +1027,13 @@ mod tests {
             requires_openai_auth: false,
             supports_websockets: false,
         }
+    }
+
+    fn messages_provider_for(base_url: String) -> ModelProviderInfo {
+        let mut provider = provider_for(base_url);
+        provider.wire_api = WireApi::Messages;
+        provider.env_key = Some("ANTHROPIC_API_KEY".to_string());
+        provider
     }
 
     async fn load_config_from_toml(codex_home: &tempfile::TempDir, config_toml: &str) -> Config {
@@ -1903,6 +1961,156 @@ model = "mock-model"
                 .collect::<Vec<_>>(),
             vec!["mock-model"]
         );
+    }
+
+    #[tokio::test]
+    async fn messages_provider_starts_with_empty_remote_models() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager = Arc::new(AuthManager::new(
+            codex_home.path().to_path_buf(),
+            false,
+            AuthCredentialsStoreMode::File,
+        ));
+        let manager = ModelsManager::with_provider(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "mock-provider",
+            messages_provider_for("http://example.test".to_string()),
+        );
+        let mut config = load_config_from_toml(&codex_home, "").await;
+        config.features.enable(Feature::RemoteModels);
+
+        assert!(manager.get_remote_models(&config).await.is_empty());
+        assert!(
+            manager
+                .list_models(&config, RefreshStrategy::Offline)
+                .await
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn switch_provider_to_messages_clears_remote_state() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager = Arc::new(AuthManager::new(
+            codex_home.path().to_path_buf(),
+            false,
+            AuthCredentialsStoreMode::File,
+        ));
+        let manager = ModelsManager::with_provider(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "mock-provider",
+            provider_for("http://example.test".to_string()),
+        );
+        manager
+            .apply_remote_models(vec![remote_model(
+                "custom-provider-model",
+                "Custom Provider",
+                1,
+            )])
+            .await;
+        *manager.etag.write().await = Some("etag-1".to_string());
+
+        manager
+            .switch_provider(
+                "anthropic",
+                messages_provider_for("https://api.anthropic.com/v1".to_string()),
+            )
+            .await;
+
+        let mut config = load_config_from_toml(&codex_home, "").await;
+        config.features.enable(Feature::RemoteModels);
+        assert!(manager.get_remote_models(&config).await.is_empty());
+        assert_eq!(manager.get_etag().await, None);
+    }
+
+    #[tokio::test]
+    async fn list_picker_models_with_messages_provider_only_shows_configured_model() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager = Arc::new(AuthManager::new(
+            codex_home.path().to_path_buf(),
+            false,
+            AuthCredentialsStoreMode::File,
+        ));
+        let manager = ModelsManager::with_provider(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "anthropic",
+            messages_provider_for("https://api.anthropic.com/v1".to_string()),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "claude-sonnet-4-5"
+"#,
+        )
+        .await;
+
+        let picker_models = manager
+            .list_picker_models(&config, RefreshStrategy::Offline)
+            .await;
+
+        assert_eq!(picker_models.len(), 1);
+        assert_eq!(picker_models[0].model, "claude-sonnet-4-5");
+        assert!(picker_models[0].is_default);
+    }
+
+    #[tokio::test]
+    async fn get_default_model_with_messages_provider_requires_explicit_model() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager = Arc::new(AuthManager::new(
+            codex_home.path().to_path_buf(),
+            false,
+            AuthCredentialsStoreMode::File,
+        ));
+        let manager = ModelsManager::with_provider(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "anthropic",
+            messages_provider_for("https://api.anthropic.com/v1".to_string()),
+        );
+        let config = load_config_from_toml(&codex_home, "").await;
+
+        let err = manager
+            .get_default_model(&None, &config, RefreshStrategy::Offline)
+            .await
+            .expect_err("messages providers should require an explicit model");
+
+        assert_eq!(
+            err.to_string(),
+            "Fatal error: wire_api = \"messages\" requires an explicit model"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_default_model_with_messages_provider_uses_configured_model() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager = Arc::new(AuthManager::new(
+            codex_home.path().to_path_buf(),
+            false,
+            AuthCredentialsStoreMode::File,
+        ));
+        let manager = ModelsManager::with_provider(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "anthropic",
+            messages_provider_for("https://api.anthropic.com/v1".to_string()),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "claude-sonnet-4-5"
+"#,
+        )
+        .await;
+
+        let model = manager
+            .get_default_model(&config.model, &config, RefreshStrategy::Offline)
+            .await
+            .expect("configured messages model should be accepted");
+
+        assert_eq!(model, "claude-sonnet-4-5");
     }
 
     #[tokio::test]

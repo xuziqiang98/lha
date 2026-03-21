@@ -37,7 +37,7 @@ pub(crate) fn should_use_remote_compact_task(
     session: &Session,
     provider: &ModelProviderInfo,
 ) -> bool {
-    provider.is_openai() && session.enabled(Feature::RemoteCompaction)
+    provider.supports_remote_compaction() && session.enabled(Feature::RemoteCompaction)
 }
 
 pub(crate) async fn run_inline_auto_compact_task(

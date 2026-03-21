@@ -1,5 +1,7 @@
 use codex_client::Request;
 
+use crate::provider::WireApi;
+
 /// Provides bearer and account identity information for API requests.
 ///
 /// Implementations should be cheap and non-blocking; any asynchronous
@@ -12,13 +14,27 @@ pub trait AuthProvider: Send + Sync {
     }
 }
 
-pub(crate) fn add_auth_headers<A: AuthProvider>(auth: &A, mut req: Request) -> Request {
-    if let Some(token) = auth.bearer_token()
-        && let Ok(header) = format!("Bearer {token}").parse()
-    {
-        let _ = req.headers.insert(http::header::AUTHORIZATION, header);
+pub(crate) fn add_auth_headers<A: AuthProvider>(
+    auth: &A,
+    wire_api: WireApi,
+    mut req: Request,
+) -> Request {
+    if let Some(token) = auth.bearer_token() {
+        match wire_api {
+            WireApi::Messages => {
+                if let Ok(header) = token.parse() {
+                    let _ = req.headers.insert("x-api-key", header);
+                }
+            }
+            WireApi::Responses | WireApi::Chat | WireApi::Compact => {
+                if let Ok(header) = format!("Bearer {token}").parse() {
+                    let _ = req.headers.insert(http::header::AUTHORIZATION, header);
+                }
+            }
+        }
     }
-    if let Some(account_id) = auth.account_id()
+    if wire_api != WireApi::Messages
+        && let Some(account_id) = auth.account_id()
         && let Ok(header) = account_id.parse()
     {
         let _ = req.headers.insert("ChatGPT-Account-ID", header);
