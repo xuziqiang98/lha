@@ -4,6 +4,7 @@ use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use crate::AuthManager;
 use crate::CodexAuth;
@@ -287,12 +288,6 @@ impl Codex {
             .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?;
 
         let config = Arc::new(config);
-        let _ = models_manager
-            .list_models(
-                &config,
-                crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
-            )
-            .await;
         let model = models_manager
             .get_default_model(
                 &config.model,
@@ -467,6 +462,7 @@ pub(crate) struct Session {
     features: Features,
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    pending_input_epoch: AtomicU64,
     pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
 }
@@ -1059,6 +1055,7 @@ impl Session {
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
+            pending_input_epoch: AtomicU64::new(0),
             services,
             next_internal_sub_id: AtomicU64::new(0),
         });
@@ -2287,6 +2284,7 @@ impl Session {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
                 ts.push_pending_input(input.into());
+                self.pending_input_epoch.fetch_add(1, Ordering::SeqCst);
                 Ok(())
             }
             None => Err(input),
@@ -2305,10 +2303,18 @@ impl Session {
                 for item in input {
                     ts.push_pending_input(item);
                 }
+                self.pending_input_epoch.fetch_add(1, Ordering::SeqCst);
                 Ok(())
             }
             None => Err(input),
         }
+    }
+
+    async fn has_late_pending_input(&self, observed_epoch: u64) -> bool {
+        tokio::task::yield_now().await;
+
+        self.pending_input_epoch.load(Ordering::SeqCst) != observed_epoch
+            && self.has_pending_input().await
     }
 
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
@@ -4771,7 +4777,11 @@ async fn try_run_sampling_request(
                     .await;
                 should_emit_turn_diff = true;
 
+                let pending_input_epoch = sess.pending_input_epoch.load(Ordering::SeqCst);
                 needs_follow_up |= sess.has_pending_input().await;
+                if !needs_follow_up {
+                    needs_follow_up |= sess.has_late_pending_input(pending_input_epoch).await;
+                }
 
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
@@ -6047,6 +6057,7 @@ mod tests {
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
+            pending_input_epoch: AtomicU64::new(0),
             services,
             next_internal_sub_id: AtomicU64::new(0),
         };
@@ -6196,6 +6207,7 @@ mod tests {
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
+            pending_input_epoch: AtomicU64::new(0),
             services,
             next_internal_sub_id: AtomicU64::new(0),
         });

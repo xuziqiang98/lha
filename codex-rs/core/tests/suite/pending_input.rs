@@ -13,6 +13,8 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use tokio::sync::oneshot;
+use tokio::time::Duration;
+use tokio::time::timeout;
 
 fn ev_message_item_done(id: &str, text: &str) -> Value {
     serde_json::json!({
@@ -88,7 +90,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
         },
     ];
 
-    let (server, _completions) =
+    let (server, mut completions) =
         start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
 
     let codex = test_codex()
@@ -128,6 +130,18 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
     let _ = gate_completed_tx.send(());
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let second_completion = completions
+        .pop()
+        .expect("second completion receiver should exist");
+    // Wait for the follow-up `/responses` request itself to finish. A single
+    // `TurnComplete` can race with the first streamed turn winding down, which
+    // made this test flaky when the second injected input landed near
+    // `response.completed`.
+    timeout(Duration::from_secs(2), second_completion)
+        .await
+        .expect("timed out waiting for follow-up request")
+        .expect("second request should complete");
 
     let requests = server.requests().await;
     assert_eq!(requests.len(), 2);
