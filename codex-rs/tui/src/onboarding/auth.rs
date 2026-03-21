@@ -184,18 +184,16 @@ impl AuthModeWidget {
         let inner_width = width.saturating_sub(2).max(1);
         match state.step {
             ApiProviderWizardStep::WireApi => {
-                let options = [ApiProviderWireApi::Chat, ApiProviderWireApi::Responses];
-                let content_height =
-                    options
-                        .into_iter()
-                        .enumerate()
-                        .fold(0u16, |total, (idx, option)| {
-                            let label = format!("  {}. {}", idx + 1, option.label());
-                            let description = format!("     {}", option.description());
-                            total
-                                .saturating_add(Self::wrapped_line_count(&label, inner_width))
-                                .saturating_add(Self::wrapped_line_count(&description, inner_width))
-                        });
+                let content_height = ApiProviderWireApi::all().into_iter().enumerate().fold(
+                    0u16,
+                    |total, (idx, option)| {
+                        let label = format!("  {}. {}", idx + 1, option.label());
+                        let description = format!("     {}", option.description());
+                        total
+                            .saturating_add(Self::wrapped_line_count(&label, inner_width))
+                            .saturating_add(Self::wrapped_line_count(&description, inner_width))
+                    },
+                );
                 content_height.saturating_add(2)
             }
             _ => {
@@ -519,8 +517,7 @@ impl AuthModeWidget {
 
         match state.step {
             ApiProviderWizardStep::WireApi => {
-                let options = [ApiProviderWireApi::Chat, ApiProviderWireApi::Responses];
-                let lines = options
+                let lines = ApiProviderWireApi::all()
                     .into_iter()
                     .enumerate()
                     .flat_map(|(idx, option)| {
@@ -584,7 +581,7 @@ impl AuthModeWidget {
                 "  Press Enter to continue".dim().into()
             },
             if state.step == ApiProviderWizardStep::WireApi {
-                "  Press 1/2 or Up/Down to choose".dim().into()
+                "  Press 1/2/3 or Up/Down to choose".dim().into()
             } else {
                 "  Type or paste to edit".dim().into()
             },
@@ -653,14 +650,14 @@ impl AuthModeWidget {
                     KeyCode::Up | KeyCode::Char('k')
                         if state.step == ApiProviderWizardStep::WireApi =>
                     {
-                        state.wire_api = ApiProviderWireApi::Chat;
+                        state.wire_api = state.wire_api.previous();
                         state.error = None;
                         should_request_frame = true;
                     }
                     KeyCode::Down | KeyCode::Char('j')
                         if state.step == ApiProviderWizardStep::WireApi =>
                     {
-                        state.wire_api = ApiProviderWireApi::Responses;
+                        state.wire_api = state.wire_api.next();
                         state.error = None;
                         should_request_frame = true;
                     }
@@ -671,15 +668,12 @@ impl AuthModeWidget {
                         state.error = None;
                         should_request_frame = true;
                     }
-                    KeyCode::Char('1') if state.step == ApiProviderWizardStep::WireApi => {
-                        state.wire_api = ApiProviderWireApi::Chat;
-                        state.error = None;
-                        should_request_frame = true;
-                    }
-                    KeyCode::Char('2') if state.step == ApiProviderWizardStep::WireApi => {
-                        state.wire_api = ApiProviderWireApi::Responses;
-                        state.error = None;
-                        should_request_frame = true;
+                    KeyCode::Char(c) if state.step == ApiProviderWizardStep::WireApi => {
+                        if let Some(wire_api) = ApiProviderWireApi::from_shortcut_digit(c) {
+                            state.wire_api = wire_api;
+                            state.error = None;
+                            should_request_frame = true;
+                        }
                     }
                     KeyCode::Char(c)
                         if key_event.kind == KeyEventKind::Press
@@ -688,18 +682,10 @@ impl AuthModeWidget {
                             && !key_event.modifiers.contains(KeyModifiers::ALT) =>
                     {
                         if state.step == ApiProviderWizardStep::WireApi {
-                            match c {
-                                'c' | 'C' => {
-                                    state.wire_api = ApiProviderWireApi::Chat;
-                                    state.error = None;
-                                    should_request_frame = true;
-                                }
-                                'r' | 'R' => {
-                                    state.wire_api = ApiProviderWireApi::Responses;
-                                    state.error = None;
-                                    should_request_frame = true;
-                                }
-                                _ => {}
+                            if let Some(wire_api) = ApiProviderWireApi::from_shortcut_letter(c) {
+                                state.wire_api = wire_api;
+                                state.error = None;
+                                should_request_frame = true;
                             }
                         } else if let Some(field) = current_step_value_mut(state) {
                             field.push(c);
@@ -1035,6 +1021,14 @@ mod tests {
             .to_string()
     }
 
+    fn current_api_key_input_state(widget: &AuthModeWidget) -> ApiKeyInputState {
+        let guard = widget.sign_in_state.read().unwrap();
+        match &*guard {
+            SignInState::ApiKeyEntry(state) => state.clone(),
+            _ => panic!("expected api key entry state"),
+        }
+    }
+
     #[test]
     fn api_key_flow_disabled_when_chatgpt_forced() {
         let (mut widget, _tmp) = widget_forced_chatgpt();
@@ -1142,7 +1136,39 @@ mod tests {
 
         let input_height = widget.api_key_entry_input_height(120, &state);
 
-        assert_eq!(input_height, 6);
+        assert_eq!(input_height, 8);
+    }
+
+    #[test]
+    fn api_key_entry_wire_api_shortcuts_support_messages() {
+        let (mut widget, _tmp) = widget_custom_provider_entry();
+
+        widget.handle_paste("custom_1".to_string());
+        widget.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        widget.handle_key_event(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
+        assert_eq!(
+            current_api_key_input_state(&widget).wire_api,
+            ApiProviderWireApi::Messages
+        );
+
+        widget.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(
+            current_api_key_input_state(&widget).wire_api,
+            ApiProviderWireApi::Chat
+        );
+
+        widget.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(
+            current_api_key_input_state(&widget).wire_api,
+            ApiProviderWireApi::Messages
+        );
+
+        widget.handle_key_event(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        assert_eq!(
+            current_api_key_input_state(&widget).wire_api,
+            ApiProviderWireApi::Messages
+        );
     }
 
     #[test]

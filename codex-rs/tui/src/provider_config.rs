@@ -90,20 +90,57 @@ pub(crate) enum ApiProviderWireApi {
     Chat,
     #[default]
     Responses,
+    Messages,
 }
 
 impl ApiProviderWireApi {
-    pub(crate) fn toggle(&mut self) {
-        *self = match self {
+    pub(crate) const fn all() -> [Self; 3] {
+        [Self::Chat, Self::Responses, Self::Messages]
+    }
+
+    pub(crate) const fn next(self) -> Self {
+        match self {
             Self::Chat => Self::Responses,
+            Self::Responses => Self::Messages,
+            Self::Messages => Self::Chat,
+        }
+    }
+
+    pub(crate) const fn previous(self) -> Self {
+        match self {
+            Self::Chat => Self::Messages,
             Self::Responses => Self::Chat,
-        };
+            Self::Messages => Self::Responses,
+        }
+    }
+
+    pub(crate) fn toggle(&mut self) {
+        *self = self.next();
+    }
+
+    pub(crate) const fn from_shortcut_digit(c: char) -> Option<Self> {
+        match c {
+            '1' => Some(Self::Chat),
+            '2' => Some(Self::Responses),
+            '3' => Some(Self::Messages),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn from_shortcut_letter(c: char) -> Option<Self> {
+        match c {
+            'c' | 'C' => Some(Self::Chat),
+            'r' | 'R' => Some(Self::Responses),
+            'm' | 'M' => Some(Self::Messages),
+            _ => None,
+        }
     }
 
     pub(crate) fn as_config_value(self) -> &'static str {
         match self {
             Self::Chat => "chat",
             Self::Responses => "responses",
+            Self::Messages => "messages",
         }
     }
 
@@ -111,6 +148,7 @@ impl ApiProviderWireApi {
         match self {
             Self::Chat => ApiWireApi::Chat,
             Self::Responses => ApiWireApi::Responses,
+            Self::Messages => ApiWireApi::Messages,
         }
     }
 
@@ -118,6 +156,7 @@ impl ApiProviderWireApi {
         match self {
             Self::Chat => "chat",
             Self::Responses => "responses",
+            Self::Messages => "messages",
         }
     }
 
@@ -125,6 +164,7 @@ impl ApiProviderWireApi {
         match self {
             Self::Chat => "Compatible with chat completions style APIs",
             Self::Responses => "Compatible with Responses API style backends",
+            Self::Messages => "Anthropic-compatible Messages API at /v1/messages",
         }
     }
 }
@@ -480,6 +520,83 @@ requires_openai_auth = false
 model_provider = "custom_1"
 model = "gpt-test"
 "#
+        );
+    }
+
+    #[test]
+    fn api_provider_wire_api_messages_helpers_are_consistent() {
+        assert_eq!(
+            ApiProviderWireApi::all(),
+            [
+                ApiProviderWireApi::Chat,
+                ApiProviderWireApi::Responses,
+                ApiProviderWireApi::Messages,
+            ]
+        );
+        assert_eq!(
+            ApiProviderWireApi::Chat.next(),
+            ApiProviderWireApi::Responses
+        );
+        assert_eq!(
+            ApiProviderWireApi::Responses.next(),
+            ApiProviderWireApi::Messages
+        );
+        assert_eq!(
+            ApiProviderWireApi::Messages.next(),
+            ApiProviderWireApi::Chat
+        );
+        assert_eq!(
+            ApiProviderWireApi::Chat.previous(),
+            ApiProviderWireApi::Messages
+        );
+        assert_eq!(
+            ApiProviderWireApi::Messages.previous(),
+            ApiProviderWireApi::Responses
+        );
+        assert_eq!(
+            ApiProviderWireApi::from_shortcut_digit('3'),
+            Some(ApiProviderWireApi::Messages)
+        );
+        assert_eq!(
+            ApiProviderWireApi::from_shortcut_letter('m'),
+            Some(ApiProviderWireApi::Messages)
+        );
+        assert_eq!(ApiProviderWireApi::Messages.as_config_value(), "messages");
+        assert_eq!(
+            ApiProviderWireApi::Messages.as_api_wire(),
+            ApiWireApi::Messages
+        );
+        assert_eq!(ApiProviderWireApi::Messages.label(), "messages");
+    }
+
+    #[test]
+    fn custom_provider_edits_write_messages_wire_api() {
+        let codex_home = tempdir().expect("temp dir");
+        let config = CustomProviderConfig {
+            provider_id: "anthropic".to_string(),
+            wire_api: ApiProviderWireApi::Messages,
+            base_url: "https://api.anthropic.com/v1".to_string(),
+            api_key: "sk-ant-test".to_string(),
+            model: "claude-sonnet-4-20250514".to_string(),
+            model_context_window: None,
+        };
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits(&config))
+            .apply_blocking()
+            .expect("write config");
+
+        let raw = std::fs::read_to_string(codex_home.path().join("config.toml")).unwrap();
+        let doc = raw.parse::<DocumentMut>().expect("parse config");
+
+        assert_eq!(
+            doc["model_providers"]["anthropic"]["wire_api"].as_str(),
+            Some("messages")
+        );
+        assert_eq!(doc["model_provider"].as_str(), Some("anthropic"));
+        assert_eq!(
+            doc["profiles"]["_provider.anthropic.claude-sonnet-4-20250514"]["model"].as_str(),
+            Some("claude-sonnet-4-20250514")
         );
     }
 
