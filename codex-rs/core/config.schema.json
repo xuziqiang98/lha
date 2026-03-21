@@ -1148,6 +1148,13 @@
             "chat"
           ],
           "type": "string"
+        },
+        {
+          "description": "Anthropic-compatible Messages API exposed at `/v1/messages`.",
+          "enum": [
+            "messages"
+          ],
+          "type": "string"
         }
       ]
     }

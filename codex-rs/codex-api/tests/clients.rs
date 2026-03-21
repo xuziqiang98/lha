@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use codex_api::AuthProvider;
 use codex_api::ChatClient;
+use codex_api::MessagesClient;
 use codex_api::Provider;
 use codex_api::ResponsesClient;
 use codex_api::ResponsesOptions;
@@ -252,6 +253,53 @@ async fn responses_client_uses_chat_path_for_chat_wire() -> Result<()> {
 
     let requests = state.take_stream_requests();
     assert_path_ends_with(&requests, "/chat/completions");
+    Ok(())
+}
+
+#[tokio::test]
+async fn messages_client_uses_messages_path_for_messages_wire() -> Result<()> {
+    let state = RecordingState::default();
+    let transport = RecordingTransport::new(state.clone());
+    let client = MessagesClient::new(transport, provider("anthropic", WireApi::Messages), NoAuth);
+
+    let body = serde_json::json!({ "echo": true });
+    let _stream = client
+        .stream_request(codex_api::MessagesRequest {
+            body,
+            headers: HeaderMap::new(),
+        })
+        .await?;
+
+    let requests = state.take_stream_requests();
+    assert_path_ends_with(&requests, "/messages");
+    Ok(())
+}
+
+#[tokio::test]
+async fn messages_wire_uses_x_api_key_auth() -> Result<()> {
+    let state = RecordingState::default();
+    let transport = RecordingTransport::new(state.clone());
+    let auth = StaticAuth::new("secret-token", "acct-1");
+    let client = MessagesClient::new(transport, provider("anthropic", WireApi::Messages), auth);
+
+    let body = serde_json::json!({ "model": "claude-test" });
+    let _stream = client
+        .stream_request(codex_api::MessagesRequest {
+            body,
+            headers: HeaderMap::new(),
+        })
+        .await?;
+
+    let requests = state.take_stream_requests();
+    assert_eq!(requests.len(), 1);
+    let req = &requests[0];
+
+    assert_eq!(
+        req.headers.get("x-api-key").and_then(|h| h.to_str().ok()),
+        Some("secret-token")
+    );
+    assert!(req.headers.get(http::header::AUTHORIZATION).is_none());
+    assert!(req.headers.get("ChatGPT-Account-ID").is_none());
     Ok(())
 }
 

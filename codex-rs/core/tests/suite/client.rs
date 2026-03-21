@@ -52,6 +52,8 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::io::Write;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use tempfile::TempDir;
 use uuid::Uuid;
 use wiremock::Mock;
@@ -66,6 +68,76 @@ use wiremock::matchers::query_param;
 /// Build minimal SSE stream with completed marker using the JSON fixture.
 fn sse_completed(id: &str) -> String {
     load_sse_fixture_with_id("../fixtures/completed_template.json", id)
+}
+
+fn messages_sse_text_and_stop_with_tokens(
+    response_id: &str,
+    text: &str,
+    input_tokens: i64,
+    output_tokens: i64,
+) -> String {
+    let mut body = String::new();
+    body.push_str("event: message_start\n");
+    body.push_str(&format!(
+        "data: {}\n\n",
+        serde_json::to_string(&json!({
+            "type": "message_start",
+            "message": {
+                "id": response_id,
+                "usage": { "input_tokens": input_tokens },
+            },
+        }))
+        .expect("serialize Messages start event"),
+    ));
+    body.push_str("event: content_block_delta\n");
+    body.push_str(&format!(
+        "data: {}\n\n",
+        serde_json::to_string(&json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "text_delta",
+                "text": text,
+            },
+        }))
+        .expect("serialize Messages text delta"),
+    ));
+    body.push_str("event: message_delta\n");
+    body.push_str(&format!(
+        "data: {}\n\n",
+        serde_json::to_string(&json!({
+            "type": "message_delta",
+            "delta": { "stop_reason": "end_turn" },
+            "usage": { "output_tokens": output_tokens },
+        }))
+        .expect("serialize Messages delta event"),
+    ));
+    body.push_str("event: message_stop\n");
+    body.push_str(&format!(
+        "data: {}\n\n",
+        serde_json::to_string(&json!({
+            "type": "message_stop",
+        }))
+        .expect("serialize Messages stop event"),
+    ));
+    body
+}
+
+struct MessagesSeqResponder {
+    num_calls: AtomicUsize,
+    bodies: Vec<String>,
+}
+
+impl wiremock::Respond for MessagesSeqResponder {
+    fn respond(&self, _: &wiremock::Request) -> wiremock::ResponseTemplate {
+        let idx = self.num_calls.fetch_add(1, Ordering::SeqCst);
+        match self.bodies.get(idx) {
+            Some(body) => ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body.clone()),
+            None => panic!("no Messages response for index {idx}"),
+        }
+    }
 }
 
 #[expect(clippy::unwrap_used)]
@@ -1125,6 +1197,165 @@ async fn includes_developer_instructions_message_in_request() {
     assert_message_role(&request_body["input"][3], "user");
     assert_message_starts_with(&request_body["input"][3], "<environment_context>");
     assert_message_ends_with(&request_body["input"][3], "</environment_context>");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn messages_api_folds_developer_messages_into_system() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(MessagesSeqResponder {
+            num_calls: AtomicUsize::new(0),
+            bodies: vec![messages_sse_text_and_stop_with_tokens(
+                "msg_1",
+                "hello back",
+                120,
+                24,
+            )],
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut model_provider = ModelProviderInfo::create_openai_provider();
+    model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    model_provider.env_key = Some("PATH".into());
+    model_provider.requires_openai_auth = false;
+    model_provider.supports_websockets = false;
+    model_provider.wire_api = WireApi::Messages;
+
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model = Some("claude-test".to_string());
+            config.model_provider = model_provider;
+            config.user_instructions = Some("be nice".to_string());
+            config.developer_instructions = Some("be useful".to_string());
+        })
+        .build(&server)
+        .await
+        .expect("create new conversation");
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = server.received_requests().await.expect("capture requests");
+    let request = requests
+        .iter()
+        .find(|request| request.url.path() == "/v1/messages")
+        .expect("messages request");
+    let request_body: serde_json::Value =
+        serde_json::from_slice(&request.body).expect("messages request should be json");
+
+    let system = request_body["system"]
+        .as_str()
+        .expect("system should be a string");
+    assert!(system.contains("<permissions instructions>"));
+    assert!(system.contains("be useful"));
+
+    let messages = request_body["messages"]
+        .as_array()
+        .expect("messages should be an array");
+    assert!(messages.iter().all(|message| {
+        matches!(
+            message.get("role").and_then(serde_json::Value::as_str),
+            Some("user" | "assistant")
+        )
+    }));
+
+    let message_texts: Vec<(String, String)> = messages
+        .iter()
+        .filter_map(|message| {
+            let role = message.get("role")?.as_str()?.to_string();
+            let text = message
+                .get("content")?
+                .as_array()?
+                .first()?
+                .get("text")?
+                .as_str()?
+                .to_string();
+            Some((role, text))
+        })
+        .collect();
+
+    assert!(message_texts.iter().any(|(role, text)| {
+        role == "user"
+            && text.contains("be nice")
+            && (text.starts_with("# AGENTS.md instructions for ")
+                || text.starts_with("<user_instructions>"))
+    }));
+    assert!(
+        message_texts
+            .iter()
+            .any(|(role, text)| role == "user" && text.contains("<environment_context>"))
+    );
+    assert!(
+        message_texts
+            .iter()
+            .any(|(role, text)| role == "user" && text == "hello")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn messages_api_rejects_unsupported_freeform_tools() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let mut model_provider = ModelProviderInfo::create_openai_provider();
+    model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    model_provider.env_key = Some("PATH".into());
+    model_provider.requires_openai_auth = false;
+    model_provider.supports_websockets = false;
+    model_provider.wire_api = WireApi::Messages;
+
+    let test = test_codex()
+        .with_model("gpt-5.1-codex")
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.web_search_mode = Some(codex_protocol::config_types::WebSearchMode::Disabled);
+        })
+        .build(&server)
+        .await
+        .expect("create new conversation");
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    let error_event = wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::Error(_))).await;
+    let EventMsg::Error(error_event) = error_event else {
+        unreachable!();
+    };
+    assert_eq!(
+        error_event.message,
+        "unsupported operation: Messages API only supports function tools; unsupported tool: apply_patch"
+    );
+
+    let requests = server.received_requests().await.expect("capture requests");
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.url.path() != "/v1/messages"),
+        "unsupported Messages tools should fail before sending a request"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -112,6 +112,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         match self.streaming.provider().wire {
             WireApi::Responses | WireApi::Compact => "responses",
             WireApi::Chat => "chat/completions",
+            WireApi::Messages => "messages",
         }
     }
 
@@ -122,6 +123,12 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         compression: Compression,
         turn_state: Option<Arc<OnceLock<String>>>,
     ) -> Result<ResponseStream, ApiError> {
+        if self.streaming.provider().wire == WireApi::Messages {
+            return Err(ApiError::Stream(
+                "messages wire api requires MessagesClient".to_string(),
+            ));
+        }
+
         let compression = match compression {
             Compression::None => RequestCompression::None,
             Compression::Zstd => RequestCompression::Zstd,

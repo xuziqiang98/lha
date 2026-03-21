@@ -9,6 +9,7 @@ use std::sync::atomic::Ordering;
 use crate::AuthManager;
 use crate::CodexAuth;
 use crate::SandboxState;
+use crate::WireApi;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
@@ -294,7 +295,7 @@ impl Codex {
                 &config,
                 crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
             )
-            .await;
+            .await?;
 
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
@@ -706,7 +707,7 @@ impl Session {
         model_info: &ModelInfo,
     ) -> Option<Arc<std::sync::Mutex<DynamicContextWindowState>>> {
         if config.model_context_window.is_some()
-            || config.model_provider.wire_api != crate::WireApi::Chat
+            || !supports_dynamic_context_window(config.model_provider.wire_api)
             || model_info.context_window.is_some()
         {
             return None;
@@ -2526,6 +2527,13 @@ impl Session {
             .lock()
             .await
             .cancel();
+    }
+}
+
+fn supports_dynamic_context_window(wire_api: WireApi) -> bool {
+    match wire_api {
+        WireApi::Chat | WireApi::Messages => true,
+        WireApi::Responses => false,
     }
 }
 
@@ -5285,6 +5293,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn messages_turn_enables_dynamic_context_window_without_static_metadata() {
+        let session = make_session_for_messages_model(None).await;
+
+        let turn_context = session
+            .new_default_turn_with_sub_id("messages-dynamic".to_string())
+            .await;
+
+        assert_eq!(
+            turn_context.client.get_provider().wire_api,
+            WireApi::Messages
+        );
+        assert_eq!(turn_context.client.get_model(), "claude-sonnet-4-5");
+        assert_eq!(turn_context.client.config().model_context_window, None);
+        assert_eq!(turn_context.client.get_model_context_window(), Some(30_400));
+        assert!(turn_context.client.dynamic_context_window().is_some());
+    }
+
+    #[tokio::test]
+    async fn messages_turn_skips_dynamic_context_window_when_configured_window_present() {
+        let session = make_session_for_messages_model(Some(123_456)).await;
+
+        let turn_context = session
+            .new_default_turn_with_sub_id("messages-static-config".to_string())
+            .await;
+
+        assert_eq!(
+            turn_context.client.get_provider().wire_api,
+            WireApi::Messages
+        );
+        assert_eq!(
+            turn_context.client.get_model_info().context_window,
+            Some(123_456)
+        );
+        assert!(turn_context.client.dynamic_context_window().is_none());
+    }
+
+    #[tokio::test]
+    async fn responses_turn_still_skips_dynamic_context_window_without_static_metadata() {
+        let session = make_session_for_responses_model_without_static_metadata().await;
+
+        let turn_context = session
+            .new_default_turn_with_sub_id("responses-no-dynamic".to_string())
+            .await;
+
+        assert_eq!(
+            turn_context.client.get_provider().wire_api,
+            WireApi::Responses
+        );
+        assert_eq!(turn_context.client.get_model_info().context_window, None);
+        assert!(turn_context.client.dynamic_context_window().is_none());
+    }
+
+    #[tokio::test]
+    async fn messages_dynamic_context_window_preflights_after_probe_failure() {
+        let session = make_session_for_messages_model(None).await;
+        let turn_context = session
+            .new_default_turn_with_sub_id("messages-preflight".to_string())
+            .await;
+
+        assert!(turn_context.client.dynamic_context_window().is_some());
+
+        let upgradeable_input_tokens = 100_000;
+        assert!(!should_preflight_compact(
+            turn_context.as_ref(),
+            Some(upgradeable_input_tokens)
+        ));
+
+        let _ = turn_context
+            .client
+            .record_dynamic_context_window_probe_failure(
+                &turn_context.sub_id,
+                upgradeable_input_tokens,
+            );
+        assert!(should_preflight_compact(
+            turn_context.as_ref(),
+            Some(upgradeable_input_tokens)
+        ));
+    }
+
+    #[tokio::test]
     async fn dynamic_context_window_preflights_after_probe_failure() {
         let (session, mut turn_context) = make_session_and_context().await;
         let mut model_info = turn_context.client.get_model_info();
@@ -5946,6 +6034,45 @@ mod tests {
             .build()
             .await
             .expect("load default test config")
+    }
+
+    async fn make_session_for_messages_model(model_context_window: Option<i64>) -> Session {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(codex_home.path()).await;
+        config.model = Some("claude-sonnet-4-5".to_string());
+        config.model_context_window = model_context_window;
+        config.model_auto_compact_token_limit = None;
+        config.model_provider_id = "anthropic".to_string();
+        config.model_provider = ModelProviderInfo {
+            name: "Anthropic".to_string(),
+            base_url: Some("https://api.anthropic.com/v1".to_string()),
+            env_key: Some("ANTHROPIC_API_KEY".to_string()),
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            wire_api: WireApi::Messages,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        };
+        config.model_providers.insert(
+            config.model_provider_id.clone(),
+            config.model_provider.clone(),
+        );
+
+        make_session_and_context_for_config(config).await.0
+    }
+
+    async fn make_session_for_responses_model_without_static_metadata() -> Session {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(codex_home.path()).await;
+        config.model = Some("responses-unknown-model".to_string());
+
+        make_session_and_context_for_config(config).await.0
     }
 
     async fn make_session_and_context_for_config(config: Config) -> (Session, TurnContext) {

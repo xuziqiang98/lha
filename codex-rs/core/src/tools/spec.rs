@@ -1,6 +1,7 @@
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::config::AgentRoleConfig;
+use crate::error::CodexErr;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::tools::handlers::PLAN_TOOL;
@@ -1283,6 +1284,31 @@ pub fn create_tools_json_for_responses_api(
 
     Ok(tools_json)
 }
+
+pub fn create_tools_json_for_messages_api(
+    tools: &[ToolSpec],
+) -> crate::error::Result<Vec<serde_json::Value>> {
+    let mut tools_json = Vec::new();
+
+    for tool in tools {
+        match tool {
+            ToolSpec::Function(tool) => tools_json.push(serde_json::json!({
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.parameters,
+            })),
+            ToolSpec::LocalShell {} | ToolSpec::WebSearch { .. } | ToolSpec::Freeform(_) => {
+                return Err(CodexErr::UnsupportedOperation(format!(
+                    "Messages API only supports function tools; unsupported tool: {}",
+                    tool.name()
+                )));
+            }
+        }
+    }
+
+    Ok(tools_json)
+}
+
 /// Returns JSON values that are compatible with Function Calling in the
 /// Chat Completions API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=chat
@@ -2962,6 +2988,69 @@ Examples of valid command strings:
                     },
                 }
             })]
+        );
+    }
+
+    #[test]
+    fn messages_tools_support_function_tools() {
+        let properties =
+            BTreeMap::from([("foo".to_string(), JsonSchema::String { description: None })]);
+        let tools = vec![ToolSpec::Function(ResponsesApiTool {
+            name: "demo".to_string(),
+            description: "A demo tool".to_string(),
+            strict: false,
+            parameters: JsonSchema::Object {
+                properties,
+                required: None,
+                additional_properties: None,
+            },
+        })];
+
+        let tools_json = create_tools_json_for_messages_api(&tools).unwrap();
+
+        assert_eq!(tools_json.len(), 1);
+        assert_eq!(tools_json[0]["name"], "demo");
+        assert_eq!(tools_json[0]["description"], "A demo tool");
+        assert!(tools_json[0].get("input_schema").is_some());
+    }
+
+    #[test]
+    fn messages_tools_reject_local_shell() {
+        let tools = vec![ToolSpec::LocalShell {}];
+
+        let err =
+            create_tools_json_for_messages_api(&tools).expect_err("should reject local shell");
+
+        assert_eq!(
+            err.to_string(),
+            "unsupported operation: Messages API only supports function tools; unsupported tool: local_shell"
+        );
+    }
+
+    #[test]
+    fn messages_tools_reject_web_search() {
+        let tools = vec![ToolSpec::WebSearch {
+            external_web_access: Some(true),
+        }];
+
+        let err = create_tools_json_for_messages_api(&tools).expect_err("should reject web search");
+
+        assert_eq!(
+            err.to_string(),
+            "unsupported operation: Messages API only supports function tools; unsupported tool: web_search"
+        );
+    }
+
+    #[test]
+    fn messages_tools_reject_freeform_tool() {
+        let tools = vec![create_apply_patch_freeform_tool()];
+
+        let err =
+            create_tools_json_for_messages_api(&tools).expect_err("should reject freeform tools");
+
+        assert_eq!(
+            err.to_string(),
+            "unsupported operation: Messages API only supports function tools; unsupported tool: apply_patch"
         );
     }
 }

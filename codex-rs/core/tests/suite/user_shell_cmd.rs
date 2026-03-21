@@ -43,11 +43,11 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
     let mut builder = test_codex().with_config(move |config| {
         config.cwd = cwd_path;
     });
-    let codex = builder
+    let test = builder
         .build(&server)
         .await
-        .expect("create new conversation")
-        .codex;
+        .expect("create new conversation");
+    let codex = test.codex.clone();
 
     // 1) shell command should list the file
     let list_cmd = "ls".to_string();

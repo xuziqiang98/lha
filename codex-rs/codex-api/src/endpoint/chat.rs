@@ -71,7 +71,8 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
     fn path(&self) -> &'static str {
         match self.streaming.provider().wire {
             WireApi::Chat => "chat/completions",
-            _ => "responses",
+            WireApi::Responses | WireApi::Compact => "responses",
+            WireApi::Messages => "messages",
         }
     }
 
@@ -80,6 +81,12 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
         body: Value,
         extra_headers: HeaderMap,
     ) -> Result<ResponseStream, ApiError> {
+        if self.streaming.provider().wire == WireApi::Messages {
+            return Err(ApiError::Stream(
+                "messages wire api requires MessagesClient".to_string(),
+            ));
+        }
+
         self.streaming
             .stream(
                 self.path(),

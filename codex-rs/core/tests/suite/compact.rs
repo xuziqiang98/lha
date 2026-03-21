@@ -183,6 +183,59 @@ fn chat_sse_length() -> String {
     )
 }
 
+fn messages_sse_text_and_stop_with_tokens(
+    response_id: &str,
+    text: &str,
+    input_tokens: i64,
+    output_tokens: i64,
+) -> String {
+    let mut body = String::new();
+    body.push_str("event: message_start\n");
+    body.push_str(&format!(
+        "data: {}\n\n",
+        serde_json::to_string(&json!({
+            "type": "message_start",
+            "message": {
+                "id": response_id,
+                "usage": { "input_tokens": input_tokens },
+            },
+        }))
+        .expect("serialize Messages start event"),
+    ));
+    body.push_str("event: content_block_delta\n");
+    body.push_str(&format!(
+        "data: {}\n\n",
+        serde_json::to_string(&json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "text_delta",
+                "text": text,
+            },
+        }))
+        .expect("serialize Messages text delta"),
+    ));
+    body.push_str("event: message_delta\n");
+    body.push_str(&format!(
+        "data: {}\n\n",
+        serde_json::to_string(&json!({
+            "type": "message_delta",
+            "delta": { "stop_reason": "end_turn" },
+            "usage": { "output_tokens": output_tokens },
+        }))
+        .expect("serialize Messages delta event"),
+    ));
+    body.push_str("event: message_stop\n");
+    body.push_str(&format!(
+        "data: {}\n\n",
+        serde_json::to_string(&json!({
+            "type": "message_stop",
+        }))
+        .expect("serialize Messages stop event"),
+    ));
+    body
+}
+
 struct ChatSeqResponder {
     num_calls: AtomicUsize,
     bodies: Vec<String>,
@@ -196,6 +249,23 @@ impl wiremock::Respond for ChatSeqResponder {
                 .insert_header("content-type", "text/event-stream")
                 .set_body_string(body.clone()),
             None => panic!("no chat completion response for index {idx}"),
+        }
+    }
+}
+
+struct MessagesSeqResponder {
+    num_calls: AtomicUsize,
+    bodies: Vec<String>,
+}
+
+impl wiremock::Respond for MessagesSeqResponder {
+    fn respond(&self, _: &wiremock::Request) -> wiremock::ResponseTemplate {
+        let idx = self.num_calls.fetch_add(1, Ordering::SeqCst);
+        match self.bodies.get(idx) {
+            Some(body) => ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body.clone()),
+            None => panic!("no Messages response for index {idx}"),
         }
     }
 }
@@ -2441,6 +2511,97 @@ async fn preflight_auto_compact_runs_before_initial_request_when_input_exceeds_e
     assert!(
         body_contains_text(&follow_up_body, &summary_with_prefix(&auto_summary_payload)),
         "post-compact request should use compacted history"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn preflight_auto_compact_with_messages_uses_local_compaction() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(MessagesSeqResponder {
+            num_calls: AtomicUsize::new(0),
+            bodies: vec![
+                messages_sse_text_and_stop_with_tokens("msg_1", AUTO_SUMMARY_TEXT, 200, 20),
+                messages_sse_text_and_stop_with_tokens("msg_2", FINAL_REPLY, 120, 15),
+            ],
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let mut model_provider = ModelProviderInfo::create_openai_provider();
+    model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    model_provider.env_key = Some("PATH".into());
+    model_provider.requires_openai_auth = false;
+    model_provider.supports_websockets = false;
+    model_provider.wire_api = codex_core::WireApi::Messages;
+
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model = Some("claude-test".to_string());
+            config.model_provider = model_provider;
+            config.features.enable(Feature::RemoteCompaction);
+            set_test_compact_prompt(config);
+            config.model_context_window = Some(400);
+        })
+        .build(&server)
+        .await
+        .expect("build codex");
+
+    let large_user_message = "preflight-overflow ".repeat(200);
+    test.submit_turn(&large_user_message)
+        .await
+        .expect("submit large turn");
+
+    let requests = server.received_requests().await.expect("capture requests");
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.url.path() != "/v1/responses/compact"),
+        "Messages compaction should not hit the compact endpoint"
+    );
+    let message_requests: Vec<_> = requests
+        .iter()
+        .filter(|request| request.url.path() == "/v1/messages")
+        .collect();
+    assert_eq!(
+        message_requests.len(),
+        2,
+        "expected preflight and follow-up Messages requests"
+    );
+
+    let compact_body: serde_json::Value =
+        serde_json::from_slice(&message_requests[0].body).expect("decode first Messages request");
+    assert!(
+        compact_body.get("tools").is_none(),
+        "local compact Messages request should omit tools when no tools are declared"
+    );
+    assert!(
+        compact_body.get("tool_choice").is_none(),
+        "local compact Messages request should omit tool_choice when no tools are declared"
+    );
+    let compact_body = compact_body.to_string();
+    assert!(
+        body_contains_text(&compact_body, SUMMARIZATION_PROMPT),
+        "first Messages request should be the local compact request"
+    );
+    assert!(
+        body_contains_text(&compact_body, &large_user_message),
+        "local compact request should include the oversized user message"
+    );
+
+    let follow_up_body: serde_json::Value =
+        serde_json::from_slice(&message_requests[1].body).expect("decode second Messages request");
+    let follow_up_body = follow_up_body.to_string();
+    assert!(
+        body_contains_text(
+            &follow_up_body,
+            &summary_with_prefix(&auto_summary(AUTO_SUMMARY_TEXT)),
+        ),
+        "follow-up Messages request should use compacted local history"
     );
 }
 

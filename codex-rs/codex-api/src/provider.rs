@@ -13,6 +13,7 @@ use url::Url;
 pub enum WireApi {
     Responses,
     Chat,
+    Messages,
     Compact,
 }
 
