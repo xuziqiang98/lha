@@ -11,6 +11,7 @@ use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MIN_WAIT_TIMEOUT_MS;
+use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolRegistryBuilder;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -26,6 +27,7 @@ use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
@@ -118,24 +120,44 @@ impl ToolsConfig {
     }
 }
 
-fn messages_supports_tool(tool: &ToolSpec) -> bool {
-    matches!(tool, ToolSpec::Function(_))
+fn tool_is_exposed_on_wire_api(config: &ToolsConfig, spec: &ToolSpec) -> bool {
+    config.wire_api != WireApi::Messages || matches!(spec, ToolSpec::Function(_))
 }
 
 fn maybe_push_spec(builder: &mut ToolRegistryBuilder, config: &ToolsConfig, spec: ToolSpec) {
-    if config.wire_api != WireApi::Messages || messages_supports_tool(&spec) {
+    if tool_is_exposed_on_wire_api(config, &spec) {
         builder.push_spec(spec);
     }
 }
 
-fn maybe_push_spec_with_parallel_support(
+fn maybe_push_spec_and_register_handler<H>(
+    builder: &mut ToolRegistryBuilder,
+    config: &ToolsConfig,
+    spec: ToolSpec,
+    name: impl Into<String>,
+    handler: Arc<H>,
+) where
+    H: ToolHandler + 'static,
+{
+    if tool_is_exposed_on_wire_api(config, &spec) {
+        builder.push_spec(spec);
+        builder.register_handler(name, handler);
+    }
+}
+
+fn maybe_push_spec_with_parallel_support_and_register_handler<H>(
     builder: &mut ToolRegistryBuilder,
     config: &ToolsConfig,
     spec: ToolSpec,
     parallel: bool,
-) {
-    if config.wire_api != WireApi::Messages || messages_supports_tool(&spec) {
+    name: impl Into<String>,
+    handler: Arc<H>,
+) where
+    H: ToolHandler + 'static,
+{
+    if tool_is_exposed_on_wire_api(config, &spec) {
         builder.push_spec_with_parallel_support(spec, parallel);
+        builder.register_handler(name, handler);
     }
 }
 
@@ -1564,8 +1586,6 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
-    use std::sync::Arc;
-
     let mut builder = ToolRegistryBuilder::new();
 
     let shell_handler = Arc::new(ShellHandler);
@@ -1591,24 +1611,56 @@ pub(crate) fn build_specs(
             maybe_push_spec(&mut builder, config, ToolSpec::LocalShell {});
         }
         ConfigShellToolType::UnifiedExec => {
-            maybe_push_spec(
+            maybe_push_spec_and_register_handler(
                 &mut builder,
                 config,
                 create_exec_command_tool(config.request_rule_enabled),
+                "exec_command",
+                unified_exec_handler.clone(),
             );
-            maybe_push_spec(&mut builder, config, create_write_stdin_tool());
-            builder.register_handler("exec_command", unified_exec_handler.clone());
-            builder.register_handler("write_stdin", unified_exec_handler);
+            maybe_push_spec_and_register_handler(
+                &mut builder,
+                config,
+                create_write_stdin_tool(),
+                "write_stdin",
+                unified_exec_handler,
+            );
         }
         ConfigShellToolType::Disabled => {
             // Do nothing.
         }
         ConfigShellToolType::ShellCommand => {
-            builder.push_spec(create_shell_command_tool(config.request_rule_enabled));
+            maybe_push_spec(
+                &mut builder,
+                config,
+                create_shell_command_tool(config.request_rule_enabled),
+            );
         }
     }
 
-    if config.shell_type != ConfigShellToolType::Disabled {
+    if config.wire_api == WireApi::Messages {
+        match config.shell_type {
+            ConfigShellToolType::Default => {
+                let shell_spec = create_shell_tool(config.request_rule_enabled);
+                if tool_is_exposed_on_wire_api(config, &shell_spec) {
+                    builder.register_handler("shell", shell_handler);
+                }
+            }
+            ConfigShellToolType::Local => {
+                let local_shell_spec = ToolSpec::LocalShell {};
+                if tool_is_exposed_on_wire_api(config, &local_shell_spec) {
+                    builder.register_handler("local_shell", shell_handler);
+                }
+            }
+            ConfigShellToolType::UnifiedExec | ConfigShellToolType::Disabled => {}
+            ConfigShellToolType::ShellCommand => {
+                let shell_command_spec = create_shell_command_tool(config.request_rule_enabled);
+                if tool_is_exposed_on_wire_api(config, &shell_command_spec) {
+                    builder.register_handler("shell_command", shell_command_handler);
+                }
+            }
+        }
+    } else if config.shell_type != ConfigShellToolType::Disabled {
         // Always register shell aliases so older prompts remain compatible.
         builder.register_handler("shell", shell_handler.clone());
         builder.register_handler("container.exec", shell_handler.clone());
@@ -1616,46 +1668,70 @@ pub(crate) fn build_specs(
         builder.register_handler("shell_command", shell_command_handler);
     }
 
-    maybe_push_spec_with_parallel_support(
+    maybe_push_spec_with_parallel_support_and_register_handler(
         &mut builder,
         config,
         create_list_mcp_resources_tool(),
         true,
+        "list_mcp_resources",
+        mcp_resource_handler.clone(),
     );
-    maybe_push_spec_with_parallel_support(
+    maybe_push_spec_with_parallel_support_and_register_handler(
         &mut builder,
         config,
         create_list_mcp_resource_templates_tool(),
         true,
+        "list_mcp_resource_templates",
+        mcp_resource_handler.clone(),
     );
-    maybe_push_spec_with_parallel_support(
+    maybe_push_spec_with_parallel_support_and_register_handler(
         &mut builder,
         config,
         create_read_mcp_resource_tool(),
         true,
+        "read_mcp_resource",
+        mcp_resource_handler,
     );
-    builder.register_handler("list_mcp_resources", mcp_resource_handler.clone());
-    builder.register_handler("list_mcp_resource_templates", mcp_resource_handler.clone());
-    builder.register_handler("read_mcp_resource", mcp_resource_handler);
 
-    maybe_push_spec(&mut builder, config, PLAN_TOOL.clone());
-    builder.register_handler("update_plan", plan_handler);
+    maybe_push_spec_and_register_handler(
+        &mut builder,
+        config,
+        PLAN_TOOL.clone(),
+        "update_plan",
+        plan_handler,
+    );
 
     if config.collaboration_modes_tools {
-        maybe_push_spec(&mut builder, config, create_request_user_input_tool());
-        builder.register_handler("request_user_input", request_user_input_handler);
+        maybe_push_spec_and_register_handler(
+            &mut builder,
+            config,
+            create_request_user_input_tool(),
+            "request_user_input",
+            request_user_input_handler,
+        );
     }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
         match apply_patch_tool_type {
             ApplyPatchToolType::Freeform => {
-                maybe_push_spec(&mut builder, config, create_apply_patch_freeform_tool());
+                maybe_push_spec_and_register_handler(
+                    &mut builder,
+                    config,
+                    create_apply_patch_freeform_tool(),
+                    "apply_patch",
+                    apply_patch_handler,
+                );
             }
             ApplyPatchToolType::Function => {
-                maybe_push_spec(&mut builder, config, create_apply_patch_json_tool());
+                maybe_push_spec_and_register_handler(
+                    &mut builder,
+                    config,
+                    create_apply_patch_json_tool(),
+                    "apply_patch",
+                    apply_patch_handler,
+                );
             }
         }
-        builder.register_handler("apply_patch", apply_patch_handler);
     }
 
     if config
@@ -1663,8 +1739,14 @@ pub(crate) fn build_specs(
         .contains(&"grep_files".to_string())
     {
         let grep_files_handler = Arc::new(GrepFilesHandler);
-        maybe_push_spec_with_parallel_support(&mut builder, config, create_grep_files_tool(), true);
-        builder.register_handler("grep_files", grep_files_handler);
+        maybe_push_spec_with_parallel_support_and_register_handler(
+            &mut builder,
+            config,
+            create_grep_files_tool(),
+            true,
+            "grep_files",
+            grep_files_handler,
+        );
     }
 
     if config
@@ -1672,8 +1754,14 @@ pub(crate) fn build_specs(
         .contains(&"read_file".to_string())
     {
         let read_file_handler = Arc::new(ReadFileHandler);
-        maybe_push_spec_with_parallel_support(&mut builder, config, create_read_file_tool(), true);
-        builder.register_handler("read_file", read_file_handler);
+        maybe_push_spec_with_parallel_support_and_register_handler(
+            &mut builder,
+            config,
+            create_read_file_tool(),
+            true,
+            "read_file",
+            read_file_handler,
+        );
     }
 
     if config
@@ -1682,8 +1770,14 @@ pub(crate) fn build_specs(
         .any(|tool| tool == "list_dir")
     {
         let list_dir_handler = Arc::new(ListDirHandler);
-        maybe_push_spec_with_parallel_support(&mut builder, config, create_list_dir_tool(), true);
-        builder.register_handler("list_dir", list_dir_handler);
+        maybe_push_spec_with_parallel_support_and_register_handler(
+            &mut builder,
+            config,
+            create_list_dir_tool(),
+            true,
+            "list_dir",
+            list_dir_handler,
+        );
     }
 
     if config
@@ -1691,8 +1785,14 @@ pub(crate) fn build_specs(
         .contains(&"test_sync_tool".to_string())
     {
         let test_sync_handler = Arc::new(TestSyncHandler);
-        maybe_push_spec_with_parallel_support(&mut builder, config, create_test_sync_tool(), true);
-        builder.register_handler("test_sync_tool", test_sync_handler);
+        maybe_push_spec_with_parallel_support_and_register_handler(
+            &mut builder,
+            config,
+            create_test_sync_tool(),
+            true,
+            "test_sync_tool",
+            test_sync_handler,
+        );
     }
 
     match config.web_search_mode {
@@ -1717,32 +1817,73 @@ pub(crate) fn build_specs(
         Some(WebSearchMode::Disabled) | None => {}
     }
 
-    maybe_push_spec_with_parallel_support(&mut builder, config, create_view_image_tool(), true);
-    builder.register_handler("view_image", view_image_handler);
+    maybe_push_spec_with_parallel_support_and_register_handler(
+        &mut builder,
+        config,
+        create_view_image_tool(),
+        true,
+        "view_image",
+        view_image_handler,
+    );
 
     if config.collab_tools {
         let collab_handler = Arc::new(CollabHandler);
-        maybe_push_spec(&mut builder, config, create_spawn_agent_tool(config));
-        maybe_push_spec(&mut builder, config, create_send_input_tool());
-        maybe_push_spec(&mut builder, config, create_resume_agent_tool());
-        maybe_push_spec(&mut builder, config, create_wait_tool());
-        maybe_push_spec(&mut builder, config, create_close_agent_tool());
-        builder.register_handler("spawn_agent", collab_handler.clone());
-        builder.register_handler("send_input", collab_handler.clone());
-        builder.register_handler("resume_agent", collab_handler.clone());
-        builder.register_handler("wait", collab_handler.clone());
-        builder.register_handler("close_agent", collab_handler);
+        maybe_push_spec_and_register_handler(
+            &mut builder,
+            config,
+            create_spawn_agent_tool(config),
+            "spawn_agent",
+            collab_handler.clone(),
+        );
+        maybe_push_spec_and_register_handler(
+            &mut builder,
+            config,
+            create_send_input_tool(),
+            "send_input",
+            collab_handler.clone(),
+        );
+        maybe_push_spec_and_register_handler(
+            &mut builder,
+            config,
+            create_resume_agent_tool(),
+            "resume_agent",
+            collab_handler.clone(),
+        );
+        maybe_push_spec_and_register_handler(
+            &mut builder,
+            config,
+            create_wait_tool(),
+            "wait",
+            collab_handler.clone(),
+        );
+        maybe_push_spec_and_register_handler(
+            &mut builder,
+            config,
+            create_close_agent_tool(),
+            "close_agent",
+            collab_handler,
+        );
     }
 
     if config.agent_jobs_tools || config.agent_jobs_worker_tools {
         let agent_jobs_handler = Arc::new(BatchJobHandler);
         if config.agent_jobs_tools {
-            maybe_push_spec(&mut builder, config, create_spawn_agents_on_csv_tool());
-            builder.register_handler("spawn_agents_on_csv", agent_jobs_handler.clone());
+            maybe_push_spec_and_register_handler(
+                &mut builder,
+                config,
+                create_spawn_agents_on_csv_tool(),
+                "spawn_agents_on_csv",
+                agent_jobs_handler.clone(),
+            );
         }
         if config.agent_jobs_worker_tools {
-            maybe_push_spec(&mut builder, config, create_report_agent_job_result_tool());
-            builder.register_handler("report_agent_job_result", agent_jobs_handler);
+            maybe_push_spec_and_register_handler(
+                &mut builder,
+                config,
+                create_report_agent_job_result_tool(),
+                "report_agent_job_result",
+                agent_jobs_handler,
+            );
         }
     }
 
@@ -1753,8 +1894,13 @@ pub(crate) fn build_specs(
         for (name, tool) in entries.into_iter() {
             match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {
                 Ok(converted_tool) => {
-                    builder.push_spec(ToolSpec::Function(converted_tool));
-                    builder.register_handler(name, mcp_handler.clone());
+                    maybe_push_spec_and_register_handler(
+                        &mut builder,
+                        config,
+                        ToolSpec::Function(converted_tool),
+                        name,
+                        mcp_handler.clone(),
+                    );
                 }
                 Err(e) => {
                     tracing::error!("Failed to convert {name:?} MCP tool to OpenAI tool: {e:?}");
@@ -1767,8 +1913,13 @@ pub(crate) fn build_specs(
         for tool in dynamic_tools {
             match dynamic_tool_to_openai_tool(tool) {
                 Ok(converted_tool) => {
-                    builder.push_spec(ToolSpec::Function(converted_tool));
-                    builder.register_handler(tool.name.clone(), dynamic_tool_handler.clone());
+                    maybe_push_spec_and_register_handler(
+                        &mut builder,
+                        config,
+                        ToolSpec::Function(converted_tool),
+                        tool.name.clone(),
+                        dynamic_tool_handler.clone(),
+                    );
                 }
                 Err(e) => {
                     tracing::error!(
@@ -2001,6 +2152,60 @@ mod tests {
         assert!(!tools.iter().any(|tool| tool.spec.name() == "web_search"));
         assert!(!tools.iter().any(|tool| tool.spec.name() == "local_shell"));
         assert!(!tools.iter().any(|tool| tool.spec.name() == "apply_patch"));
+    }
+
+    #[test]
+    fn messages_build_specs_filters_local_shell_and_freeform_apply_patch_handlers() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("codex-mini-latest", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::ApplyPatchFreeform);
+        features.enable(Feature::CollaborationModes);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            wire_api: WireApi::Messages,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Live),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, registry) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
+
+        assert!(
+            tools
+                .iter()
+                .all(|tool| matches!(tool.spec, ToolSpec::Function(_)))
+        );
+        assert!(!tools.iter().any(|tool| tool.spec.name() == "apply_patch"));
+        assert!(!tools.iter().any(|tool| tool.spec.name() == "local_shell"));
+
+        assert!(registry.handler("apply_patch").is_none());
+        assert!(registry.handler("local_shell").is_none());
+        assert!(registry.handler("shell").is_none());
+        assert!(registry.handler("container.exec").is_none());
+    }
+
+    #[test]
+    fn messages_build_specs_keeps_unified_exec_handlers() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("codex-mini-latest", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
+        features.enable(Feature::CollaborationModes);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            wire_api: WireApi::Messages,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Live),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, registry) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
+
+        assert!(tools.iter().any(|tool| tool.spec.name() == "exec_command"));
+        assert!(tools.iter().any(|tool| tool.spec.name() == "write_stdin"));
+        assert!(registry.handler("exec_command").is_some());
+        assert!(registry.handler("write_stdin").is_some());
     }
 
     #[test]
