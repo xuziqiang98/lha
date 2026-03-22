@@ -1324,6 +1324,10 @@ pub fn create_tools_json_for_messages_api(
                 "input_schema": tool.parameters,
             })),
             ToolSpec::LocalShell {} | ToolSpec::WebSearch { .. } | ToolSpec::Freeform(_) => {
+                // Messages requests should only receive function tools because
+                // build_specs() filters unsupported tool types up front.
+                // Keep this error as a defensive invariant in case a future
+                // caller bypasses that filtering.
                 return Err(CodexErr::UnsupportedOperation(format!(
                     "Messages API only supports function tools; unsupported tool: {}",
                     tool.name()
@@ -1996,11 +2000,6 @@ mod tests {
         );
         assert!(!tools.iter().any(|tool| tool.spec.name() == "web_search"));
         assert!(!tools.iter().any(|tool| tool.spec.name() == "local_shell"));
-        assert!(
-            !tools
-                .iter()
-                .any(|tool| tool.spec.name() == VIEW_IMAGE_TOOL_NAME)
-        );
         assert!(!tools.iter().any(|tool| tool.spec.name() == "apply_patch"));
     }
 

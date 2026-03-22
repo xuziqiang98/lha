@@ -1308,9 +1308,24 @@ async fn messages_api_folds_developer_messages_into_system() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn messages_api_rejects_unsupported_freeform_tools() {
+async fn messages_api_filters_unsupported_freeform_tools() {
     skip_if_no_network!();
     let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(MessagesSeqResponder {
+            num_calls: AtomicUsize::new(0),
+            bodies: vec![messages_sse_text_and_stop_with_tokens(
+                "msg_1",
+                "hello back",
+                120,
+                24,
+            )],
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
 
     let mut model_provider = ModelProviderInfo::create_openai_provider();
     model_provider.base_url = Some(format!("{}/v1", server.uri()));
@@ -1340,22 +1355,48 @@ async fn messages_api_rejects_unsupported_freeform_tools() {
         .await
         .unwrap();
 
-    let error_event = wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::Error(_))).await;
-    let EventMsg::Error(error_event) = error_event else {
-        unreachable!();
-    };
-    assert_eq!(
-        error_event.message,
-        "unsupported operation: Messages API only supports function tools; unsupported tool: apply_patch"
-    );
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let requests = server.received_requests().await.expect("capture requests");
+    let request = requests
+        .iter()
+        .find(|request| request.url.path() == "/v1/messages")
+        .expect("messages request");
+    let request_body: serde_json::Value =
+        serde_json::from_slice(&request.body).expect("messages request should be json");
+
+    let tools = request_body
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     assert!(
-        requests
-            .iter()
-            .all(|request| request.url.path() != "/v1/messages"),
-        "unsupported Messages tools should fail before sending a request"
+        tools.iter().all(|tool| {
+            tool.get("name")
+                .and_then(serde_json::Value::as_str)
+                .is_some()
+                && tool.get("input_schema").is_some()
+        }),
+        "messages request should only include function-tool payloads"
     );
+    assert!(
+        !tools.iter().any(|tool| {
+            tool.get("name").and_then(serde_json::Value::as_str) == Some("apply_patch")
+        }),
+        "messages request should filter out freeform apply_patch"
+    );
+
+    if tools.is_empty() {
+        assert!(
+            request_body.get("tool_choice").is_none(),
+            "messages request without tools should omit tool_choice"
+        );
+    } else {
+        assert_eq!(
+            request_body["tool_choice"]["type"],
+            serde_json::Value::String("auto".to_string())
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
