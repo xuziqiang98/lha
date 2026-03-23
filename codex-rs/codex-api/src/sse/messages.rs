@@ -14,11 +14,15 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio::time::timeout;
 use tracing::debug;
+
+static NEXT_ASSISTANT_ITEM_ID: AtomicU64 = AtomicU64::new(1);
 
 pub fn spawn_messages_stream(
     stream_response: StreamResponse,
@@ -137,6 +141,7 @@ pub async fn process_messages_sse(
 ) {
     let mut stream = stream.eventsource();
     let mut assistant_item: Option<ResponseItem> = None;
+    let mut assistant_item_id: Option<String> = None;
     let mut tool_uses: HashMap<usize, ToolUseState> = HashMap::new();
     let mut usage_state = UsageState::default();
     let mut response_id = String::new();
@@ -183,6 +188,11 @@ pub async fn process_messages_sse(
             "message_start" => {
                 if let Some(message) = event.message {
                     response_id = message.id.unwrap_or_default();
+                    assistant_item_id = Some(if response_id.is_empty() {
+                        next_assistant_item_id()
+                    } else {
+                        response_id.clone()
+                    });
                     if let Some(usage) = message.usage {
                         if let Some(input_tokens) = usage.input_tokens {
                             usage_state.input_tokens = input_tokens;
@@ -222,7 +232,16 @@ pub async fn process_messages_sse(
                 match delta.kind.as_str() {
                     "text_delta" => {
                         let text = delta.text.unwrap_or_default();
-                        append_assistant_text(&tx_event, &mut assistant_item, text).await;
+                        let assistant_item_id = assistant_item_id
+                            .get_or_insert_with(next_assistant_item_id)
+                            .clone();
+                        append_assistant_text(
+                            &tx_event,
+                            &mut assistant_item,
+                            assistant_item_id,
+                            text,
+                        )
+                        .await;
                     }
                     "input_json_delta" => {
                         if let Some(tool_use) = tool_uses.get_mut(&index)
@@ -352,11 +371,12 @@ pub async fn process_messages_sse(
 async fn append_assistant_text(
     tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
     assistant_item: &mut Option<ResponseItem>,
+    assistant_item_id: String,
     text: String,
 ) {
     if assistant_item.is_none() {
         let item = ResponseItem::Message {
-            id: None,
+            id: Some(assistant_item_id),
             role: "assistant".to_string(),
             content: vec![],
             end_turn: None,
@@ -373,6 +393,11 @@ async fn append_assistant_text(
             .send(Ok(ResponseEvent::OutputTextDelta(text)))
             .await;
     }
+}
+
+fn next_assistant_item_id() -> String {
+    let next_id = NEXT_ASSISTANT_ITEM_ID.fetch_add(1, Ordering::Relaxed);
+    format!("messages-assistant-{next_id}")
 }
 
 #[cfg(test)]
@@ -448,5 +473,86 @@ mod tests {
             .expect("event")
             .expect_err("should be error");
         assert_eq!(err.to_string(), "invalid request: bad request");
+    }
+
+    #[tokio::test]
+    async fn text_stream_reuses_message_id_for_output_item_lifecycle() {
+        let body = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\"}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n"
+        );
+
+        let (tx, mut rx) = mpsc::channel(8);
+        process_messages_sse(build_stream(body), tx, Duration::from_secs(1), None).await;
+
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event.expect("event should succeed"));
+        }
+
+        assert_eq!(events.len(), 5);
+        assert!(matches!(events[0], ResponseEvent::Created));
+        assert!(matches!(events[2], ResponseEvent::OutputTextDelta(ref delta) if delta == "Hello"));
+        assert!(matches!(events[4], ResponseEvent::Completed { .. }));
+
+        let ResponseEvent::OutputItemAdded(ResponseItem::Message {
+            id: Some(added_id), ..
+        }) = &events[1]
+        else {
+            panic!("unexpected added event: {:?}", events[1]);
+        };
+
+        let ResponseEvent::OutputItemDone(ResponseItem::Message {
+            id: Some(completed_id),
+            ..
+        }) = &events[3]
+        else {
+            panic!("unexpected completed event: {:?}", events[3]);
+        };
+
+        assert_eq!(added_id, "msg_1");
+        assert_eq!(completed_id, "msg_1");
+    }
+
+    #[tokio::test]
+    async fn text_stream_generates_stable_fallback_id_without_message_id() {
+        let body = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n"
+        );
+
+        let (tx, mut rx) = mpsc::channel(8);
+        process_messages_sse(build_stream(body), tx, Duration::from_secs(1), None).await;
+
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event.expect("event should succeed"));
+        }
+
+        let ResponseEvent::OutputItemAdded(ResponseItem::Message {
+            id: Some(added_id), ..
+        }) = &events[1]
+        else {
+            panic!("unexpected added event: {:?}", events[1]);
+        };
+
+        let ResponseEvent::OutputItemDone(ResponseItem::Message {
+            id: Some(completed_id),
+            ..
+        }) = &events[3]
+        else {
+            panic!("unexpected completed event: {:?}", events[3]);
+        };
+
+        assert_eq!(added_id, completed_id);
+        assert!(added_id.starts_with("messages-assistant-"));
     }
 }
