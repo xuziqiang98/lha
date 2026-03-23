@@ -19,6 +19,8 @@ use codex_core::default_client::originator;
 use codex_core::error::CodexErr;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ItemCompletedEvent;
+use codex_core::protocol::ItemStartedEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_otel::OtelManager;
@@ -28,6 +30,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -46,6 +49,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use dunce::canonicalize as normalize_path;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
@@ -87,7 +91,7 @@ fn messages_sse_text_and_stop_with_tokens(
                 "usage": { "input_tokens": input_tokens },
             },
         }))
-        .expect("serialize Messages start event"),
+        .unwrap_or_else(|err| panic!("serialize Messages start event: {err}")),
     ));
     body.push_str("event: content_block_delta\n");
     body.push_str(&format!(
@@ -100,7 +104,7 @@ fn messages_sse_text_and_stop_with_tokens(
                 "text": text,
             },
         }))
-        .expect("serialize Messages text delta"),
+        .unwrap_or_else(|err| panic!("serialize Messages text delta: {err}")),
     ));
     body.push_str("event: message_delta\n");
     body.push_str(&format!(
@@ -110,7 +114,7 @@ fn messages_sse_text_and_stop_with_tokens(
             "delta": { "stop_reason": "end_turn" },
             "usage": { "output_tokens": output_tokens },
         }))
-        .expect("serialize Messages delta event"),
+        .unwrap_or_else(|err| panic!("serialize Messages delta event: {err}")),
     ));
     body.push_str("event: message_stop\n");
     body.push_str(&format!(
@@ -118,7 +122,7 @@ fn messages_sse_text_and_stop_with_tokens(
         serde_json::to_string(&json!({
             "type": "message_stop",
         }))
-        .expect("serialize Messages stop event"),
+        .unwrap_or_else(|err| panic!("serialize Messages stop event: {err}")),
     ));
     body
 }
@@ -1305,6 +1309,86 @@ async fn messages_api_folds_developer_messages_into_system() {
             .iter()
             .any(|(role, text)| role == "user" && text == "hello")
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn messages_api_streamed_agent_message_reuses_item_id() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(MessagesSeqResponder {
+            num_calls: AtomicUsize::new(0),
+            bodies: vec![messages_sse_text_and_stop_with_tokens(
+                "msg_1",
+                "hello back",
+                120,
+                24,
+            )],
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut model_provider = ModelProviderInfo::create_openai_provider();
+    model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    model_provider.env_key = Some("PATH".into());
+    model_provider.requires_openai_auth = false;
+    model_provider.supports_websockets = false;
+    model_provider.wire_api = WireApi::Messages;
+
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model = Some("claude-test".to_string());
+            config.model_provider = model_provider;
+        })
+        .build(&server)
+        .await
+        .expect("create new conversation");
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    let started_item = wait_for_event_match(&test.codex, |ev| match ev {
+        EventMsg::ItemStarted(ItemStartedEvent {
+            item: TurnItem::AgentMessage(item),
+            ..
+        }) => Some(item.clone()),
+        _ => None,
+    })
+    .await;
+    let delta_event = wait_for_event_match(&test.codex, |ev| match ev {
+        EventMsg::AgentMessageContentDelta(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    let legacy_delta = wait_for_event_match(&test.codex, |ev| match ev {
+        EventMsg::AgentMessageDelta(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    let completed_item = wait_for_event_match(&test.codex, |ev| match ev {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::AgentMessage(item),
+            ..
+        }) => Some(item.clone()),
+        _ => None,
+    })
+    .await;
+
+    assert_eq!(started_item.id, "msg_1");
+    assert_eq!(delta_event.item_id, started_item.id);
+    assert_eq!(legacy_delta.delta, "hello back");
+    assert_eq!(completed_item.id, started_item.id);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
