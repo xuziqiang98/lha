@@ -8,6 +8,7 @@ use chrono::Local;
 use codex_common::summarize_sandbox_policy;
 use codex_core::WireApi;
 use codex_core::config::Config;
+use codex_core::config::display_model_provider_ref;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::NetworkAccess;
 use codex_core::protocol::SandboxPolicy;
@@ -173,7 +174,10 @@ impl StatusHistoryCell {
         let mut config_entries = vec![
             ("workdir", config.cwd.display().to_string()),
             ("model", model_name.to_string()),
-            ("provider", config.model_provider_id.clone()),
+            (
+                "provider",
+                display_model_provider_ref(&config.model_provider_id),
+            ),
             ("approval", config.approval_policy.value().to_string()),
             (
                 "sandbox",
@@ -561,6 +565,11 @@ fn format_model_provider(config: &Config) -> Option<String> {
     } else {
         name
     };
+    let provider_name = if name.is_empty() {
+        display_model_provider_ref(provider_name)
+    } else {
+        provider_name.to_string()
+    };
     let base_url = provider.base_url.as_deref().and_then(sanitize_base_url);
     let is_default_openai = provider.is_openai() && base_url.is_none();
     if is_default_openai {
@@ -569,7 +578,7 @@ fn format_model_provider(config: &Config) -> Option<String> {
 
     Some(match base_url {
         Some(base_url) => format!("{provider_name} - {base_url}"),
-        None => provider_name.to_string(),
+        None => provider_name,
     })
 }
 

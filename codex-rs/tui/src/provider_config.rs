@@ -9,12 +9,23 @@ use codex_api::ReqwestTransport;
 use codex_api::TransportError;
 use codex_api::WireApi as ApiWireApi;
 use codex_api::provider::RetryConfig;
+use codex_core::ModelProviderInfo;
+use codex_core::WireApi;
+use codex_core::config::CONFIG_TOML_FILE;
+use codex_core::config::ConfigToml;
+use codex_core::config::MODEL_PROVIDER_VARIANTS_KEY;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::generated_provider_profile_name;
+use codex_core::config::model_provider_variant_ref;
+use codex_core::config::profile::ConfigProfile;
+use codex_core::config::wire_api_config_value;
 use codex_core::default_client::build_reqwest_client;
 use reqwest::StatusCode;
 use reqwest::header::HeaderMap;
+use toml_edit::DocumentMut;
+use toml_edit::Item as TomlItem;
+use toml_edit::Table as TomlTable;
 use toml_edit::value;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -199,6 +210,18 @@ pub(crate) fn generated_profile_name(provider_id: &str, model: &str) -> String {
     generated_provider_profile_name(provider_id, model)
 }
 
+fn as_core_wire_api(wire_api: ApiProviderWireApi) -> WireApi {
+    match wire_api {
+        ApiProviderWireApi::Chat => WireApi::Chat,
+        ApiProviderWireApi::Responses => WireApi::Responses,
+        ApiProviderWireApi::Messages => WireApi::Messages,
+    }
+}
+
+pub(crate) fn custom_provider_ref(config: &CustomProviderConfig) -> String {
+    model_provider_variant_ref(&config.provider_id, as_core_wire_api(config.wire_api))
+}
+
 pub(crate) fn current_step_value_mut(state: &mut ApiKeyInputState) -> Option<&mut String> {
     match state.step {
         ApiProviderWizardStep::ProviderId => Some(&mut state.provider_id),
@@ -303,11 +326,27 @@ pub(crate) async fn persist_custom_provider_config(
 ) -> Result<(), String> {
     validate_custom_provider_config(config).await?;
 
+    let existing_config = load_existing_config_toml(codex_home)?;
+
     ConfigEditsBuilder::new(codex_home)
-        .with_edits(build_custom_provider_edits(config))
+        .with_edits(build_custom_provider_edits_with_existing(
+            config,
+            existing_config.as_ref(),
+        ))
         .apply()
         .await
         .map_err(|err| format!("Failed to write config.toml: {err}"))
+}
+
+fn load_existing_config_toml(codex_home: &Path) -> Result<Option<ConfigToml>, String> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    match std::fs::read_to_string(&config_path) {
+        Ok(raw) => toml::from_str(&raw)
+            .map(Some)
+            .map_err(|err| format!("Failed to parse config.toml: {err}")),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(format!("Failed to read config.toml: {err}")),
+    }
 }
 
 async fn validate_custom_provider_config(config: &CustomProviderConfig) -> Result<(), String> {
@@ -381,70 +420,462 @@ async fn validate_custom_provider_config(config: &CustomProviderConfig) -> Resul
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn build_custom_provider_edits(config: &CustomProviderConfig) -> Vec<ConfigEdit> {
-    let profile_name = generated_profile_name(&config.provider_id, &config.model);
-    let mut edits = vec![
+    build_custom_provider_edits_with_existing(config, None)
+}
+
+fn provider_variant_segments(provider_id: &str, wire_api: ApiProviderWireApi) -> Vec<String> {
+    vec![
+        "model_providers".to_string(),
+        provider_id.to_string(),
+        MODEL_PROVIDER_VARIANTS_KEY.to_string(),
+        wire_api.as_config_value().to_string(),
+    ]
+}
+
+fn clear_legacy_provider_paths(provider_id: &str) -> Vec<ConfigEdit> {
+    [
+        "name",
+        "base_url",
+        "env_key",
+        "env_key_instructions",
+        "experimental_bearer_token",
+        "wire_api",
+        "query_params",
+        "http_headers",
+        "env_http_headers",
+        "request_max_retries",
+        "stream_max_retries",
+        "stream_idle_timeout_ms",
+        "requires_openai_auth",
+        "supports_websockets",
+    ]
+    .into_iter()
+    .map(|field| ConfigEdit::ClearPath {
+        segments: vec![
+            "model_providers".to_string(),
+            provider_id.to_string(),
+            field.to_string(),
+        ],
+    })
+    .collect()
+}
+
+fn set_variant_provider_field(
+    edits: &mut Vec<ConfigEdit>,
+    provider_id: &str,
+    wire_api: ApiProviderWireApi,
+    field: &str,
+    field_value: toml_edit::Item,
+) {
+    let mut segments = provider_variant_segments(provider_id, wire_api);
+    segments.push(field.to_string());
+    edits.push(ConfigEdit::SetPath {
+        segments,
+        value: field_value,
+    });
+}
+
+fn migrate_legacy_provider_to_variant_edits(
+    provider_id: &str,
+    legacy_provider: &ModelProviderInfo,
+) -> Vec<ConfigEdit> {
+    let legacy_wire_api = legacy_provider.wire_api;
+    let mut edits = clear_legacy_provider_paths(provider_id);
+    let variant_wire_api = match legacy_wire_api {
+        WireApi::Chat => ApiProviderWireApi::Chat,
+        WireApi::Responses => ApiProviderWireApi::Responses,
+        WireApi::Messages => ApiProviderWireApi::Messages,
+    };
+
+    set_variant_provider_field(
+        &mut edits,
+        provider_id,
+        variant_wire_api,
+        "name",
+        value(legacy_provider.name.clone()),
+    );
+    set_variant_provider_field(
+        &mut edits,
+        provider_id,
+        variant_wire_api,
+        "wire_api",
+        value(wire_api_config_value(legacy_wire_api)),
+    );
+    set_variant_provider_field(
+        &mut edits,
+        provider_id,
+        variant_wire_api,
+        "requires_openai_auth",
+        value(legacy_provider.requires_openai_auth),
+    );
+    set_variant_provider_field(
+        &mut edits,
+        provider_id,
+        variant_wire_api,
+        "supports_websockets",
+        value(legacy_provider.supports_websockets),
+    );
+
+    if let Some(base_url) = &legacy_provider.base_url {
+        set_variant_provider_field(
+            &mut edits,
+            provider_id,
+            variant_wire_api,
+            "base_url",
+            value(base_url.to_string()),
+        );
+    }
+    if let Some(env_key) = &legacy_provider.env_key {
+        set_variant_provider_field(
+            &mut edits,
+            provider_id,
+            variant_wire_api,
+            "env_key",
+            value(env_key.to_string()),
+        );
+    }
+    if let Some(env_key_instructions) = &legacy_provider.env_key_instructions {
+        set_variant_provider_field(
+            &mut edits,
+            provider_id,
+            variant_wire_api,
+            "env_key_instructions",
+            value(env_key_instructions.to_string()),
+        );
+    }
+    if let Some(bearer_token) = &legacy_provider.experimental_bearer_token {
+        set_variant_provider_field(
+            &mut edits,
+            provider_id,
+            variant_wire_api,
+            "experimental_bearer_token",
+            value(bearer_token.to_string()),
+        );
+    }
+    if let Some(query_params) = &legacy_provider.query_params {
+        for (key, value_str) in query_params {
+            let mut segments = provider_variant_segments(provider_id, variant_wire_api);
+            segments.extend(["query_params".to_string(), key.to_string()]);
+            edits.push(ConfigEdit::SetPath {
+                segments,
+                value: value(value_str.to_string()),
+            });
+        }
+    }
+    if let Some(http_headers) = &legacy_provider.http_headers {
+        for (key, value_str) in http_headers {
+            let mut segments = provider_variant_segments(provider_id, variant_wire_api);
+            segments.extend(["http_headers".to_string(), key.to_string()]);
+            edits.push(ConfigEdit::SetPath {
+                segments,
+                value: value(value_str.to_string()),
+            });
+        }
+    }
+    if let Some(env_http_headers) = &legacy_provider.env_http_headers {
+        for (key, value_str) in env_http_headers {
+            let mut segments = provider_variant_segments(provider_id, variant_wire_api);
+            segments.extend(["env_http_headers".to_string(), key.to_string()]);
+            edits.push(ConfigEdit::SetPath {
+                segments,
+                value: value(value_str.to_string()),
+            });
+        }
+    }
+    if let Some(request_max_retries) = legacy_provider.request_max_retries {
+        set_variant_provider_field(
+            &mut edits,
+            provider_id,
+            variant_wire_api,
+            "request_max_retries",
+            value(request_max_retries as i64),
+        );
+    }
+    if let Some(stream_max_retries) = legacy_provider.stream_max_retries {
+        set_variant_provider_field(
+            &mut edits,
+            provider_id,
+            variant_wire_api,
+            "stream_max_retries",
+            value(stream_max_retries as i64),
+        );
+    }
+    if let Some(stream_idle_timeout_ms) = legacy_provider.stream_idle_timeout_ms {
+        set_variant_provider_field(
+            &mut edits,
+            provider_id,
+            variant_wire_api,
+            "stream_idle_timeout_ms",
+            value(stream_idle_timeout_ms as i64),
+        );
+    }
+
+    edits
+}
+
+fn legacy_provider_migration_ref(provider_id: &str, legacy_provider: &ModelProviderInfo) -> String {
+    model_provider_variant_ref(provider_id, legacy_provider.wire_api)
+}
+
+fn profile_field_segments(profile_name: &str, field: &str) -> Vec<String> {
+    vec![
+        "profiles".to_string(),
+        profile_name.to_string(),
+        field.to_string(),
+    ]
+}
+
+fn profile_table_segments(profile_name: &str) -> Vec<String> {
+    vec!["profiles".to_string(), profile_name.to_string()]
+}
+
+fn config_profile_table(profile: &ConfigProfile) -> Option<TomlTable> {
+    let Ok(serialized) = toml::to_string(profile) else {
+        return None;
+    };
+    let mut table = if serialized.is_empty() {
+        TomlTable::new()
+    } else {
+        let Ok(doc) = serialized.parse::<DocumentMut>() else {
+            return None;
+        };
+        doc.as_table().clone()
+    };
+    table.set_implicit(false);
+    Some(table)
+}
+
+fn merge_profile_missing_fields(
+    source: &ConfigProfile,
+    destination: &ConfigProfile,
+    migrated_provider_ref: &str,
+) -> ConfigProfile {
+    let mut merged = destination.clone();
+
+    if merged.model.is_none() {
+        merged.model = source.model.clone();
+    }
+    if merged.model_context_window.is_none() {
+        merged.model_context_window = source.model_context_window;
+    }
+    if merged.approval_policy.is_none() {
+        merged.approval_policy = source.approval_policy;
+    }
+    if merged.sandbox_mode.is_none() {
+        merged.sandbox_mode = source.sandbox_mode;
+    }
+    if merged.model_reasoning_effort.is_none() {
+        merged.model_reasoning_effort = source.model_reasoning_effort;
+    }
+    if merged.model_reasoning_summary.is_none() {
+        merged.model_reasoning_summary = source.model_reasoning_summary;
+    }
+    if merged.model_verbosity.is_none() {
+        merged.model_verbosity = source.model_verbosity;
+    }
+    if merged.personality.is_none() {
+        merged.personality = source.personality;
+    }
+    if merged.chatgpt_base_url.is_none() {
+        merged.chatgpt_base_url = source.chatgpt_base_url.clone();
+    }
+    if merged.model_instructions_file.is_none() {
+        merged.model_instructions_file = source.model_instructions_file.clone();
+    }
+    if merged.experimental_instructions_file.is_none() {
+        merged.experimental_instructions_file = source.experimental_instructions_file.clone();
+    }
+    if merged.experimental_compact_prompt_file.is_none() {
+        merged.experimental_compact_prompt_file = source.experimental_compact_prompt_file.clone();
+    }
+    if merged.include_apply_patch_tool.is_none() {
+        merged.include_apply_patch_tool = source.include_apply_patch_tool;
+    }
+    if merged.experimental_use_unified_exec_tool.is_none() {
+        merged.experimental_use_unified_exec_tool = source.experimental_use_unified_exec_tool;
+    }
+    if merged.experimental_use_freeform_apply_patch.is_none() {
+        merged.experimental_use_freeform_apply_patch = source.experimental_use_freeform_apply_patch;
+    }
+    if merged.tools_web_search.is_none() {
+        merged.tools_web_search = source.tools_web_search;
+    }
+    if merged.tools_view_image.is_none() {
+        merged.tools_view_image = source.tools_view_image;
+    }
+    if merged.web_search.is_none() {
+        merged.web_search = source.web_search;
+    }
+    if merged.analytics.is_none() {
+        merged.analytics = source.analytics.clone();
+    }
+    if merged.features.is_none() {
+        merged.features = source.features.clone();
+    }
+    if merged.oss_provider.is_none() {
+        merged.oss_provider = source.oss_provider.clone();
+    }
+
+    merged.model_provider = Some(migrated_provider_ref.to_string());
+
+    merged
+}
+
+fn legacy_profile_migration_edits(
+    existing_config: &ConfigToml,
+    provider_id: &str,
+    migrated_provider_ref: &str,
+) -> Vec<ConfigEdit> {
+    let mut edits = Vec::new();
+    let mut renamed_active_profile = None;
+
+    for (profile_name, profile) in &existing_config.profiles {
+        if profile.model_provider.as_deref() != Some(provider_id) {
+            continue;
+        }
+
+        let Some(model) = profile.model.as_deref() else {
+            edits.push(ConfigEdit::SetPath {
+                segments: profile_field_segments(profile_name, "model_provider"),
+                value: value(migrated_provider_ref.to_string()),
+            });
+            continue;
+        };
+
+        let legacy_generated_profile_name = generated_profile_name(provider_id, model);
+        if profile_name != &legacy_generated_profile_name {
+            edits.push(ConfigEdit::SetPath {
+                segments: profile_field_segments(profile_name, "model_provider"),
+                value: value(migrated_provider_ref.to_string()),
+            });
+            continue;
+        }
+
+        let migrated_profile_name = generated_profile_name(migrated_provider_ref, model);
+        let migrated_profile = existing_config
+            .profiles
+            .get(&migrated_profile_name)
+            .map(|destination| {
+                merge_profile_missing_fields(profile, destination, migrated_provider_ref)
+            })
+            .unwrap_or_else(|| {
+                let mut migrated = profile.clone();
+                migrated.model_provider = Some(migrated_provider_ref.to_string());
+                migrated
+            });
+
+        if let Some(profile_table) = config_profile_table(&migrated_profile) {
+            edits.push(ConfigEdit::SetPath {
+                segments: profile_table_segments(&migrated_profile_name),
+                value: TomlItem::Table(profile_table),
+            });
+        }
+        edits.push(ConfigEdit::ClearPath {
+            segments: profile_table_segments(profile_name),
+        });
+
+        if existing_config.profile.as_deref() == Some(profile_name.as_str()) {
+            renamed_active_profile = Some(migrated_profile_name);
+        }
+    }
+
+    if let Some(renamed_active_profile) = renamed_active_profile {
+        edits.push(ConfigEdit::SetPath {
+            segments: vec!["profile".to_string()],
+            value: value(renamed_active_profile),
+        });
+    }
+
+    edits
+}
+
+pub(crate) fn build_custom_provider_edits_with_existing(
+    config: &CustomProviderConfig,
+    existing_config: Option<&ConfigToml>,
+) -> Vec<ConfigEdit> {
+    let provider_ref = custom_provider_ref(config);
+    let profile_name = generated_profile_name(&provider_ref, &config.model);
+    let mut edits = Vec::new();
+
+    if let Some(existing_config) = existing_config
+        && let Some(legacy_provider) = existing_config.model_providers.get(&config.provider_id)
+    {
+        edits.extend(migrate_legacy_provider_to_variant_edits(
+            &config.provider_id,
+            legacy_provider,
+        ));
+        edits.extend(legacy_profile_migration_edits(
+            existing_config,
+            &config.provider_id,
+            &legacy_provider_migration_ref(&config.provider_id, legacy_provider),
+        ));
+    }
+
+    edits.extend([
         ConfigEdit::SetPath {
             segments: vec!["model_provider".to_string()],
-            value: value(config.provider_id.clone()),
+            value: value(provider_ref.clone()),
         },
         ConfigEdit::SetPath {
             segments: vec!["model".to_string()],
             value: value(config.model.clone()),
         },
-        ConfigEdit::SetPath {
-            segments: vec![
-                "model_providers".to_string(),
-                config.provider_id.clone(),
-                "name".to_string(),
-            ],
-            value: value(config.provider_id.clone()),
-        },
-        ConfigEdit::SetPath {
-            segments: vec![
-                "model_providers".to_string(),
-                config.provider_id.clone(),
-                "base_url".to_string(),
-            ],
-            value: value(config.base_url.clone()),
-        },
-        ConfigEdit::SetPath {
-            segments: vec![
-                "model_providers".to_string(),
-                config.provider_id.clone(),
-                "wire_api".to_string(),
-            ],
-            value: value(config.wire_api.as_config_value()),
-        },
-        ConfigEdit::SetPath {
-            segments: vec![
-                "model_providers".to_string(),
-                config.provider_id.clone(),
-                "experimental_bearer_token".to_string(),
-            ],
-            value: value(config.api_key.clone()),
-        },
-        ConfigEdit::SetPath {
-            segments: vec![
-                "model_providers".to_string(),
-                config.provider_id.clone(),
-                "requires_openai_auth".to_string(),
-            ],
-            value: value(false),
-        },
+    ]);
+
+    set_variant_provider_field(
+        &mut edits,
+        &config.provider_id,
+        config.wire_api,
+        "name",
+        value(config.provider_id.clone()),
+    );
+    set_variant_provider_field(
+        &mut edits,
+        &config.provider_id,
+        config.wire_api,
+        "base_url",
+        value(config.base_url.clone()),
+    );
+    set_variant_provider_field(
+        &mut edits,
+        &config.provider_id,
+        config.wire_api,
+        "wire_api",
+        value(config.wire_api.as_config_value()),
+    );
+    set_variant_provider_field(
+        &mut edits,
+        &config.provider_id,
+        config.wire_api,
+        "experimental_bearer_token",
+        value(config.api_key.clone()),
+    );
+    set_variant_provider_field(
+        &mut edits,
+        &config.provider_id,
+        config.wire_api,
+        "requires_openai_auth",
+        value(false),
+    );
+
+    let mut profile_edits = vec![
         ConfigEdit::SetPath {
             segments: vec![
                 "profiles".to_string(),
                 profile_name.clone(),
                 "model_provider".to_string(),
             ],
-            value: value(config.provider_id.clone()),
+            value: value(provider_ref.clone()),
         },
         ConfigEdit::SetPath {
             segments: vec!["profiles".to_string(), profile_name, "model".to_string()],
             value: value(config.model.clone()),
         },
     ];
+
+    edits.append(&mut profile_edits);
 
     match config.model_context_window {
         Some(model_context_window) => {
@@ -455,7 +886,7 @@ pub(crate) fn build_custom_provider_edits(config: &CustomProviderConfig) -> Vec<
             edits.push(ConfigEdit::SetPath {
                 segments: vec![
                     "profiles".to_string(),
-                    generated_profile_name(&config.provider_id, &config.model),
+                    generated_profile_name(&provider_ref, &config.model),
                     "model_context_window".to_string(),
                 ],
                 value: value(model_context_window),
@@ -498,18 +929,18 @@ mod tests {
         let raw = std::fs::read_to_string(codex_home.path().join("config.toml")).unwrap();
         assert_eq!(
             raw,
-            r#"model_provider = "custom_1"
+            r#"model_provider = "custom_1#responses"
 model = "gpt-test"
 
-[model_providers.custom_1]
+[model_providers.custom_1.variants.responses]
 name = "custom_1"
 base_url = "https://example.com/v1"
 wire_api = "responses"
 experimental_bearer_token = "sk-test"
 requires_openai_auth = false
 
-[profiles."_provider.custom_1.gpt-test"]
-model_provider = "custom_1"
+[profiles."_provider.custom_1#responses.gpt-test"]
+model_provider = "custom_1#responses"
 model = "gpt-test"
 "#
         );
@@ -583,18 +1014,19 @@ model = "gpt-test"
         let doc = raw.parse::<DocumentMut>().expect("parse config");
 
         assert_eq!(
-            doc["model_providers"]["anthropic"]["wire_api"].as_str(),
+            doc["model_providers"]["anthropic"]["variants"]["messages"]["wire_api"].as_str(),
             Some("messages")
         );
-        assert_eq!(doc["model_provider"].as_str(), Some("anthropic"));
+        assert_eq!(doc["model_provider"].as_str(), Some("anthropic#messages"));
         assert_eq!(
-            doc["profiles"]["_provider.anthropic.claude-sonnet-4-20250514"]["model"].as_str(),
+            doc["profiles"]["_provider.anthropic#messages.claude-sonnet-4-20250514"]["model"]
+                .as_str(),
             Some("claude-sonnet-4-20250514")
         );
     }
 
     #[test]
-    fn saving_second_model_for_same_provider_keeps_one_provider_entry() {
+    fn saving_second_wire_api_for_same_provider_keeps_distinct_variants() {
         let codex_home = tempdir().expect("temp dir");
 
         ConfigEditsBuilder::new(codex_home.path())
@@ -610,41 +1042,50 @@ model = "gpt-test"
             .expect("write initial config");
 
         ConfigEditsBuilder::new(codex_home.path())
-            .with_edits(build_custom_provider_edits(&CustomProviderConfig {
-                provider_id: "custom_1".to_string(),
-                wire_api: ApiProviderWireApi::Chat,
-                base_url: "https://example.com/chat".to_string(),
-                api_key: "sk-new".to_string(),
-                model: "gpt-other".to_string(),
-                model_context_window: None,
-            }))
+            .with_edits(build_custom_provider_edits_with_existing(
+                &CustomProviderConfig {
+                    provider_id: "custom_1".to_string(),
+                    wire_api: ApiProviderWireApi::Chat,
+                    base_url: "https://example.com/chat".to_string(),
+                    api_key: "sk-new".to_string(),
+                    model: "gpt-other".to_string(),
+                    model_context_window: None,
+                },
+                load_existing_config_toml(codex_home.path())
+                    .expect("read config")
+                    .as_ref(),
+            ))
             .apply_blocking()
             .expect("write updated config");
 
         let raw = std::fs::read_to_string(codex_home.path().join("config.toml")).unwrap();
-        assert_eq!(raw.matches("[model_providers.custom_1]").count(), 1);
+        assert_eq!(
+            raw.matches("[model_providers.custom_1.variants.").count(),
+            2
+        );
 
         let doc = raw.parse::<DocumentMut>().expect("parse config");
-        assert_eq!(doc["model_provider"].as_str(), Some("custom_1"));
+        assert_eq!(doc["model_provider"].as_str(), Some("custom_1#chat"));
         assert_eq!(doc["model"].as_str(), Some("gpt-other"));
         assert_eq!(
-            doc["model_providers"]["custom_1"]["wire_api"].as_str(),
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["wire_api"].as_str(),
             Some("chat")
         );
         assert_eq!(
-            doc["model_providers"]["custom_1"]["base_url"].as_str(),
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["base_url"].as_str(),
             Some("https://example.com/chat")
         );
         assert_eq!(
-            doc["model_providers"]["custom_1"]["experimental_bearer_token"].as_str(),
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["experimental_bearer_token"]
+                .as_str(),
             Some("sk-new")
         );
         assert_eq!(
-            doc["profiles"]["_provider.custom_1.gpt-test"]["model"].as_str(),
+            doc["profiles"]["_provider.custom_1#responses.gpt-test"]["model"].as_str(),
             Some("gpt-test")
         );
         assert_eq!(
-            doc["profiles"]["_provider.custom_1.gpt-other"]["model"].as_str(),
+            doc["profiles"]["_provider.custom_1#chat.gpt-other"]["model"].as_str(),
             Some("gpt-other")
         );
         assert_eq!(
@@ -670,46 +1111,52 @@ model = "gpt-test"
             .expect("write initial config");
 
         ConfigEditsBuilder::new(codex_home.path())
-            .with_edits(build_custom_provider_edits(&CustomProviderConfig {
-                provider_id: "custom_1".to_string(),
-                wire_api: ApiProviderWireApi::Chat,
-                base_url: "https://example.com/chat".to_string(),
-                api_key: "sk-new".to_string(),
-                model: "gpt-test".to_string(),
-                model_context_window: None,
-            }))
+            .with_edits(build_custom_provider_edits_with_existing(
+                &CustomProviderConfig {
+                    provider_id: "custom_1".to_string(),
+                    wire_api: ApiProviderWireApi::Chat,
+                    base_url: "https://example.com/chat".to_string(),
+                    api_key: "sk-new".to_string(),
+                    model: "gpt-test".to_string(),
+                    model_context_window: None,
+                },
+                load_existing_config_toml(codex_home.path())
+                    .expect("read config")
+                    .as_ref(),
+            ))
             .apply_blocking()
             .expect("rewrite same pair");
 
         let raw = std::fs::read_to_string(codex_home.path().join("config.toml")).unwrap();
         assert_eq!(
-            raw.matches("[profiles.\"_provider.custom_1.gpt-test\"]")
+            raw.matches("[profiles.\"_provider.custom_1#chat.gpt-test\"]")
                 .count(),
             1
         );
 
         let doc = raw.parse::<DocumentMut>().expect("parse config");
-        assert_eq!(doc["model_provider"].as_str(), Some("custom_1"));
+        assert_eq!(doc["model_provider"].as_str(), Some("custom_1#chat"));
         assert_eq!(doc["model"].as_str(), Some("gpt-test"));
         assert_eq!(
-            doc["model_providers"]["custom_1"]["wire_api"].as_str(),
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["wire_api"].as_str(),
             Some("chat")
         );
         assert_eq!(
-            doc["model_providers"]["custom_1"]["base_url"].as_str(),
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["base_url"].as_str(),
             Some("https://example.com/chat")
         );
         assert_eq!(
-            doc["model_providers"]["custom_1"]["experimental_bearer_token"].as_str(),
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["experimental_bearer_token"]
+                .as_str(),
             Some("sk-new")
         );
         assert_eq!(
-            doc["profiles"]["_provider.custom_1.gpt-test"]["model_provider"].as_str(),
-            Some("custom_1")
+            doc["profiles"]["_provider.custom_1#chat.gpt-test"]["model_provider"].as_str(),
+            Some("custom_1#chat")
         );
         assert_eq!(
             doc["profiles"].as_table().map(toml_edit::Table::len),
-            Some(1)
+            Some(2)
         );
     }
 
@@ -739,14 +1186,19 @@ X-Test = "1"
         .expect("write initial config");
 
         ConfigEditsBuilder::new(codex_home.path())
-            .with_edits(build_custom_provider_edits(&CustomProviderConfig {
-                provider_id: "custom_1".to_string(),
-                wire_api: ApiProviderWireApi::Chat,
-                base_url: "https://example.com/chat".to_string(),
-                api_key: "sk-new".to_string(),
-                model: "gpt-other".to_string(),
-                model_context_window: None,
-            }))
+            .with_edits(build_custom_provider_edits_with_existing(
+                &CustomProviderConfig {
+                    provider_id: "custom_1".to_string(),
+                    wire_api: ApiProviderWireApi::Chat,
+                    base_url: "https://example.com/chat".to_string(),
+                    api_key: "sk-new".to_string(),
+                    model: "gpt-other".to_string(),
+                    model_context_window: None,
+                },
+                load_existing_config_toml(codex_home.path())
+                    .expect("read config")
+                    .as_ref(),
+            ))
             .apply_blocking()
             .expect("rewrite provider");
 
@@ -754,32 +1206,215 @@ X-Test = "1"
         let doc = raw.parse::<DocumentMut>().expect("parse config");
 
         assert_eq!(
-            doc["model_providers"]["custom_1"]["env_key"].as_str(),
+            doc["model_providers"]["custom_1"]["variants"]["responses"]["env_key"].as_str(),
             Some("CUSTOM_API_KEY")
         );
         assert_eq!(
-            doc["model_providers"]["custom_1"]["query_params"]["api-version"].as_str(),
+            doc["model_providers"]["custom_1"]["variants"]["responses"]["query_params"]
+                ["api-version"]
+                .as_str(),
             Some("2025-04-01-preview")
         );
         assert_eq!(
-            doc["model_providers"]["custom_1"]["http_headers"]["X-Test"].as_str(),
+            doc["model_providers"]["custom_1"]["variants"]["responses"]["http_headers"]["X-Test"]
+                .as_str(),
             Some("1")
         );
         assert_eq!(
-            doc["model_providers"]["custom_1"]["wire_api"].as_str(),
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["wire_api"].as_str(),
             Some("chat")
         );
         assert_eq!(
-            doc["model_providers"]["custom_1"]["base_url"].as_str(),
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["base_url"].as_str(),
             Some("https://example.com/chat")
         );
         assert_eq!(
-            doc["model_providers"]["custom_1"]["experimental_bearer_token"].as_str(),
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["experimental_bearer_token"]
+                .as_str(),
             Some("sk-new")
         );
         assert_eq!(
-            doc["profiles"]["_provider.custom_1.gpt-other"]["model"].as_str(),
+            doc["profiles"]["_provider.custom_1#chat.gpt-other"]["model"].as_str(),
             Some("gpt-other")
+        );
+    }
+
+    #[test]
+    fn saving_existing_provider_rewrites_named_profile_provider_refs() {
+        let codex_home = tempdir().expect("temp dir");
+        let config_path = codex_home.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"model_provider = "custom_1"
+model = "gpt-test"
+
+[model_providers.custom_1]
+name = "custom_1"
+base_url = "https://example.com/v1"
+wire_api = "responses"
+experimental_bearer_token = "sk-old"
+
+[profiles.saved]
+model = "gpt-test"
+model_provider = "custom_1"
+"#,
+        )
+        .expect("write initial config");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits_with_existing(
+                &CustomProviderConfig {
+                    provider_id: "custom_1".to_string(),
+                    wire_api: ApiProviderWireApi::Chat,
+                    base_url: "https://example.com/chat".to_string(),
+                    api_key: "sk-new".to_string(),
+                    model: "gpt-other".to_string(),
+                    model_context_window: None,
+                },
+                load_existing_config_toml(codex_home.path())
+                    .expect("read config")
+                    .as_ref(),
+            ))
+            .apply_blocking()
+            .expect("rewrite provider");
+
+        let raw = std::fs::read_to_string(config_path).expect("read config");
+        let doc = raw.parse::<DocumentMut>().expect("parse config");
+
+        assert_eq!(
+            doc["profiles"]["saved"]["model_provider"].as_str(),
+            Some("custom_1#responses")
+        );
+    }
+
+    #[test]
+    fn saving_existing_provider_renames_generated_profile_and_active_profile() {
+        let codex_home = tempdir().expect("temp dir");
+        let config_path = codex_home.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"profile = "_provider.custom_1.gpt-test"
+model_provider = "custom_1"
+model = "gpt-test"
+
+[model_providers.custom_1]
+name = "custom_1"
+base_url = "https://example.com/v1"
+wire_api = "responses"
+experimental_bearer_token = "sk-old"
+
+[profiles."_provider.custom_1.gpt-test"]
+model = "gpt-test"
+model_provider = "custom_1"
+model_context_window = 64000
+"#,
+        )
+        .expect("write initial config");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits_with_existing(
+                &CustomProviderConfig {
+                    provider_id: "custom_1".to_string(),
+                    wire_api: ApiProviderWireApi::Chat,
+                    base_url: "https://example.com/chat".to_string(),
+                    api_key: "sk-new".to_string(),
+                    model: "gpt-other".to_string(),
+                    model_context_window: None,
+                },
+                load_existing_config_toml(codex_home.path())
+                    .expect("read config")
+                    .as_ref(),
+            ))
+            .apply_blocking()
+            .expect("rewrite provider");
+
+        let raw = std::fs::read_to_string(config_path).expect("read config");
+        let doc = raw.parse::<DocumentMut>().expect("parse config");
+
+        assert_eq!(
+            doc["profile"].as_str(),
+            Some("_provider.custom_1#responses.gpt-test")
+        );
+        assert!(
+            doc["profiles"]
+                .as_table()
+                .and_then(|profiles| profiles.get("_provider.custom_1.gpt-test"))
+                .is_none()
+        );
+        assert_eq!(
+            doc["profiles"]["_provider.custom_1#responses.gpt-test"]["model_provider"].as_str(),
+            Some("custom_1#responses")
+        );
+        assert_eq!(
+            doc["profiles"]["_provider.custom_1#responses.gpt-test"]["model_context_window"]
+                .as_integer(),
+            Some(64_000)
+        );
+    }
+
+    #[test]
+    fn saving_existing_provider_merges_legacy_generated_profile_into_existing_variant_profile() {
+        let codex_home = tempdir().expect("temp dir");
+        let config_path = codex_home.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"model_provider = "custom_1"
+model = "gpt-test"
+
+[model_providers.custom_1]
+name = "custom_1"
+base_url = "https://example.com/v1"
+wire_api = "responses"
+experimental_bearer_token = "sk-old"
+
+[profiles."_provider.custom_1.gpt-test"]
+model = "gpt-test"
+model_provider = "custom_1"
+model_context_window = 64000
+
+[profiles."_provider.custom_1#responses.gpt-test"]
+model = "gpt-test"
+model_provider = "custom_1#responses"
+include_apply_patch_tool = true
+"#,
+        )
+        .expect("write initial config");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits_with_existing(
+                &CustomProviderConfig {
+                    provider_id: "custom_1".to_string(),
+                    wire_api: ApiProviderWireApi::Chat,
+                    base_url: "https://example.com/chat".to_string(),
+                    api_key: "sk-new".to_string(),
+                    model: "gpt-other".to_string(),
+                    model_context_window: None,
+                },
+                load_existing_config_toml(codex_home.path())
+                    .expect("read config")
+                    .as_ref(),
+            ))
+            .apply_blocking()
+            .expect("rewrite provider");
+
+        let raw = std::fs::read_to_string(config_path).expect("read config");
+        let doc = raw.parse::<DocumentMut>().expect("parse config");
+
+        assert!(
+            doc["profiles"]
+                .as_table()
+                .and_then(|profiles| profiles.get("_provider.custom_1.gpt-test"))
+                .is_none()
+        );
+        assert_eq!(
+            doc["profiles"]["_provider.custom_1#responses.gpt-test"]["model_context_window"]
+                .as_integer(),
+            Some(64_000)
+        );
+        assert_eq!(
+            doc["profiles"]["_provider.custom_1#responses.gpt-test"]["include_apply_patch_tool"]
+                .as_bool(),
+            Some(true)
         );
     }
 
@@ -803,7 +1438,8 @@ X-Test = "1"
         let doc = raw.parse::<DocumentMut>().expect("parse config");
         assert_eq!(doc["model_context_window"].as_integer(), Some(128_000));
         assert_eq!(
-            doc["profiles"]["_provider.custom_1.gpt-test"]["model_context_window"].as_integer(),
+            doc["profiles"]["_provider.custom_1#responses.gpt-test"]["model_context_window"]
+                .as_integer(),
             Some(128_000)
         );
     }
@@ -841,7 +1477,8 @@ X-Test = "1"
         let doc = raw.parse::<DocumentMut>().expect("parse config");
         assert!(doc.get("model_context_window").is_none());
         assert_eq!(
-            doc["profiles"]["_provider.custom_1.gpt-test"]["model_context_window"].as_integer(),
+            doc["profiles"]["_provider.custom_1#responses.gpt-test"]["model_context_window"]
+                .as_integer(),
             Some(64_000)
         );
     }
@@ -878,11 +1515,12 @@ X-Test = "1"
         let doc = raw.parse::<DocumentMut>().expect("parse config");
         assert!(doc.get("model_context_window").is_none());
         assert_eq!(
-            doc["profiles"]["_provider.custom_1.gpt-test"]["model_context_window"].as_integer(),
+            doc["profiles"]["_provider.custom_1#responses.gpt-test"]["model_context_window"]
+                .as_integer(),
             Some(64_000)
         );
         assert!(
-            doc["profiles"]["_provider.custom_2.gpt-other"]
+            doc["profiles"]["_provider.custom_2#chat.gpt-other"]
                 .get("model_context_window")
                 .is_none()
         );

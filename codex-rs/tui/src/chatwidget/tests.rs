@@ -3970,11 +3970,11 @@ async fn model_picker_without_auth_shows_same_model_for_different_custom_provide
         "expected two glm-5 entries:\n{popup}"
     );
     assert!(
-        popup.contains("User-defined model from provider_a provider."),
+        popup.contains("User-defined model from provider_a (responses) provider."),
         "expected provider_a description in picker:\n{popup}"
     );
     assert!(
-        popup.contains("User-defined model from provider_b provider."),
+        popup.contains("User-defined model from provider_b (responses) provider."),
         "expected provider_b description in picker:\n{popup}"
     );
     assert_eq!(
@@ -3983,7 +3983,7 @@ async fn model_picker_without_auth_shows_same_model_for_different_custom_provide
         "expected only one current entry:\n{popup}"
     );
     assert!(
-        popup.contains("glm-5 (current)  User-defined model from provider_b provider."),
+        popup.contains("glm-5 (current)  User-defined model from provider_b (responses) provider."),
         "expected current entry to match active provider:\n{popup}"
     );
 }
@@ -4061,7 +4061,7 @@ async fn model_switcher_with_chatgpt_auth_keeps_builtin_and_custom_same_slug_vis
         .filter(|line| {
             line.contains("gpt-5.2")
                 && (line.contains("Latest frontier model with improvements across knowledge, reasoning and coding")
-                    || line.contains("User-defined model from provider_a provider."))
+                    || line.contains("User-defined model from provider_a (responses) provider."))
         })
         .count();
 
@@ -4073,7 +4073,7 @@ async fn model_switcher_with_chatgpt_auth_keeps_builtin_and_custom_same_slug_vis
         "expected built-in description in picker:\n{popup}"
     );
     assert!(
-        popup.contains("User-defined model from provider_a provider."),
+        popup.contains("User-defined model from provider_a (responses) provider."),
         "expected custom provider description in picker:\n{popup}"
     );
     assert_eq!(
@@ -4084,7 +4084,7 @@ async fn model_switcher_with_chatgpt_auth_keeps_builtin_and_custom_same_slug_vis
     assert!(
         popup.lines().any(|line| {
             line.contains("gpt-5.2 (current)")
-                && line.contains("User-defined model from provider_a provider.")
+                && line.contains("User-defined model from provider_a (responses) provider.")
         }),
         "expected current entry to match active custom provider:\n{popup}"
     );

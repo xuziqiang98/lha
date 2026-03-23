@@ -36,6 +36,7 @@ use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::OLLAMA_CHAT_PROVIDER_ID;
 use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
+use crate::model_provider_info::WireApi;
 use crate::model_provider_info::built_in_model_providers;
 use crate::models_manager::model_info::find_model_info_for_slug;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
@@ -61,7 +62,13 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::Serializer;
+use serde::de::Error as _;
+use serde::ser::Error as _;
+use serde::ser::SerializeMap;
+use sha1::Digest;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -99,11 +106,226 @@ pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 pub const GENERATED_PROVIDER_PROFILE_PREFIX: &str = "_provider.";
+pub const MODEL_PROVIDER_VARIANT_SEPARATOR: char = '#';
+pub const MODEL_PROVIDER_VARIANTS_KEY: &str = "variants";
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
-pub fn generated_provider_profile_name(provider_id: &str, model: &str) -> String {
-    format!("{GENERATED_PROVIDER_PROFILE_PREFIX}{provider_id}.{model}")
+pub fn generated_provider_profile_name(model_provider_id: &str, model: &str) -> String {
+    format!("{GENERATED_PROVIDER_PROFILE_PREFIX}{model_provider_id}.{model}")
+}
+
+pub fn model_provider_cache_key(model_provider_ref: &str) -> String {
+    let readable_prefix = sanitize_model_provider_cache_key_prefix(model_provider_ref);
+    let readable_prefix = if readable_prefix.is_empty() {
+        "provider".to_string()
+    } else {
+        readable_prefix
+    };
+    let digest = sha1::Sha1::digest(model_provider_ref.as_bytes());
+    let short_hash = format!("{digest:x}");
+
+    format!("{readable_prefix}__{}", &short_hash[..10])
+}
+
+fn sanitize_model_provider_cache_key_prefix(model_provider_ref: &str) -> String {
+    model_provider_ref
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '-' => ch,
+            _ => '_',
+        })
+        .collect()
+}
+
+pub const fn wire_api_config_value(wire_api: WireApi) -> &'static str {
+    match wire_api {
+        WireApi::Responses => "responses",
+        WireApi::Chat => "chat",
+        WireApi::Messages => "messages",
+    }
+}
+
+pub fn parse_wire_api_config_value(value: &str) -> Option<WireApi> {
+    match value {
+        "responses" => Some(WireApi::Responses),
+        "chat" => Some(WireApi::Chat),
+        "messages" => Some(WireApi::Messages),
+        _ => None,
+    }
+}
+
+pub fn model_provider_variant_ref(provider_id: &str, wire_api: WireApi) -> String {
+    format!(
+        "{provider_id}{MODEL_PROVIDER_VARIANT_SEPARATOR}{}",
+        wire_api_config_value(wire_api)
+    )
+}
+
+pub fn split_model_provider_variant_ref(provider_ref: &str) -> Option<(&str, WireApi)> {
+    let (provider_id, wire_api) = provider_ref.rsplit_once(MODEL_PROVIDER_VARIANT_SEPARATOR)?;
+    parse_wire_api_config_value(wire_api).map(|wire_api| (provider_id, wire_api))
+}
+
+pub fn display_model_provider_ref(provider_ref: &str) -> String {
+    split_model_provider_variant_ref(provider_ref)
+        .map(|(provider_id, wire_api)| {
+            format!("{provider_id} ({})", wire_api_config_value(wire_api))
+        })
+        .unwrap_or_else(|| provider_ref.to_string())
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(crate) struct RawModelProviderVariantsToml {
+    #[serde(default)]
+    pub variants: HashMap<String, ModelProviderInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[serde(untagged)]
+pub(crate) enum RawModelProviderEntryToml {
+    Legacy(Box<ModelProviderInfo>),
+    Variants(RawModelProviderVariantsToml),
+}
+
+fn parse_model_provider_variants(
+    provider_id: &str,
+    variants_value: TomlValue,
+) -> Result<HashMap<String, ModelProviderInfo>, String> {
+    let mut model_providers = HashMap::new();
+
+    let TomlValue::Table(variants_table) = variants_value else {
+        return Err(format!(
+            "model_providers.{provider_id}.{MODEL_PROVIDER_VARIANTS_KEY} must be a table"
+        ));
+    };
+
+    if variants_table.is_empty() {
+        return Err(format!(
+            "model_providers.{provider_id}.{MODEL_PROVIDER_VARIANTS_KEY} cannot be empty"
+        ));
+    }
+
+    for (variant_name, provider_value) in variants_table {
+        let Some(wire_api) = parse_wire_api_config_value(&variant_name) else {
+            return Err(format!(
+                "model_providers.{provider_id}.{MODEL_PROVIDER_VARIANTS_KEY}.{variant_name} must be one of: chat, responses, messages"
+            ));
+        };
+
+        let provider: ModelProviderInfo = provider_value.try_into().map_err(|err| {
+            format!(
+                "model_providers.{provider_id}.{MODEL_PROVIDER_VARIANTS_KEY}.{variant_name}: {err}"
+            )
+        })?;
+
+        if provider.wire_api != wire_api {
+            return Err(format!(
+                "model_providers.{provider_id}.{MODEL_PROVIDER_VARIANTS_KEY}.{variant_name}.wire_api must match `{variant_name}`"
+            ));
+        }
+
+        model_providers.insert(model_provider_variant_ref(provider_id, wire_api), provider);
+    }
+
+    Ok(model_providers)
+}
+
+fn parse_raw_model_providers(
+    raw_providers: HashMap<String, TomlValue>,
+) -> Result<HashMap<String, ModelProviderInfo>, String> {
+    let mut model_providers = HashMap::new();
+
+    for (provider_id, provider_value) in raw_providers {
+        let TomlValue::Table(mut provider_table) = provider_value else {
+            return Err(format!("model_providers.{provider_id} must be a table"));
+        };
+
+        let variants_value = provider_table.remove(MODEL_PROVIDER_VARIANTS_KEY);
+        if let Some(variants_value) = variants_value {
+            if !provider_table.is_empty() {
+                return Err(format!(
+                    "model_providers.{provider_id} cannot mix provider fields with `{MODEL_PROVIDER_VARIANTS_KEY}`"
+                ));
+            }
+
+            model_providers.extend(parse_model_provider_variants(&provider_id, variants_value)?);
+        } else {
+            let provider: ModelProviderInfo = TomlValue::Table(provider_table)
+                .try_into()
+                .map_err(|err| format!("model_providers.{provider_id}: {err}"))?;
+            model_providers.insert(provider_id, provider);
+        }
+    }
+
+    Ok(model_providers)
+}
+
+fn deserialize_model_providers<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, ModelProviderInfo>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw_providers = HashMap::<String, TomlValue>::deserialize(deserializer)?;
+    parse_raw_model_providers(raw_providers).map_err(D::Error::custom)
+}
+
+fn serialize_model_providers<S>(
+    model_providers: &HashMap<String, ModelProviderInfo>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let mut legacy_entries = HashMap::new();
+    let mut variant_entries = HashMap::<String, HashMap<String, ModelProviderInfo>>::new();
+
+    for (provider_ref, provider) in model_providers {
+        if let Some((provider_id, wire_api)) = split_model_provider_variant_ref(provider_ref) {
+            variant_entries
+                .entry(provider_id.to_string())
+                .or_default()
+                .insert(
+                    wire_api_config_value(wire_api).to_string(),
+                    provider.clone(),
+                );
+        } else {
+            legacy_entries.insert(provider_ref.clone(), provider.clone());
+        }
+    }
+
+    if let Some(provider_id) = legacy_entries
+        .keys()
+        .find(|provider_id| variant_entries.contains_key(provider_id.as_str()))
+    {
+        return Err(S::Error::custom(format!(
+            "cannot serialize mixed legacy and variant model provider entries for `{provider_id}`"
+        )));
+    }
+
+    let mut map = serializer.serialize_map(Some(legacy_entries.len() + variant_entries.len()))?;
+
+    let mut legacy_entries = legacy_entries.into_iter().collect::<Vec<_>>();
+    legacy_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (provider_id, provider) in legacy_entries {
+        map.serialize_entry(
+            &provider_id,
+            &RawModelProviderEntryToml::Legacy(Box::new(provider)),
+        )?;
+    }
+
+    let mut variant_entries = variant_entries.into_iter().collect::<Vec<_>>();
+    variant_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (provider_id, variants) in variant_entries {
+        map.serialize_entry(
+            &provider_id,
+            &RawModelProviderEntryToml::Variants(RawModelProviderVariantsToml { variants }),
+        )?;
+    }
+
+    map.end()
 }
 
 #[cfg(test)]
@@ -942,7 +1164,12 @@ pub struct ConfigToml {
     pub mcp_oauth_callback_port: Option<u16>,
 
     /// User-defined provider entries that extend/override the built-in list.
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_model_providers",
+        serialize_with = "serialize_model_providers"
+    )]
+    #[schemars(schema_with = "crate::config::schema::model_providers_schema")]
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
@@ -4202,6 +4429,106 @@ model_provider = "chatanywhere"
         assert_eq!(
             err.to_string(),
             "model `deepseek-v3` is configured for multiple providers: chatanywhere, iie"
+        );
+    }
+
+    #[test]
+    fn config_toml_deserializes_nested_model_provider_variants() {
+        let config_toml: ConfigToml = toml::from_str(
+            r#"
+[model_providers.anthropic.variants.messages]
+name = "Anthropic"
+base_url = "https://api.anthropic.com/v1"
+wire_api = "messages"
+experimental_bearer_token = "sk-msg"
+
+[model_providers.anthropic.variants.chat]
+name = "Anthropic Chat"
+base_url = "https://example.com/chat"
+wire_api = "chat"
+experimental_bearer_token = "sk-chat"
+"#,
+        )
+        .expect("parse config");
+
+        assert_eq!(config_toml.model_providers.len(), 2);
+        assert_eq!(
+            config_toml
+                .model_providers
+                .get("anthropic#messages")
+                .and_then(|provider| provider.base_url.as_deref()),
+            Some("https://api.anthropic.com/v1")
+        );
+        assert_eq!(
+            config_toml
+                .model_providers
+                .get("anthropic#chat")
+                .map(|provider| provider.wire_api),
+            Some(WireApi::Chat)
+        );
+    }
+
+    #[test]
+    fn config_toml_rejects_mixed_legacy_and_variant_model_provider_entry() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+[model_providers.anthropic]
+name = "Anthropic"
+wire_api = "messages"
+
+[model_providers.anthropic.variants.chat]
+name = "Anthropic Chat"
+wire_api = "chat"
+"#,
+        )
+        .expect_err("expected mixed provider entry to fail");
+
+        assert!(
+            err.to_string().contains("model_providers"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn config_toml_rejects_variant_key_mismatch() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+[model_providers.anthropic.variants.messages]
+name = "Anthropic"
+wire_api = "chat"
+"#,
+        )
+        .expect_err("expected wire api mismatch to fail");
+
+        assert!(
+            err.to_string().contains(
+                "model_providers.anthropic.variants.messages.wire_api must match `messages`"
+            ),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_model_provider_for_model_rejects_ambiguous_variant_mapping() {
+        let config_toml: ConfigToml = toml::from_str(
+            r#"
+[profiles.messages]
+model = "claude-sonnet-4-5"
+model_provider = "anthropic#messages"
+
+[profiles.chat]
+model = "claude-sonnet-4-5"
+model_provider = "anthropic#chat"
+"#,
+        )
+        .expect("parse config");
+
+        let err = config_toml
+            .resolve_model_provider_for_model("claude-sonnet-4-5")
+            .expect_err("expected ambiguous provider mapping");
+        assert_eq!(
+            err.to_string(),
+            "model `claude-sonnet-4-5` is configured for multiple providers: anthropic#chat, anthropic#messages"
         );
     }
 

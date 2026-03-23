@@ -6,6 +6,7 @@ use chrono::DateTime;
 use chrono::TimeZone;
 use chrono::Utc;
 use codex_core::CodexAuth;
+use codex_core::config::model_provider_cache_key;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::protocol::EventMsg;
@@ -158,18 +159,8 @@ struct ModelsCache {
 fn cache_path_for_provider(codex_home: &Path, model_provider_id: &str) -> std::path::PathBuf {
     codex_home
         .join("remote_models")
-        .join(sanitize_model_provider_id(model_provider_id))
+        .join(model_provider_cache_key(model_provider_id))
         .join(CACHE_FILE)
-}
-
-fn sanitize_model_provider_id(model_provider_id: &str) -> String {
-    model_provider_id
-        .chars()
-        .map(|ch| match ch {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '-' => ch,
-            _ => '_',
-        })
-        .collect()
 }
 
 fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {

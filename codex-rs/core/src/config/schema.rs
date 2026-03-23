@@ -1,4 +1,5 @@
 use crate::config::ConfigToml;
+use crate::config::RawModelProviderEntryToml;
 use crate::config::types::RawMcpServerConfig;
 use crate::features::FEATURES;
 use schemars::r#gen::SchemaGenerator;
@@ -45,6 +46,24 @@ pub(crate) fn mcp_servers_schema(schema_gen: &mut SchemaGenerator) -> Schema {
 
     let validation = ObjectValidation {
         additional_properties: Some(Box::new(schema_gen.subschema_for::<RawMcpServerConfig>())),
+        ..Default::default()
+    };
+    object.object = Some(Box::new(validation));
+
+    Schema::Object(object)
+}
+
+/// Schema for the `[model_providers]` map using the raw input shape.
+pub(crate) fn model_providers_schema(schema_gen: &mut SchemaGenerator) -> Schema {
+    let mut object = SchemaObject {
+        instance_type: Some(InstanceType::Object.into()),
+        ..Default::default()
+    };
+
+    let validation = ObjectValidation {
+        additional_properties: Some(Box::new(
+            schema_gen.subschema_for::<RawModelProviderEntryToml>(),
+        )),
         ..Default::default()
     };
     object.object = Some(Box::new(validation));
