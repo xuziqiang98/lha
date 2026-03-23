@@ -32,6 +32,7 @@ use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
 use crate::pager_overlay::Overlay;
 use crate::provider_config::CustomProviderConfig;
+use crate::provider_config::custom_provider_ref;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
@@ -48,6 +49,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
+use codex_core::config::display_model_provider_ref;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::ConfigLayerStackOrdering;
@@ -973,7 +975,8 @@ impl App {
     }
 
     async fn handle_custom_provider_configured(&mut self, config: CustomProviderConfig) {
-        let provider_id = config.provider_id.clone();
+        let provider_id = custom_provider_ref(&config);
+        let provider_label = display_model_provider_ref(&provider_id);
         let model = config.model.clone();
 
         self.chat_widget.dismiss_active_view();
@@ -985,7 +988,7 @@ impl App {
             Ok(()) => {
                 self.chat_widget.add_info_message(
                     format!(
-                        "Switched this session to provider `{provider_id}` with model `{model}`."
+                        "Switched this session to provider `{provider_label}` with model `{model}`."
                     ),
                     Some(
                         "Future sessions will also use this provider and model by default."
@@ -995,7 +998,7 @@ impl App {
             }
             Err(err) => {
                 self.chat_widget.add_error_message(format!(
-                    "Saved provider `{provider_id}` with model `{model}`, but failed to activate it in this session: {err}. Restart Codex to use the updated settings."
+                    "Saved provider `{provider_label}` with model `{model}`, but failed to activate it in this session: {err}. Restart Codex to use the updated settings."
                 ));
             }
         }
@@ -2904,6 +2907,7 @@ mod tests {
     use crate::provider_config::ApiProviderWireApi;
     use crate::provider_config::CustomProviderConfig;
     use crate::provider_config::build_custom_provider_edits;
+    use crate::provider_config::build_custom_provider_edits_with_existing;
     use crate::provider_config::generated_profile_name;
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
@@ -3666,8 +3670,14 @@ X-Test = "1"
 "#,
         )
         .expect("write config");
+        let existing_config: ConfigToml =
+            toml::from_str(&std::fs::read_to_string(&config_path).expect("read config"))
+                .expect("parse config");
         ConfigEditsBuilder::new(&app.config.codex_home)
-            .with_edits(build_custom_provider_edits(&saved))
+            .with_edits(build_custom_provider_edits_with_existing(
+                &saved,
+                Some(&existing_config),
+            ))
             .apply()
             .await
             .expect("persist provider save");
@@ -3682,40 +3692,24 @@ X-Test = "1"
 
         app.handle_custom_provider_configured(saved).await;
 
-        assert_eq!(
-            app.config.model_provider.env_key.as_deref(),
-            Some("CUSTOM_API_KEY")
-        );
-        assert_eq!(
-            app.config
-                .model_provider
-                .query_params
-                .as_ref()
-                .and_then(|params| params.get("api-version"))
-                .map(String::as_str),
-            Some("2025-04-01-preview")
-        );
-        assert_eq!(
-            app.config
-                .model_provider
-                .http_headers
-                .as_ref()
-                .and_then(|headers| headers.get("X-Test"))
-                .map(String::as_str),
-            Some("1")
-        );
+        assert_eq!(app.config.model_provider.env_key.as_deref(), None);
+        assert_eq!(app.config.model_provider.query_params.as_ref(), None);
+        assert_eq!(app.config.model_provider.http_headers.as_ref(), None);
         assert_eq!(
             app.chat_widget.config_ref().model_provider,
             app.config.model_provider
         );
-        assert_eq!(app.config.model_provider_id, "custom_1");
+        assert_eq!(app.config.model_provider_id, "custom_1#chat");
         assert_eq!(app.config.model.as_deref(), Some("gpt-other"));
         assert_eq!(app.chat_widget.current_model(), "gpt-other");
         assert_eq!(
             app.chat_widget.config_ref().model.as_deref(),
             Some("gpt-other")
         );
-        assert_eq!(app.chat_widget.config_ref().model_provider_id, "custom_1");
+        assert_eq!(
+            app.chat_widget.config_ref().model_provider_id,
+            "custom_1#chat"
+        );
 
         let config_toml: ConfigToml = app
             .config
@@ -3726,9 +3720,16 @@ X-Test = "1"
         assert_eq!(
             config_toml
                 .profiles
-                .get(generated_profile_name("custom_1", "gpt-other").as_str())
+                .get(generated_profile_name("custom_1#chat", "gpt-other").as_str())
                 .and_then(|profile| profile.model.as_deref()),
             Some("gpt-other")
+        );
+        assert_eq!(
+            config_toml
+                .model_providers
+                .get("custom_1#responses")
+                .and_then(|provider| provider.env_key.as_deref()),
+            Some("CUSTOM_API_KEY")
         );
     }
 
@@ -3751,10 +3752,13 @@ X-Test = "1"
 
         app.handle_custom_provider_configured(saved).await;
 
-        assert_eq!(app.config.model_provider_id, "custom_1");
+        assert_eq!(app.config.model_provider_id, "custom_1#responses");
         assert_eq!(app.config.model.as_deref(), Some("gpt-test"));
         assert_eq!(app.chat_widget.current_model(), "gpt-test");
-        assert_eq!(app.chat_widget.config_ref().model_provider_id, "custom_1");
+        assert_eq!(
+            app.chat_widget.config_ref().model_provider_id,
+            "custom_1#responses"
+        );
         assert_eq!(
             app.chat_widget.config_ref().model.as_deref(),
             Some("gpt-test")
@@ -3769,9 +3773,9 @@ X-Test = "1"
         assert_eq!(
             config_toml
                 .profiles
-                .get(generated_profile_name("custom_1", "gpt-test").as_str())
+                .get(generated_profile_name("custom_1#responses", "gpt-test").as_str())
                 .and_then(|profile| profile.model_provider.as_deref()),
-            Some("custom_1")
+            Some("custom_1#responses")
         );
     }
 
@@ -3794,7 +3798,7 @@ X-Test = "1"
 
         app.handle_custom_provider_configured(saved).await;
 
-        assert_eq!(app.config.model_provider_id, "custom_1");
+        assert_eq!(app.config.model_provider_id, "custom_1#responses");
         assert_eq!(app.config.model.as_deref(), Some("gpt-test"));
         assert_eq!(app.config.model_context_window, Some(128_000));
         assert_eq!(app.chat_widget.current_model(), "gpt-test");
@@ -3813,7 +3817,7 @@ X-Test = "1"
         assert_eq!(
             config_toml
                 .profiles
-                .get(generated_profile_name("custom_1", "gpt-test").as_str())
+                .get(generated_profile_name("custom_1#responses", "gpt-test").as_str())
                 .and_then(|profile| profile.model_context_window),
             Some(128_000)
         );
@@ -3851,13 +3855,10 @@ X-Test = "1"
 
         app.handle_custom_provider_configured(saved).await;
 
-        assert_eq!(app.config.model_provider_id, "custom_1");
+        assert_eq!(app.config.model_provider_id, "custom_1#chat");
         assert_eq!(app.config.model.as_deref(), Some("gpt-test"));
-        assert_eq!(app.config.model_context_window, Some(64_000));
-        assert_eq!(
-            app.chat_widget.config_ref().model_context_window,
-            Some(64_000)
-        );
+        assert_eq!(app.config.model_context_window, None);
+        assert_eq!(app.chat_widget.config_ref().model_context_window, None);
 
         let config_toml: ConfigToml = app
             .config
@@ -3869,9 +3870,16 @@ X-Test = "1"
         assert_eq!(
             config_toml
                 .profiles
-                .get(generated_profile_name("custom_1", "gpt-test").as_str())
+                .get(generated_profile_name("custom_1#responses", "gpt-test").as_str())
                 .and_then(|profile| profile.model_context_window),
             Some(64_000)
+        );
+        assert_eq!(
+            config_toml
+                .profiles
+                .get(generated_profile_name("custom_1#chat", "gpt-test").as_str())
+                .and_then(|profile| profile.model_context_window),
+            None
         );
     }
 
@@ -3907,7 +3915,7 @@ X-Test = "1"
 
         app.handle_custom_provider_configured(saved).await;
 
-        assert_eq!(app.config.model_provider_id, "custom_2");
+        assert_eq!(app.config.model_provider_id, "custom_2#chat");
         assert_eq!(app.config.model.as_deref(), Some("gpt-other"));
         assert_eq!(app.config.model_context_window, None);
         assert_eq!(app.chat_widget.config_ref().model_context_window, None);
@@ -3922,14 +3930,14 @@ X-Test = "1"
         assert_eq!(
             config_toml
                 .profiles
-                .get(generated_profile_name("custom_1", "gpt-test").as_str())
+                .get(generated_profile_name("custom_1#responses", "gpt-test").as_str())
                 .and_then(|profile| profile.model_context_window),
             Some(64_000)
         );
         assert_eq!(
             config_toml
                 .profiles
-                .get(generated_profile_name("custom_2", "gpt-other").as_str())
+                .get(generated_profile_name("custom_2#chat", "gpt-other").as_str())
                 .and_then(|profile| profile.model_context_window),
             None
         );
@@ -3970,7 +3978,7 @@ X-Test = "1"
             .await
             .expect("get thread");
         let snapshot = thread.config_snapshot().await;
-        assert_eq!(snapshot.model_provider_id, "custom_1");
+        assert_eq!(snapshot.model_provider_id, "custom_1#responses");
         assert_eq!(snapshot.model, "gpt-test");
     }
 

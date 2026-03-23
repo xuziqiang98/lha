@@ -34,15 +34,24 @@ You can configure a custom Anthropic-compatible provider with `wire_api = "messa
 
 ```toml
 model = "claude-sonnet-4-5"
+model_provider = "anthropic#messages"
 
-[model_providers.anthropic]
+[model_providers.anthropic.variants.messages]
 name = "Anthropic"
 base_url = "https://api.anthropic.com/v1"
 env_key = "ANTHROPIC_API_KEY"
 wire_api = "messages"
+
+[model_providers.anthropic.variants.chat]
+name = "Anthropic"
+base_url = "https://example.com/chat"
+env_key = "ANTHROPIC_API_KEY"
+wire_api = "chat"
 ```
 
 You can also create this kind of provider from the TUI custom provider flows, including `/providers` and the first-run custom provider setup.
+
+When a custom provider has multiple wire APIs, Codex stores them under the same provider id in `variants` and refers to a specific saved variant with `model_provider = "<provider_id>#<wire_api>"`.
 
 `wire_api = "messages"` does not support model discovery yet, so you must configure `model` explicitly.
 

@@ -865,6 +865,29 @@
       },
       "type": "object"
     },
+    "RawModelProviderEntryToml": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ModelProviderInfo"
+        },
+        {
+          "$ref": "#/definitions/RawModelProviderVariantsToml"
+        }
+      ]
+    },
+    "RawModelProviderVariantsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "variants": {
+          "additionalProperties": {
+            "$ref": "#/definitions/ModelProviderInfo"
+          },
+          "default": {},
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
       "enum": [
@@ -1438,7 +1461,7 @@
     },
     "model_providers": {
       "additionalProperties": {
-        "$ref": "#/definitions/ModelProviderInfo"
+        "$ref": "#/definitions/RawModelProviderEntryToml"
       },
       "default": {},
       "description": "User-defined provider entries that extend/override the built-in list.",

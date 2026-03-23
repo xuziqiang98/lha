@@ -388,7 +388,14 @@ async fn append_assistant_text(
     }
 
     if let Some(ResponseItem::Message { content, .. }) = assistant_item {
-        content.push(ContentItem::OutputText { text: text.clone() });
+        if let Some(ContentItem::OutputText {
+            text: aggregated_text,
+        }) = content.last_mut()
+        {
+            aggregated_text.push_str(&text);
+        } else {
+            content.push(ContentItem::OutputText { text: text.clone() });
+        }
         let _ = tx_event
             .send(Ok(ResponseEvent::OutputTextDelta(text)))
             .await;
@@ -516,6 +523,92 @@ mod tests {
 
         assert_eq!(added_id, "msg_1");
         assert_eq!(completed_id, "msg_1");
+
+        let ResponseEvent::OutputItemDone(ResponseItem::Message { content, .. }) = &events[3]
+        else {
+            panic!("unexpected completed event: {:?}", events[3]);
+        };
+
+        assert_eq!(
+            content,
+            &vec![ContentItem::OutputText {
+                text: "Hello".to_string(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn aggregates_text_deltas_into_single_output_item_text() {
+        let body = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\"}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hey there! \"}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"How can \"}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I help you today?\"}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n"
+        );
+
+        let (tx, mut rx) = mpsc::channel(8);
+        process_messages_sse(build_stream(body), tx, Duration::from_secs(1), None).await;
+
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event.expect("event should succeed"));
+        }
+
+        assert_eq!(events.len(), 7);
+        assert!(matches!(events[0], ResponseEvent::Created));
+        assert!(matches!(
+            &events[1],
+            ResponseEvent::OutputItemAdded(ResponseItem::Message {
+                id: Some(id),
+                role,
+                content,
+                end_turn: None,
+            }) if id == "msg_1" && role == "assistant" && content.is_empty()
+        ));
+        assert!(matches!(
+            &events[2],
+            ResponseEvent::OutputTextDelta(delta) if delta == "Hey there! "
+        ));
+        assert!(matches!(
+            &events[3],
+            ResponseEvent::OutputTextDelta(delta) if delta == "How can "
+        ));
+        assert!(matches!(
+            &events[4],
+            ResponseEvent::OutputTextDelta(delta) if delta == "I help you today?"
+        ));
+
+        let ResponseEvent::OutputItemDone(ResponseItem::Message {
+            id: Some(id),
+            role,
+            content,
+            end_turn: None,
+        }) = &events[5]
+        else {
+            panic!("unexpected completed event: {:?}", events[5]);
+        };
+
+        assert_eq!(id, "msg_1");
+        assert_eq!(role, "assistant");
+        assert_eq!(
+            content,
+            &vec![ContentItem::OutputText {
+                text: "Hey there! How can I help you today?".to_string(),
+            }]
+        );
+        assert!(matches!(
+            &events[6],
+            ResponseEvent::Completed {
+                response_id,
+                token_usage: None,
+            } if response_id == "msg_1"
+        ));
     }
 
     #[tokio::test]

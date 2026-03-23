@@ -5,7 +5,9 @@ use crate::auth::AuthManager;
 use crate::auth::AuthMode;
 use crate::config::Config;
 use crate::config::ConfigToml;
+use crate::config::display_model_provider_ref;
 use crate::config::generated_provider_profile_name;
+use crate::config::model_provider_cache_key;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result as CoreResult;
@@ -714,9 +716,15 @@ impl ModelsManager {
     ) -> ModelPreset {
         let id = generated_provider_profile_name(provider_id, model);
         let description = if config_toml.model_providers.contains_key(provider_id) {
-            format!("User-defined model from {provider_id} provider.")
+            format!(
+                "User-defined model from {} provider.",
+                display_model_provider_ref(provider_id)
+            )
         } else {
-            format!("Configured model from {provider_id} provider.")
+            format!(
+                "Configured model from {} provider.",
+                display_model_provider_ref(provider_id)
+            )
         };
 
         let mut preset = available_models
@@ -925,18 +933,8 @@ impl ModelsManager {
 fn models_cache_path(codex_home: &std::path::Path, model_provider_id: &str) -> PathBuf {
     codex_home
         .join("remote_models")
-        .join(sanitize_model_provider_id(model_provider_id))
+        .join(model_provider_cache_key(model_provider_id))
         .join(MODEL_CACHE_FILE)
-}
-
-fn sanitize_model_provider_id(model_provider_id: &str) -> String {
-    model_provider_id
-        .chars()
-        .map(|ch| match ch {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '-' => ch,
-            _ => '_',
-        })
-        .collect()
 }
 
 /// Convert a client version string to a whole version string (e.g. "1.2.3-alpha.4" -> "1.2.3")
@@ -1490,12 +1488,23 @@ mod tests {
     }
 
     #[test]
-    fn models_cache_path_sanitizes_provider_id() {
+    fn models_cache_path_uses_readable_prefix_and_hash() {
         let path = models_cache_path(std::path::Path::new("/tmp/codey"), "mock/provider:beta");
         assert_eq!(
             path,
-            PathBuf::from("/tmp/codey/remote_models/mock_provider_beta/models_cache.json")
+            PathBuf::from(
+                "/tmp/codey/remote_models/mock_provider_beta__70b0afe22d/models_cache.json"
+            )
         );
+    }
+
+    #[test]
+    fn models_cache_path_avoids_variant_collisions() {
+        let base = std::path::Path::new("/tmp/codey");
+        let plain = models_cache_path(base, "acme_chat");
+        let variant = models_cache_path(base, "acme#chat");
+
+        assert_ne!(plain, variant);
     }
 
     #[tokio::test]
@@ -1672,6 +1681,73 @@ model_provider = "provider_b"
             picker_models
                 .iter()
                 .all(|preset| !preset.supported_reasoning_efforts.is_empty())
+        );
+    }
+
+    #[tokio::test]
+    async fn list_model_switcher_models_keeps_same_model_for_provider_variants() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager = Arc::new(AuthManager::new(
+            codex_home.path().to_path_buf(),
+            false,
+            AuthCredentialsStoreMode::File,
+        ));
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "openai",
+            ModelProviderInfo::create_openai_provider(),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "claude-sonnet-4-5"
+model_provider = "anthropic#messages"
+
+[model_providers.anthropic.variants.messages]
+name = "anthropic"
+base_url = "https://api.anthropic.com/v1"
+wire_api = "messages"
+experimental_bearer_token = "sk-msg"
+
+[model_providers.anthropic.variants.chat]
+name = "anthropic"
+base_url = "https://example.com/chat"
+wire_api = "chat"
+experimental_bearer_token = "sk-chat"
+
+[profiles.chat]
+model = "claude-sonnet-4-5"
+model_provider = "anthropic#chat"
+"#,
+        )
+        .await;
+
+        let picker_models = manager
+            .list_model_switcher_models(&config, RefreshStrategy::Offline)
+            .await;
+
+        assert_eq!(
+            picker_models
+                .iter()
+                .filter(|preset| preset.model == "claude-sonnet-4-5")
+                .map(|preset| {
+                    (
+                        preset.model_provider_id.as_deref(),
+                        preset.description.as_str(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    Some("anthropic#messages"),
+                    "User-defined model from anthropic (messages) provider.",
+                ),
+                (
+                    Some("anthropic#chat"),
+                    "User-defined model from anthropic (chat) provider.",
+                ),
+            ]
         );
     }
 

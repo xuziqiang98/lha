@@ -1219,18 +1219,18 @@ mod tests {
         let raw = std::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).unwrap();
         assert_eq!(
             raw,
-            r#"model_provider = "custom_1"
+            r#"model_provider = "custom_1#responses"
 model = "gpt-test"
 
-[model_providers.custom_1]
+[model_providers.custom_1.variants.responses]
 name = "custom_1"
 base_url = "https://example.com/v1"
 wire_api = "responses"
 experimental_bearer_token = "sk-test"
 requires_openai_auth = false
 
-[profiles."_provider.custom_1.gpt-test"]
-model_provider = "custom_1"
+[profiles."_provider.custom_1#responses.gpt-test"]
+model_provider = "custom_1#responses"
 model = "gpt-test"
 "#
         );
