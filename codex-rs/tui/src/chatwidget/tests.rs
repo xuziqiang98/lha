@@ -3007,6 +3007,29 @@ async fn set_reasoning_effort_updates_active_collaboration_mask() {
 }
 
 #[tokio::test]
+async fn code_effort_is_inherited_when_switching_to_plan() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    let code_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Code)
+            .expect("expected code collaboration mask");
+    chat.set_collaboration_mask(code_mask);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Low));
+
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::Low)
+    );
+}
+
+#[tokio::test]
 async fn plan_effort_override_survives_mode_switch() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
@@ -3061,6 +3084,31 @@ async fn plan_effort_override_is_restored_for_supported_model() {
     assert_eq!(
         chat.current_reasoning_effort(),
         Some(ReasoningEffortConfig::Low)
+    );
+}
+
+#[tokio::test]
+async fn plan_inherited_code_effort_falls_back_to_medium_when_unsupported() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    let code_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Code)
+            .expect("expected code collaboration mask");
+    chat.set_collaboration_mask(code_mask);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Low));
+    chat.set_model("gpt-5.1-codex-mini");
+
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.current_model(), "gpt-5.1-codex-mini");
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::Medium)
     );
 }
 
