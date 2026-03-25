@@ -242,13 +242,13 @@ fn mode_indicator_line(
 }
 
 fn footer_info_line(props: &FooterProps, state: FooterInfoState) -> Line<'static> {
-    let mut spans = vec![Span::from(props.model_name.clone())];
+    let mut spans = vec![Span::from(props.model_name.clone()).dim()];
 
     if state.show_reasoning
         && let Some(reasoning_effort) = &props.reasoning_effort
     {
         spans.push(" ".into());
-        spans.push(Span::from(reasoning_effort.clone()));
+        spans.push(Span::from(reasoning_effort.clone()).dim());
     }
 
     if state.show_context {
@@ -851,6 +851,8 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Modifier;
+    use ratatui::style::Style;
 
     fn test_footer_props(mode: FooterMode) -> FooterProps {
         FooterProps {
@@ -929,6 +931,14 @@ mod tests {
             })
             .unwrap();
         assert_snapshot!(name, terminal.backend());
+    }
+
+    fn span_style(line: &Line<'_>, text: &str) -> Style {
+        line.spans
+            .iter()
+            .find(|span| span.content.as_ref() == text)
+            .map(|span| span.style)
+            .unwrap_or_else(|| panic!("missing span: {text}"))
     }
 
     #[test]
@@ -1073,6 +1083,33 @@ mod tests {
             props,
             Some(CollaborationModeIndicator::Plan),
         );
+    }
+
+    #[test]
+    fn footer_info_line_dims_model_effort_context_and_cwd() {
+        let props = FooterProps {
+            context_window_percent: Some(84),
+            ..test_footer_props(FooterMode::ComposerEmpty)
+        };
+
+        let line = footer_info_line(
+            &props,
+            FooterInfoState {
+                show_reasoning: true,
+                show_context: true,
+                show_cwd: true,
+            },
+        );
+
+        let model_style = span_style(&line, "gpt-5.4");
+        let effort_style = span_style(&line, "high");
+        let context_style = span_style(&line, "84% left");
+        let cwd_style = span_style(&line, "~/Workspace/codey");
+
+        assert!(context_style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(model_style, context_style);
+        assert_eq!(effort_style, context_style);
+        assert_eq!(cwd_style, context_style);
     }
 
     #[test]
