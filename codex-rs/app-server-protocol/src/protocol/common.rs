@@ -124,6 +124,11 @@ client_request_definitions! {
         params: v2::ThreadForkParams,
         response: v2::ThreadForkResponse,
     },
+    /// EXPERIMENTAL - terminate all running background terminals for a thread.
+    ThreadBackgroundTerminalsClean => "thread/backgroundTerminals/clean" {
+        params: v2::ThreadBackgroundTerminalsCleanParams,
+        response: v2::ThreadBackgroundTerminalsCleanResponse,
+    },
     ThreadArchive => "thread/archive" {
         params: v2::ThreadArchiveParams,
         response: v2::ThreadArchiveResponse,
@@ -993,6 +998,23 @@ mod tests {
             }),
             serde_json::to_value(&request)?,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_background_terminals_clean() -> Result<()> {
+        let request = ClientRequest::ThreadBackgroundTerminalsClean {
+            request_id: RequestId::Integer(35),
+            params: v2::ThreadBackgroundTerminalsCleanParams {
+                thread_id: ThreadId::new().to_string(),
+            },
+        };
+
+        let value = serde_json::to_value(&request)?;
+        assert_eq!(value["method"], json!("thread/backgroundTerminals/clean"));
+
+        let round_trip: ClientRequest = serde_json::from_value(value)?;
+        assert_eq!(round_trip, request);
         Ok(())
     }
 }

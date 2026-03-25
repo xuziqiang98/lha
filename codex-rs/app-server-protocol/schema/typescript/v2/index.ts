@@ -125,6 +125,8 @@ export type { TextRange } from "./TextRange";
 export type { Thread } from "./Thread";
 export type { ThreadArchiveParams } from "./ThreadArchiveParams";
 export type { ThreadArchiveResponse } from "./ThreadArchiveResponse";
+export type { ThreadBackgroundTerminalsCleanParams } from "./ThreadBackgroundTerminalsCleanParams";
+export type { ThreadBackgroundTerminalsCleanResponse } from "./ThreadBackgroundTerminalsCleanResponse";
 export type { ThreadForkParams } from "./ThreadForkParams";
 export type { ThreadForkResponse } from "./ThreadForkResponse";
 export type { ThreadItem } from "./ThreadItem";

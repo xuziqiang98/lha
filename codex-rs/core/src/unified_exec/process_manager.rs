@@ -151,10 +151,25 @@ impl UnifiedExecProcessManager {
 
         start_streaming_output(&process, context, Arc::clone(&transcript));
 
+        let start = Instant::now();
+        let process_started_alive = !process.has_exited() && process.exit_code().is_none();
+        if process_started_alive {
+            self.store_process(
+                Arc::clone(&process),
+                context,
+                &request.command,
+                cwd.clone(),
+                start,
+                request.process_id.clone(),
+                request.tty,
+                Arc::clone(&transcript),
+            )
+            .await;
+        }
+
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
 
-        let start = Instant::now();
         // For the initial exec_command call, we both stream output to events
         // (via start_streaming_output above) and collect a snapshot here for
         // the tool response body.
@@ -175,14 +190,26 @@ impl UnifiedExecProcessManager {
 
         let text = String::from_utf8_lossy(&collected).to_string();
         let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
-        let exit_code = process.exit_code();
-        let has_exited = process.has_exited() || exit_code.is_some();
         let chunk_id = generate_chunk_id();
         let process_id = request.process_id.clone();
-        if has_exited {
+        let (response_process_id, exit_code) = if process_started_alive {
+            match self.refresh_process_state(process_id.as_str()).await {
+                ProcessStatus::Alive { exit_code, .. } => (Some(process_id.clone()), exit_code),
+                ProcessStatus::Exited { exit_code, .. } => {
+                    process.check_for_sandbox_denial_with_text(&text).await?;
+                    (None, exit_code)
+                }
+                ProcessStatus::Unknown => {
+                    return Err(UnifiedExecError::UnknownProcessId {
+                        process_id: process_id.clone(),
+                    });
+                }
+            }
+        } else {
             // Short‑lived command: emit ExecCommandEnd immediately using the
             // same helper as the background watcher, so all end events share
             // one implementation.
+            let exit_code = process.exit_code();
             let exit = exit_code.unwrap_or(-1);
             emit_exec_end_for_unified_exec(
                 Arc::clone(&context.session),
@@ -200,22 +227,7 @@ impl UnifiedExecProcessManager {
 
             self.release_process_id(&request.process_id).await;
             process.check_for_sandbox_denial_with_text(&text).await?;
-        } else {
-            // Long‑lived command: persist the process so write_stdin can reuse
-            // it, and register a background watcher that will emit
-            // ExecCommandEnd when the PTY eventually exits (even if no further
-            // tool calls are made).
-            self.store_process(
-                Arc::clone(&process),
-                context,
-                &request.command,
-                cwd.clone(),
-                start,
-                process_id,
-                request.tty,
-                Arc::clone(&transcript),
-            )
-            .await;
+            (None, exit_code)
         };
 
         let original_token_count = approx_token_count(&text);
@@ -225,11 +237,7 @@ impl UnifiedExecProcessManager {
             wall_time,
             output,
             raw_output: collected,
-            process_id: if has_exited {
-                None
-            } else {
-                Some(request.process_id.clone())
-            },
+            process_id: response_process_id,
             exit_code,
             original_token_count: Some(original_token_count),
             session_command: Some(request.command.clone()),

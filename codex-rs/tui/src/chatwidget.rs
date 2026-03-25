@@ -1336,7 +1336,6 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
-        self.clear_unified_exec_processes();
         self.stream_controller = None;
         self.maybe_show_pending_rate_limit_prompt();
     }
@@ -3045,6 +3044,9 @@ impl ChatWidget {
             SlashCommand::Ps => {
                 self.add_ps_output();
             }
+            SlashCommand::Stop => {
+                self.clean_background_terminals();
+            }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
@@ -3819,6 +3821,11 @@ impl ChatWidget {
             })
             .collect();
         self.add_to_history(history_cell::new_unified_exec_processes_output(processes));
+    }
+
+    fn clean_background_terminals(&mut self) {
+        self.submit_op(Op::CleanBackgroundTerminals);
+        self.add_info_message("Stopping all background terminals.".to_string(), None);
     }
 
     fn stop_rate_limit_poller(&mut self) {

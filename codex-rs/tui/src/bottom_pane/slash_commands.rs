@@ -3,6 +3,8 @@
 //! The same sandbox- and feature-gating rules are used by both the composer
 //! and the command popup. Centralizing them here keeps those call sites small
 //! and ensures they stay in sync.
+use std::str::FromStr;
+
 use codex_common::fuzzy_match::fuzzy_match;
 
 use crate::slash_command::SlashCommand;
@@ -35,6 +37,8 @@ pub(crate) fn find_builtin_command(
     personality_command_enabled: bool,
     allow_elevate_sandbox: bool,
 ) -> Option<SlashCommand> {
+    let cmd = SlashCommand::from_str(name).ok()?;
+
     builtins_for_input(
         collaboration_modes_enabled,
         connectors_enabled,
@@ -42,8 +46,8 @@ pub(crate) fn find_builtin_command(
         allow_elevate_sandbox,
     )
     .into_iter()
-    .find(|(command_name, _)| *command_name == name)
-    .map(|(_, cmd)| cmd)
+    .any(|(_, visible_cmd)| visible_cmd == cmd)
+    .then_some(cmd)
 }
 
 /// Whether any visible built-in fuzzily matches the provided prefix.
@@ -62,4 +66,27 @@ pub(crate) fn has_builtin_prefix(
     )
     .into_iter()
     .any(|(command_name, _)| fuzzy_match(command_name, name).is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn stop_command_resolves_for_dispatch() {
+        assert_eq!(
+            find_builtin_command("stop", true, true, true, true),
+            Some(SlashCommand::Stop)
+        );
+    }
+
+    #[test]
+    fn clean_command_alias_resolves_for_dispatch() {
+        assert_eq!(
+            find_builtin_command("clean", true, true, true, true),
+            Some(SlashCommand::Stop)
+        );
+    }
 }

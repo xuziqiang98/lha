@@ -98,6 +98,8 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
+use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
+use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
@@ -438,6 +440,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadFork { request_id, params } => {
                 self.thread_fork(request_id, params).await;
+            }
+            ClientRequest::ThreadBackgroundTerminalsClean { request_id, params } => {
+                self.thread_background_terminals_clean(request_id, params)
+                    .await;
             }
             ClientRequest::ThreadArchive { request_id, params } => {
                 self.thread_archive(request_id, params).await;
@@ -2742,6 +2748,34 @@ impl CodexMessageProcessor {
         let notif = ThreadStartedNotification { thread };
         self.outgoing
             .send_server_notification(ServerNotification::ThreadStarted(notif))
+            .await;
+    }
+
+    async fn thread_background_terminals_clean(
+        &mut self,
+        request_id: RequestId,
+        params: ThreadBackgroundTerminalsCleanParams,
+    ) {
+        let ThreadBackgroundTerminalsCleanParams { thread_id } = params;
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        if let Err(err) = thread.submit(Op::CleanBackgroundTerminals).await {
+            self.send_internal_error(
+                request_id,
+                format!("failed to clean background terminals: {err}"),
+            )
+            .await;
+            return;
+        }
+
+        self.outgoing
+            .send_response(request_id, ThreadBackgroundTerminalsCleanResponse {})
             .await;
     }
 

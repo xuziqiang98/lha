@@ -67,7 +67,8 @@ For complete documentation of the `Op` and `EventMsg` variants, refer to [protoc
 - `Op`
   - `Op::UserTurn` – Any input from the user to kick off a `Turn`
   - `Op::UserInput` – Legacy form of user input
-  - `Op::Interrupt` – Interrupts a running turn
+  - `Op::Interrupt` – Interrupts a running turn without terminating background terminals
+  - `Op::CleanBackgroundTerminals` – Explicitly terminates running background terminals
   - `Op::ExecApproval` – Approve or deny code execution
   - `Op::UserInputAnswer` – Provide answers for a `request_user_input` tool call
   - `Op::ListSkills` – Request skills for one or more cwd values (optionally `force_reload`)

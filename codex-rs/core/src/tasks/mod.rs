@@ -43,7 +43,7 @@ pub(crate) use undo::UndoTask;
 pub(crate) use user_shell::UserShellCommandTask;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
-const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
+const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
 
 /// Thin wrapper that exposes the parts of [`Session`] task runners need.
 #[derive(Clone)]
@@ -179,7 +179,6 @@ impl Session {
         for task in self.take_all_running_tasks().await {
             self.handle_task_abort(task, reason.clone()).await;
         }
-        self.close_unified_exec_processes().await;
     }
 
     pub async fn on_task_finished(
@@ -223,7 +222,7 @@ impl Session {
         }
     }
 
-    async fn close_unified_exec_processes(&self) {
+    pub(crate) async fn close_unified_exec_processes(&self) {
         self.services
             .unified_exec_manager
             .terminate_all_processes()
