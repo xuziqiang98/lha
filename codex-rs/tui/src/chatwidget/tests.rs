@@ -3273,6 +3273,22 @@ async fn slash_fork_requests_current_fork() {
 }
 
 #[tokio::test]
+async fn slash_stop_submits_background_terminal_cleanup() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Stop);
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::CleanBackgroundTerminals));
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected cleanup confirmation message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Stopping all background terminals."),
+        "expected cleanup confirmation, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
 async fn slash_rollout_displays_current_path() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let rollout_path = PathBuf::from("/tmp/codex-test-rollout.jsonl");
@@ -5027,7 +5043,7 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
 }
 
 #[tokio::test]
-async fn interrupt_clears_unified_exec_processes() {
+async fn interrupt_preserves_unified_exec_processes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
@@ -5041,13 +5057,13 @@ async fn interrupt_clears_unified_exec_processes() {
         }),
     });
 
-    assert!(chat.unified_exec_processes.is_empty());
+    assert_eq!(chat.unified_exec_processes.len(), 2);
 
     let _ = drain_insert_history(&mut rx);
 }
 
 #[tokio::test]
-async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
+async fn interrupt_preserves_unified_exec_wait_streak_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.handle_codex_event(Event {
@@ -5076,7 +5092,7 @@ async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
         .collect::<Vec<_>>()
         .join("\n");
     let snapshot = format!("cells={}\n{combined}", cells.len());
-    assert_snapshot!("interrupt_clears_unified_exec_wait_streak", snapshot);
+    assert_snapshot!("interrupt_preserves_unified_exec_wait_streak", snapshot);
 }
 
 #[tokio::test]

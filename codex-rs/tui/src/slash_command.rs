@@ -44,6 +44,8 @@ pub enum SlashCommand {
     Feedback,
     Rollout,
     Ps,
+    #[strum(to_string = "stop", serialize = "clean")]
+    Stop,
     Personality,
     TestApproval,
 }
@@ -67,6 +69,7 @@ impl SlashCommand {
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Ps => "list background terminals",
+            SlashCommand::Stop => "stop all background terminals",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Providers => "add a custom provider and save models for it",
             SlashCommand::Personality => "choose a communication style for Codex",
@@ -117,6 +120,7 @@ impl SlashCommand {
             | SlashCommand::Skills
             | SlashCommand::Status
             | SlashCommand::Ps
+            | SlashCommand::Stop
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Feedback
@@ -169,5 +173,15 @@ mod tests {
                     command == "multi-agents" && slash_command == SlashCommand::MultiAgents
                 })
         );
+    }
+
+    #[test]
+    fn stop_command_is_canonical_name() {
+        assert_eq!(SlashCommand::Stop.command(), "stop");
+    }
+
+    #[test]
+    fn clean_alias_parses_to_stop_command() {
+        assert_eq!(SlashCommand::from_str("clean"), Ok(SlashCommand::Stop));
     }
 }
