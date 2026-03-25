@@ -2,6 +2,7 @@ pub mod auth;
 pub mod common;
 pub mod endpoint;
 pub mod error;
+mod proposed_plan_parser;
 pub mod provider;
 pub mod rate_limits;
 pub mod requests;

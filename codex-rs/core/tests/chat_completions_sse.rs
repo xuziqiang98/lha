@@ -29,10 +29,17 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 async fn run_stream(sse_body: &str) -> Vec<ResponseEvent> {
-    run_stream_with_bytes(sse_body.as_bytes()).await
+    run_stream_with_show_raw_agent_reasoning(sse_body.as_bytes(), true).await
 }
 
 async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
+    run_stream_with_show_raw_agent_reasoning(sse_body, true).await
+}
+
+async fn run_stream_with_show_raw_agent_reasoning(
+    sse_body: &[u8],
+    show_raw_agent_reasoning: bool,
+) -> Vec<ResponseEvent> {
     let server = MockServer::start().await;
 
     let template = ResponseTemplate::new(200)
@@ -70,7 +77,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();
-    config.show_raw_agent_reasoning = true;
+    config.show_raw_agent_reasoning = show_raw_agent_reasoning;
     let effort = config.model_reasoning_effort;
     let summary = config.model_reasoning_summary;
     let config = Arc::new(config);
@@ -129,6 +136,47 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         }
     }
     events
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn default_chat_aggregate_preserves_proposed_plan_deltas() {
+    skip_if_no_network!();
+
+    let sse = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Intro\\n<proposed_plan>\\n\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"- Step 1\\n\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"</proposed_plan>\\nOutro\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+
+    let events = run_stream_with_show_raw_agent_reasoning(sse.as_bytes(), false).await;
+
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ResponseEvent::ProposedPlanDelta(text) if text == "- Step 1\n"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ResponseEvent::ProposedPlanDone(text) if text == "- Step 1\n"
+    )));
+
+    let message = events
+        .iter()
+        .find_map(|event| match event {
+            ResponseEvent::OutputItemDone(item @ ResponseItem::Message { .. }) => Some(item),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected aggregated assistant message, got {events:?}"));
+    assert_message(
+        message,
+        "Intro\n<proposed_plan>\n- Step 1\n</proposed_plan>\nOutro",
+    );
+
+    assert!(matches!(
+        events.last(),
+        Some(ResponseEvent::Completed { .. })
+    ));
 }
 
 fn assert_message(item: &ResponseItem, expected: &str) {

@@ -1,6 +1,9 @@
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::error::ApiError;
+use crate::proposed_plan_parser::ProposedPlanParser;
+use crate::proposed_plan_parser::ProposedPlanSegment;
+use crate::proposed_plan_parser::extract_proposed_plan_text;
 use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
 use codex_client::StreamResponse;
@@ -146,6 +149,7 @@ pub async fn process_messages_sse(
     let mut usage_state = UsageState::default();
     let mut response_id = String::new();
     let mut stop_reason: Option<String> = None;
+    let mut assistant_plan_parser: Option<ProposedPlanParser> = None;
 
     loop {
         let start = Instant::now();
@@ -238,6 +242,7 @@ pub async fn process_messages_sse(
                         append_assistant_text(
                             &tx_event,
                             &mut assistant_item,
+                            &mut assistant_plan_parser,
                             assistant_item_id,
                             text,
                         )
@@ -319,6 +324,8 @@ pub async fn process_messages_sse(
             }
             "message_stop" => {
                 if let Some(assistant) = assistant_item.take() {
+                    emit_buffered_plan_events(&tx_event, &mut assistant_plan_parser, &assistant)
+                        .await;
                     let _ = tx_event
                         .send(Ok(ResponseEvent::OutputItemDone(assistant)))
                         .await;
@@ -371,6 +378,7 @@ pub async fn process_messages_sse(
 async fn append_assistant_text(
     tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
     assistant_item: &mut Option<ResponseItem>,
+    assistant_plan_parser: &mut Option<ProposedPlanParser>,
     assistant_item_id: String,
     text: String,
 ) {
@@ -387,6 +395,9 @@ async fn append_assistant_text(
             .await;
     }
 
+    let parser = assistant_plan_parser.get_or_insert_with(ProposedPlanParser::new);
+    emit_plan_deltas(tx_event, parser.parse(&text)).await;
+
     if let Some(ResponseItem::Message { content, .. }) = assistant_item {
         if let Some(ContentItem::OutputText {
             text: aggregated_text,
@@ -399,6 +410,44 @@ async fn append_assistant_text(
         let _ = tx_event
             .send(Ok(ResponseEvent::OutputTextDelta(text)))
             .await;
+    }
+}
+
+async fn emit_plan_deltas(
+    tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
+    segments: Vec<ProposedPlanSegment>,
+) {
+    for segment in segments {
+        if let ProposedPlanSegment::ProposedPlanDelta(delta) = segment {
+            let _ = tx_event
+                .send(Ok(ResponseEvent::ProposedPlanDelta(delta)))
+                .await;
+        }
+    }
+}
+
+async fn emit_buffered_plan_events(
+    tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
+    assistant_plan_parser: &mut Option<ProposedPlanParser>,
+    assistant: &ResponseItem,
+) {
+    if let Some(parser) = assistant_plan_parser.as_mut() {
+        emit_plan_deltas(tx_event, parser.finish()).await;
+    }
+    *assistant_plan_parser = None;
+
+    if let ResponseItem::Message { content, .. } = assistant {
+        let mut text = String::new();
+        for entry in content {
+            if let ContentItem::OutputText { text: chunk } = entry {
+                text.push_str(chunk);
+            }
+        }
+        if let Some(plan_text) = extract_proposed_plan_text(&text) {
+            let _ = tx_event
+                .send(Ok(ResponseEvent::ProposedPlanDone(plan_text)))
+                .await;
+        }
     }
 }
 
@@ -647,5 +696,38 @@ mod tests {
 
         assert_eq!(added_id, completed_id);
         assert!(added_id.starts_with("messages-assistant-"));
+    }
+
+    #[tokio::test]
+    async fn emits_proposed_plan_events_for_plan_block() {
+        let body = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\"}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Intro\\n<proposed_plan>\\n- Step 1\\n</proposed_plan>\\nOutro\"}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n"
+        );
+
+        let (tx, mut rx) = mpsc::channel(16);
+        process_messages_sse(build_stream(body), tx, Duration::from_secs(1), None).await;
+
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event.expect("event should succeed"));
+        }
+
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                ResponseEvent::ProposedPlanDelta(delta) if delta == "- Step 1\n"
+            )
+        }));
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                ResponseEvent::ProposedPlanDone(text) if text == "- Step 1\n"
+            )
+        }));
     }
 }
