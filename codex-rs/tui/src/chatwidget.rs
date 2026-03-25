@@ -5509,15 +5509,37 @@ impl ChatWidget {
         &self,
         mut mask: CollaborationModeMask,
     ) -> CollaborationModeMask {
-        if let Some(mode) = mask
-            .mode
-            .filter(|mode| Self::stores_effort_override_for(*mode))
-            && let Some(effort) = self.reasoning_effort_overrides.get(&mode)
-            && self.model_supports_reasoning_effort(self.model_for_mask(&mask), *effort)
-        {
-            mask.reasoning_effort = Some(*effort);
+        if let Some(effort) = self.reasoning_effort_override_for_mask(&mask) {
+            mask.reasoning_effort = Some(effort);
         }
         mask
+    }
+
+    fn reasoning_effort_override_for_mask(
+        &self,
+        mask: &CollaborationModeMask,
+    ) -> Option<Option<ReasoningEffortConfig>> {
+        let mode = mask
+            .mode
+            .filter(|mode| Self::stores_effort_override_for(*mode))?;
+        let model = self.model_for_mask(mask);
+
+        if let Some(effort) = self.reasoning_effort_overrides.get(&mode) {
+            return if self.model_supports_reasoning_effort(model, *effort) {
+                Some(*effort)
+            } else {
+                None
+            };
+        }
+
+        if mode == ModeKind::Plan {
+            let effort = self.current_collaboration_mode.reasoning_effort();
+            if effort.is_some() && self.model_supports_reasoning_effort(model, effort) {
+                return Some(effort);
+            }
+        }
+
+        None
     }
 
     fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
