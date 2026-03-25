@@ -206,13 +206,24 @@ impl BottomPane {
     }
 
     pub fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
-        self.composer.set_skill_mentions(skills);
+        self.set_skills_without_redraw(skills);
         self.request_redraw();
     }
 
+    pub(crate) fn set_skills_without_redraw(&mut self, skills: Option<Vec<SkillMetadata>>) {
+        self.composer.set_skill_mentions(skills);
+    }
+
     pub fn set_connectors_snapshot(&mut self, snapshot: Option<ConnectorsSnapshot>) {
-        self.composer.set_connector_mentions(snapshot);
+        self.set_connectors_snapshot_without_redraw(snapshot);
         self.request_redraw();
+    }
+
+    pub(crate) fn set_connectors_snapshot_without_redraw(
+        &mut self,
+        snapshot: Option<ConnectorsSnapshot>,
+    ) {
+        self.composer.set_connector_mentions(snapshot);
     }
 
     pub fn take_mention_paths(&mut self) -> HashMap<String, String> {
@@ -252,14 +263,27 @@ impl BottomPane {
         reasoning_effort: Option<String>,
         cwd: String,
     ) {
-        self.composer
-            .set_footer_info(model_name, reasoning_effort, cwd);
+        self.set_footer_info_without_redraw(model_name, reasoning_effort, cwd);
         self.request_redraw();
     }
 
+    pub(crate) fn set_footer_info_without_redraw(
+        &mut self,
+        model_name: String,
+        reasoning_effort: Option<String>,
+        cwd: String,
+    ) {
+        self.composer
+            .set_footer_info(model_name, reasoning_effort, cwd);
+    }
+
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
-        self.composer.set_personality_command_enabled(enabled);
+        self.set_personality_command_enabled_without_redraw(enabled);
         self.request_redraw();
+    }
+
+    pub(crate) fn set_personality_command_enabled_without_redraw(&mut self, enabled: bool) {
+        self.composer.set_personality_command_enabled(enabled);
     }
 
     pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {

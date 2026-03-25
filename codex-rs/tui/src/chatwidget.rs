@@ -813,10 +813,17 @@ impl ChatWidget {
 
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
+        let request_redraw = !self.suppress_session_configured_redraw;
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
-        self.set_skills(None);
-        self.bottom_pane.set_connectors_snapshot(None);
+        if request_redraw {
+            self.set_skills(None);
+            self.bottom_pane.set_connectors_snapshot(None);
+        } else {
+            self.bottom_pane.set_skills_without_redraw(None);
+            self.bottom_pane
+                .set_connectors_snapshot_without_redraw(None);
+        }
         self.thread_id = Some(event.session_id);
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
@@ -834,7 +841,8 @@ impl ChatWidget {
             None,
         );
         self.refresh_model_display();
-        self.sync_personality_command_enabled();
+        self.update_footer_info_with_redraw(request_redraw);
+        self.sync_personality_command_enabled_with_redraw(request_redraw);
         let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -5415,8 +5423,17 @@ impl ChatWidget {
     }
 
     fn sync_personality_command_enabled(&mut self) {
-        self.bottom_pane
-            .set_personality_command_enabled(self.config.features.enabled(Feature::Personality));
+        self.sync_personality_command_enabled_with_redraw(true);
+    }
+
+    fn sync_personality_command_enabled_with_redraw(&mut self, request_redraw: bool) {
+        let enabled = self.config.features.enabled(Feature::Personality);
+        if request_redraw {
+            self.bottom_pane.set_personality_command_enabled(enabled);
+        } else {
+            self.bottom_pane
+                .set_personality_command_enabled_without_redraw(enabled);
+        }
     }
 
     fn current_model_supports_personality(&self) -> bool {
@@ -5617,15 +5634,27 @@ impl ChatWidget {
     }
 
     fn update_footer_info(&mut self) {
+        self.update_footer_info_with_redraw(true);
+    }
+
+    fn update_footer_info_with_redraw(&mut self, request_redraw: bool) {
         let reasoning_effort = self
             .effective_reasoning_effort()
             .map(Self::reasoning_effort_label)
             .map(str::to_string);
-        self.bottom_pane.set_footer_info(
-            self.model_display_name().to_string(),
-            reasoning_effort,
-            format_directory_display(&self.config.cwd, None),
-        );
+        if request_redraw {
+            self.bottom_pane.set_footer_info(
+                self.model_display_name().to_string(),
+                reasoning_effort,
+                format_directory_display(&self.config.cwd, None),
+            );
+        } else {
+            self.bottom_pane.set_footer_info_without_redraw(
+                self.model_display_name().to_string(),
+                reasoning_effort,
+                format_directory_display(&self.config.cwd, None),
+            );
+        }
     }
 
     fn personality_label(personality: Personality) -> &'static str {

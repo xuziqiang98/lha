@@ -95,6 +95,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use tempfile::tempdir;
+use tokio::sync::broadcast;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
 use toml::Value as TomlValue;
@@ -203,6 +204,176 @@ async fn resumed_initial_messages_render_history() {
     assert!(
         text_blob.contains("assistant reply"),
         "expected replayed agent message",
+    );
+}
+
+#[tokio::test]
+async fn session_configured_updates_footer_reasoning_effort_immediately() {
+    let codex_home = tempdir().expect("tempdir");
+    let cfg = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cli_overrides(vec![(
+            "features.collaboration_modes".to_string(),
+            TomlValue::Boolean(true),
+        )])
+        .build()
+        .await
+        .expect("config");
+    let resolved_model = ModelsManager::get_model_offline(cfg.model.as_deref());
+    let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
+    let thread_manager = Arc::new(ThreadManager::with_models_provider(
+        CodexAuth::from_api_key("test"),
+        cfg.model_provider.clone(),
+    ));
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let init = ChatWidgetInit {
+        config: cfg,
+        frame_requester: FrameRequester::test_dummy(),
+        app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
+        initial_user_message: None,
+        enhanced_keys_supported: false,
+        auth_manager,
+        models_manager: thread_manager.get_models_manager(),
+        feedback: codex_feedback::CodexFeedback::new(),
+        is_first_run: true,
+        feedback_audience: FeedbackAudience::External,
+        model: Some(resolved_model.clone()),
+        otel_manager,
+    };
+
+    let mut chat = ChatWidget::new(init, thread_manager);
+    let width = 120;
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("render initial state");
+    let initial_footer = terminal
+        .backend()
+        .vt100()
+        .screen()
+        .contents()
+        .lines()
+        .last()
+        .unwrap_or_default()
+        .to_string();
+    let initial_footer_lower = initial_footer.to_ascii_lowercase();
+    assert!(
+        !initial_footer_lower.contains(" high "),
+        "initial footer should not show high effort before session configuration: {initial_footer:?}"
+    );
+
+    let rollout_file = NamedTempFile::new().expect("rollout file");
+    let configured = codex_core::protocol::SessionConfiguredEvent {
+        session_id: ThreadId::new(),
+        forked_from_id: None,
+        thread_name: None,
+        model: resolved_model,
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::High),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.handle_codex_event(Event {
+        id: "session-configured".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("render configured state");
+
+    let footer = terminal
+        .backend()
+        .vt100()
+        .screen()
+        .contents()
+        .lines()
+        .last()
+        .unwrap_or_default()
+        .to_string();
+    let footer_lower = footer.to_ascii_lowercase();
+    assert!(
+        footer.contains("Code mode"),
+        "expected code mode footer: {footer:?}"
+    );
+    assert!(
+        footer_lower.contains(" high "),
+        "expected footer to show reasoning effort immediately after session configuration: {footer:?}"
+    );
+}
+
+#[tokio::test]
+async fn session_configured_suppression_updates_footer_without_requesting_redraw() {
+    let (draw_tx, mut draw_rx) = broadcast::channel(16);
+    let frame_requester = FrameRequester::new(draw_tx);
+    let (mut chat, _rx, _ops) =
+        make_chatwidget_manual_with_frame_requester(Some("gpt-5.2-codex"), frame_requester).await;
+    chat.suppress_session_configured_redraw = true;
+    drain_draw_requests(&mut draw_rx).await;
+
+    let configured = codex_core::protocol::SessionConfiguredEvent {
+        session_id: ThreadId::new(),
+        forked_from_id: None,
+        thread_name: None,
+        model: "gpt-5.2-codex".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::High),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        rollout_path: None,
+    };
+
+    chat.handle_codex_event(Event {
+        id: "session-configured-suppressed".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    let redraw = tokio::time::timeout(std::time::Duration::from_millis(50), draw_rx.recv()).await;
+    assert!(
+        redraw.is_err(),
+        "suppressed session configured should not request redraw"
+    );
+
+    let width = 120;
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("render configured state");
+
+    let footer = terminal
+        .backend()
+        .vt100()
+        .screen()
+        .contents()
+        .lines()
+        .last()
+        .unwrap_or_default()
+        .to_string()
+        .to_ascii_lowercase();
+    assert!(
+        footer.contains(" high "),
+        "expected suppressed session configured to update footer state: {footer:?}"
     );
 }
 
@@ -1392,6 +1563,132 @@ async fn make_chatwidget_manual(
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
+}
+
+async fn make_chatwidget_manual_with_frame_requester(
+    model_override: Option<&str>,
+    frame_requester: FrameRequester,
+) -> (
+    ChatWidget,
+    tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    tokio::sync::mpsc::UnboundedReceiver<Op>,
+) {
+    let (tx_raw, rx) = unbounded_channel::<AppEvent>();
+    let app_event_tx = AppEventSender::new(tx_raw);
+    let (op_tx, op_rx) = unbounded_channel::<Op>();
+    let mut cfg = test_config().await;
+    let resolved_model = model_override
+        .map(str::to_owned)
+        .unwrap_or_else(|| ModelsManager::get_model_offline(cfg.model.as_deref()));
+    if let Some(model) = model_override {
+        cfg.model = Some(model.to_string());
+    }
+    let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
+    let mut bottom = BottomPane::new(BottomPaneParams {
+        app_event_tx: app_event_tx.clone(),
+        frame_requester: frame_requester.clone(),
+        has_input_focus: true,
+        enhanced_keys_supported: false,
+        placeholder_text: "Ask Codex to do anything".to_string(),
+        disable_paste_burst: false,
+        animations_enabled: cfg.animations,
+        skills: None,
+    });
+    bottom.set_steer_enabled(true);
+    bottom.set_collaboration_modes_enabled(cfg.features.enabled(Feature::CollaborationModes));
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let codex_home = cfg.codex_home.clone();
+    let models_manager = Arc::new(ModelsManager::new(
+        codex_home,
+        auth_manager.clone(),
+        cfg.model_provider_id.as_str(),
+        cfg.model_provider.clone(),
+    ));
+    let current_collaboration_mode = CollaborationMode {
+        mode: ModeKind::Custom,
+        settings: Settings {
+            model: resolved_model.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+    let mut widget = ChatWidget {
+        app_event_tx,
+        codex_op_tx: op_tx,
+        bottom_pane: bottom,
+        active_cell: None,
+        active_cell_revision: 0,
+        config: cfg,
+        current_collaboration_mode,
+        active_collaboration_mask: None,
+        reasoning_effort_overrides: HashMap::new(),
+        auth_manager,
+        models_manager,
+        otel_manager,
+        session_header: SessionHeader::new(resolved_model.clone()),
+        initial_user_message: None,
+        token_info: None,
+        rate_limit_snapshot: None,
+        plan_type: None,
+        rate_limit_warnings: RateLimitWarningState::default(),
+        rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
+        rate_limit_poller: None,
+        stream_controller: None,
+        plan_stream_controller: None,
+        running_commands: HashMap::new(),
+        suppressed_exec_calls: HashSet::new(),
+        skills_all: Vec::new(),
+        skills_initial_state: None,
+        last_unified_wait: None,
+        unified_exec_wait_streak: None,
+        task_complete_pending: false,
+        unified_exec_processes: Vec::new(),
+        agent_turn_running: false,
+        mcp_startup_status: None,
+        connectors_cache: ConnectorsCacheState::default(),
+        interrupts: InterruptManager::new(),
+        reasoning_buffer: String::new(),
+        full_reasoning_buffer: String::new(),
+        current_status_header: String::from("Working"),
+        retry_status_header: None,
+        thread_id: None,
+        thread_name: None,
+        forked_from: None,
+        context_compact_count: 0,
+        counted_context_compaction_item_ids: HashSet::new(),
+        pending_live_legacy_context_compactions: HashMap::new(),
+        pending_replay_legacy_context_compactions: 0,
+        frame_requester,
+        show_welcome_banner: true,
+        queued_user_messages: VecDeque::new(),
+        suppress_session_configured_redraw: false,
+        pending_notification: None,
+        quit_shortcut_expires_at: None,
+        quit_shortcut_key: None,
+        is_review_mode: false,
+        pre_review_token_info: None,
+        needs_final_message_separator: false,
+        had_work_activity: false,
+        saw_plan_update_this_turn: false,
+        saw_plan_item_this_turn: false,
+        plan_delta_buffer: String::new(),
+        plan_item_active: false,
+        last_separator_elapsed_secs: None,
+        last_rendered_width: std::cell::Cell::new(None),
+        feedback: codex_feedback::CodexFeedback::new(),
+        feedback_audience: FeedbackAudience::External,
+        current_rollout_path: None,
+        external_editor_state: ExternalEditorState::Closed,
+    };
+    widget.set_model(&resolved_model);
+    (widget, rx, op_rx)
+}
+
+async fn drain_draw_requests(draw_rx: &mut broadcast::Receiver<()>) {
+    while tokio::time::timeout(std::time::Duration::from_millis(20), draw_rx.recv())
+        .await
+        .is_ok()
+    {}
 }
 
 // ChatWidget may emit other `Op`s (e.g. history/logging updates) on the same channel; this helper
