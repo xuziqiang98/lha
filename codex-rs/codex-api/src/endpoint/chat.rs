@@ -251,6 +251,12 @@ impl Stream for AggregatedStream {
                 Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryPartAdded { .. }))) => {
                     continue;
                 }
+                Poll::Ready(Some(Ok(ResponseEvent::ProposedPlanDelta(delta)))) => {
+                    return Poll::Ready(Some(Ok(ResponseEvent::ProposedPlanDelta(delta))));
+                }
+                Poll::Ready(Some(Ok(ResponseEvent::ProposedPlanDone(text)))) => {
+                    return Poll::Ready(Some(Ok(ResponseEvent::ProposedPlanDone(text))));
+                }
                 Poll::Ready(Some(Ok(ResponseEvent::OutputItemAdded(item)))) => {
                     return Poll::Ready(Some(Ok(ResponseEvent::OutputItemAdded(item))));
                 }
@@ -284,5 +290,83 @@ impl AggregatedStream {
             pending: VecDeque::new(),
             mode,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AggregateStreamExt;
+    use super::ResponseEvent;
+    use super::ResponseStream;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
+    use futures::StreamExt;
+    use pretty_assertions::assert_eq;
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn aggregate_preserves_proposed_plan_events() {
+        let (tx, rx) = mpsc::channel(8);
+        tx.send(Ok(ResponseEvent::OutputTextDelta(
+            "Intro\n<proposed_plan>\n- Step 1\n</proposed_plan>\nOutro".to_string(),
+        )))
+        .await
+        .expect("send output delta");
+        tx.send(Ok(ResponseEvent::ProposedPlanDelta(
+            "- Step 1\n".to_string(),
+        )))
+        .await
+        .expect("send plan delta");
+        tx.send(Ok(ResponseEvent::ProposedPlanDone(
+            "- Step 1\n".to_string(),
+        )))
+        .await
+        .expect("send plan done");
+        tx.send(Ok(ResponseEvent::Completed {
+            response_id: "resp-1".to_string(),
+            token_usage: None,
+        }))
+        .await
+        .expect("send completed");
+        drop(tx);
+
+        let mut stream = ResponseStream { rx_event: rx }.aggregate();
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            events.push(event.expect("stream event"));
+        }
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ResponseEvent::ProposedPlanDelta(text) if text == "- Step 1\n"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ResponseEvent::ProposedPlanDone(text) if text == "- Step 1\n"
+        )));
+
+        assert_eq!(events.len(), 4);
+        assert!(matches!(
+            &events[0],
+            ResponseEvent::ProposedPlanDelta(text) if text == "- Step 1\n"
+        ));
+        assert!(matches!(
+            &events[1],
+            ResponseEvent::ProposedPlanDone(text) if text == "- Step 1\n"
+        ));
+        assert!(matches!(
+            &events[2],
+            ResponseEvent::OutputItemDone(ResponseItem::Message { content, .. })
+                if content == &vec![ContentItem::OutputText {
+                    text: "Intro\n<proposed_plan>\n- Step 1\n</proposed_plan>\nOutro".to_string(),
+                }]
+        ));
+        assert!(matches!(
+            events[3],
+            ResponseEvent::Completed {
+                ref response_id,
+                token_usage: None,
+            } if response_id == "resp-1"
+        ));
     }
 }

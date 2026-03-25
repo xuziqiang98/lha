@@ -1,6 +1,9 @@
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::error::ApiError;
+use crate::proposed_plan_parser::ProposedPlanParser;
+use crate::proposed_plan_parser::ProposedPlanSegment;
+use crate::proposed_plan_parser::extract_proposed_plan_text;
 use crate::telemetry::SseTelemetry;
 use codex_client::StreamResponse;
 use codex_protocol::models::ContentItem;
@@ -79,11 +82,13 @@ pub async fn process_chat_sse<S>(
     let mut reasoning_item: Option<ResponseItem> = None;
     let mut token_usage: Option<TokenUsage> = None;
     let mut completion_pending = false;
+    let mut assistant_plan_parser: Option<ProposedPlanParser> = None;
 
     async fn flush_and_complete(
         tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
         reasoning_item: &mut Option<ResponseItem>,
         assistant_item: &mut Option<ResponseItem>,
+        assistant_plan_parser: &mut Option<ProposedPlanParser>,
         token_usage: &Option<TokenUsage>,
     ) {
         if let Some(reasoning) = reasoning_item.take() {
@@ -93,6 +98,7 @@ pub async fn process_chat_sse<S>(
         }
 
         if let Some(assistant) = assistant_item.take() {
+            emit_buffered_plan_events(tx_event, assistant_plan_parser, &assistant).await;
             let _ = tx_event
                 .send(Ok(ResponseEvent::OutputItemDone(assistant)))
                 .await;
@@ -125,6 +131,7 @@ pub async fn process_chat_sse<S>(
                         &tx_event,
                         &mut reasoning_item,
                         &mut assistant_item,
+                        &mut assistant_plan_parser,
                         &token_usage,
                     )
                     .await;
@@ -138,6 +145,7 @@ pub async fn process_chat_sse<S>(
                     &tx_event,
                     &mut reasoning_item,
                     &mut assistant_item,
+                    &mut assistant_plan_parser,
                     &token_usage,
                 )
                 .await;
@@ -149,6 +157,7 @@ pub async fn process_chat_sse<S>(
                         &tx_event,
                         &mut reasoning_item,
                         &mut assistant_item,
+                        &mut assistant_plan_parser,
                         &token_usage,
                     )
                     .await;
@@ -174,6 +183,7 @@ pub async fn process_chat_sse<S>(
                 &tx_event,
                 &mut reasoning_item,
                 &mut assistant_item,
+                &mut assistant_plan_parser,
                 &token_usage,
             )
             .await;
@@ -200,6 +210,7 @@ pub async fn process_chat_sse<S>(
                 &tx_event,
                 &mut reasoning_item,
                 &mut assistant_item,
+                &mut assistant_plan_parser,
                 &token_usage,
             )
             .await;
@@ -237,14 +248,20 @@ pub async fn process_chat_sse<S>(
                                 append_assistant_text(
                                     &tx_event,
                                     &mut assistant_item,
+                                    &mut assistant_plan_parser,
                                     text.to_string(),
                                 )
                                 .await;
                             }
                         }
                     } else if let Some(text) = content.as_str() {
-                        append_assistant_text(&tx_event, &mut assistant_item, text.to_string())
-                            .await;
+                        append_assistant_text(
+                            &tx_event,
+                            &mut assistant_item,
+                            &mut assistant_plan_parser,
+                            text.to_string(),
+                        )
+                        .await;
                     }
                 }
 
@@ -324,6 +341,8 @@ pub async fn process_chat_sse<S>(
                 }
 
                 if let Some(assistant) = assistant_item.take() {
+                    emit_buffered_plan_events(&tx_event, &mut assistant_plan_parser, &assistant)
+                        .await;
                     let _ = tx_event
                         .send(Ok(ResponseEvent::OutputItemDone(assistant)))
                         .await;
@@ -376,6 +395,8 @@ pub async fn process_chat_sse<S>(
                 last_tool_call_index = None;
 
                 if let Some(assistant) = assistant_item.take() {
+                    emit_buffered_plan_events(&tx_event, &mut assistant_plan_parser, &assistant)
+                        .await;
                     let _ = tx_event
                         .send(Ok(ResponseEvent::OutputItemDone(assistant)))
                         .await;
@@ -391,6 +412,7 @@ pub async fn process_chat_sse<S>(
                     &tx_event,
                     &mut reasoning_item,
                     &mut assistant_item,
+                    &mut assistant_plan_parser,
                     &token_usage,
                 )
                 .await;
@@ -429,6 +451,7 @@ fn parse_chat_token_usage(value: &serde_json::Value) -> Option<TokenUsage> {
 async fn append_assistant_text(
     tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
     assistant_item: &mut Option<ResponseItem>,
+    assistant_plan_parser: &mut Option<ProposedPlanParser>,
     text: String,
 ) {
     if assistant_item.is_none() {
@@ -443,6 +466,9 @@ async fn append_assistant_text(
             .send(Ok(ResponseEvent::OutputItemAdded(item)))
             .await;
     }
+
+    let parser = assistant_plan_parser.get_or_insert_with(ProposedPlanParser::new);
+    emit_plan_deltas(tx_event, parser.parse(&text)).await;
 
     if let Some(ResponseItem::Message { content, .. }) = assistant_item {
         content.push(ContentItem::OutputText { text: text.clone() });
@@ -484,6 +510,44 @@ async fn append_reasoning_text(
                 content_index,
             }))
             .await;
+    }
+}
+
+async fn emit_plan_deltas(
+    tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
+    segments: Vec<ProposedPlanSegment>,
+) {
+    for segment in segments {
+        if let ProposedPlanSegment::ProposedPlanDelta(delta) = segment {
+            let _ = tx_event
+                .send(Ok(ResponseEvent::ProposedPlanDelta(delta)))
+                .await;
+        }
+    }
+}
+
+async fn emit_buffered_plan_events(
+    tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
+    assistant_plan_parser: &mut Option<ProposedPlanParser>,
+    assistant: &ResponseItem,
+) {
+    if let Some(parser) = assistant_plan_parser.as_mut() {
+        emit_plan_deltas(tx_event, parser.finish()).await;
+    }
+    *assistant_plan_parser = None;
+
+    if let ResponseItem::Message { content, .. } = assistant {
+        let mut text = String::new();
+        for entry in content {
+            if let ContentItem::OutputText { text: chunk } = entry {
+                text.push_str(chunk);
+            }
+        }
+        if let Some(plan_text) = extract_proposed_plan_text(&text) {
+            let _ = tx_event
+                .send(Ok(ResponseEvent::ProposedPlanDone(plan_text)))
+                .await;
+        }
     }
 }
 
@@ -898,6 +962,39 @@ mod tests {
                 total_tokens: 12,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn emits_proposed_plan_events_for_plan_block() {
+        let delta_content = json!({
+            "choices": [{
+                "delta": {
+                    "content": "Intro\n<proposed_plan>\n- Step 1\n</proposed_plan>\nOutro"
+                }
+            }]
+        });
+
+        let finish_stop = json!({
+            "choices": [{
+                "finish_reason": "stop"
+            }]
+        });
+
+        let body = build_body(&[delta_content, finish_stop]);
+        let events = collect_events(&body).await;
+
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                ResponseEvent::ProposedPlanDelta(delta) if delta == "- Step 1\n"
+            )
+        }));
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                ResponseEvent::ProposedPlanDone(text) if text == "- Step 1\n"
+            )
+        }));
     }
 
     #[tokio::test]

@@ -42,6 +42,8 @@ pub enum ResponseEvent {
     Created,
     OutputItemDone(ResponseItem),
     OutputItemAdded(ResponseItem),
+    ProposedPlanDelta(String),
+    ProposedPlanDone(String),
     /// Emitted when `X-Reasoning-Included: true` is present on the response,
     /// meaning the server already accounted for past reasoning tokens and the
     /// client should not re-estimate them.

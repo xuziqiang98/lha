@@ -4877,6 +4877,7 @@ async fn try_run_sampling_request(
                     error_or_panic("ReasoningRawContentDelta without active item".to_string());
                 }
             }
+            ResponseEvent::ProposedPlanDelta(_) | ResponseEvent::ProposedPlanDone(_) => {}
         }
     };
 

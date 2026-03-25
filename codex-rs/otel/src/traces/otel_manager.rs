@@ -658,6 +658,8 @@ impl OtelManager {
             ResponseEvent::OutputItemAdded(item) => OtelManager::responses_item_type(item),
             ResponseEvent::Completed { .. } => "completed".into(),
             ResponseEvent::OutputTextDelta(_) => "text_delta".into(),
+            ResponseEvent::ProposedPlanDelta(_) => "proposed_plan_delta".into(),
+            ResponseEvent::ProposedPlanDone(_) => "proposed_plan_done".into(),
             ResponseEvent::ReasoningSummaryDelta { .. } => "reasoning_summary_delta".into(),
             ResponseEvent::ReasoningContentDelta { .. } => "reasoning_content_delta".into(),
             ResponseEvent::ReasoningSummaryPartAdded { .. } => {
