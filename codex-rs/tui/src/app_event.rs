@@ -119,6 +119,10 @@ pub(crate) enum AppEvent {
     },
 
     InsertHistoryCell(Box<dyn HistoryCell>),
+    InsertThreadHistoryCell {
+        thread_id: ThreadId,
+        cell: Box<dyn HistoryCell>,
+    },
 
     StartCommitAnimation,
     StopCommitAnimation,

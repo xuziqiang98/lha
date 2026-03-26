@@ -710,26 +710,45 @@ impl App {
 
     fn insert_history_cell(&mut self, cell: Box<dyn HistoryCell>, tui: &mut tui::Tui) {
         let cell: Arc<dyn HistoryCell> = cell.into();
-        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-            t.insert_cell(cell.clone());
+        self.insert_history_cell_arc(cell, tui);
+    }
+
+    fn insert_history_cell_for_thread(
+        &mut self,
+        thread_id: ThreadId,
+        cell: Box<dyn HistoryCell>,
+        tui: &mut tui::Tui,
+    ) {
+        let cell: Arc<dyn HistoryCell> = cell.into();
+        if self.insert_history_cell_arc_for_thread(thread_id, cell) {
             tui.frame_requester().schedule_frame();
         }
-        self.transcript_cells.push(cell.clone());
-        let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
-        if !display.is_empty() {
-            if !cell.is_stream_continuation() {
-                if self.has_emitted_history_lines {
-                    display.insert(0, Line::from(""));
-                } else {
-                    self.has_emitted_history_lines = true;
-                }
-            }
-            if self.overlay.is_some() {
-                self.deferred_history_lines.extend(display);
-            } else {
-                tui.insert_history_lines(display);
-            }
+    }
+
+    fn insert_history_cell_arc_for_thread(
+        &mut self,
+        thread_id: ThreadId,
+        cell: Arc<dyn HistoryCell>,
+    ) -> bool {
+        if self.chat_widget.thread_id() != Some(thread_id) {
+            return false;
         }
+
+        self.insert_history_cell_state(cell);
+        true
+    }
+
+    fn insert_history_cell_arc(&mut self, cell: Arc<dyn HistoryCell>, tui: &mut tui::Tui) {
+        self.insert_history_cell_state(cell);
+        tui.frame_requester().schedule_frame();
+    }
+
+    fn insert_history_cell_state(&mut self, cell: Arc<dyn HistoryCell>) {
+        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+            t.insert_cell(cell.clone());
+        }
+        self.transcript_cells.push(cell.clone());
+        self.chat_widget.insert_transcript_cell(cell);
     }
 
     pub fn chatwidget_init_for_forked_or_resumed_thread(
@@ -1697,7 +1716,6 @@ impl App {
                 TuiEvent::Draw => {
                     if self.backtrack_render_pending {
                         self.backtrack_render_pending = false;
-                        self.render_transcript_once(tui);
                     }
                     self.chat_widget.maybe_post_pending_notification(tui);
                     if self
@@ -1924,6 +1942,9 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryCell(cell) => self.insert_history_cell(cell, tui),
+            AppEvent::InsertThreadHistoryCell { thread_id, cell } => {
+                self.insert_history_cell_for_thread(thread_id, cell, tui)
+            }
             AppEvent::StartCommitAnimation => {
                 if self
                     .commit_anim_running
@@ -2991,6 +3012,7 @@ mod tests {
     use crate::file_search::FileSearchManager;
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
+    use crate::history_cell::PlainHistoryCell;
     use crate::history_cell::UserHistoryCell;
     use crate::history_cell::new_session_info;
     use crate::provider_config::ApiProviderWireApi;
@@ -3199,7 +3221,8 @@ mod tests {
             other => panic!("expected UpdateFeatureFlags event, got {other:?}"),
         }
         let cell = match app_event_rx.try_recv() {
-            Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+            Ok(AppEvent::InsertHistoryCell(cell))
+            | Ok(AppEvent::InsertThreadHistoryCell { cell, .. }) => cell,
             other => panic!("expected InsertHistoryCell event, got {other:?}"),
         };
         let rendered = cell
@@ -3227,6 +3250,43 @@ mod tests {
             Ok(AppEvent::SelectAgentThread(id)) => assert_eq!(id, thread_id),
             other => panic!("expected SelectAgentThread event, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn thread_scoped_history_is_dropped_after_thread_switch() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        let old_thread_id = ThreadId::new();
+        let new_thread_id = ThreadId::new();
+        let configure = |thread_id| Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        };
+
+        app.chat_widget.handle_codex_event(configure(old_thread_id));
+        app.chat_widget.handle_codex_event(configure(new_thread_id));
+
+        let inserted = app.insert_history_cell_arc_for_thread(
+            old_thread_id,
+            Arc::new(PlainHistoryCell::new(vec!["stale".into()])),
+        );
+
+        assert!(!inserted);
+        assert!(app.transcript_cells.is_empty());
     }
 
     #[tokio::test]
