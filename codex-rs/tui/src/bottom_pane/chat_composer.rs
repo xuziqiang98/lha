@@ -1854,9 +1854,8 @@ impl ChatComposer {
                     let message = format!(
                         r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
                     );
-                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_info_event(message, None),
-                    )));
+                    self.app_event_tx
+                        .send_history_cell(Box::new(history_cell::new_info_event(message, None)));
                     self.set_text_content(
                         original_input.clone(),
                         original_text_elements,
@@ -1874,9 +1873,9 @@ impl ChatComposer {
                 match expand_custom_prompt(&text, &text_elements, &self.custom_prompts) {
                     Ok(expanded) => expanded,
                     Err(err) => {
-                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        self.app_event_tx.send_history_cell(Box::new(
                             history_cell::new_error_event(err.user_message()),
-                        )));
+                        ));
                         self.set_text_content(
                             original_input.clone(),
                             original_text_elements,

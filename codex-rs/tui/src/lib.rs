@@ -102,6 +102,7 @@ mod style;
 mod terminal_palette;
 mod text_formatting;
 mod tooltips;
+mod transcript_view;
 mod tui;
 mod ui_consts;
 pub mod update_action;
@@ -795,8 +796,8 @@ fn restore() {
 
 /// Determine whether to use the terminal's alternate screen buffer.
 ///
-/// The alternate screen buffer provides a cleaner fullscreen experience without polluting
-/// the terminal's scrollback history. However, it conflicts with terminal multiplexers like
+/// The alternate screen buffer provides a cleaner fullscreen experience while keeping the outer
+/// terminal scrollback uncluttered. However, it conflicts with terminal multiplexers like
 /// Zellij that strictly follow the xterm spec, which disallows scrollback in alternate screen
 /// buffers. Zellij intentionally disables scrollback in alternate screen mode (see
 /// https://github.com/zellij-org/zellij/pull/1032) and offers no configuration option to
@@ -806,7 +807,8 @@ fn restore() {
 /// - If `--no-alt-screen` is explicitly passed, always disable alternate screen
 /// - Otherwise, respect the `tui.alternate_screen` config setting:
 ///   - `always`: Use alternate screen everywhere (original behavior)
-///   - `never`: Inline mode only, preserves scrollback
+///   - `never`: Inline mode only, preserving the outer terminal scrollback while Codex history is
+///     browsed in-app
 ///   - `auto` (default): Auto-detect the terminal multiplexer and disable alternate screen
 ///     only in Zellij, enabling it everywhere else
 fn determine_alt_screen_mode(no_alt_screen: bool, tui_alternate_screen: AltScreenMode) -> bool {

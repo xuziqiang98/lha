@@ -20,6 +20,7 @@
 //! is in progress and while MCP server startup is in progress. Those lifecycles are tracked
 //! independently (`agent_turn_running` and `mcp_startup_status`) and synchronized via
 //! `update_task_running_state`.
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -114,6 +115,8 @@ use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use rand::Rng;
 use ratatui::buffer::Buffer;
+use ratatui::layout::Constraint;
+use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
@@ -179,16 +182,14 @@ use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::markdown::append_markdown;
-use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
-use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
-use crate::render::renderable::RenderableExt;
-use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::status::format_directory_display;
 use crate::text_formatting::truncate_text;
+use crate::transcript_view::TranscriptScroll;
+use crate::transcript_view::TranscriptView;
 use crate::tui::FrameRequester;
 mod interrupts;
 use self::interrupts::InterruptManager;
@@ -461,6 +462,7 @@ pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
     bottom_pane: BottomPane,
+    transcript: RefCell<TranscriptView>,
     active_cell: Option<Box<dyn HistoryCell>>,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
     ///
@@ -778,8 +780,7 @@ impl ChatWidget {
         };
         self.needs_final_message_separator = true;
         let cell = history_cell::new_unified_exec_interaction(wait.command_display, String::new());
-        self.app_event_tx
-            .send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        self.app_event_tx.send_history_cell(Box::new(cell));
         self.restore_reasoning_status_header();
     }
 
@@ -825,6 +826,8 @@ impl ChatWidget {
                 .set_connectors_snapshot_without_redraw(None);
         }
         self.thread_id = Some(event.session_id);
+        self.app_event_tx
+            .set_history_thread_id(Some(event.session_id));
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
         self.context_compact_count = 0;
@@ -1195,8 +1198,8 @@ impl ChatWidget {
                     tx.send(AppEvent::UpdateFeatureFlags {
                         updates: vec![(Feature::Collab, true)],
                     });
-                    tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_warning_event(MULTI_AGENT_ENABLE_NOTICE.to_string()),
+                    tx.send_history_cell(Box::new(history_cell::new_warning_event(
+                        MULTI_AGENT_ENABLE_NOTICE.to_string(),
                     )));
                 })],
                 dismiss_on_select: true,
@@ -2263,6 +2266,7 @@ impl ChatWidget {
             model,
             otel_manager,
         } = common;
+        let app_event_tx = app_event_tx.bind_history_to_widget();
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
         config.model = model.clone();
@@ -2307,6 +2311,7 @@ impl ChatWidget {
                 animations_enabled: config.animations,
                 skills: None,
             }),
+            transcript: RefCell::new(TranscriptView::new(Vec::new())),
             active_cell,
             active_cell_revision: 0,
             config,
@@ -2415,6 +2420,7 @@ impl ChatWidget {
             model,
             otel_manager,
         } = common;
+        let app_event_tx = app_event_tx.bind_history_to_widget();
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
         config.model = model.clone();
@@ -2458,6 +2464,7 @@ impl ChatWidget {
                 animations_enabled: config.animations,
                 skills: None,
             }),
+            transcript: RefCell::new(TranscriptView::new(Vec::new())),
             active_cell,
             active_cell_revision: 0,
             config,
@@ -2554,6 +2561,7 @@ impl ChatWidget {
             otel_manager,
             ..
         } = common;
+        let app_event_tx = app_event_tx.bind_history_to_widget();
         let model = model.filter(|m| !m.trim().is_empty());
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
@@ -2597,6 +2605,7 @@ impl ChatWidget {
                 animations_enabled: config.animations,
                 skills: None,
             }),
+            transcript: RefCell::new(TranscriptView::new(Vec::new())),
             active_cell: None,
             active_cell_revision: 0,
             config,
@@ -2743,6 +2752,10 @@ impl ChatWidget {
         }
 
         match key_event {
+            KeyEvent {
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } if self.handle_transcript_scroll_key(key_event) => {}
             KeyEvent {
                 code: KeyCode::BackTab,
                 kind: KeyEventKind::Press,
@@ -3172,13 +3185,13 @@ impl ChatWidget {
             None,
             Box::new(move |name: String| {
                 let Some(name) = codex_core::util::normalize_thread_name(&name) else {
-                    tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_error_event("Thread name cannot be empty.".to_string()),
+                    tx.send_history_cell(Box::new(history_cell::new_error_event(
+                        "Thread name cannot be empty.".to_string(),
                     )));
                     return;
                 };
                 let cell = Self::rename_confirmation_cell(&name, thread_id);
-                tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+                tx.send_history_cell(Box::new(cell));
                 tx.send(AppEvent::CodexOp(Op::SetThreadName { name }));
             }),
         );
@@ -3211,7 +3224,7 @@ impl ChatWidget {
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.active_cell.take() {
             self.needs_final_message_separator = true;
-            self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
+            self.app_event_tx.send_history_cell(active);
         }
     }
 
@@ -3233,7 +3246,7 @@ impl ChatWidget {
             self.flush_active_cell();
             self.needs_final_message_separator = true;
         }
-        self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+        self.app_event_tx.send_history_cell(cell);
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
@@ -3272,12 +3285,11 @@ impl ChatWidget {
         if let Some(stripped) = text.strip_prefix('!') {
             let cmd = stripped.trim();
             if cmd.is_empty() {
-                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::new_info_event(
+                self.app_event_tx
+                    .send_history_cell(Box::new(history_cell::new_info_event(
                         USER_SHELL_COMMAND_HELP_TITLE.to_string(),
                         Some(USER_SHELL_COMMAND_HELP_HINT.to_string()),
-                    ),
-                )));
+                    )));
                 return;
             }
             self.submit_op(Op::RunUserShellCommand {
@@ -3680,8 +3692,7 @@ impl ChatWidget {
                     let mut rendered: Vec<ratatui::text::Line<'static>> = vec!["".into()];
                     append_markdown(&explanation, None, &mut rendered);
                     let body_cell = AgentMessageCell::new(rendered, false);
-                    self.app_event_tx
-                        .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
+                    self.app_event_tx.send_history_cell(Box::new(body_cell));
                 }
             }
             // Final message is rendered as part of the AgentMessage.
@@ -5889,8 +5900,9 @@ impl ChatWidget {
                 item.selected_description = Some(selected_label.to_string());
             } else {
                 item.actions = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_info_event(missing_label.to_string(), None),
+                    tx.send_history_cell(Box::new(history_cell::new_info_event(
+                        missing_label.to_string(),
+                        None,
                     )));
                 })];
                 item.dismiss_on_select = true;
@@ -6353,18 +6365,57 @@ impl ChatWidget {
         self.token_info = None;
     }
 
-    fn as_renderable(&self) -> RenderableItem<'_> {
-        let active_cell_renderable = match &self.active_cell {
-            Some(cell) => RenderableItem::Borrowed(cell).inset(Insets::tlbr(1, 0, 0, 0)),
-            None => RenderableItem::Owned(Box::new(())),
-        };
-        let mut flex = FlexRenderable::new();
-        flex.push(1, active_cell_renderable);
-        flex.push(
-            0,
-            RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(1, 0, 0, 0)),
+    pub(crate) fn insert_transcript_cell(&mut self, cell: Arc<dyn HistoryCell>) {
+        self.transcript.borrow_mut().insert_cell(cell);
+    }
+
+    pub(crate) fn replace_transcript_cells(&mut self, cells: Vec<Arc<dyn HistoryCell>>) {
+        self.transcript = RefCell::new(TranscriptView::new(cells));
+        self.request_redraw();
+    }
+
+    fn sync_transcript_live_tail_for_width(&self, width: u16) {
+        self.transcript.borrow_mut().sync_live_tail(
+            width.max(1),
+            self.active_cell_transcript_key(),
+            |tail_width| self.active_cell_transcript_lines(tail_width),
         );
-        RenderableItem::Owned(Box::new(flex))
+    }
+
+    fn handle_transcript_scroll_key(&mut self, key_event: KeyEvent) -> bool {
+        if !self.bottom_pane.no_modal_or_popup_active() {
+            return false;
+        }
+
+        let command = match key_event {
+            KeyEvent {
+                code: KeyCode::PageUp,
+                ..
+            } => Some(TranscriptScroll::PageUp),
+            KeyEvent {
+                code: KeyCode::PageDown,
+                ..
+            } => Some(TranscriptScroll::PageDown),
+            KeyEvent {
+                code: KeyCode::Home,
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) => Some(TranscriptScroll::Home),
+            KeyEvent {
+                code: KeyCode::End,
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) => Some(TranscriptScroll::End),
+            _ => None,
+        };
+
+        let Some(command) = command else {
+            return false;
+        };
+
+        self.transcript.borrow_mut().apply_scroll(command);
+        self.request_redraw();
+        true
     }
 }
 
@@ -6376,16 +6427,53 @@ impl Drop for ChatWidget {
 
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.as_renderable().render(area, buf);
+        self.sync_transcript_live_tail_for_width(area.width);
+        let bottom_height = self.bottom_pane.desired_height(area.width);
+        let transcript_height = self.transcript.borrow().desired_height(area.width.max(1));
+        let has_transcript = transcript_height > 0 || self.active_cell.is_some();
+        let top_inset = u16::from(has_transcript);
+        let separator_height = u16::from(has_transcript && bottom_height > 0);
+        let top_height = area
+            .height
+            .saturating_sub(bottom_height.saturating_add(separator_height));
+        let [transcript_area, _separator_area, bottom_area] = Layout::vertical([
+            Constraint::Length(top_height),
+            Constraint::Length(separator_height),
+            Constraint::Length(bottom_height),
+        ])
+        .areas(area);
+        let transcript_area = Rect::new(
+            transcript_area.x,
+            transcript_area.y.saturating_add(top_inset),
+            transcript_area.width,
+            transcript_area.height.saturating_sub(top_inset),
+        );
+
+        self.transcript
+            .borrow_mut()
+            .render_inline(transcript_area, buf);
+        self.bottom_pane.render(bottom_area, buf);
         self.last_rendered_width.set(Some(area.width as usize));
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        self.as_renderable().desired_height(width)
+        self.sync_transcript_live_tail_for_width(width);
+        let transcript_height = self.transcript.borrow().desired_height(width.max(1));
+        let top_inset = u16::from(transcript_height > 0 || self.active_cell.is_some());
+        let bottom_height = self.bottom_pane.desired_height(width);
+        let separator_height =
+            u16::from((transcript_height > 0 || self.active_cell.is_some()) && bottom_height > 0);
+        transcript_height
+            .saturating_add(top_inset)
+            .saturating_add(separator_height)
+            .saturating_add(bottom_height)
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        self.as_renderable().cursor_pos(area)
+        let bottom_height = self.bottom_pane.desired_height(area.width);
+        let bottom_y = area.bottom().saturating_sub(bottom_height);
+        self.bottom_pane
+            .cursor_pos(Rect::new(area.x, bottom_y, area.width, bottom_height))
     }
 }
 

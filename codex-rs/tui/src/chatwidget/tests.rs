@@ -10,8 +10,10 @@ use crate::app_event::ExitMode;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
+use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
+use crate::transcript_view::TranscriptView;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
 use codex_common::approval_presets::builtin_approval_presets;
@@ -317,6 +319,128 @@ async fn session_configured_updates_footer_reasoning_effort_immediately() {
 }
 
 #[tokio::test]
+async fn desired_height_includes_live_tail_before_render() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.active_cell = Some(Box::new(PlainHistoryCell::new(vec![
+        "this live tail should wrap across several lines before render".into(),
+    ])));
+    chat.transcript = RefCell::new(TranscriptView::new(Vec::new()));
+
+    let width = 12;
+    let bottom_height = chat.bottom_pane.desired_height(width);
+    let height = chat.desired_height(width);
+
+    assert!(height > bottom_height + 2);
+}
+
+#[derive(Debug)]
+struct WidthSensitiveTranscriptCell;
+
+impl HistoryCell for WidthSensitiveTranscriptCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        vec!["live tail".into()]
+    }
+
+    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if width < 20 {
+            vec![
+                "narrow one".into(),
+                "narrow two".into(),
+                "narrow three".into(),
+            ]
+        } else {
+            vec!["wide".into()]
+        }
+    }
+}
+
+#[derive(Debug)]
+struct MaxHeightTranscriptCell;
+
+impl HistoryCell for MaxHeightTranscriptCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        vec!["transcript".into()]
+    }
+
+    fn transcript_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        vec!["transcript".into()]
+    }
+
+    fn desired_transcript_height(&self, _width: u16) -> u16 {
+        u16::MAX
+    }
+}
+
+#[tokio::test]
+async fn desired_height_rewraps_live_tail_on_width_change_before_render() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.active_cell = Some(Box::new(WidthSensitiveTranscriptCell));
+    chat.transcript = RefCell::new(TranscriptView::new(Vec::new()));
+
+    let wide_height = chat.desired_height(40);
+    let narrow_height = chat.desired_height(12);
+
+    assert!(narrow_height > wide_height);
+}
+
+#[tokio::test]
+async fn desired_height_saturates_after_adding_bottom_pane_rows() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.transcript = RefCell::new(TranscriptView::new(vec![Arc::new(MaxHeightTranscriptCell)]));
+
+    let width = 80;
+    let bottom_height = chat.bottom_pane.desired_height(width);
+
+    assert!(bottom_height > 0, "expected bottom pane to contribute rows");
+    assert_eq!(chat.desired_height(width), u16::MAX);
+}
+
+#[tokio::test]
+async fn history_insertions_are_thread_scoped_after_session_configuration() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let thread_id = ThreadId::new();
+    let configured = codex_core::protocol::SessionConfiguredEvent {
+        session_id: thread_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        rollout_path: Some(PathBuf::new()),
+    };
+
+    chat.handle_codex_event(Event {
+        id: "session-configured".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    let _ = drain_insert_history(&mut rx);
+
+    chat.add_boxed_history(Box::new(PlainHistoryCell::new(vec!["scoped".into()])));
+
+    let event = rx.try_recv().expect("history event");
+    match event {
+        AppEvent::InsertThreadHistoryCell {
+            thread_id: actual,
+            cell,
+        } => {
+            assert_eq!(actual, thread_id);
+            assert_eq!(lines_to_single_string(&cell.display_lines(80)), "scoped\n");
+        }
+        other => panic!("expected thread-scoped history event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn session_configured_suppression_updates_footer_without_requesting_redraw() {
     let (draw_tx, mut draw_rx) = broadcast::channel(16);
     let frame_requester = FrameRequester::new(draw_tx);
@@ -419,7 +543,7 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
 
     let mut user_cell = None;
     while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::InsertHistoryCell(cell) = ev
+        if let Some(cell) = into_insert_history_cell(ev)
             && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
         {
             user_cell = Some((
@@ -1025,7 +1149,7 @@ async fn submission_preserves_text_elements_and_local_images() {
 
     let mut user_cell = None;
     while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::InsertHistoryCell(cell) = ev
+        if let Some(cell) = into_insert_history_cell(ev)
             && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
         {
             user_cell = Some((
@@ -1532,6 +1656,7 @@ async fn make_chatwidget_manual(
         app_event_tx,
         codex_op_tx: op_tx,
         bottom_pane: bottom,
+        transcript: std::cell::RefCell::new(TranscriptView::new(Vec::new())),
         active_cell: None,
         active_cell_revision: 0,
         config: cfg,
@@ -1651,6 +1776,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         app_event_tx,
         codex_op_tx: op_tx,
         bottom_pane: bottom,
+        transcript: std::cell::RefCell::new(TranscriptView::new(Vec::new())),
         active_cell: None,
         active_cell_revision: 0,
         config: cfg,
@@ -1796,12 +1922,21 @@ pub(crate) async fn make_chatwidget_manual_with_sender() -> (
     (widget, app_event_tx, rx, op_rx)
 }
 
+fn into_insert_history_cell(event: AppEvent) -> Option<Box<dyn HistoryCell>> {
+    match event {
+        AppEvent::InsertHistoryCell(cell) | AppEvent::InsertThreadHistoryCell { cell, .. } => {
+            Some(cell)
+        }
+        _ => None,
+    }
+}
+
 fn drain_insert_history(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
 ) -> Vec<Vec<ratatui::text::Line<'static>>> {
     let mut out = Vec::new();
     while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::InsertHistoryCell(cell) = ev {
+        if let Some(cell) = into_insert_history_cell(ev) {
             let mut lines = cell.display_lines(80);
             if !cell.is_stream_continuation() && !out.is_empty() && !lines.is_empty() {
                 lines.insert(0, "".into());
@@ -4143,7 +4278,8 @@ async fn multi_agent_enable_prompt_updates_feature_and_emits_notice() {
         other => panic!("expected UpdateFeatureFlags event, got {other:?}"),
     }
     let cell = match rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        Ok(AppEvent::InsertHistoryCell(cell))
+        | Ok(AppEvent::InsertThreadHistoryCell { cell, .. }) => cell,
         other => panic!("expected InsertHistoryCell event, got {other:?}"),
     };
     let rendered = lines_to_single_string(&cell.display_lines(120));
@@ -6506,7 +6642,7 @@ printf 'fenced within fenced\n'
             chat.on_commit_tick();
             let mut inserted_any = false;
             while let Ok(app_ev) = rx.try_recv() {
-                if let AppEvent::InsertHistoryCell(cell) = app_ev {
+                if let Some(cell) = into_insert_history_cell(app_ev) {
                     let lines = cell.display_lines(width);
                     crate::insert_history::insert_history_lines(&mut term, lines)
                         .expect("Failed to insert history lines in test");

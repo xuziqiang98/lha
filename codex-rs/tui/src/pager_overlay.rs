@@ -21,13 +21,11 @@ use std::time::Duration;
 
 use crate::chatwidget::ActiveCellTranscriptKey;
 use crate::history_cell::HistoryCell;
-use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
-use crate::render::Insets;
-use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
-use crate::style::user_message_style;
+use crate::transcript_view::TranscriptScroll;
+use crate::transcript_view::TranscriptView;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crossterm::event::KeyCode;
@@ -35,7 +33,6 @@ use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -326,6 +323,7 @@ impl PagerView {
 }
 
 impl PagerView {
+    #[cfg(test)]
     fn is_scrolled_to_bottom(&self) -> bool {
         if self.scroll_offset == usize::MAX {
             return true;
@@ -344,11 +342,6 @@ impl PagerView {
         }
         let max_scroll = total_height.saturating_sub(height);
         self.scroll_offset >= max_scroll
-    }
-
-    /// Request that the given text chunk index be scrolled into view on next render.
-    fn scroll_chunk_into_view(&mut self, chunk_index: usize) {
-        self.pending_scroll_chunk = Some(chunk_index);
     }
 
     fn ensure_chunk_visible(&mut self, idx: usize, area: Rect) {
@@ -403,50 +396,10 @@ impl Renderable for CachedRenderable {
     }
 }
 
-struct CellRenderable {
-    cell: Arc<dyn HistoryCell>,
-    style: Style,
-}
-
-impl Renderable for CellRenderable {
-    fn render(&self, area: Rect, buf: &mut Buffer) {
-        let p =
-            Paragraph::new(Text::from(self.cell.transcript_lines(area.width))).style(self.style);
-        p.render(area, buf);
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        self.cell.desired_transcript_height(width)
-    }
-}
-
 pub(crate) struct TranscriptOverlay {
-    /// Pager UI state and the renderables currently displayed.
-    ///
-    /// The invariant is that `view.renderables` is `render_cells(cells)` plus an optional trailing
-    /// live-tail renderable appended after the committed cells.
-    view: PagerView,
-    /// Committed transcript cells (does not include the live tail).
-    cells: Vec<Arc<dyn HistoryCell>>,
+    view: TranscriptView,
     highlight_cell: Option<usize>,
-    /// Cache key for the render-only live tail appended after committed cells.
-    live_tail_key: Option<LiveTailKey>,
     is_done: bool,
-}
-
-/// Cache key for the active-cell "live tail" appended to the transcript overlay.
-///
-/// Changing any field implies a different rendered tail.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct LiveTailKey {
-    /// Current terminal width, which affects wrapping.
-    width: u16,
-    /// Revision that changes on in-place active cell transcript updates.
-    revision: u64,
-    /// Whether the tail should be treated as a continuation for spacing.
-    is_stream_continuation: bool,
-    /// Optional animation tick to refresh spinners/progress indicators.
-    animation_tick: Option<u64>,
 }
 
 impl TranscriptOverlay {
@@ -456,52 +409,10 @@ impl TranscriptOverlay {
     /// `sync_live_tail` during draws to reflect in-flight activity.
     pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>) -> Self {
         Self {
-            view: PagerView::new(
-                Self::render_cells(&transcript_cells, None),
-                "T R A N S C R I P T".to_string(),
-                usize::MAX,
-            ),
-            cells: transcript_cells,
+            view: TranscriptView::new(transcript_cells),
             highlight_cell: None,
-            live_tail_key: None,
             is_done: false,
         }
-    }
-
-    fn render_cells(
-        cells: &[Arc<dyn HistoryCell>],
-        highlight_cell: Option<usize>,
-    ) -> Vec<Box<dyn Renderable>> {
-        cells
-            .iter()
-            .enumerate()
-            .flat_map(|(i, c)| {
-                let mut v: Vec<Box<dyn Renderable>> = Vec::new();
-                let mut cell_renderable = if c.as_any().is::<UserHistoryCell>() {
-                    Box::new(CachedRenderable::new(CellRenderable {
-                        cell: c.clone(),
-                        style: if highlight_cell == Some(i) {
-                            user_message_style().reversed()
-                        } else {
-                            user_message_style()
-                        },
-                    })) as Box<dyn Renderable>
-                } else {
-                    Box::new(CachedRenderable::new(CellRenderable {
-                        cell: c.clone(),
-                        style: Style::default(),
-                    })) as Box<dyn Renderable>
-                };
-                if !c.is_stream_continuation() && i > 0 {
-                    cell_renderable = Box::new(InsetRenderable::new(
-                        cell_renderable,
-                        Insets::tlbr(1, 0, 0, 0),
-                    ));
-                }
-                v.push(cell_renderable);
-                v
-            })
-            .collect()
     }
 
     /// Insert a committed history cell while keeping any cached live tail.
@@ -515,29 +426,7 @@ impl TranscriptOverlay {
     /// the overlay was scrolled to bottom before insertion, it remains pinned to bottom after the
     /// insertion to preserve the "follow along" behavior.
     pub(crate) fn insert_cell(&mut self, cell: Arc<dyn HistoryCell>) {
-        let follow_bottom = self.view.is_scrolled_to_bottom();
-        let had_prior_cells = !self.cells.is_empty();
-        let tail_renderable = self.take_live_tail_renderable();
-        self.cells.push(cell);
-        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
-        if let Some(tail) = tail_renderable {
-            let tail = if !had_prior_cells
-                && self
-                    .live_tail_key
-                    .is_some_and(|key| !key.is_stream_continuation)
-            {
-                // The tail was rendered as the only entry, so it lacks a top
-                // inset; add one now that it follows a committed cell.
-                Box::new(InsetRenderable::new(tail, Insets::tlbr(1, 0, 0, 0)))
-                    as Box<dyn Renderable>
-            } else {
-                tail
-            };
-            self.view.renderables.push(tail);
-        }
-        if follow_bottom {
-            self.view.scroll_offset = usize::MAX;
-        }
+        self.view.insert_cell(cell);
     }
 
     /// Sync the active-cell live tail with the current width and cell state.
@@ -558,42 +447,12 @@ impl TranscriptOverlay {
         active_key: Option<ActiveCellTranscriptKey>,
         compute_lines: impl FnOnce(u16) -> Option<Vec<Line<'static>>>,
     ) {
-        let next_key = active_key.map(|key| LiveTailKey {
-            width,
-            revision: key.revision,
-            is_stream_continuation: key.is_stream_continuation,
-            animation_tick: key.animation_tick,
-        });
-
-        if self.live_tail_key == next_key {
-            return;
-        }
-        let follow_bottom = self.view.is_scrolled_to_bottom();
-
-        self.take_live_tail_renderable();
-        self.live_tail_key = next_key;
-
-        if let Some(key) = next_key {
-            let lines = compute_lines(width).unwrap_or_default();
-            if !lines.is_empty() {
-                self.view.renderables.push(Self::live_tail_renderable(
-                    lines,
-                    !self.cells.is_empty(),
-                    key.is_stream_continuation,
-                ));
-            }
-        }
-        if follow_bottom {
-            self.view.scroll_offset = usize::MAX;
-        }
+        self.view.sync_live_tail(width, active_key, compute_lines);
     }
 
     pub(crate) fn set_highlight_cell(&mut self, cell: Option<usize>) {
         self.highlight_cell = cell;
-        self.rebuild_renderables();
-        if let Some(idx) = self.highlight_cell {
-            self.view.scroll_chunk_into_view(idx);
-        }
+        self.view.set_highlight_cell(cell);
     }
 
     /// Returns whether the underlying pager view is currently pinned to the bottom.
@@ -602,36 +461,6 @@ impl TranscriptOverlay {
     /// tail; if the user has scrolled up, we avoid driving animation work that they cannot see.
     pub(crate) fn is_scrolled_to_bottom(&self) -> bool {
         self.view.is_scrolled_to_bottom()
-    }
-
-    fn rebuild_renderables(&mut self) {
-        let tail_renderable = self.take_live_tail_renderable();
-        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
-        if let Some(tail) = tail_renderable {
-            self.view.renderables.push(tail);
-        }
-    }
-
-    /// Removes and returns the cached live-tail renderable, if present.
-    ///
-    /// The live tail is represented as a single optional renderable appended after the committed
-    /// cell renderables, so this relies on the live tail always being the final entry in
-    /// `view.renderables` when present.
-    fn take_live_tail_renderable(&mut self) -> Option<Box<dyn Renderable>> {
-        (self.view.renderables.len() > self.cells.len()).then(|| self.view.renderables.pop())?
-    }
-
-    fn live_tail_renderable(
-        lines: Vec<Line<'static>>,
-        has_prior_cells: bool,
-        is_stream_continuation: bool,
-    ) -> Box<dyn Renderable> {
-        let paragraph = Paragraph::new(Text::from(lines));
-        let mut renderable: Box<dyn Renderable> = Box::new(CachedRenderable::new(paragraph));
-        if has_prior_cells && !is_stream_continuation {
-            renderable = Box::new(InsetRenderable::new(renderable, Insets::tlbr(1, 0, 0, 0)));
-        }
-        renderable
     }
 
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
@@ -654,7 +483,10 @@ impl TranscriptOverlay {
         let top_h = area.height.saturating_sub(3);
         let top = Rect::new(area.x, area.y, area.width, top_h);
         let bottom = Rect::new(area.x, area.y + top_h, area.width, 3);
-        self.view.render(top, buf);
+        render_overlay_header(top, buf, "T R A N S C R I P T");
+        let content_area = overlay_content_area(top);
+        self.view.render_overlay_content(content_area, buf);
+        render_overlay_bottom_bar(top, content_area, buf, &self.view);
         self.render_hints(bottom, buf);
     }
 }
@@ -667,7 +499,14 @@ impl TranscriptOverlay {
                     self.is_done = true;
                     Ok(())
                 }
-                other => self.view.handle_key_event(tui, other),
+                other => {
+                    if let Some(scroll) = transcript_scroll_key(other) {
+                        self.view.apply_scroll(scroll);
+                        tui.frame_requester()
+                            .schedule_frame_in(Duration::from_millis(16));
+                    }
+                    Ok(())
+                }
             },
             TuiEvent::Draw => {
                 tui.draw(u16::MAX, |frame| {
@@ -681,6 +520,65 @@ impl TranscriptOverlay {
     pub(crate) fn is_done(&self) -> bool {
         self.is_done
     }
+}
+
+fn transcript_scroll_key(key_event: KeyEvent) -> Option<TranscriptScroll> {
+    match key_event {
+        e if KEY_UP.is_press(e) || KEY_K.is_press(e) => Some(TranscriptScroll::Up),
+        e if KEY_DOWN.is_press(e) || KEY_J.is_press(e) => Some(TranscriptScroll::Down),
+        e if KEY_PAGE_UP.is_press(e) || KEY_SHIFT_SPACE.is_press(e) || KEY_CTRL_B.is_press(e) => {
+            Some(TranscriptScroll::PageUp)
+        }
+        e if KEY_PAGE_DOWN.is_press(e) || KEY_SPACE.is_press(e) || KEY_CTRL_F.is_press(e) => {
+            Some(TranscriptScroll::PageDown)
+        }
+        e if KEY_CTRL_D.is_press(e) => Some(TranscriptScroll::HalfPageDown),
+        e if KEY_CTRL_U.is_press(e) => Some(TranscriptScroll::HalfPageUp),
+        e if KEY_HOME.is_press(e) => Some(TranscriptScroll::Home),
+        e if KEY_END.is_press(e) => Some(TranscriptScroll::End),
+        _ => None,
+    }
+}
+
+fn overlay_content_area(area: Rect) -> Rect {
+    let mut area = area;
+    area.y = area.y.saturating_add(1);
+    area.height = area.height.saturating_sub(2);
+    area
+}
+
+fn render_overlay_header(area: Rect, buf: &mut Buffer, title: &str) {
+    Span::from("/ ".repeat(area.width as usize / 2))
+        .dim()
+        .render_ref(area, buf);
+    let header = format!("/ {title}");
+    header.dim().render_ref(area, buf);
+}
+
+fn render_overlay_bottom_bar(
+    full_area: Rect,
+    content_area: Rect,
+    buf: &mut Buffer,
+    view: &TranscriptView,
+) {
+    let sep_y = content_area.bottom();
+    let sep_rect = Rect::new(full_area.x, sep_y, full_area.width, 1);
+
+    Span::from("─".repeat(sep_rect.width as usize))
+        .dim()
+        .render_ref(sep_rect, buf);
+    let percent = view.scroll_percent();
+    let pct_text = format!(" {percent}% ");
+    let pct_w = pct_text.chars().count() as u16;
+    let pct_area_width = pct_w.min(sep_rect.width);
+    let pct_x = sep_rect.x.saturating_add(
+        sep_rect
+            .width
+            .saturating_sub(pct_area_width.saturating_add(1)),
+    );
+    Span::from(pct_text)
+        .dim()
+        .render_ref(Rect::new(pct_x, sep_rect.y, pct_area_width, 1), buf);
 }
 
 pub(crate) struct StaticOverlay {
@@ -993,7 +891,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
 
         overlay.render(area, &mut buf);
-        overlay.view.scroll_offset = 0;
+        overlay.view.set_scroll_offset(0);
         overlay.render(area, &mut buf);
 
         let snapshot = buffer_to_text(&buf, area);
@@ -1024,7 +922,7 @@ mod tests {
             lines: vec!["tail".into()],
         }));
 
-        assert_eq!(overlay.view.scroll_offset, usize::MAX);
+        assert_eq!(overlay.view.scroll_offset(), usize::MAX);
     }
 
     #[test]
@@ -1042,13 +940,27 @@ mod tests {
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
 
-        overlay.view.scroll_offset = 0;
+        overlay.view.set_scroll_offset(0);
 
         overlay.insert_cell(Arc::new(TestCell {
             lines: vec!["tail".into()],
         }));
 
-        assert_eq!(overlay.view.scroll_offset, 0);
+        assert_eq!(overlay.view.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn transcript_overlay_renders_percent_label_in_narrow_widths() {
+        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
+            lines: vec![Line::from("alpha")],
+        })]);
+        let area = Rect::new(0, 0, 4, 6);
+        let mut buf = Buffer::empty(area);
+
+        overlay.render(area, &mut buf);
+
+        let rendered = buffer_to_text(&buf, area);
+        assert!(!rendered.is_empty(), "expected narrow overlay to render");
     }
 
     #[test]
@@ -1105,12 +1017,13 @@ mod tests {
 
         // Prime layout so last_content_height is populated and paging uses the real content height.
         let mut buf = Buffer::empty(area);
-        overlay.view.scroll_offset = 0;
+        overlay.view.set_scroll_offset(0);
         overlay.render(area, &mut buf);
-        let page_height = overlay.view.page_height(area);
+        let top = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(3));
+        let page_height = overlay.view.page_height_for_area(top);
 
         // Scenario 1: starting from the top, PageDown should show the next page of content.
-        overlay.view.scroll_offset = 0;
+        overlay.view.set_scroll_offset(0);
         let page1 = transcript_line_numbers(&mut overlay, area);
         let page1_len = page1.len();
         let expected_page1: Vec<usize> = (0..page1_len).collect();
@@ -1119,7 +1032,9 @@ mod tests {
             "first page should start at line-00 and show a full page of content"
         );
 
-        overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_add(page_height);
+        overlay
+            .view
+            .set_scroll_offset(overlay.view.scroll_offset().saturating_add(page_height));
         let page2 = transcript_line_numbers(&mut overlay, area);
         assert_eq!(
             page2.len(),
@@ -1134,11 +1049,15 @@ mod tests {
 
         // Scenario 2: from an interior offset (start=3), PageDown then PageUp should round-trip.
         let interior_offset = 3usize;
-        overlay.view.scroll_offset = interior_offset;
+        overlay.view.set_scroll_offset(interior_offset);
         let before = transcript_line_numbers(&mut overlay, area);
-        overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_add(page_height);
+        overlay
+            .view
+            .set_scroll_offset(overlay.view.scroll_offset().saturating_add(page_height));
         let _ = transcript_line_numbers(&mut overlay, area);
-        overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_sub(page_height);
+        overlay
+            .view
+            .set_scroll_offset(overlay.view.scroll_offset().saturating_sub(page_height));
         let after = transcript_line_numbers(&mut overlay, area);
         assert_eq!(
             before, after,
@@ -1146,11 +1065,15 @@ mod tests {
         );
 
         // Scenario 3: from the top of the second page, PageUp then PageDown should round-trip.
-        overlay.view.scroll_offset = page_height;
+        overlay.view.set_scroll_offset(page_height);
         let before2 = transcript_line_numbers(&mut overlay, area);
-        overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_sub(page_height);
+        overlay
+            .view
+            .set_scroll_offset(overlay.view.scroll_offset().saturating_sub(page_height));
         let _ = transcript_line_numbers(&mut overlay, area);
-        overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_add(page_height);
+        overlay
+            .view
+            .set_scroll_offset(overlay.view.scroll_offset().saturating_add(page_height));
         let after2 = transcript_line_numbers(&mut overlay, area);
         assert_eq!(
             before2, after2,
