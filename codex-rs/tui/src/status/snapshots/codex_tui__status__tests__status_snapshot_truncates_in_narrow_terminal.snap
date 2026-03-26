@@ -1,6 +1,5 @@
 ---
 source: tui/src/status/tests.rs
-assertion_line: 890
 expression: sanitized
 ---
 /status
@@ -11,14 +10,13 @@ expression: sanitized
 │ Visit https://chatgpt.com/codex/settings/usage for up-to-date      │
 │ information on rate limits and credits                             │
 │                                                                    │
-│  Model:             gpt-5.1-codex-max (reasoning high, summaries d │
+│  Model:            gpt-5.1-codex-max (reasoning high, summaries de │
 │  Directory: [[workspace]]                                          │
-│  Approval:          on-request                                     │
-│  Sandbox:           read-only                                      │
-│  Agents.md:         <none>                                         │
-│  Account:           user@example.com (Unknown)                     │
+│  Approval:         on-request                                      │
+│  Sandbox:          read-only                                       │
+│  Agents.md:        <none>                                          │
+│  Account:          user@example.com (Unknown)                      │
 │                                                                    │
-│  Context window:    99% left (2.25K used / 272K)                   │
-│  Context compact:   0                                              │
-│  5h limit:          [██████░░░░░░░░░░░░░░] 28% left (resets 03:14) │
+│  Context window:   99% left (2.25K used / 272K)                    │
+│  5h limit:         [██████░░░░░░░░░░░░░░] 28% left (resets 03:14)  │
 ╰────────────────────────────────────────────────────────────────────╯

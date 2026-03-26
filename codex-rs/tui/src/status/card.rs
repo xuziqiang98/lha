@@ -463,7 +463,9 @@ impl HistoryCell for StatusHistoryCell {
         if self.token_usage.context_window.is_some() {
             push_label(&mut labels, &mut seen, "Context window");
         }
-        push_label(&mut labels, &mut seen, "Context compact");
+        if self.context_compact_count > 0 {
+            push_label(&mut labels, &mut seen, "Context compact");
+        }
 
         if self.show_limits {
             self.collect_rate_limit_labels(&mut seen, &mut labels);
@@ -537,10 +539,12 @@ impl HistoryCell for StatusHistoryCell {
         if let Some(spans) = self.context_window_spans() {
             lines.push(formatter.line("Context window", spans));
         }
-        lines.push(formatter.line(
-            "Context compact",
-            vec![Span::from(self.context_compact_count.to_string())],
-        ));
+        if self.context_compact_count > 0 {
+            lines.push(formatter.line(
+                "Context compact",
+                vec![Span::from(self.context_compact_count.to_string())],
+            ));
+        }
 
         if self.show_limits {
             lines.extend(self.rate_limit_lines(available_inner_width, &formatter));

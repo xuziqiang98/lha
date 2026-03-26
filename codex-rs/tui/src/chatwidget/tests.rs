@@ -439,6 +439,41 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
 }
 
 #[tokio::test]
+async fn status_hides_zero_context_compact_count() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().expect("rollout file");
+    let configured = codex_core::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    let status = status_output_text(&mut chat, &mut rx);
+    assert!(
+        !status.lines().any(|line| line.contains("Context compact:")),
+        "expected zero context compact count to be hidden, got {status:?}"
+    );
+}
+
+#[tokio::test]
 async fn status_shows_live_context_compact_count() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
 
