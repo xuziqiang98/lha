@@ -1776,14 +1776,15 @@ pub(crate) fn new_changelog_output(
         lines.push(Line::from(""));
         lines.push(format!("{title} ({})", grouped.len()).bold().into());
 
-        for entry in grouped {
+        for (index, entry) in grouped.iter().enumerate() {
             let marker = match kind {
                 ChangelogKind::Added => marker.green(),
                 ChangelogKind::Modified => marker.cyan(),
                 ChangelogKind::Deleted => marker.red(),
             };
             let path = format_changelog_path(&entry.path, cwd, display_root);
-            lines.push(vec!["  └ ".into(), marker, " ".dim(), path.dim()].into());
+            let prefix = if index == 0 { "  └ " } else { "    " };
+            lines.push(vec![prefix.into(), marker, " ".dim(), path.dim()].into());
         }
     }
 
@@ -2193,11 +2194,23 @@ mod tests {
             vec![
                 ChangelogEntry {
                     kind: ChangelogKind::Added,
+                    path: PathBuf::from("/repo/project/src/lib.rs"),
+                },
+                ChangelogEntry {
+                    kind: ChangelogKind::Added,
                     path: PathBuf::from("/repo/project/src/main.rs"),
                 },
                 ChangelogEntry {
                     kind: ChangelogKind::Modified,
+                    path: home.join("notes/ideas.md"),
+                },
+                ChangelogEntry {
+                    kind: ChangelogKind::Modified,
                     path: home.join("notes/todo.md"),
+                },
+                ChangelogEntry {
+                    kind: ChangelogKind::Deleted,
+                    path: PathBuf::from("/opt/shared/legacy.txt"),
                 },
                 ChangelogEntry {
                     kind: ChangelogKind::Deleted,
@@ -2214,14 +2227,17 @@ mod tests {
             vec![
                 "Changed files".to_string(),
                 "".to_string(),
-                "Added (1)".to_string(),
-                "  └ A ./src/main.rs".to_string(),
+                "Added (2)".to_string(),
+                "  └ A ./src/lib.rs".to_string(),
+                "    A ./src/main.rs".to_string(),
                 "".to_string(),
-                "Modified (1)".to_string(),
-                "  └ M ~/notes/todo.md".to_string(),
+                "Modified (2)".to_string(),
+                "  └ M ~/notes/ideas.md".to_string(),
+                "    M ~/notes/todo.md".to_string(),
                 "".to_string(),
-                "Deleted (1)".to_string(),
-                "  └ D /opt/shared/old.txt".to_string(),
+                "Deleted (2)".to_string(),
+                "  └ D /opt/shared/legacy.txt".to_string(),
+                "    D /opt/shared/old.txt".to_string(),
             ]
         );
     }
