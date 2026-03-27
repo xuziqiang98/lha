@@ -315,6 +315,12 @@ impl MessageProcessor {
         self.codex_message_processor.thread_created_receiver()
     }
 
+    pub(crate) async fn clear_all_thread_listeners(&mut self) {
+        self.codex_message_processor
+            .clear_all_thread_listeners()
+            .await;
+    }
+
     pub(crate) async fn try_attach_thread_listener(&mut self, thread_id: ThreadId) {
         if !self.initialized {
             return;

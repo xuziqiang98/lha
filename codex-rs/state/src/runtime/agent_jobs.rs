@@ -445,6 +445,7 @@ WHERE
     AND item_id = ?
     AND status = ?
     AND assigned_thread_id = ?
+    AND result_json IS NULL
             "#,
         )
         .bind(serialized)
@@ -559,5 +560,202 @@ WHERE job_id = ?
                 .unwrap_or_default(),
             failed_items: usize::try_from(failed_items.unwrap_or_default()).unwrap_or_default(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use std::path::PathBuf;
+    use uuid::Uuid;
+
+    fn unique_temp_dir() -> PathBuf {
+        std::env::temp_dir().join(format!("codex-state-agent-jobs-{}", Uuid::new_v4()))
+    }
+
+    async fn create_running_single_item_job(
+        runtime: &StateRuntime,
+    ) -> anyhow::Result<(String, String, String)> {
+        let job_id = "job-1".to_string();
+        let item_id = "item-1".to_string();
+        let thread_id = "thread-1".to_string();
+        runtime
+            .create_agent_job(
+                &AgentJobCreateParams {
+                    id: job_id.clone(),
+                    name: "test-job".to_string(),
+                    instruction: "Return a result".to_string(),
+                    auto_export: true,
+                    max_runtime_seconds: None,
+                    output_schema_json: None,
+                    input_headers: vec!["path".to_string()],
+                    input_csv_path: "/tmp/in.csv".to_string(),
+                    output_csv_path: "/tmp/out.csv".to_string(),
+                },
+                &[AgentJobItemCreateParams {
+                    item_id: item_id.clone(),
+                    row_index: 0,
+                    source_id: None,
+                    row_json: json!({"path":"file-1"}),
+                }],
+            )
+            .await?;
+        runtime.mark_agent_job_running(job_id.as_str()).await?;
+        let marked_running = runtime
+            .mark_agent_job_item_running_with_thread(
+                job_id.as_str(),
+                item_id.as_str(),
+                thread_id.as_str(),
+            )
+            .await?;
+        assert!(marked_running);
+        Ok((job_id, item_id, thread_id))
+    }
+
+    #[tokio::test]
+    async fn report_agent_job_item_result_records_report_without_completing_item()
+    -> anyhow::Result<()> {
+        let runtime =
+            StateRuntime::init(unique_temp_dir(), "test-provider".to_string(), None).await?;
+        let (job_id, item_id, thread_id) = create_running_single_item_job(runtime.as_ref()).await?;
+
+        let accepted = runtime
+            .report_agent_job_item_result(
+                job_id.as_str(),
+                item_id.as_str(),
+                thread_id.as_str(),
+                &json!({"ok": true}),
+            )
+            .await?;
+        assert!(accepted);
+
+        let item = runtime
+            .get_agent_job_item(job_id.as_str(), item_id.as_str())
+            .await?
+            .expect("job item should exist");
+        assert_eq!(item.status, AgentJobItemStatus::Running);
+        assert_eq!(item.result_json, Some(json!({"ok": true})));
+        assert_eq!(item.assigned_thread_id, Some(thread_id));
+        assert_eq!(item.last_error, None);
+        assert!(item.reported_at.is_some());
+        assert_eq!(item.completed_at, None);
+
+        let progress = runtime.get_agent_job_progress(job_id.as_str()).await?;
+        assert_eq!(
+            progress,
+            AgentJobProgress {
+                total_items: 1,
+                pending_items: 0,
+                running_items: 1,
+                completed_items: 0,
+                failed_items: 0,
+            }
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn report_agent_job_item_result_rejects_duplicate_reports() -> anyhow::Result<()> {
+        let runtime =
+            StateRuntime::init(unique_temp_dir(), "test-provider".to_string(), None).await?;
+        let (job_id, item_id, thread_id) = create_running_single_item_job(runtime.as_ref()).await?;
+
+        let accepted = runtime
+            .report_agent_job_item_result(
+                job_id.as_str(),
+                item_id.as_str(),
+                thread_id.as_str(),
+                &json!({"ok": true}),
+            )
+            .await?;
+        assert!(accepted);
+
+        let accepted = runtime
+            .report_agent_job_item_result(
+                job_id.as_str(),
+                item_id.as_str(),
+                thread_id.as_str(),
+                &json!({"ok": false}),
+            )
+            .await?;
+        assert!(!accepted);
+
+        let item = runtime
+            .get_agent_job_item(job_id.as_str(), item_id.as_str())
+            .await?
+            .expect("job item should exist");
+        assert_eq!(item.status, AgentJobItemStatus::Running);
+        assert_eq!(item.result_json, Some(json!({"ok": true})));
+        assert_eq!(item.assigned_thread_id, Some(thread_id));
+        assert!(item.reported_at.is_some());
+        assert_eq!(item.completed_at, None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn report_agent_job_item_result_still_allows_failure_before_exit() -> anyhow::Result<()> {
+        let runtime =
+            StateRuntime::init(unique_temp_dir(), "test-provider".to_string(), None).await?;
+        let (job_id, item_id, thread_id) = create_running_single_item_job(runtime.as_ref()).await?;
+
+        let accepted = runtime
+            .report_agent_job_item_result(
+                job_id.as_str(),
+                item_id.as_str(),
+                thread_id.as_str(),
+                &json!({"ok": true}),
+            )
+            .await?;
+        assert!(accepted);
+
+        let marked_failed = runtime
+            .mark_agent_job_item_failed(job_id.as_str(), item_id.as_str(), "worker timed out")
+            .await?;
+        assert!(marked_failed);
+
+        let item = runtime
+            .get_agent_job_item(job_id.as_str(), item_id.as_str())
+            .await?
+            .expect("job item should exist");
+        assert_eq!(item.status, AgentJobItemStatus::Failed);
+        assert_eq!(item.result_json, Some(json!({"ok": true})));
+        assert_eq!(item.assigned_thread_id, None);
+        assert_eq!(item.last_error, Some("worker timed out".to_string()));
+        assert!(item.reported_at.is_some());
+        assert!(item.completed_at.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn report_agent_job_item_result_rejects_late_reports() -> anyhow::Result<()> {
+        let runtime =
+            StateRuntime::init(unique_temp_dir(), "test-provider".to_string(), None).await?;
+        let (job_id, item_id, thread_id) = create_running_single_item_job(runtime.as_ref()).await?;
+
+        let marked_failed = runtime
+            .mark_agent_job_item_failed(job_id.as_str(), item_id.as_str(), "missing report")
+            .await?;
+        assert!(marked_failed);
+
+        let accepted = runtime
+            .report_agent_job_item_result(
+                job_id.as_str(),
+                item_id.as_str(),
+                thread_id.as_str(),
+                &json!({"late": true}),
+            )
+            .await?;
+        assert!(!accepted);
+
+        let item = runtime
+            .get_agent_job_item(job_id.as_str(), item_id.as_str())
+            .await?
+            .expect("job item should exist");
+        assert_eq!(item.status, AgentJobItemStatus::Failed);
+        assert_eq!(item.result_json, None);
+        assert_eq!(item.last_error, Some("missing report".to_string()));
+        Ok(())
     }
 }
