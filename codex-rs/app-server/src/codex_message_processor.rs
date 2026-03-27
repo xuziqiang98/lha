@@ -2337,6 +2337,14 @@ impl CodexMessageProcessor {
         }
     }
 
+    pub(crate) async fn clear_all_thread_listeners(&mut self) {
+        let listeners = std::mem::take(&mut self.conversation_listeners);
+        self.listener_thread_ids_by_subscription.clear();
+        for sender in listeners.into_values() {
+            let _ = sender.send(());
+        }
+    }
+
     async fn thread_resume(&mut self, request_id: RequestId, params: ThreadResumeParams) {
         let ThreadResumeParams {
             thread_id,

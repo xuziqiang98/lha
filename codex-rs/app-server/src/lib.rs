@@ -378,6 +378,7 @@ pub async fn run_main(
                 }
             }
 
+            processor.clear_all_thread_listeners().await;
             info!("processor task exited (channel closed)");
         }
     });
