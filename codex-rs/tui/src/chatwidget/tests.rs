@@ -4676,6 +4676,66 @@ async fn model_switcher_with_chatgpt_auth_keeps_builtin_and_custom_same_slug_vis
 }
 
 #[tokio::test]
+async fn model_switcher_prefers_exact_provider_for_current_marker() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.set_model("gpt-5.4");
+    chat.config.model_provider_id = "provider_a".to_string();
+
+    chat.open_all_models_popup(vec![
+        ModelPreset {
+            id: "gpt-5.4".to_string(),
+            model: "gpt-5.4".to_string(),
+            model_provider_id: None,
+            display_name: "gpt-5.4".to_string(),
+            description: "Configured model from config.toml.".to_string(),
+            default_reasoning_effort: ReasoningEffortConfig::Medium,
+            supported_reasoning_efforts: Vec::new(),
+            supports_personality: false,
+            is_default: false,
+            upgrade: None,
+            show_in_picker: true,
+            supported_in_api: true,
+        },
+        ModelPreset {
+            id: "provider_a/gpt-5.4".to_string(),
+            model: "gpt-5.4".to_string(),
+            model_provider_id: Some("provider_a".to_string()),
+            display_name: "gpt-5.4".to_string(),
+            description: "User-defined model from provider_a provider.".to_string(),
+            default_reasoning_effort: ReasoningEffortConfig::Medium,
+            supported_reasoning_efforts: Vec::new(),
+            supports_personality: false,
+            is_default: false,
+            upgrade: None,
+            show_in_picker: true,
+            supported_in_api: true,
+        },
+    ]);
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert_eq!(
+        popup.matches("(current)").count(),
+        1,
+        "expected only one current entry:\n{popup}"
+    );
+    assert!(
+        popup.lines().any(|line| {
+            line.contains("gpt-5.4 (current)")
+                && line.contains("User-defined model from provider_a provider.")
+        }),
+        "expected exact provider entry to be current:\n{popup}"
+    );
+    assert!(
+        popup.lines().any(|line| {
+            line.contains("gpt-5.4")
+                && line.contains("Configured model from config.toml.")
+                && !line.contains("(current)")
+        }),
+        "expected generic entry to remain non-current:\n{popup}"
+    );
+}
+
+#[tokio::test]
 async fn model_cap_error_does_not_switch_models() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("boomslang")).await;
     chat.set_model("boomslang");

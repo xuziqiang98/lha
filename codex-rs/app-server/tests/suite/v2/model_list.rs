@@ -333,10 +333,10 @@ async fn list_models_without_auth_returns_only_configured_custom_model() -> Resu
     assert_eq!(
         items,
         vec![Model {
-            id: "mock-model".to_string(),
+            id: "_provider.mock_provider.mock-model".to_string(),
             model: "mock-model".to_string(),
             display_name: "mock-model".to_string(),
-            description: "Configured model from config.toml.".to_string(),
+            description: "User-defined model from mock_provider provider.".to_string(),
             supported_reasoning_efforts: vec![],
             default_reasoning_effort: ReasoningEffort::None,
             supports_personality: false,
@@ -395,7 +395,71 @@ async fn list_models_with_auth_appends_configured_custom_model() -> Result<()> {
     );
     assert_eq!(
         items.last().map(|model| model.description.as_str()),
-        Some("Configured model from config.toml.")
+        Some("User-defined model from mock_provider provider.")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_models_with_auth_prefers_provider_aware_same_slug_over_generic_duplicate()
+-> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_models_cache(codex_home.path())?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"
+model = "gpt-5.2"
+model_provider = "provider_a"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+[features]
+remote_models = false
+
+[model_providers.provider_a]
+name = "provider_a"
+base_url = "https://example.test/a"
+wire_api = "chat"
+experimental_bearer_token = "sk-a"
+requires_openai_auth = false
+"#,
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-access"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_list_models_request(ModelListParams {
+            limit: Some(100),
+            cursor: None,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    let ModelListResponse { data: items, .. } = to_response::<ModelListResponse>(response)?;
+
+    let gpt_5_2_descriptions = items
+        .iter()
+        .filter(|model| model.model == "gpt-5.2")
+        .map(|model| model.description.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        gpt_5_2_descriptions,
+        vec![
+            "Latest frontier model with improvements across knowledge, reasoning and coding",
+            "User-defined model from provider_a provider.",
+        ]
     );
     Ok(())
 }

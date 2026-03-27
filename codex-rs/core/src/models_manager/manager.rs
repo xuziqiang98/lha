@@ -441,13 +441,7 @@ impl ModelsManager {
             .filter(|preset| preset.show_in_picker)
             .collect();
 
-        let custom_model = self
-            .configured_picker_model(config, &picker_models)
-            .filter(|preset| {
-                !picker_models
-                    .iter()
-                    .any(|model| model.model == preset.model)
-            });
+        let custom_model = self.configured_picker_model(config, &picker_models);
 
         match (has_auth, custom_model) {
             (true, Some(custom_model)) => {
@@ -609,6 +603,11 @@ impl ModelsManager {
             .map(str::to_string);
 
         if let Some(model) = top_level_model {
+            let top_level_provider_id = Self::normalized_configured_model_provider_id(
+                config_toml,
+                model,
+                top_level_provider_id,
+            );
             let key = (model.to_string(), top_level_provider_id.clone());
             if seen_models.insert(key) {
                 configured_models.push((model.to_string(), top_level_provider_id));
@@ -629,6 +628,8 @@ impl ModelsManager {
                     .map(str::trim)
                     .filter(|provider_id| !provider_id.is_empty())
                     .map(str::to_string);
+                let provider_id =
+                    Self::normalized_configured_model_provider_id(config_toml, &model, provider_id);
                 Some((model, provider_id))
             })
             .collect();
@@ -725,29 +726,56 @@ impl ModelsManager {
         picker_models: &[ModelPreset],
     ) -> Option<ModelPreset> {
         let model = config.model.as_deref()?.trim();
-        if model.is_empty() || picker_models.iter().any(|preset| preset.model == model) {
+        if model.is_empty() {
             return None;
         }
 
-        let model_info =
-            model_info::with_config_overrides(model_info::find_model_info_for_slug(model), config);
-        let default_reasoning_effort =
-            configured_model_default_reasoning_effort(config, &model_info);
-        let supports_personality = model_info.supports_personality();
+        let configured_model = if let Some(config_toml) = self.config_toml(config) {
+            let model_provider_id = Self::normalized_configured_model_provider_id(
+                &config_toml,
+                model,
+                config_toml.model_provider.clone(),
+            );
 
-        Some(ModelPreset {
-            id: model.to_string(),
-            model: model.to_string(),
-            model_provider_id: None,
-            display_name: model.to_string(),
-            description: "Configured model from config.toml.".to_string(),
-            default_reasoning_effort,
-            supported_reasoning_efforts: model_info.supported_reasoning_levels,
-            supports_personality,
-            is_default: false,
-            upgrade: None,
-            show_in_picker: true,
-            supported_in_api: true,
+            if self.should_use_official_openai_switcher_model(
+                model,
+                model_provider_id.as_deref(),
+                picker_models,
+            ) {
+                self.official_openai_switcher_model(model, config, picker_models)
+            } else {
+                self.configured_model_preset_from_config_toml(
+                    model,
+                    model_provider_id.as_deref(),
+                    &config_toml,
+                    config,
+                    picker_models,
+                )
+            }
+        } else {
+            self.configured_model_from_config_toml(model, config, picker_models)
+        };
+
+        if picker_models
+            .iter()
+            .any(|preset| Self::same_model_identity(preset, &configured_model))
+        {
+            return None;
+        }
+
+        Some(configured_model)
+    }
+
+    fn normalized_configured_model_provider_id(
+        config_toml: &ConfigToml,
+        model: &str,
+        provider_id: Option<String>,
+    ) -> Option<String> {
+        provider_id.or_else(|| {
+            config_toml
+                .resolve_model_provider_for_model(model)
+                .ok()
+                .flatten()
         })
     }
 
@@ -2031,20 +2059,20 @@ experimental_bearer_token = "sk-a"
             })
             .collect::<Vec<_>>();
 
+        assert_eq!(matching_models.len(), 2);
+        assert_eq!(matching_models[0].0, "gpt-5.2".to_string());
+        assert_eq!(matching_models[0].1, Some("openai".to_string()));
+        assert_ne!(
+            matching_models[0].2,
+            "Configured model from config.toml.".to_string()
+        );
         assert_eq!(
-            matching_models,
-            vec![
-                (
-                    "gpt-5.2".to_string(),
-                    Some("openai".to_string()),
-                    OFFICIAL_OPENAI_PROVIDER_DESCRIPTION.to_string(),
-                ),
-                (
-                    generated_provider_profile_name("provider_a", "gpt-5.2"),
-                    Some("provider_a".to_string()),
-                    "User-defined model from provider_a provider.".to_string(),
-                ),
-            ]
+            matching_models[1],
+            (
+                generated_provider_profile_name("provider_a", "gpt-5.2"),
+                Some("provider_a".to_string()),
+                "User-defined model from provider_a provider.".to_string(),
+            )
         );
     }
 
@@ -2097,20 +2125,20 @@ experimental_bearer_token = "sk-a"
             })
             .collect::<Vec<_>>();
 
+        assert_eq!(matching_models.len(), 2);
+        assert_eq!(matching_models[0].0, "gpt-5.2".to_string());
+        assert_eq!(matching_models[0].1, Some("openai".to_string()));
+        assert_ne!(
+            matching_models[0].2,
+            "Configured model from config.toml.".to_string()
+        );
         assert_eq!(
-            matching_models,
-            vec![
-                (
-                    "gpt-5.2".to_string(),
-                    Some("openai".to_string()),
-                    OFFICIAL_OPENAI_PROVIDER_DESCRIPTION.to_string(),
-                ),
-                (
-                    generated_provider_profile_name("provider_a", "gpt-5.2"),
-                    Some("provider_a".to_string()),
-                    "User-defined model from provider_a provider.".to_string(),
-                ),
-            ]
+            matching_models[1],
+            (
+                generated_provider_profile_name("provider_a", "gpt-5.2"),
+                Some("provider_a".to_string()),
+                "User-defined model from provider_a provider.".to_string(),
+            )
         );
     }
 
@@ -2172,6 +2200,145 @@ experimental_bearer_token = "sk-a"
                     generated_provider_profile_name("provider_a", "gpt-5.4"),
                     Some("provider_a".to_string()),
                     "User-defined model from provider_a provider.".to_string(),
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn list_picker_models_with_chatgpt_auth_prefers_provider_aware_current_model() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "openai",
+            ModelProviderInfo::create_openai_provider(),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "gpt-5.2"
+model_provider = "provider_a"
+
+[model_providers.provider_a]
+name = "provider_a"
+base_url = "https://example.com/a"
+wire_api = "chat"
+experimental_bearer_token = "sk-a"
+"#,
+        )
+        .await;
+
+        let picker_models = manager
+            .list_picker_models(&config, RefreshStrategy::Offline)
+            .await;
+
+        let matching_models = picker_models
+            .iter()
+            .filter(|preset| preset.model == "gpt-5.2")
+            .map(|preset| {
+                (
+                    preset.id.clone(),
+                    preset.model_provider_id.clone(),
+                    preset.description.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(matching_models.len(), 2);
+        assert_eq!(matching_models[0].0, "gpt-5.2".to_string());
+        assert_eq!(matching_models[0].1, Some("openai".to_string()));
+        assert_ne!(
+            matching_models[0].2,
+            "Configured model from config.toml.".to_string()
+        );
+        assert_eq!(
+            matching_models[1],
+            (
+                generated_provider_profile_name("provider_a", "gpt-5.2"),
+                Some("provider_a".to_string()),
+                "User-defined model from provider_a provider.".to_string(),
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn list_model_switcher_models_without_chatgpt_auth_keeps_ambiguous_providerless_entry() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager = Arc::new(AuthManager::new(
+            codex_home.path().to_path_buf(),
+            false,
+            AuthCredentialsStoreMode::File,
+        ));
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "openai",
+            ModelProviderInfo::create_openai_provider(),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "shared-model"
+
+[profiles.first]
+model = "shared-model"
+model_provider = "provider_a"
+
+[profiles.second]
+model = "shared-model"
+model_provider = "provider_b"
+
+[model_providers.provider_a]
+name = "provider_a"
+base_url = "https://example.com/a"
+wire_api = "chat"
+experimental_bearer_token = "sk-a"
+
+[model_providers.provider_b]
+name = "provider_b"
+base_url = "https://example.com/b"
+wire_api = "chat"
+experimental_bearer_token = "sk-b"
+"#,
+        )
+        .await;
+
+        let picker_models = manager
+            .list_model_switcher_models(&config, RefreshStrategy::Offline)
+            .await;
+
+        let matching_models = picker_models
+            .iter()
+            .filter(|preset| preset.model == "shared-model")
+            .map(|preset| {
+                (
+                    preset.id.clone(),
+                    preset.model_provider_id.clone(),
+                    preset.description.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            matching_models,
+            vec![
+                (
+                    "shared-model".to_string(),
+                    None,
+                    "Configured model from config.toml.".to_string(),
+                ),
+                (
+                    generated_provider_profile_name("provider_a", "shared-model"),
+                    Some("provider_a".to_string()),
+                    "User-defined model from provider_a provider.".to_string(),
+                ),
+                (
+                    generated_provider_profile_name("provider_b", "shared-model"),
+                    Some("provider_b".to_string()),
+                    "User-defined model from provider_b provider.".to_string(),
                 ),
             ]
         );
