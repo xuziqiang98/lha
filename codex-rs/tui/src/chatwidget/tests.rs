@@ -2328,7 +2328,6 @@ async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
                     mode: ModeKind::Code,
                     ..
                 }),
-            personality: None,
             ..
         } => {}
         other => {
@@ -3373,7 +3372,6 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
                     mode: ModeKind::Code,
                     ..
                 }),
-            personality: None,
             ..
         } => {}
         other => {
@@ -3391,7 +3389,6 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
                     mode: ModeKind::Code,
                     ..
                 }),
-            personality: None,
             ..
         } => {}
         other => {
@@ -3717,9 +3714,7 @@ async fn collab_mode_is_not_sent_until_selected() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            collaboration_mode,
-            personality: None,
-            ..
+            collaboration_mode, ..
         } => {
             assert_eq!(collaboration_mode, None);
         }

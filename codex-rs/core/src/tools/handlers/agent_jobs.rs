@@ -891,10 +891,10 @@ async fn active_item_status(
     thread_id: ThreadId,
     item: &mut ActiveJobItem,
 ) -> AgentStatus {
-    if let Some(status_rx) = item.status_rx.as_mut() {
-        if let Some(status) = active_item_status_from_receiver(status_rx) {
-            return status;
-        }
+    if let Some(status_rx) = item.status_rx.as_mut()
+        && let Some(status) = active_item_status_from_receiver(status_rx)
+    {
+        return status;
     }
     session.services.agent_control.get_status(thread_id).await
 }

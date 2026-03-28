@@ -4235,7 +4235,6 @@ impl ChatWidget {
                         &preset,
                         has_exact_provider_match,
                     ),
-                    is_default: preset.is_default,
                     actions,
                     dismiss_on_select: true,
                     ..Default::default()
@@ -4321,7 +4320,6 @@ impl ChatWidget {
                 name: preset.display_name.clone(),
                 description,
                 is_current,
-                is_default: preset.is_default,
                 actions,
                 dismiss_on_select: !requires_reasoning_picker,
                 ..Default::default()

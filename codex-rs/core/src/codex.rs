@@ -5120,7 +5120,7 @@ mod tests {
 
     #[tokio::test]
     async fn reconstruct_history_matches_live_compactions() {
-        let (session, turn_context) = make_session_and_context().await;
+        let (session, turn_context) = make_session_and_context_without_personality().await;
         let (rollout_items, expected) = sample_rollout(&session, &turn_context).await;
 
         let reconstructed = session
@@ -5132,7 +5132,7 @@ mod tests {
 
     #[tokio::test]
     async fn record_initial_history_reconstructs_resumed_transcript() {
-        let (session, turn_context) = make_session_and_context().await;
+        let (session, turn_context) = make_session_and_context_without_personality().await;
         let (rollout_items, expected) = sample_rollout(&session, &turn_context).await;
 
         session
@@ -5149,7 +5149,7 @@ mod tests {
 
     #[tokio::test]
     async fn resumed_history_seeds_initial_context_on_first_turn_only() {
-        let (session, turn_context) = make_session_and_context().await;
+        let (session, turn_context) = make_session_and_context_without_personality().await;
         let (rollout_items, mut expected) = sample_rollout(&session, &turn_context).await;
 
         session
@@ -5252,8 +5252,11 @@ mod tests {
 
     #[tokio::test]
     async fn record_initial_history_reconstructs_forked_transcript() {
-        let (session, turn_context) = make_session_and_context().await;
-        let (rollout_items, mut expected) = sample_rollout(&session, &turn_context).await;
+        let (session, turn_context) = make_session_and_context_without_personality().await;
+        let (rollout_items, _expected) = sample_rollout(&session, &turn_context).await;
+        let mut expected = session
+            .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+            .await;
 
         session
             .record_initial_history(InitialHistory::Forked(rollout_items))
@@ -6225,6 +6228,13 @@ mod tests {
     pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         let codex_home = tempfile::tempdir().expect("create temp dir");
         let config = build_test_config(codex_home.path()).await;
+        make_session_and_context_for_config(config).await
+    }
+
+    async fn make_session_and_context_without_personality() -> (Session, TurnContext) {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(codex_home.path()).await;
+        config.personality = None;
         make_session_and_context_for_config(config).await
     }
 

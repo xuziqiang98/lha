@@ -1985,7 +1985,7 @@ model = "deepseek-r1"
 
         assert_eq!(
             picker_models.first().map(|preset| preset.model.as_str()),
-            Some("gpt-5.2-codex")
+            Some("gpt-5.3-codex")
         );
         assert_eq!(
             picker_models.last().map(|preset| preset.model.as_str()),
@@ -2001,7 +2001,7 @@ model = "deepseek-r1"
         assert!(
             picker_models
                 .iter()
-                .any(|preset| preset.model == "gpt-5.2-codex" && preset.is_default)
+                .any(|preset| preset.model == "gpt-5.3-codex" && preset.is_default)
         );
         assert!(
             picker_models

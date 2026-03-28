@@ -38,7 +38,6 @@ pub(crate) struct SelectionItem {
     pub description: Option<String>,
     pub selected_description: Option<String>,
     pub is_current: bool,
-    pub is_default: bool,
     pub is_disabled: bool,
     pub actions: Vec<SelectionAction>,
     pub dismiss_on_select: bool,
@@ -192,13 +191,7 @@ impl ListSelectionView {
                     let is_selected = self.state.selected_idx == Some(visible_idx);
                     let prefix = if is_selected { '›' } else { ' ' };
                     let name = item.name.as_str();
-                    let marker = if item.is_current {
-                        " (current)"
-                    } else if item.is_default {
-                        " (default)"
-                    } else {
-                        ""
-                    };
+                    let marker = if item.is_current { " (current)" } else { "" };
                     let name_with_marker = format!("{name}{marker}");
                     let n = visible_idx + 1;
                     let wrap_prefix = if self.is_searchable {
