@@ -4642,19 +4642,27 @@ async fn model_switcher_with_chatgpt_auth_keeps_builtin_and_custom_same_slug_vis
         .filter(|line| {
             line.contains("gpt-5.2")
                 && !line.contains("gpt-5.2-codex")
-                && (line.contains("Official model from OpenAI provider.")
+                && (line.contains(
+                    "Latest frontier model with improvements across knowledge, reasoning and coding",
+                )
                     || line.contains("User-defined model from provider_a (responses) provider."))
         })
         .count();
 
     assert_eq!(matching_lines, 2, "expected two gpt-5.2 entries:\n{popup}");
     assert!(
-        popup.contains("Official model from OpenAI provider."),
-        "expected openai-official description in picker:\n{popup}"
+        !popup.contains("Official model from OpenAI provider."),
+        "expected custom-provider picker not to brand catalog models as official openai:\n{popup}"
     );
     assert!(
         popup.contains("User-defined model from provider_a (responses) provider."),
         "expected custom provider description in picker:\n{popup}"
+    );
+    assert!(
+        popup.contains(
+            "Latest frontier model with improvements across knowledge, reasoning and coding"
+        ),
+        "expected catalog model description in picker:\n{popup}"
     );
     assert_eq!(
         popup.matches("(current)").count(),
