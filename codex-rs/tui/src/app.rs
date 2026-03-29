@@ -1781,7 +1781,7 @@ impl App {
                     if self.backtrack_render_pending {
                         self.backtrack_render_pending = false;
                         if self.uses_terminal_scrollback() {
-                            self.render_transcript_once(tui)?;
+                            self.render_transcript_once(tui);
                         }
                     }
                     self.chat_widget.maybe_post_pending_notification(tui);

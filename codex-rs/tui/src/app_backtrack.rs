@@ -240,16 +240,16 @@ impl App {
         }
     }
 
-    /// Re-render the full transcript into the terminal scrollback in one pass.
+    /// Re-render the full transcript into terminal-managed scrollback in one pass.
     ///
-    /// This is used by classic terminal-managed scrollback mode after rollback trims the local
-    /// transcript so the outer terminal history matches the surviving cells.
-    pub(crate) fn render_transcript_once(&mut self, tui: &mut tui::Tui) -> Result<()> {
+    /// In classic terminal scrollback mode this is a best-effort refresh after rollback trims the
+    /// local transcript. We only replace Codex's queued history lines here; already committed
+    /// terminal scrollback remains under the user's terminal control.
+    pub(crate) fn render_transcript_once(&mut self, tui: &mut tui::Tui) {
         self.has_emitted_history_lines = false;
         let width = tui.terminal.last_known_screen_size.width;
         let lines = self.collect_terminal_scrollback_transcript_lines(width);
-        tui.replace_history_lines(lines)?;
-        Ok(())
+        tui.replace_pending_history_lines(lines);
     }
 
     /// Initialize backtrack state and show composer hint.
