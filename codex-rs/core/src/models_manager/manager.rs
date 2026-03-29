@@ -458,6 +458,10 @@ impl ModelsManager {
         }
     }
 
+    fn picker_contains_model(picker_models: &[ModelPreset], model: &str) -> bool {
+        picker_models.iter().any(|preset| preset.model == model)
+    }
+
     fn build_model_switcher_models(
         &self,
         config: &Config,
@@ -707,10 +711,7 @@ impl ModelsManager {
             self.configured_model_from_config_toml(model, config, available_models)
         };
 
-        if picker_models
-            .iter()
-            .any(|preset| Self::same_model_identity(preset, &configured_model))
-        {
+        if Self::picker_contains_model(picker_models, &configured_model.model) {
             return None;
         }
 
@@ -2313,7 +2314,7 @@ model_provider = "openai"
     }
 
     #[tokio::test]
-    async fn list_picker_models_with_chatgpt_auth_prefers_provider_aware_current_model() {
+    async fn list_picker_models_with_chatgpt_auth_dedupes_same_slug_custom_provider() {
         let codex_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
@@ -2354,21 +2355,78 @@ experimental_bearer_token = "sk-a"
             })
             .collect::<Vec<_>>();
 
-        assert_eq!(matching_models.len(), 2);
-        assert_eq!(matching_models[0].0, "gpt-5.2".to_string());
-        assert_eq!(matching_models[0].1, Some("openai".to_string()));
-        assert_ne!(
-            matching_models[0].2,
-            "Configured model from config.toml.".to_string()
-        );
         assert_eq!(
-            matching_models[1],
-            (
-                generated_provider_profile_name("provider_a", "gpt-5.2"),
-                Some("provider_a".to_string()),
-                "User-defined model from provider_a provider.".to_string(),
-            )
+            matching_models,
+            vec![(
+                "gpt-5.2".to_string(),
+                Some("openai".to_string()),
+                "Latest frontier model with improvements across knowledge, reasoning and coding"
+                    .to_string(),
+            )]
         );
+    }
+
+    #[tokio::test]
+    async fn list_picker_models_without_remote_models_uses_builtin_gpt_5_3_codex_default() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "openai",
+            ModelProviderInfo::create_openai_provider(),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+[features]
+remote_models = false
+"#,
+        )
+        .await;
+
+        let picker_models = manager
+            .list_picker_models(&config, RefreshStrategy::Offline)
+            .await;
+
+        assert_eq!(
+            picker_models.first().map(|preset| preset.model.as_str()),
+            Some("gpt-5.3-codex")
+        );
+        assert!(
+            picker_models
+                .iter()
+                .any(|preset| preset.model == "gpt-5.3-codex" && preset.is_default)
+        );
+    }
+
+    #[tokio::test]
+    async fn get_default_model_without_remote_models_uses_builtin_gpt_5_3_codex() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "openai",
+            ModelProviderInfo::create_openai_provider(),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+[features]
+remote_models = false
+"#,
+        )
+        .await;
+
+        let model = manager
+            .get_default_model(&None, &config, RefreshStrategy::Offline)
+            .await
+            .expect("offline default model should resolve");
+
+        assert_eq!(model, "gpt-5.3-codex");
     }
 
     #[tokio::test]

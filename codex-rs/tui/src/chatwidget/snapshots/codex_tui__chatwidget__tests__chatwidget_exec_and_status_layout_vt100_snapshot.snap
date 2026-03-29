@@ -30,10 +30,6 @@ expression: term.backend().vt100().screen().contents()
 
 
 
-
-
-
-
 • I’m going to search the repo for where “Change Approved” is rendered to update
   that view.
 
@@ -45,4 +41,4 @@ $ rg "Change Approved"
 
 › Summarize recent commits
 
-  gpt-5.2-codex · 100% left · ~/Workspace/codey/codex-rs/tui
+  gpt-5.3-codex · 100% left · ~/Workspace/codey/codex-rs/tui

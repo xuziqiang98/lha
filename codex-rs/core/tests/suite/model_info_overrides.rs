@@ -3,6 +3,8 @@ use codex_core::auth::CodexAuth;
 use codex_core::built_in_model_providers;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
+use codex_protocol::openai_models::ApplyPatchToolType;
+use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use core_test_support::load_default_config_for_test;
 use pretty_assertions::assert_eq;
@@ -34,6 +36,23 @@ async fn offline_model_info_with_tool_output_override() {
         model_info.truncation_policy,
         TruncationPolicyConfig::tokens(123)
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn offline_gpt_5_3_codex_uses_codex_fallback_metadata() {
+    let codex_home = TempDir::new().expect("create temp dir");
+    let config = load_default_config_for_test(&codex_home).await;
+
+    let model_info = ModelsManager::construct_model_info_offline("gpt-5.3-codex", &config);
+
+    assert_eq!(
+        model_info.apply_patch_tool_type,
+        Some(ApplyPatchToolType::Freeform)
+    );
+    assert_eq!(model_info.shell_type, ConfigShellToolType::ShellCommand);
+    assert!(model_info.supports_parallel_tool_calls);
+    assert!(model_info.supports_reasoning_summaries);
+    assert_eq!(model_info.supported_reasoning_levels.len(), 4);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
