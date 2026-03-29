@@ -251,6 +251,14 @@ pub struct Tui {
     alt_screen_enabled: bool,
 }
 
+fn replace_pending_history_lines(
+    pending_history_lines: &mut Vec<Line<'static>>,
+    lines: Vec<Line<'static>>,
+) {
+    pending_history_lines.clear();
+    pending_history_lines.extend(lines);
+}
+
 impl Tui {
     pub fn new(terminal: Terminal) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
@@ -439,6 +447,11 @@ impl Tui {
         self.frame_requester().schedule_frame();
     }
 
+    pub(crate) fn replace_pending_history_lines(&mut self, lines: Vec<Line<'static>>) {
+        replace_pending_history_lines(&mut self.pending_history_lines, lines);
+        self.frame_requester().schedule_frame();
+    }
+
     pub fn draw(
         &mut self,
         height: u16,
@@ -532,5 +545,30 @@ impl Tui {
             }
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::replace_pending_history_lines;
+    use pretty_assertions::assert_eq;
+    use ratatui::text::Line;
+
+    #[test]
+    fn replace_pending_history_lines_clears_stale_queue() {
+        let mut pending_history_lines = vec!["stale".into()];
+
+        replace_pending_history_lines(&mut pending_history_lines, vec![Line::from("fresh")]);
+
+        assert_eq!(pending_history_lines, vec![Line::from("fresh")]);
+    }
+
+    #[test]
+    fn replace_pending_history_lines_allows_empty_replay() {
+        let mut pending_history_lines = vec!["stale".into()];
+
+        replace_pending_history_lines(&mut pending_history_lines, Vec::new());
+
+        assert!(pending_history_lines.is_empty());
     }
 }
