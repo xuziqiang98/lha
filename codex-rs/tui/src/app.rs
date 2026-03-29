@@ -802,9 +802,8 @@ impl App {
             return;
         }
 
-        let Some(display) = self
-            .terminal_scrollback_lines_for_cell(cell, tui.terminal.last_known_screen_size.width)
-        else {
+        let width = self.current_terminal_scrollback_width(tui);
+        let Some(display) = self.terminal_scrollback_lines_for_cell(cell, width) else {
             return;
         };
 
@@ -813,6 +812,13 @@ impl App {
         } else {
             tui.insert_history_lines(display);
         }
+    }
+
+    pub(crate) fn current_terminal_scrollback_width(&self, tui: &tui::Tui) -> u16 {
+        resolve_terminal_scrollback_width(
+            tui.terminal.size().map(|size| size.width),
+            tui.terminal.last_known_screen_size.width,
+        )
     }
 
     pub fn chatwidget_init_for_forked_or_resumed_thread(
@@ -3083,6 +3089,13 @@ impl App {
     }
 }
 
+fn resolve_terminal_scrollback_width(
+    current_width: std::io::Result<u16>,
+    fallback_width: u16,
+) -> u16 {
+    current_width.unwrap_or(fallback_width)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3130,6 +3143,7 @@ mod tests {
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
+    use std::io;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -3296,6 +3310,20 @@ mod tests {
 
         assert_eq!(lines, cell.display_lines(80));
         assert_ne!(lines, cell.transcript_lines(80));
+    }
+
+    #[test]
+    fn terminal_scrollback_width_prefers_current_width() {
+        let width = resolve_terminal_scrollback_width(Ok(120), 80);
+
+        assert_eq!(width, 120);
+    }
+
+    #[test]
+    fn terminal_scrollback_width_falls_back_to_last_known_width() {
+        let width = resolve_terminal_scrollback_width(Err(io::Error::other("boom")), 80);
+
+        assert_eq!(width, 80);
     }
 
     #[tokio::test]
