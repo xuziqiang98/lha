@@ -283,8 +283,7 @@ async fn list_models_with_auth_appends_configured_custom_model() -> Result<()> {
 }
 
 #[tokio::test]
-async fn list_models_with_auth_prefers_provider_aware_same_slug_over_generic_duplicate()
--> Result<()> {
+async fn list_models_with_auth_keeps_same_slug_unique_without_provider_metadata() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_models_cache(codex_home.path())?;
     std::fs::write(
@@ -330,18 +329,16 @@ requires_openai_auth = false
 
     let ModelListResponse { data: items, .. } = to_response::<ModelListResponse>(response)?;
 
-    let gpt_5_2_descriptions = items
+    let gpt_5_2_models = items
         .iter()
         .filter(|model| model.model == "gpt-5.2")
-        .map(|model| model.description.as_str())
         .collect::<Vec<_>>();
 
+    assert_eq!(gpt_5_2_models.len(), 1);
+    assert_eq!(items.len(), expected_visible_models().len());
     assert_eq!(
-        gpt_5_2_descriptions,
-        vec![
-            "Latest frontier model with improvements across knowledge, reasoning and coding",
-            "User-defined model from provider_a provider.",
-        ]
+        gpt_5_2_models[0].description,
+        "Latest frontier model with improvements across knowledge, reasoning and coding"
     );
     Ok(())
 }

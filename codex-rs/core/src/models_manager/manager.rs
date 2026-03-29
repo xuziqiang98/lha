@@ -569,12 +569,10 @@ impl ModelsManager {
         config: &Config,
         available_models: &[ModelPreset],
     ) -> ModelPreset {
-        if self.should_use_official_openai_switcher_model(
-            model,
-            model_provider_id,
-            available_models,
-        ) {
-            return self.official_openai_switcher_model(model, config, available_models);
+        if let Some(preset) =
+            self.official_openai_switcher_model(model, model_provider_id, available_models)
+        {
+            return preset;
         }
 
         self.configured_model_preset_from_config_toml(
@@ -633,70 +631,31 @@ impl ModelsManager {
         configured_models
     }
 
-    fn should_use_official_openai_switcher_model(
+    fn official_openai_switcher_model(
         &self,
         model: &str,
         model_provider_id: Option<&str>,
         available_models: &[ModelPreset],
-    ) -> bool {
-        match model_provider_id {
-            Some(provider_id) => provider_id == OPENAI_PROVIDER_ID,
-            None => available_models.iter().any(|preset| {
-                preset.model == model
-                    && preset.model_provider_id.as_deref() == Some(OPENAI_PROVIDER_ID)
-            }),
+    ) -> Option<ModelPreset> {
+        if let Some(provider_id) = model_provider_id
+            && provider_id != OPENAI_PROVIDER_ID
+        {
+            return None;
         }
-    }
 
-    fn official_openai_switcher_model(
-        &self,
-        model: &str,
-        config: &Config,
-        available_models: &[ModelPreset],
-    ) -> ModelPreset {
         let mut preset = available_models
             .iter()
             .find(|candidate| {
                 candidate.model == model
                     && candidate.model_provider_id.as_deref() == Some(OPENAI_PROVIDER_ID)
             })
-            .cloned()
-            .or_else(|| {
-                available_models
-                    .iter()
-                    .find(|candidate| candidate.model == model)
-                    .cloned()
-            })
-            .unwrap_or_else(|| {
-                let model_info = model_info::with_config_overrides(
-                    model_info::find_model_info_for_slug(model),
-                    config,
-                );
-                let default_reasoning_effort =
-                    configured_model_default_reasoning_effort(config, &model_info);
-                let supports_personality = model_info.supports_personality();
-
-                ModelPreset {
-                    id: model.to_string(),
-                    model: model.to_string(),
-                    model_provider_id: None,
-                    display_name: model.to_string(),
-                    description: String::new(),
-                    default_reasoning_effort,
-                    supported_reasoning_efforts: model_info.supported_reasoning_levels,
-                    supports_personality,
-                    is_default: false,
-                    upgrade: None,
-                    show_in_picker: true,
-                    supported_in_api: true,
-                }
-            });
+            .cloned()?;
         preset.id = generated_provider_profile_name(OPENAI_PROVIDER_ID, model);
         preset.model_provider_id = Some(OPENAI_PROVIDER_ID.to_string());
         preset.description = OFFICIAL_OPENAI_PROVIDER_DESCRIPTION.to_string();
         preset.show_in_picker = true;
         preset.is_default = false;
-        preset
+        Some(preset)
     }
 
     fn apply_openai_official_switcher_metadata(&self, presets: &mut [ModelPreset]) {
@@ -705,7 +664,9 @@ impl ModelsManager {
         }
 
         for preset in presets {
-            if preset.model_provider_id.as_deref() == Some(OPENAI_PROVIDER_ID) {
+            if preset.model_provider_id.as_deref() == Some(OPENAI_PROVIDER_ID)
+                && preset.id == preset.model
+            {
                 preset.description = OFFICIAL_OPENAI_PROVIDER_DESCRIPTION.to_string();
             }
         }
@@ -725,12 +686,12 @@ impl ModelsManager {
             let model_provider_id =
                 Self::explicit_configured_model_provider_id(config_toml.model_provider.as_deref());
 
-            if self.should_use_official_openai_switcher_model(
+            if let Some(preset) = self.official_openai_switcher_model(
                 model,
                 model_provider_id.as_deref(),
                 picker_models,
             ) {
-                self.official_openai_switcher_model(model, config, picker_models)
+                preset
             } else {
                 self.configured_model_preset_from_config_toml(
                     model,
@@ -2209,6 +2170,49 @@ experimental_bearer_token = "sk-a"
     }
 
     #[tokio::test]
+    async fn list_model_switcher_models_with_chatgpt_auth_keeps_unknown_openai_models_configured() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "openai",
+            ModelProviderInfo::create_openai_provider(),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "custom-openai-model"
+model_provider = "openai"
+"#,
+        )
+        .await;
+
+        let available_models =
+            manager.build_available_models(vec![remote_model("gpt-5.4", "gpt-5.4", 1)]);
+        let picker_models = manager.build_model_switcher_models(&config, available_models);
+
+        let custom_model = picker_models
+            .iter()
+            .find(|preset| preset.model == "custom-openai-model")
+            .expect("custom OpenAI model should be present in switcher");
+
+        assert_eq!(
+            (
+                custom_model.id.clone(),
+                custom_model.model_provider_id.clone(),
+                custom_model.description.clone(),
+            ),
+            (
+                generated_provider_profile_name("openai", "custom-openai-model"),
+                Some("openai".to_string()),
+                "Configured model from openai provider.".to_string(),
+            )
+        );
+    }
+
+    #[tokio::test]
     async fn list_picker_models_with_chatgpt_auth_preserves_providerless_top_level_model() {
         let codex_home = tempdir().expect("temp dir");
         let auth_manager =
@@ -2260,6 +2264,49 @@ experimental_bearer_token = "sk-a"
                 Some("openai".to_string()),
                 "gpt-5.4 desc".to_string(),
             )]
+        );
+    }
+
+    #[tokio::test]
+    async fn list_picker_models_with_chatgpt_auth_keeps_unknown_openai_models_configured() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "openai",
+            ModelProviderInfo::create_openai_provider(),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "custom-openai-model"
+model_provider = "openai"
+"#,
+        )
+        .await;
+
+        let available_models =
+            manager.build_available_models(vec![remote_model("gpt-5.4", "gpt-5.4", 1)]);
+        let picker_models = manager.build_picker_models(&config, available_models);
+
+        let custom_model = picker_models
+            .iter()
+            .find(|preset| preset.model == "custom-openai-model")
+            .expect("custom OpenAI model should be present in picker");
+
+        assert_eq!(
+            (
+                custom_model.id.clone(),
+                custom_model.model_provider_id.clone(),
+                custom_model.description.clone(),
+            ),
+            (
+                generated_provider_profile_name("openai", "custom-openai-model"),
+                Some("openai".to_string()),
+                "Configured model from openai provider.".to_string(),
+            )
         );
     }
 

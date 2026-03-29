@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use codex_app_server_protocol::Model;
@@ -9,12 +10,20 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 
 pub async fn supported_models(thread_manager: Arc<ThreadManager>, config: &Config) -> Vec<Model> {
-    thread_manager
-        .list_picker_models(config, RefreshStrategy::OnlineIfUncached)
-        .await
-        .into_iter()
-        .map(model_from_preset)
-        .collect()
+    unique_public_model_presets(
+        thread_manager
+            .list_picker_models(config, RefreshStrategy::OnlineIfUncached)
+            .await,
+    )
+    .into_iter()
+    .map(model_from_preset)
+    .collect()
+}
+
+fn unique_public_model_presets(mut presets: Vec<ModelPreset>) -> Vec<ModelPreset> {
+    let mut seen_models = HashSet::new();
+    presets.retain(|preset| seen_models.insert(preset.model.clone()));
+    presets
 }
 
 fn model_from_preset(preset: ModelPreset) -> Model {

@@ -102,6 +102,10 @@ Each response yields:
   - `isDefault` – whether the model is recommended for most users
 - `nextCursor` – pass into the next request to continue paging (optional)
 
+Today `model/list` returns at most one entry per model slug. Provider-specific metadata is not
+yet exposed in this API, so same-slug variants from different providers are not listed
+separately.
+
 ## Collaboration modes (experimental)
 
 Fetch the built-in collaboration mode presets with `collaborationMode/list`. This endpoint does not accept pagination and returns the full list in one response:
