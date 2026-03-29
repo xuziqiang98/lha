@@ -16,6 +16,7 @@ use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_app_server_protocol::RequestId;
 use codex_core::auth::AuthCredentialsStoreMode;
+use codex_core::config::generated_provider_profile_name;
 use codex_core::features::Feature;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
@@ -283,7 +284,7 @@ async fn list_models_with_auth_appends_configured_custom_model() -> Result<()> {
 }
 
 #[tokio::test]
-async fn list_models_with_auth_keeps_same_slug_unique_without_provider_metadata() -> Result<()> {
+async fn list_models_with_auth_preserves_provider_distinct_same_slug_entries() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_models_cache(codex_home.path())?;
     std::fs::write(
@@ -332,13 +333,24 @@ requires_openai_auth = false
     let gpt_5_2_models = items
         .iter()
         .filter(|model| model.model == "gpt-5.2")
+        .map(|model| (model.id.clone(), model.description.clone()))
         .collect::<Vec<_>>();
 
-    assert_eq!(gpt_5_2_models.len(), 1);
-    assert_eq!(items.len(), expected_visible_models().len());
+    assert_eq!(gpt_5_2_models.len(), 2);
+    assert_eq!(items.len(), expected_visible_models().len() + 1);
     assert_eq!(
-        gpt_5_2_models[0].description,
-        "Latest frontier model with improvements across knowledge, reasoning and coding"
+        gpt_5_2_models,
+        vec![
+            (
+                "gpt-5.2".to_string(),
+                "Latest frontier model with improvements across knowledge, reasoning and coding"
+                    .to_string(),
+            ),
+            (
+                generated_provider_profile_name("provider_a", "gpt-5.2"),
+                "User-defined model from provider_a provider.".to_string(),
+            ),
+        ]
     );
     Ok(())
 }

@@ -437,11 +437,12 @@ impl ModelsManager {
             available_models
         };
         let mut picker_models: Vec<ModelPreset> = available_models
-            .into_iter()
+            .iter()
             .filter(|preset| preset.show_in_picker)
+            .cloned()
             .collect();
 
-        let custom_model = self.configured_picker_model(config, &picker_models);
+        let custom_model = self.configured_picker_model(config, &picker_models, &available_models);
 
         match (has_auth, custom_model) {
             (true, Some(custom_model)) => {
@@ -676,6 +677,7 @@ impl ModelsManager {
         &self,
         config: &Config,
         picker_models: &[ModelPreset],
+        available_models: &[ModelPreset],
     ) -> Option<ModelPreset> {
         let model = config.model.as_deref()?.trim();
         if model.is_empty() {
@@ -689,7 +691,7 @@ impl ModelsManager {
             if let Some(preset) = self.official_openai_switcher_model(
                 model,
                 model_provider_id.as_deref(),
-                picker_models,
+                available_models,
             ) {
                 preset
             } else {
@@ -698,11 +700,11 @@ impl ModelsManager {
                     model_provider_id.as_deref(),
                     &config_toml,
                     config,
-                    picker_models,
+                    available_models,
                 )
             }
         } else {
-            self.configured_model_from_config_toml(model, config, picker_models)
+            self.configured_model_from_config_toml(model, config, available_models)
         };
 
         if picker_models
@@ -2366,6 +2368,96 @@ experimental_bearer_token = "sk-a"
                 Some("provider_a".to_string()),
                 "User-defined model from provider_a provider.".to_string(),
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn list_picker_models_with_chatgpt_auth_normalizes_hidden_official_openai_model() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "openai",
+            ModelProviderInfo::create_openai_provider(),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "gpt-5.1"
+"#,
+        )
+        .await;
+
+        let picker_models = manager
+            .list_picker_models(&config, RefreshStrategy::Offline)
+            .await;
+
+        let matching_models = picker_models
+            .iter()
+            .filter(|preset| preset.model == "gpt-5.1")
+            .map(|preset| {
+                (
+                    preset.id.clone(),
+                    preset.model_provider_id.clone(),
+                    preset.description.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            matching_models,
+            vec![(
+                generated_provider_profile_name("openai", "gpt-5.1"),
+                Some("openai".to_string()),
+                OFFICIAL_OPENAI_PROVIDER_DESCRIPTION.to_string(),
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn list_model_switcher_models_with_chatgpt_auth_dedupes_hidden_official_openai_model() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "openai",
+            ModelProviderInfo::create_openai_provider(),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "gpt-5.1"
+"#,
+        )
+        .await;
+
+        let switcher_models = manager
+            .list_model_switcher_models(&config, RefreshStrategy::Offline)
+            .await;
+
+        let matching_models = switcher_models
+            .iter()
+            .filter(|preset| preset.model == "gpt-5.1")
+            .map(|preset| {
+                (
+                    preset.id.clone(),
+                    preset.model_provider_id.clone(),
+                    preset.description.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            matching_models,
+            vec![(
+                generated_provider_profile_name("openai", "gpt-5.1"),
+                Some("openai".to_string()),
+                OFFICIAL_OPENAI_PROVIDER_DESCRIPTION.to_string(),
+            )]
         );
     }
 

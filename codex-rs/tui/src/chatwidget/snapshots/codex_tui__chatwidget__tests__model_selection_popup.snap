@@ -11,6 +11,6 @@ expression: popup
   4. gpt-5.1-codex-max      Official model from OpenAI provider.
   5. gpt-5.2                Official model from OpenAI provider.
   6. gpt-5.1-codex-mini     Official model from OpenAI provider.
-› 7. gpt-5-codex (current)  Configured model from config.toml.
+› 7. gpt-5-codex (current)  Official model from OpenAI provider.
 
   Press enter to select reasoning effort, or esc to dismiss.
