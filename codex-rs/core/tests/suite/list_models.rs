@@ -47,9 +47,21 @@ async fn list_models_returns_chatgpt_models() -> Result<()> {
 fn expected_models(chatgpt_mode: bool) -> Vec<ModelPreset> {
     let response: ModelsResponse = serde_json::from_str(include_str!("../../models.json"))
         .unwrap_or_else(|err| panic!("models.json should parse: {err}"));
+    let builtin_presets = all_model_presets().clone();
     let remote_presets: Vec<ModelPreset> = response.models.into_iter().map(Into::into).collect();
-    let mut merged = ModelPreset::merge(remote_presets, all_model_presets().clone());
+    let mut merged = ModelPreset::merge(remote_presets, builtin_presets.clone());
     merged = ModelPreset::filter_by_auth(merged, chatgpt_mode);
+    let builtin_model_slugs = builtin_presets
+        .iter()
+        .map(|preset| preset.model.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    for preset in &mut merged {
+        preset.model_provider_id = Some(if builtin_model_slugs.contains(preset.model.as_str()) {
+            "openai".to_string()
+        } else {
+            "test-provider".to_string()
+        });
+    }
 
     for preset in &mut merged {
         preset.is_default = false;

@@ -400,8 +400,16 @@ impl ModelsManager {
     fn build_available_models(&self, mut remote_models: Vec<ModelInfo>) -> Vec<ModelPreset> {
         remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
 
-        let remote_presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
+        let remote_presets: Vec<ModelPreset> = remote_models
+            .into_iter()
+            .map(Into::into)
+            .map(|preset| self.assign_available_model_provider_identity(preset))
+            .collect();
         let existing_presets = self.builtin_presets_for_provider();
+        let existing_presets = existing_presets
+            .into_iter()
+            .map(|preset| self.assign_builtin_model_provider_identity(preset))
+            .collect();
         let mut merged_presets = ModelPreset::merge(remote_presets, existing_presets);
         let chatgpt_mode = matches!(
             self.auth_manager.get_internal_auth_mode(),
@@ -431,11 +439,6 @@ impl ModelsManager {
     ) -> Vec<ModelPreset> {
         let has_auth = self.auth_manager.get_internal_auth_mode().is_some()
             || self.provider_snapshot().has_local_auth();
-        let available_models = if has_auth {
-            Self::with_builtin_provider_identity(available_models)
-        } else {
-            available_models
-        };
         let mut picker_models: Vec<ModelPreset> = available_models
             .iter()
             .filter(|preset| preset.show_in_picker)
@@ -471,11 +474,6 @@ impl ModelsManager {
             self.auth_manager.get_internal_auth_mode(),
             Some(AuthMode::Chatgpt)
         );
-        let available_models = if chatgpt_auth {
-            Self::with_builtin_provider_identity(available_models)
-        } else {
-            available_models
-        };
         let configured_models = if chatgpt_auth {
             self.configured_chatgpt_model_switcher_models(config, &available_models)
         } else {
@@ -664,10 +662,6 @@ impl ModelsManager {
     }
 
     fn apply_openai_official_switcher_metadata(&self, presets: &mut [ModelPreset]) {
-        if !self.is_current_provider_openai() {
-            return;
-        }
-
         for preset in presets {
             if preset.model_provider_id.as_deref() == Some(OPENAI_PROVIDER_ID)
                 && preset.id == preset.model
@@ -872,16 +866,37 @@ impl ModelsManager {
         left.model == right.model && left.model_provider_id == right.model_provider_id
     }
 
-    fn with_builtin_provider_identity(available_models: Vec<ModelPreset>) -> Vec<ModelPreset> {
-        available_models
-            .into_iter()
-            .map(|mut preset| {
-                if preset.model_provider_id.is_none() {
-                    preset.model_provider_id = Some(OPENAI_PROVIDER_ID.to_string());
-                }
-                preset
-            })
-            .collect()
+    fn assign_available_model_provider_identity(&self, mut preset: ModelPreset) -> ModelPreset {
+        if preset.model_provider_id.is_some() {
+            return preset;
+        }
+
+        preset.model_provider_id = Some(
+            if self.is_builtin_model_slug(&preset.model) || self.is_current_provider_openai() {
+                OPENAI_PROVIDER_ID.to_string()
+            } else {
+                self.current_provider_id()
+            },
+        );
+        preset
+    }
+
+    fn assign_builtin_model_provider_identity(&self, mut preset: ModelPreset) -> ModelPreset {
+        if preset.model_provider_id.is_none() {
+            preset.model_provider_id = Some(OPENAI_PROVIDER_ID.to_string());
+        }
+        preset
+    }
+
+    fn current_provider_id(&self) -> String {
+        self.model_provider_id
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn is_builtin_model_slug(&self, model: &str) -> bool {
+        self.local_models.iter().any(|preset| preset.model == model)
     }
 
     fn config_toml(&self, config: &Config) -> Option<ConfigToml> {
@@ -1553,8 +1568,10 @@ mod tests {
         let hidden_model = remote_model_with_visibility("hidden", "Hidden", 0, "hide");
         let visible_model = remote_model_with_visibility("visible", "Visible", 1, "list");
 
-        let expected_hidden = ModelPreset::from(hidden_model.clone());
+        let mut expected_hidden = ModelPreset::from(hidden_model.clone());
+        expected_hidden.model_provider_id = Some("mock-provider".to_string());
         let mut expected_visible = ModelPreset::from(visible_model.clone());
+        expected_visible.model_provider_id = Some("mock-provider".to_string());
         expected_visible.is_default = true;
 
         let available = manager.build_available_models(vec![hidden_model, visible_model]);
@@ -2029,9 +2046,9 @@ experimental_bearer_token = "sk-a"
         assert_eq!(matching_models.len(), 2);
         assert_eq!(matching_models[0].0, "gpt-5.2".to_string());
         assert_eq!(matching_models[0].1, Some("openai".to_string()));
-        assert_ne!(
+        assert_eq!(
             matching_models[0].2,
-            "Configured model from config.toml.".to_string()
+            OFFICIAL_OPENAI_PROVIDER_DESCRIPTION.to_string()
         );
         assert_eq!(
             matching_models[1],
@@ -2095,9 +2112,9 @@ experimental_bearer_token = "sk-a"
         assert_eq!(matching_models.len(), 2);
         assert_eq!(matching_models[0].0, "gpt-5.2".to_string());
         assert_eq!(matching_models[0].1, Some("openai".to_string()));
-        assert_ne!(
+        assert_eq!(
             matching_models[0].2,
-            "Configured model from config.toml.".to_string()
+            OFFICIAL_OPENAI_PROVIDER_DESCRIPTION.to_string()
         );
         assert_eq!(
             matching_models[1],
@@ -2693,7 +2710,7 @@ experimental_bearer_token = "sk-b"
 
         assert_eq!(
             custom_provider_model.model_provider_id.as_deref(),
-            Some("openai")
+            Some("mock-provider")
         );
         assert_eq!(custom_provider_model.description, "Custom Provider desc");
     }
