@@ -3,6 +3,7 @@ use std::future::Future;
 use std::io::IsTerminal;
 use std::io::Result;
 use std::io::Stdout;
+use std::io::Write;
 use std::io::stdin;
 use std::io::stdout;
 use std::panic;
@@ -251,6 +252,17 @@ pub struct Tui {
     alt_screen_enabled: bool,
 }
 
+fn replace_terminal_history_lines<B: Backend + Write>(
+    terminal: &mut custom_terminal::Terminal<B>,
+    pending_history_lines: &mut Vec<Line<'static>>,
+    lines: Vec<Line<'static>>,
+) -> Result<()> {
+    pending_history_lines.clear();
+    terminal.clear_scrollback()?;
+    pending_history_lines.extend(lines);
+    Ok(())
+}
+
 impl Tui {
     pub fn new(terminal: Terminal) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
@@ -439,6 +451,10 @@ impl Tui {
         self.frame_requester().schedule_frame();
     }
 
+    pub(crate) fn replace_history_lines(&mut self, lines: Vec<Line<'static>>) -> Result<()> {
+        replace_terminal_history_lines(&mut self.terminal, &mut self.pending_history_lines, lines)
+    }
+
     pub fn draw(
         &mut self,
         height: u16,
@@ -532,5 +548,45 @@ impl Tui {
             }
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::replace_terminal_history_lines;
+    use crate::custom_terminal::Terminal as CustomTerminal;
+    use crate::test_backend::VT100Backend;
+    use pretty_assertions::assert_eq;
+    use ratatui::prelude::Rect;
+    use ratatui::text::Line;
+
+    #[test]
+    fn replace_terminal_history_lines_clears_pending_before_replacing() {
+        let backend = VT100Backend::new(40, 10);
+        let mut terminal = CustomTerminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 9, 40, 1));
+
+        let mut pending_history_lines = vec!["stale".into()];
+        replace_terminal_history_lines(
+            &mut terminal,
+            &mut pending_history_lines,
+            vec![Line::from("fresh")],
+        )
+        .expect("replace history lines");
+
+        assert_eq!(pending_history_lines, vec![Line::from("fresh")]);
+    }
+
+    #[test]
+    fn replace_terminal_history_lines_allows_empty_replay() {
+        let backend = VT100Backend::new(40, 10);
+        let mut terminal = CustomTerminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 9, 40, 1));
+
+        let mut pending_history_lines = vec!["stale".into()];
+        replace_terminal_history_lines(&mut terminal, &mut pending_history_lines, Vec::new())
+            .expect("replace empty history lines");
+
+        assert!(pending_history_lines.is_empty());
     }
 }

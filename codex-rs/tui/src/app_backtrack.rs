@@ -244,28 +244,12 @@ impl App {
     ///
     /// This is used by classic terminal-managed scrollback mode after rollback trims the local
     /// transcript so the outer terminal history matches the surviving cells.
-    pub(crate) fn render_transcript_once(&mut self, tui: &mut tui::Tui) {
-        if self.transcript_cells.is_empty() {
-            return;
-        }
-
+    pub(crate) fn render_transcript_once(&mut self, tui: &mut tui::Tui) -> Result<()> {
         self.has_emitted_history_lines = false;
         let width = tui.terminal.last_known_screen_size.width;
-        for cell in &self.transcript_cells {
-            let mut display = cell.display_lines(width);
-            if display.is_empty() {
-                continue;
-            }
-
-            if !cell.is_stream_continuation() {
-                if self.has_emitted_history_lines {
-                    display.insert(0, "".into());
-                } else {
-                    self.has_emitted_history_lines = true;
-                }
-            }
-            tui.insert_history_lines(display);
-        }
+        let lines = self.collect_terminal_scrollback_transcript_lines(width);
+        tui.replace_history_lines(lines)?;
+        Ok(())
     }
 
     /// Initialize backtrack state and show composer hint.
@@ -495,6 +479,7 @@ impl App {
             return;
         }
         self.trim_transcript_for_backtrack(pending.selection.nth_user_message);
+        self.deferred_history_lines.clear();
         self.chat_widget
             .replace_transcript_cells(self.transcript_cells.clone());
         self.backtrack_render_pending = true;
