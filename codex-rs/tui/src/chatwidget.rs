@@ -4192,10 +4192,16 @@ impl ChatWidget {
             .into_iter()
             .filter(|preset| preset.show_in_picker)
             .collect();
+        let has_exact_provider_match = self.has_exact_current_model_provider_match(&presets);
 
         let current_label = presets
             .iter()
-            .find(|preset| self.is_current_model_preset(preset))
+            .find(|preset| {
+                self.is_current_model_preset_with_exact_provider_match(
+                    preset,
+                    has_exact_provider_match,
+                )
+            })
             .map(|preset| preset.display_name.to_string())
             .unwrap_or_else(|| self.model_display_name().to_string());
 
@@ -4225,8 +4231,10 @@ impl ChatWidget {
                 SelectionItem {
                     name: preset.display_name.clone(),
                     description,
-                    is_current: self.is_current_model_preset(&preset),
-                    is_default: preset.is_default,
+                    is_current: self.is_current_model_preset_with_exact_provider_match(
+                        &preset,
+                        has_exact_provider_match,
+                    ),
                     actions,
                     dismiss_on_select: true,
                     ..Default::default()
@@ -4291,11 +4299,15 @@ impl ChatWidget {
             return;
         }
 
+        let has_exact_provider_match = self.has_exact_current_model_provider_match(&presets);
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.iter().cloned() {
             let description =
                 (!preset.description.is_empty()).then_some(preset.description.to_string());
-            let is_current = self.is_current_model_preset(&preset);
+            let is_current = self.is_current_model_preset_with_exact_provider_match(
+                &preset,
+                has_exact_provider_match,
+            );
             let requires_reasoning_picker = preset.supported_reasoning_efforts.len() > 1;
             let preset_for_action = preset.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -4308,7 +4320,6 @@ impl ChatWidget {
                 name: preset.display_name.clone(),
                 description,
                 is_current,
-                is_default: preset.is_default,
                 actions,
                 dismiss_on_select: !requires_reasoning_picker,
                 ..Default::default()
@@ -4573,6 +4584,33 @@ impl ChatWidget {
             preset.model.as_str(),
             preset.model_provider_id.as_deref(),
         )
+    }
+
+    fn has_exact_current_model_provider_match(&self, presets: &[ModelPreset]) -> bool {
+        let current_model = self.current_model();
+        let current_provider_id = self.config.model_provider_id.as_str();
+
+        presets.iter().any(|candidate| {
+            candidate.model == current_model
+                && candidate.model_provider_id.as_deref() == Some(current_provider_id)
+        })
+    }
+
+    fn is_current_model_preset_with_exact_provider_match(
+        &self,
+        preset: &ModelPreset,
+        has_exact_provider_match: bool,
+    ) -> bool {
+        if self.current_model() != preset.model {
+            return false;
+        }
+
+        if has_exact_provider_match {
+            return preset.model_provider_id.as_deref()
+                == Some(self.config.model_provider_id.as_str());
+        }
+
+        self.is_current_model_preset(preset)
     }
 
     fn is_current_model_for_selection(&self, model: &str, provider_id: Option<&str>) -> bool {

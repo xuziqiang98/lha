@@ -25,4 +25,4 @@ expression: term.backend().vt100().screen().contents()
 
 › Ask Codex to do anything
 
-  gpt-5.2-codex · 100% left · ~/Workspace/codey/codex-rs/tui
+  gpt-5.3-codex · 100% left · ~/Workspace/codey/codex-rs/tui
