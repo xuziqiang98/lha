@@ -101,6 +101,8 @@ pub enum Feature {
     RemoteModels,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Render transcript history inside the TUI instead of terminal scrollback.
+    TuiManagedScrollback,
     /// Enable runtime metrics snapshots via a manual reader.
     RuntimeMetrics,
     /// Persist rollout metadata to a local SQLite database.
@@ -435,6 +437,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::TuiManagedScrollback,
+        key: "tui_managed_scrollback",
+        stage: Stage::Experimental {
+            name: "TUI-managed scrollback",
+            menu_description: "Render committed transcript inside Codex so resize can reflow history. Experimental; applies to new or resumed sessions.",
+            announcement: "NEW! Try TUI-managed scrollback in /experimental. It can reflow on resize, but may still have rendering bugs.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::RuntimeMetrics,
         key: "runtime_metrics",
         stage: Stage::UnderDevelopment,
@@ -647,5 +659,28 @@ mod tests {
     fn collab_is_legacy_alias_for_multi_agent() {
         assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
         assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
+    }
+
+    #[test]
+    fn tui_managed_scrollback_is_experimental_and_disabled_by_default() {
+        let stage = Feature::TuiManagedScrollback.stage();
+
+        assert_eq!(false, Feature::TuiManagedScrollback.default_enabled());
+        assert_eq!(
+            Some("TUI-managed scrollback"),
+            stage.experimental_menu_name()
+        );
+        assert_eq!(
+            Some(
+                "Render committed transcript inside Codex so resize can reflow history. Experimental; applies to new or resumed sessions.",
+            ),
+            stage.experimental_menu_description()
+        );
+        assert_eq!(
+            Some(
+                "NEW! Try TUI-managed scrollback in /experimental. It can reflow on resize, but may still have rendering bugs.",
+            ),
+            stage.experimental_announcement()
+        );
     }
 }

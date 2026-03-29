@@ -114,6 +114,11 @@ We use `auto` detection instead of always disabling in Zellij because:
 
 Codex's transcript pager (opened with Ctrl+T) provides an alternative way to review conversation history, even in fullscreen mode. However, this is not as seamless as natural scrollback.
 
+Codex also has an experimental `TUI-managed scrollback` feature in `/experimental`. When enabled,
+Codex renders committed transcript history inside the TUI so resize events can reflow old content.
+This mode is still under development and may have rendering or interaction bugs, so the default
+experience continues to use terminal-managed scrollback unless you explicitly opt in.
+
 ## For Developers
 
 When modifying TUI code, remember:

@@ -240,6 +240,34 @@ impl App {
         }
     }
 
+    /// Re-render the full transcript into the terminal scrollback in one pass.
+    ///
+    /// This is used by classic terminal-managed scrollback mode after rollback trims the local
+    /// transcript so the outer terminal history matches the surviving cells.
+    pub(crate) fn render_transcript_once(&mut self, tui: &mut tui::Tui) {
+        if self.transcript_cells.is_empty() {
+            return;
+        }
+
+        self.has_emitted_history_lines = false;
+        let width = tui.terminal.last_known_screen_size.width;
+        for cell in &self.transcript_cells {
+            let mut display = cell.display_lines(width);
+            if display.is_empty() {
+                continue;
+            }
+
+            if !cell.is_stream_continuation() {
+                if self.has_emitted_history_lines {
+                    display.insert(0, "".into());
+                } else {
+                    self.has_emitted_history_lines = true;
+                }
+            }
+            tui.insert_history_lines(display);
+        }
+    }
+
     /// Initialize backtrack state and show composer hint.
     fn prime_backtrack(&mut self) {
         self.backtrack.primed = true;

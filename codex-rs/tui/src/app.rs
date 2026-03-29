@@ -538,7 +538,7 @@ pub(crate) struct App {
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
     pub(crate) deferred_history_lines: Vec<Line<'static>>,
-    has_emitted_history_lines: bool,
+    pub(crate) has_emitted_history_lines: bool,
 
     pub(crate) enhanced_keys_supported: bool,
 
@@ -630,6 +630,11 @@ fn normalize_harness_overrides_for_cwd(
 }
 
 impl App {
+    fn uses_terminal_scrollback(&self) -> bool {
+        self.chat_widget.transcript_host_mode()
+            == crate::chatwidget::TranscriptHostMode::TerminalScrollback
+    }
+
     async fn ensure_non_git_changelog_baseline(&mut self, cwd: PathBuf) -> Result<(), String> {
         if self.non_git_changelog_baselines.contains_key(&cwd) {
             return Ok(());
@@ -720,7 +725,8 @@ impl App {
         tui: &mut tui::Tui,
     ) {
         let cell: Arc<dyn HistoryCell> = cell.into();
-        if self.insert_history_cell_arc_for_thread(thread_id, cell) {
+        if self.insert_history_cell_arc_for_thread(thread_id, cell.clone()) {
+            self.emit_history_to_terminal_scrollback(&cell, tui);
             tui.frame_requester().schedule_frame();
         }
     }
@@ -734,12 +740,13 @@ impl App {
             return false;
         }
 
-        self.insert_history_cell_state(cell);
+        self.insert_history_cell_state(cell.clone());
         true
     }
 
     fn insert_history_cell_arc(&mut self, cell: Arc<dyn HistoryCell>, tui: &mut tui::Tui) {
-        self.insert_history_cell_state(cell);
+        self.insert_history_cell_state(cell.clone());
+        self.emit_history_to_terminal_scrollback(&cell, tui);
         tui.frame_requester().schedule_frame();
     }
 
@@ -749,6 +756,35 @@ impl App {
         }
         self.transcript_cells.push(cell.clone());
         self.chat_widget.insert_transcript_cell(cell);
+    }
+
+    fn emit_history_to_terminal_scrollback(
+        &mut self,
+        cell: &Arc<dyn HistoryCell>,
+        tui: &mut tui::Tui,
+    ) {
+        if !self.uses_terminal_scrollback() {
+            return;
+        }
+
+        let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+        if display.is_empty() {
+            return;
+        }
+
+        if !cell.is_stream_continuation() {
+            if self.has_emitted_history_lines {
+                display.insert(0, Line::from(""));
+            } else {
+                self.has_emitted_history_lines = true;
+            }
+        }
+
+        if self.overlay.is_some() {
+            self.deferred_history_lines.extend(display);
+        } else {
+            tui.insert_history_lines(display);
+        }
     }
 
     pub fn chatwidget_init_for_forked_or_resumed_thread(
@@ -1716,6 +1752,9 @@ impl App {
                 TuiEvent::Draw => {
                     if self.backtrack_render_pending {
                         self.backtrack_render_pending = false;
+                        if self.uses_terminal_scrollback() {
+                            self.render_transcript_once(tui);
+                        }
                     }
                     self.chat_widget.maybe_post_pending_notification(tui);
                     if self
@@ -2473,6 +2512,9 @@ impl App {
                 if updates.is_empty() {
                     return Ok(AppRunControl::Continue);
                 }
+                let scrollback_update = updates.iter().find_map(|(feature, enabled)| {
+                    (*feature == Feature::TuiManagedScrollback).then_some(*enabled)
+                });
                 let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
                     matches!(
                         feature,
@@ -2527,6 +2569,16 @@ impl App {
                     self.chat_widget.add_error_message(format!(
                         "Failed to update experimental features: {err}"
                     ));
+                } else if let Some(enabled) = scrollback_update {
+                    let message = if enabled {
+                        "TUI-managed scrollback will apply to the next new or resumed session."
+                    } else {
+                        "Classic terminal-managed scrollback will apply to the next new or resumed session."
+                    };
+                    self.insert_history_cell(
+                        Box::new(history_cell::new_info_event(message.to_string(), None)),
+                        tui,
+                    );
                 }
             }
             AppEvent::SkipNextWorldWritableScan => {

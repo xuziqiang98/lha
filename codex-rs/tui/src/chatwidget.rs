@@ -182,8 +182,12 @@ use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::markdown::append_markdown;
+use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
+use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
+use crate::render::renderable::RenderableExt;
+use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::status::format_directory_display;
@@ -446,6 +450,12 @@ pub(crate) enum ExternalEditorState {
     Active,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TranscriptHostMode {
+    TerminalScrollback,
+    TuiManaged,
+}
+
 /// Maintains the per-session UI state and interaction state machines for the chat screen.
 ///
 /// `ChatWidget` owns the state derived from the protocol event stream (history cells, streaming
@@ -463,6 +473,7 @@ pub(crate) struct ChatWidget {
     codex_op_tx: UnboundedSender<Op>,
     bottom_pane: BottomPane,
     transcript: RefCell<TranscriptView>,
+    transcript_host_mode: TranscriptHostMode,
     active_cell: Option<Box<dyn HistoryCell>>,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
     ///
@@ -757,6 +768,14 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
 }
 
 impl ChatWidget {
+    fn transcript_host_mode_from_config(config: &Config) -> TranscriptHostMode {
+        if config.features.enabled(Feature::TuiManagedScrollback) {
+            TranscriptHostMode::TuiManaged
+        } else {
+            TranscriptHostMode::TerminalScrollback
+        }
+    }
+
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
@@ -2296,6 +2315,7 @@ impl ChatWidget {
         };
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
+        let transcript_host_mode = Self::transcript_host_mode_from_config(&config);
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -2312,6 +2332,7 @@ impl ChatWidget {
                 skills: None,
             }),
             transcript: RefCell::new(TranscriptView::new(Vec::new())),
+            transcript_host_mode,
             active_cell,
             active_cell_revision: 0,
             config,
@@ -2449,6 +2470,7 @@ impl ChatWidget {
         };
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
+        let transcript_host_mode = Self::transcript_host_mode_from_config(&config);
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -2465,6 +2487,7 @@ impl ChatWidget {
                 skills: None,
             }),
             transcript: RefCell::new(TranscriptView::new(Vec::new())),
+            transcript_host_mode,
             active_cell,
             active_cell_revision: 0,
             config,
@@ -2590,6 +2613,7 @@ impl ChatWidget {
             mode: ModeKind::Custom,
             settings: fallback_custom,
         };
+        let transcript_host_mode = Self::transcript_host_mode_from_config(&config);
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -2606,6 +2630,7 @@ impl ChatWidget {
                 skills: None,
             }),
             transcript: RefCell::new(TranscriptView::new(Vec::new())),
+            transcript_host_mode,
             active_cell: None,
             active_cell_revision: 0,
             config,
@@ -6365,6 +6390,24 @@ impl ChatWidget {
         self.token_info = None;
     }
 
+    pub(crate) fn transcript_host_mode(&self) -> TranscriptHostMode {
+        self.transcript_host_mode
+    }
+
+    fn as_classic_renderable(&self) -> RenderableItem<'_> {
+        let active_cell_renderable = match &self.active_cell {
+            Some(cell) => RenderableItem::Borrowed(cell).inset(Insets::tlbr(1, 0, 0, 0)),
+            None => RenderableItem::Owned(Box::new(())),
+        };
+        let mut flex = FlexRenderable::new();
+        flex.push(1, active_cell_renderable);
+        flex.push(
+            0,
+            RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(1, 0, 0, 0)),
+        );
+        RenderableItem::Owned(Box::new(flex))
+    }
+
     pub(crate) fn insert_transcript_cell(&mut self, cell: Arc<dyn HistoryCell>) {
         self.transcript.borrow_mut().insert_cell(cell);
     }
@@ -6383,6 +6426,9 @@ impl ChatWidget {
     }
 
     fn handle_transcript_scroll_key(&mut self, key_event: KeyEvent) -> bool {
+        if self.transcript_host_mode != TranscriptHostMode::TuiManaged {
+            return false;
+        }
         if !self.bottom_pane.no_modal_or_popup_active() {
             return false;
         }
@@ -6427,6 +6473,12 @@ impl Drop for ChatWidget {
 
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        if self.transcript_host_mode == TranscriptHostMode::TerminalScrollback {
+            self.as_classic_renderable().render(area, buf);
+            self.last_rendered_width.set(Some(area.width as usize));
+            return;
+        }
+
         self.sync_transcript_live_tail_for_width(area.width);
         let bottom_height = self.bottom_pane.desired_height(area.width);
         let transcript_height = self.transcript.borrow().desired_height(area.width.max(1));
@@ -6457,6 +6509,10 @@ impl Renderable for ChatWidget {
     }
 
     fn desired_height(&self, width: u16) -> u16 {
+        if self.transcript_host_mode == TranscriptHostMode::TerminalScrollback {
+            return self.as_classic_renderable().desired_height(width);
+        }
+
         self.sync_transcript_live_tail_for_width(width);
         let transcript_height = self.transcript.borrow().desired_height(width.max(1));
         let top_inset = u16::from(transcript_height > 0 || self.active_cell.is_some());
@@ -6470,6 +6526,10 @@ impl Renderable for ChatWidget {
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        if self.transcript_host_mode == TranscriptHostMode::TerminalScrollback {
+            return self.as_classic_renderable().cursor_pos(area);
+        }
+
         let bottom_height = self.bottom_pane.desired_height(area.width);
         let bottom_y = area.bottom().saturating_sub(bottom_height);
         self.bottom_pane

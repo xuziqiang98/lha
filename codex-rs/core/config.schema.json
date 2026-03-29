@@ -271,6 +271,9 @@
             "steer": {
               "type": "boolean"
             },
+            "tui_managed_scrollback": {
+              "type": "boolean"
+            },
             "undo": {
               "type": "boolean"
             },
@@ -1334,6 +1337,9 @@
           "type": "boolean"
         },
         "steer": {
+          "type": "boolean"
+        },
+        "tui_managed_scrollback": {
           "type": "boolean"
         },
         "undo": {
