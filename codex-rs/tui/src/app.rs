@@ -640,23 +640,23 @@ impl App {
         cell: &Arc<dyn HistoryCell>,
         width: u16,
     ) -> Option<Vec<Line<'static>>> {
-        let mut transcript = cell.transcript_lines(width);
-        if transcript.is_empty() {
+        let mut display = cell.display_lines(width);
+        if display.is_empty() {
             return None;
         }
 
         if !cell.is_stream_continuation() {
             if self.has_emitted_history_lines {
-                transcript.insert(0, "".into());
+                display.insert(0, "".into());
             } else {
                 self.has_emitted_history_lines = true;
             }
         }
 
-        Some(transcript)
+        Some(display)
     }
 
-    pub(crate) fn collect_terminal_scrollback_transcript_lines(
+    pub(crate) fn collect_terminal_scrollback_display_lines(
         &mut self,
         width: u16,
     ) -> Vec<Line<'static>> {
@@ -3091,6 +3091,9 @@ mod tests {
     use crate::app_backtrack::PendingBacktrackRollback;
     use crate::app_backtrack::user_count;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
+    use crate::exec_cell::CommandOutput;
+    use crate::exec_cell::ExecCall;
+    use crate::exec_cell::ExecCell;
     use crate::file_search::FileSearchManager;
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
@@ -3115,6 +3118,7 @@ mod tests {
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::Event;
     use codex_core::protocol::EventMsg;
+    use codex_core::protocol::ExecCommandSource;
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_core::protocol::SessionSource;
@@ -3214,7 +3218,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn classic_scrollback_uses_transcript_lines_for_transcript_only_cells() {
+    async fn classic_scrollback_skips_transcript_only_cells() {
         let mut app = make_test_app().await;
         let cell = Arc::new(ReasoningSummaryCell::new(
             "Summary".to_string(),
@@ -3224,16 +3228,14 @@ mod tests {
 
         assert!(cell.display_lines(80).is_empty());
 
-        let lines = app
-            .terminal_scrollback_lines_for_cell(&cell, 80)
-            .expect("transcript lines");
+        let lines = app.terminal_scrollback_lines_for_cell(&cell, 80);
 
-        assert_eq!(lines, cell.transcript_lines(80));
-        assert!(app.has_emitted_history_lines);
+        assert_eq!(lines, None);
+        assert!(!app.has_emitted_history_lines);
     }
 
     #[tokio::test]
-    async fn classic_scrollback_collects_transcript_lines_with_spacing() {
+    async fn classic_scrollback_collects_display_lines_with_spacing() {
         let mut app = make_test_app().await;
         app.transcript_cells = vec![
             Arc::new(TestTranscriptCell {
@@ -3253,18 +3255,47 @@ mod tests {
             }),
         ];
 
-        let lines = app.collect_terminal_scrollback_transcript_lines(80);
+        let lines = app.collect_terminal_scrollback_display_lines(80);
 
         assert_eq!(
             lines,
             vec![
-                Line::from("first transcript"),
+                Line::from("display first"),
                 Line::from(""),
-                Line::from("second transcript"),
-                Line::from("continued transcript"),
+                Line::from("display second"),
+                Line::from("display continuation"),
             ]
         );
         assert!(app.has_emitted_history_lines);
+    }
+
+    #[tokio::test]
+    async fn classic_scrollback_uses_exec_display_lines_for_user_shell_commands() {
+        let mut app = make_test_app().await;
+        let cell = Arc::new(ExecCell::new(
+            ExecCall {
+                call_id: "call-1".to_string(),
+                command: vec!["ls".to_string()],
+                parsed: Vec::new(),
+                output: Some(CommandOutput {
+                    exit_code: 0,
+                    aggregated_output: String::new(),
+                    formatted_output: String::new(),
+                }),
+                source: ExecCommandSource::UserShell,
+                start_time: None,
+                duration: None,
+                interaction_input: None,
+            },
+            false,
+        )) as Arc<dyn HistoryCell>;
+
+        let lines = app
+            .terminal_scrollback_lines_for_cell(&cell, 80)
+            .expect("display lines");
+
+        assert_eq!(lines, cell.display_lines(80));
+        assert_ne!(lines, cell.transcript_lines(80));
     }
 
     #[tokio::test]

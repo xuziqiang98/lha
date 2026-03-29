@@ -248,7 +248,7 @@ impl App {
     pub(crate) fn render_transcript_once(&mut self, tui: &mut tui::Tui) {
         self.has_emitted_history_lines = false;
         let width = tui.terminal.last_known_screen_size.width;
-        let lines = self.collect_terminal_scrollback_transcript_lines(width);
+        let lines = self.collect_terminal_scrollback_display_lines(width);
         tui.replace_pending_history_lines(lines);
     }
 
