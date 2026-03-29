@@ -56,11 +56,14 @@ fn expected_models(chatgpt_mode: bool) -> Vec<ModelPreset> {
         .map(|preset| preset.model.as_str())
         .collect::<std::collections::HashSet<_>>();
     for preset in &mut merged {
-        preset.model_provider_id = Some(if builtin_model_slugs.contains(preset.model.as_str()) {
-            "openai".to_string()
-        } else {
-            "test-provider".to_string()
-        });
+        preset.model_provider_id = Some(
+            if chatgpt_mode || builtin_model_slugs.contains(preset.model.as_str()) {
+                "openai"
+            } else {
+                "test-provider"
+            }
+            .to_string(),
+        );
     }
 
     for preset in &mut merged {

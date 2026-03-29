@@ -27,6 +27,7 @@ use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+const OFFICIAL_OPENAI_PROVIDER_DESCRIPTION: &str = "Official model from OpenAI provider.";
 
 fn model_from_preset(preset: &ModelPreset) -> Model {
     Model {
@@ -56,6 +57,9 @@ fn expected_visible_models() -> Vec<Model> {
 
     for preset in &mut presets {
         preset.is_default = false;
+        if preset.show_in_picker && preset.id == preset.model {
+            preset.description = OFFICIAL_OPENAI_PROVIDER_DESCRIPTION.to_string();
+        }
     }
     if let Some(default) = presets.iter_mut().find(|preset| preset.show_in_picker) {
         default.is_default = true;
@@ -283,7 +287,7 @@ async fn list_models_with_auth_appends_configured_custom_model() -> Result<()> {
 }
 
 #[tokio::test]
-async fn list_models_with_auth_dedupes_same_slug_entries_without_provider_metadata() -> Result<()> {
+async fn list_models_with_auth_keeps_same_slug_custom_provider_entry() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_models_cache(codex_home.path())?;
     std::fs::write(
@@ -335,15 +339,20 @@ requires_openai_auth = false
         .map(|model| (model.id.clone(), model.description.clone()))
         .collect::<Vec<_>>();
 
-    assert_eq!(gpt_5_2_models.len(), 1);
-    assert_eq!(items.len(), expected_visible_models().len());
+    assert_eq!(gpt_5_2_models.len(), 2);
+    assert_eq!(items.len(), expected_visible_models().len() + 1);
     assert_eq!(
         gpt_5_2_models,
-        vec![(
-            "gpt-5.2".to_string(),
-            "Latest frontier model with improvements across knowledge, reasoning and coding"
-                .to_string(),
-        )]
+        vec![
+            (
+                "gpt-5.2".to_string(),
+                OFFICIAL_OPENAI_PROVIDER_DESCRIPTION.to_string(),
+            ),
+            (
+                "_provider.provider_a.gpt-5.2".to_string(),
+                "User-defined model from provider_a provider.".to_string(),
+            ),
+        ]
     );
     Ok(())
 }

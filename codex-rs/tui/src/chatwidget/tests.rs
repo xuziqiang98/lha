@@ -4612,6 +4612,78 @@ async fn model_picker_with_chatgpt_auth_shows_full_list_and_config_models() {
 }
 
 #[tokio::test]
+async fn model_picker_with_chatgpt_auth_keeps_builtin_and_custom_same_slug_visible() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    set_chatgpt_auth(&mut chat);
+    reload_chat_config_with_saved_providers(
+        &mut chat,
+        vec![CustomProviderConfig {
+            provider_id: "provider_a".to_string(),
+            wire_api: crate::provider_config::ApiProviderWireApi::Responses,
+            base_url: "https://example.test/a".to_string(),
+            api_key: "sk-test-a".to_string(),
+            model: "gpt-5.4".to_string(),
+            model_context_window: None,
+        }],
+    )
+    .await;
+    ConfigEditsBuilder::new(&chat.config.codex_home)
+        .set_model(Some("gpt-5.4"), None, Some("provider_a#responses"))
+        .apply()
+        .await
+        .expect("persist active model selection");
+    chat.config = ConfigBuilder::default()
+        .codex_home(chat.config.codex_home.clone())
+        .build()
+        .await
+        .expect("reload config");
+    chat.models_manager = Arc::new(ModelsManager::new(
+        chat.config.codex_home.clone(),
+        chat.auth_manager.clone(),
+        chat.config.model_provider_id.as_str(),
+        chat.config.model_provider.clone(),
+    ));
+    chat.set_model("gpt-5.4");
+
+    chat.open_model_popup();
+
+    let popup = render_bottom_popup(&chat, 140);
+    let matching_lines = popup
+        .lines()
+        .filter(|line| {
+            line.contains("gpt-5.4")
+                && (line.contains("Official model from OpenAI provider.")
+                    || line.contains("User-defined model from provider_a (responses) provider."))
+        })
+        .count();
+
+    assert_eq!(matching_lines, 2, "expected two gpt-5.4 entries:\n{popup}");
+    assert!(
+        popup.lines().any(|line| {
+            line.contains("gpt-5.4") && line.contains("Official model from OpenAI provider.")
+        }),
+        "expected official openai description in picker:\n{popup}"
+    );
+    assert!(
+        popup.contains("User-defined model from provider_a (responses) provider."),
+        "expected custom provider description in picker:\n{popup}"
+    );
+    assert_eq!(
+        popup.matches("(current)").count(),
+        1,
+        "expected only one current entry:\n{popup}"
+    );
+    assert!(
+        popup.lines().any(|line| {
+            line.contains("gpt-5.4 (current)")
+                && line.contains("User-defined model from provider_a (responses) provider.")
+        }),
+        "expected current entry to match active custom provider:\n{popup}"
+    );
+}
+
+#[tokio::test]
 async fn model_switcher_with_chatgpt_auth_keeps_builtin_and_custom_same_slug_visible() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     chat.thread_id = Some(ThreadId::new());
