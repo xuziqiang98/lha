@@ -216,6 +216,7 @@ use codex_common::approval_presets::builtin_approval_presets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
+use codex_core::auth::AuthMode;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
@@ -4052,6 +4053,13 @@ impl ChatWidget {
                 None,
             );
             return;
+        }
+
+        // Refresh auth from disk so `/model` picks up a ChatGPT login that was
+        // established after this session started, without clobbering an
+        // already-active in-memory ChatGPT auth state.
+        if self.auth_manager.get_internal_auth_mode() != Some(AuthMode::Chatgpt) {
+            self.auth_manager.reload();
         }
 
         let presets: Vec<ModelPreset> = match self

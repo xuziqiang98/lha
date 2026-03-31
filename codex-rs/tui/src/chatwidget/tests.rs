@@ -104,6 +104,9 @@ use toml::Value as TomlValue;
 
 use crate::provider_config::CustomProviderConfig;
 use crate::provider_config::build_custom_provider_edits;
+use base64::Engine;
+use chrono::Utc;
+use serde_json::json;
 
 async fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
@@ -1928,6 +1931,42 @@ fn set_chatgpt_auth(chat: &mut ChatWidget) {
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
     ));
+}
+
+fn write_chatgpt_auth(config: &Config) {
+    let header = json!({
+        "alg": "none",
+        "typ": "JWT",
+    });
+    let payload = json!({
+        "email": "user@example.com",
+        "email_verified": true,
+        "https://api.openai.com/auth": {
+            "chatgpt_plan_type": "pro",
+            "chatgpt_user_id": "user-12345",
+            "user_id": "user-12345",
+        },
+    });
+    let b64 = |value: &serde_json::Value| {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(value).expect("serialize jwt segment"))
+    };
+    let raw_jwt = format!("{}.{}.{}", b64(&header), b64(&payload), b64(&json!("sig")));
+    let auth_json = json!({
+        "OPENAI_API_KEY": null,
+        "tokens": {
+            "id_token": raw_jwt,
+            "access_token": "test-access-token",
+            "refresh_token": "test-refresh-token"
+        },
+        "last_refresh": Utc::now(),
+    });
+    let auth_file = config.codex_home.join("auth.json");
+    std::fs::write(
+        auth_file,
+        serde_json::to_string_pretty(&auth_json).expect("serialize auth json"),
+    )
+    .expect("write chatgpt auth");
 }
 
 async fn reload_chat_config_with_saved_providers(
@@ -4608,6 +4647,90 @@ async fn model_picker_with_chatgpt_auth_shows_full_list_and_config_models() {
     assert!(
         popup.contains("deepseek-r1"),
         "expected configured models to remain visible with ChatGPT auth:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn model_picker_reloads_chatgpt_auth_for_custom_provider_sessions() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("glm-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.auth_manager = Arc::new(AuthManager::new(
+        chat.config.codex_home.clone(),
+        false,
+        AuthCredentialsStoreMode::File,
+    ));
+    chat.models_manager = Arc::new(ModelsManager::new(
+        chat.config.codex_home.clone(),
+        chat.auth_manager.clone(),
+        chat.config.model_provider_id.as_str(),
+        chat.config.model_provider.clone(),
+    ));
+    reload_chat_config_with_saved_providers(
+        &mut chat,
+        vec![CustomProviderConfig {
+            provider_id: "glm_provider".to_string(),
+            wire_api: crate::provider_config::ApiProviderWireApi::Responses,
+            base_url: "https://example.test/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "glm-5".to_string(),
+            model_context_window: None,
+        }],
+    )
+    .await;
+    write_chatgpt_auth(&chat.config);
+
+    chat.open_model_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("gpt-5.2-codex"),
+        "expected official OpenAI models after reloading ChatGPT auth:\n{popup}"
+    );
+    assert!(
+        popup.contains("glm-5"),
+        "expected configured custom model to remain visible after auth reload:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn model_picker_reloads_chatgpt_auth_for_custom_messages_provider_sessions() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("glm-5.1")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.auth_manager = Arc::new(AuthManager::new(
+        chat.config.codex_home.clone(),
+        false,
+        AuthCredentialsStoreMode::File,
+    ));
+    chat.models_manager = Arc::new(ModelsManager::new(
+        chat.config.codex_home.clone(),
+        chat.auth_manager.clone(),
+        chat.config.model_provider_id.as_str(),
+        chat.config.model_provider.clone(),
+    ));
+    reload_chat_config_with_saved_providers(
+        &mut chat,
+        vec![CustomProviderConfig {
+            provider_id: "glm_provider".to_string(),
+            wire_api: crate::provider_config::ApiProviderWireApi::Messages,
+            base_url: "https://example.test/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "glm-5.1".to_string(),
+            model_context_window: None,
+        }],
+    )
+    .await;
+    write_chatgpt_auth(&chat.config);
+
+    chat.open_model_popup();
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("gpt-5.2-codex"),
+        "expected official OpenAI models after reloading ChatGPT auth for messages provider:\n{popup}"
+    );
+    assert!(
+        popup.contains("glm-5.1"),
+        "expected configured messages-provider model to remain visible after auth reload:\n{popup}"
     );
 }
 
