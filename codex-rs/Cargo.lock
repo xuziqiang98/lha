@@ -2084,6 +2084,7 @@ version = "0.94.3"
 dependencies = [
  "core-foundation 0.9.4",
  "libc",
+ "pretty_assertions",
  "tracing",
  "windows-sys 0.61.2",
 ]
