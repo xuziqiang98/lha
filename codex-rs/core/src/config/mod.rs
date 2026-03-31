@@ -3347,6 +3347,52 @@ profile = "project"
     }
 
     #[test]
+    fn apps_feature_is_disabled_even_when_explicitly_enabled() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut entries = BTreeMap::new();
+        entries.insert("apps".to_string(), true);
+        entries.insert("steer".to_string(), true);
+        let cfg = ConfigToml {
+            features: Some(crate::features::FeaturesToml { entries }),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(!config.features.enabled(Feature::Apps));
+        assert!(config.features.enabled(Feature::Steer));
+
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_connectors_alias_is_disabled_even_when_explicitly_enabled() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut entries = BTreeMap::new();
+        entries.insert("connectors".to_string(), true);
+        entries.insert("steer".to_string(), true);
+        let cfg = ConfigToml {
+            features: Some(crate::features::FeaturesToml { entries }),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(!config.features.enabled(Feature::Apps));
+        assert!(config.features.enabled(Feature::Steer));
+
+        Ok(())
+    }
+
+    #[test]
     fn legacy_toggles_map_to_features() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml {

@@ -109,6 +109,7 @@ pub(crate) enum AppEvent {
     /// Result of computing a `/changelog` command.
     ChangelogResult(Result<ChangelogOutput, String>),
 
+    #[allow(dead_code)]
     /// Open the app link view in the bottom pane.
     OpenAppLink {
         title: String,

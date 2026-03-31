@@ -320,6 +320,7 @@ impl Features {
         }
 
         overrides.apply(&mut features);
+        disable_removed_features(&mut features);
 
         features
     }
@@ -327,6 +328,10 @@ impl Features {
     pub fn enabled_features(&self) -> Vec<Feature> {
         self.enabled.iter().copied().collect()
     }
+}
+
+fn disable_removed_features(features: &mut Features) {
+    features.disable(Feature::Apps);
 }
 
 fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>) {
@@ -539,11 +544,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Apps,
         key: "apps",
-        stage: Stage::Experimental {
-            name: "Apps",
-            menu_description: "Use a connected ChatGPT App using \"$\". Install Apps via /apps command. Restart Codex after enabling.",
-            announcement: "NEW: Use ChatGPT Apps (Connectors) in Codex via $ mentions. Enable in /experimental and restart Codex!",
-        },
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
@@ -732,5 +733,16 @@ mod tests {
             assert_eq!(None, stage.experimental_menu_description());
             assert_eq!(None, stage.experimental_announcement());
         }
+    }
+
+    #[test]
+    fn apps_is_removed_and_hidden_from_experimental_ui() {
+        let stage = Feature::Apps.stage();
+
+        assert_eq!(Stage::Removed, stage);
+        assert_eq!(false, Feature::Apps.default_enabled());
+        assert_eq!(None, stage.experimental_menu_name());
+        assert_eq!(None, stage.experimental_menu_description());
+        assert_eq!(None, stage.experimental_announcement());
     }
 }

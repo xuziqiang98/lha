@@ -406,6 +406,7 @@ enum RateLimitSwitchPromptState {
     Shown,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 enum ConnectorsCacheState {
     #[default]
@@ -1305,21 +1306,26 @@ impl ChatWidget {
 
             self.plan_type = snapshot.plan_type.or(self.plan_type);
 
-            let warnings = self.rate_limit_warnings.take_warnings(
-                snapshot
-                    .secondary
-                    .as_ref()
-                    .map(|window| window.used_percent),
-                snapshot
-                    .secondary
-                    .as_ref()
-                    .and_then(|window| window.window_minutes),
-                snapshot.primary.as_ref().map(|window| window.used_percent),
-                snapshot
-                    .primary
-                    .as_ref()
-                    .and_then(|window| window.window_minutes),
-            );
+            let should_show_rate_limit_nudges = self.should_show_rate_limit_usage_nudges();
+            let warnings = if should_show_rate_limit_nudges {
+                self.rate_limit_warnings.take_warnings(
+                    snapshot
+                        .secondary
+                        .as_ref()
+                        .map(|window| window.used_percent),
+                    snapshot
+                        .secondary
+                        .as_ref()
+                        .and_then(|window| window.window_minutes),
+                    snapshot.primary.as_ref().map(|window| window.used_percent),
+                    snapshot
+                        .primary
+                        .as_ref()
+                        .and_then(|window| window.window_minutes),
+                )
+            } else {
+                Vec::new()
+            };
 
             let high_usage = snapshot
                 .secondary
@@ -1332,15 +1338,22 @@ impl ChatWidget {
                     .map(|w| w.used_percent >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
                     .unwrap_or(false);
 
-            if high_usage
-                && !self.rate_limit_switch_prompt_hidden()
-                && self.current_model() != NUDGE_MODEL_SLUG
-                && !matches!(
-                    self.rate_limit_switch_prompt,
-                    RateLimitSwitchPromptState::Shown
-                )
-            {
-                self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Pending;
+            if should_show_rate_limit_nudges {
+                if high_usage
+                    && !self.rate_limit_switch_prompt_hidden()
+                    && self.current_model() != NUDGE_MODEL_SLUG
+                    && !matches!(
+                        self.rate_limit_switch_prompt,
+                        RateLimitSwitchPromptState::Shown
+                    )
+                {
+                    self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Pending;
+                }
+            } else if matches!(
+                self.rate_limit_switch_prompt,
+                RateLimitSwitchPromptState::Pending
+            ) {
+                self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
             }
 
             let display = crate::status::rate_limit_snapshot_display(&snapshot, Local::now());
@@ -3102,9 +3115,6 @@ impl ChatWidget {
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
-            SlashCommand::Apps => {
-                self.add_connectors_output();
-            }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
                     self.add_info_message(
@@ -3950,6 +3960,21 @@ impl ChatWidget {
             .cloned()
     }
 
+    fn should_show_rate_limit_usage_nudges(&self) -> bool {
+        self.auth_manager
+            .auth_cached()
+            .as_ref()
+            .is_some_and(CodexAuth::is_chatgpt_auth)
+            && self
+                .models_manager
+                .try_is_official_openai_model(
+                    &self.config,
+                    self.current_model(),
+                    self.config.model_provider_id.as_str(),
+                )
+                .unwrap_or(false)
+    }
+
     fn rate_limit_switch_prompt_hidden(&self) -> bool {
         self.config
             .notices
@@ -3960,6 +3985,15 @@ impl ChatWidget {
     fn maybe_show_pending_rate_limit_prompt(&mut self) {
         if self.rate_limit_switch_prompt_hidden() {
             self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
+            return;
+        }
+        if !self.should_show_rate_limit_usage_nudges() {
+            if matches!(
+                self.rate_limit_switch_prompt,
+                RateLimitSwitchPromptState::Pending
+            ) {
+                self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
+            }
             return;
         }
         if !matches!(
@@ -5884,6 +5918,7 @@ impl ChatWidget {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn add_connectors_output(&mut self) {
         if !self.connectors_enabled() {
             self.add_info_message(
@@ -5923,6 +5958,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[allow(dead_code)]
     fn open_connectors_popup(&mut self, connectors: &[connectors::AppInfo]) {
         let total = connectors.len();
         let installed = connectors
@@ -6002,6 +6038,7 @@ impl ChatWidget {
         });
     }
 
+    #[allow(dead_code)]
     fn connectors_popup_hint_line() -> Line<'static> {
         Line::from(vec![
             "Press ".into(),
@@ -6010,6 +6047,7 @@ impl ChatWidget {
         ])
     }
 
+    #[allow(dead_code)]
     fn connector_brief_description(connector: &connectors::AppInfo) -> String {
         let status_label = if connector.is_accessible {
             "Connected"
@@ -6022,6 +6060,7 @@ impl ChatWidget {
         }
     }
 
+    #[allow(dead_code)]
     fn connector_description(connector: &connectors::AppInfo) -> Option<String> {
         connector
             .description

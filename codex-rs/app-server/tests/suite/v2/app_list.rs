@@ -62,13 +62,13 @@ async fn list_apps_returns_empty_when_connectors_disabled() -> Result<()> {
 
     let AppsListResponse { data, next_cursor } = to_response(response)?;
 
-    assert!(data.is_empty());
-    assert!(next_cursor.is_none());
+    assert_eq!(data, Vec::<AppInfo>::new());
+    assert_eq!(next_cursor, None);
     Ok(())
 }
 
 #[tokio::test]
-async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
+async fn list_apps_returns_empty_even_when_legacy_feature_alias_is_enabled() -> Result<()> {
     let connectors = vec![
         AppInfo {
             id: "alpha".to_string(),
@@ -124,137 +124,8 @@ async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
 
     let AppsListResponse { data, next_cursor } = to_response(response)?;
 
-    let expected = vec![
-        AppInfo {
-            id: "beta".to_string(),
-            name: "Beta App".to_string(),
-            description: None,
-            logo_url: None,
-            logo_url_dark: None,
-            distribution_channel: None,
-            install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
-            is_accessible: true,
-        },
-        AppInfo {
-            id: "alpha".to_string(),
-            name: "Alpha".to_string(),
-            description: Some("Alpha connector".to_string()),
-            logo_url: Some("https://example.com/alpha.png".to_string()),
-            logo_url_dark: None,
-            distribution_channel: None,
-            install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
-            is_accessible: false,
-        },
-    ];
-
-    assert_eq!(data, expected);
-    assert!(next_cursor.is_none());
-
-    server_handle.abort();
-    Ok(())
-}
-
-#[tokio::test]
-async fn list_apps_paginates_results() -> Result<()> {
-    let connectors = vec![
-        AppInfo {
-            id: "alpha".to_string(),
-            name: "Alpha".to_string(),
-            description: Some("Alpha connector".to_string()),
-            logo_url: None,
-            logo_url_dark: None,
-            distribution_channel: None,
-            install_url: None,
-            is_accessible: false,
-        },
-        AppInfo {
-            id: "beta".to_string(),
-            name: "beta".to_string(),
-            description: None,
-            logo_url: None,
-            logo_url_dark: None,
-            distribution_channel: None,
-            install_url: None,
-            is_accessible: false,
-        },
-    ];
-
-    let tools = vec![connector_tool("beta", "Beta App")?];
-    let (server_url, server_handle) = start_apps_server(connectors.clone(), tools).await?;
-
-    let codex_home = TempDir::new()?;
-    write_connectors_config(codex_home.path(), &server_url)?;
-    write_chatgpt_auth(
-        codex_home.path(),
-        ChatGptAuthFixture::new("chatgpt-token")
-            .account_id("account-123")
-            .chatgpt_user_id("user-123")
-            .chatgpt_account_id("account-123"),
-        AuthCredentialsStoreMode::File,
-    )?;
-
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let first_request = mcp
-        .send_apps_list_request(AppsListParams {
-            limit: Some(1),
-            cursor: None,
-        })
-        .await?;
-    let first_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(first_request)),
-    )
-    .await??;
-    let AppsListResponse {
-        data: first_page,
-        next_cursor: first_cursor,
-    } = to_response(first_response)?;
-
-    let expected_first = vec![AppInfo {
-        id: "beta".to_string(),
-        name: "Beta App".to_string(),
-        description: None,
-        logo_url: None,
-        logo_url_dark: None,
-        distribution_channel: None,
-        install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
-        is_accessible: true,
-    }];
-
-    assert_eq!(first_page, expected_first);
-    let next_cursor = first_cursor.ok_or_else(|| anyhow::anyhow!("missing cursor"))?;
-
-    let second_request = mcp
-        .send_apps_list_request(AppsListParams {
-            limit: Some(1),
-            cursor: Some(next_cursor),
-        })
-        .await?;
-    let second_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(second_request)),
-    )
-    .await??;
-    let AppsListResponse {
-        data: second_page,
-        next_cursor: second_cursor,
-    } = to_response(second_response)?;
-
-    let expected_second = vec![AppInfo {
-        id: "alpha".to_string(),
-        name: "Alpha".to_string(),
-        description: Some("Alpha connector".to_string()),
-        logo_url: None,
-        logo_url_dark: None,
-        distribution_channel: None,
-        install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
-        is_accessible: false,
-    }];
-
-    assert_eq!(second_page, expected_second);
-    assert!(second_cursor.is_none());
+    assert_eq!(data, Vec::<AppInfo>::new());
+    assert_eq!(next_cursor, None);
 
     server_handle.abort();
     Ok(())
