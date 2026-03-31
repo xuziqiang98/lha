@@ -1933,6 +1933,17 @@ fn set_chatgpt_auth(chat: &mut ChatWidget) {
     ));
 }
 
+fn set_openai_provider(chat: &mut ChatWidget) {
+    chat.config.model_provider_id = "openai".to_string();
+    chat.config.model_provider = codex_core::ModelProviderInfo::create_openai_provider();
+    chat.models_manager = Arc::new(ModelsManager::new(
+        chat.config.codex_home.clone(),
+        chat.auth_manager.clone(),
+        chat.config.model_provider_id.as_str(),
+        chat.config.model_provider.clone(),
+    ));
+}
+
 fn write_chatgpt_auth(config: &Config) {
     let header = json!({
         "alg": "none",
@@ -2228,8 +2239,8 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
 #[tokio::test]
 async fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
     let (mut chat, _, _) = make_chatwidget_manual(Some(NUDGE_MODEL_SLUG)).await;
-    chat.auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    set_chatgpt_auth(&mut chat);
+    set_openai_provider(&mut chat);
 
     chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
 
@@ -2241,9 +2252,9 @@ async fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
 
 #[tokio::test]
 async fn rate_limit_switch_prompt_shows_once_per_session() {
-    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+    set_chatgpt_auth(&mut chat);
+    set_openai_provider(&mut chat);
 
     chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
     assert!(
@@ -2265,9 +2276,9 @@ async fn rate_limit_switch_prompt_shows_once_per_session() {
 
 #[tokio::test]
 async fn rate_limit_switch_prompt_respects_hidden_notice() {
-    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+    set_chatgpt_auth(&mut chat);
+    set_openai_provider(&mut chat);
     chat.config.notices.hide_rate_limit_model_nudge = Some(true);
 
     chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
@@ -2280,9 +2291,9 @@ async fn rate_limit_switch_prompt_respects_hidden_notice() {
 
 #[tokio::test]
 async fn rate_limit_switch_prompt_defers_until_task_complete() {
-    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+    set_chatgpt_auth(&mut chat);
+    set_openai_provider(&mut chat);
 
     chat.bottom_pane.set_task_running(true);
     chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
@@ -2300,10 +2311,65 @@ async fn rate_limit_switch_prompt_defers_until_task_complete() {
 }
 
 #[tokio::test]
+async fn rate_limit_nudges_are_hidden_for_custom_provider_models() {
+    let (mut chat, mut rx, _) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    set_chatgpt_auth(&mut chat);
+    chat.config.model_provider_id = "provider_a".to_string();
+
+    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
+
+    assert_eq!(chat.rate_limit_warnings.primary_index, 0);
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+}
+
+#[tokio::test]
+async fn rate_limit_nudges_are_hidden_for_unknown_openai_models() {
+    let (mut chat, mut rx, _) = make_chatwidget_manual(Some("custom-openai-model")).await;
+    set_chatgpt_auth(&mut chat);
+    set_openai_provider(&mut chat);
+
+    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
+
+    assert_eq!(chat.rate_limit_warnings.primary_index, 0);
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+}
+
+#[tokio::test]
+async fn rate_limit_switch_prompt_pending_clears_after_switching_to_custom_provider() {
+    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    set_chatgpt_auth(&mut chat);
+    set_openai_provider(&mut chat);
+
+    chat.bottom_pane.set_task_running(true);
+    chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Pending
+    ));
+
+    chat.config.model_provider_id = "provider_a".to_string();
+    chat.bottom_pane.set_task_running(false);
+    chat.maybe_show_pending_rate_limit_prompt();
+
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+}
+
+#[tokio::test]
 async fn rate_limit_switch_prompt_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    set_chatgpt_auth(&mut chat);
+    set_openai_provider(&mut chat);
 
     chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
     chat.maybe_show_pending_rate_limit_prompt();

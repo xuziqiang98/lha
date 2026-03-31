@@ -220,6 +220,24 @@ impl ModelsManager {
         Ok(self.build_model_switcher_models(config, available_models))
     }
 
+    /// Attempt to determine whether the selected model is an official OpenAI
+    /// `/model` switcher entry without blocking on model refresh.
+    pub fn try_is_official_openai_model(
+        &self,
+        config: &Config,
+        model: &str,
+        model_provider_id: &str,
+    ) -> Result<bool, TryLockError> {
+        if model_provider_id != OPENAI_PROVIDER_ID {
+            return Ok(false);
+        }
+
+        let available_models = self.try_list_models(config)?;
+        Ok(self
+            .official_openai_switcher_model(model, Some(model_provider_id), &available_models)
+            .is_some())
+    }
+
     // todo(aibrahim): should be visible to core only and sent on session_configured event
     /// Get the model identifier to use, refreshing according to the specified strategy.
     ///
@@ -2384,6 +2402,93 @@ model_provider = "openai"
                 "Configured model from openai provider.".to_string(),
             )
         );
+    }
+
+    #[tokio::test]
+    async fn try_is_official_openai_model_returns_true_for_official_openai_model() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "openai",
+            ModelProviderInfo::create_openai_provider(),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "gpt-5.2"
+model_provider = "openai"
+"#,
+        )
+        .await;
+
+        let is_official = manager
+            .try_is_official_openai_model(&config, "gpt-5.2", "openai")
+            .expect("official model check");
+
+        assert!(is_official);
+    }
+
+    #[tokio::test]
+    async fn try_is_official_openai_model_returns_false_for_custom_provider_variant() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "openai",
+            ModelProviderInfo::create_openai_provider(),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "gpt-5.2"
+model_provider = "provider_a"
+
+[model_providers.provider_a]
+name = "provider_a"
+base_url = "https://example.com/a"
+wire_api = "chat"
+experimental_bearer_token = "sk-a"
+"#,
+        )
+        .await;
+
+        let is_official = manager
+            .try_is_official_openai_model(&config, "gpt-5.2", "provider_a")
+            .expect("official model check");
+
+        assert!(!is_official);
+    }
+
+    #[tokio::test]
+    async fn try_is_official_openai_model_returns_false_for_unknown_openai_model() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "openai",
+            ModelProviderInfo::create_openai_provider(),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "custom-openai-model"
+model_provider = "openai"
+"#,
+        )
+        .await;
+
+        let is_official = manager
+            .try_is_official_openai_model(&config, "custom-openai-model", "openai")
+            .expect("official model check");
+
+        assert!(!is_official);
     }
 
     #[tokio::test]
