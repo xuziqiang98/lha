@@ -4,15 +4,20 @@ use std::collections::btree_map::Entry;
 use std::fs;
 use std::io::Write;
 use std::io::{self};
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use anyhow::Result;
-use anyhow::anyhow;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
+use serde::Deserialize;
+use serde::Serialize;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use tracing::Event;
 use tracing::Level;
 use tracing::field::Visit;
@@ -22,11 +27,11 @@ use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::registry::LookupSpan;
 
 const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
-const SENTRY_DSN: &str =
-    "https://ae32ed50620d7a7792c1ce5df38b3e3e@o33249.ingest.us.sentry.io/4510195390611458";
-const UPLOAD_TIMEOUT_SECS: u64 = 10;
 const FEEDBACK_TAGS_TARGET: &str = "feedback_tags";
 const MAX_FEEDBACK_TAGS: usize = 64;
+const FEEDBACK_SUBDIR: &str = "feedback";
+const LOG_FILENAME: &str = "codex-logs.log";
+const METADATA_FILENAME: &str = "metadata.json";
 
 #[derive(Clone)]
 pub struct CodexFeedback {
@@ -70,14 +75,14 @@ impl CodexFeedback {
             .with_ansi(false)
             .with_target(false)
             // Capture everything, regardless of the caller's `RUST_LOG`, so feedback includes the
-            // full trace when the user uploads a report.
+            // full trace when the user saves a feedback bundle.
             .with_filter(Targets::new().with_default(Level::TRACE))
     }
 
     /// Returns a [`tracing_subscriber`] layer that collects structured metadata for feedback.
     ///
     /// Events with `target: "feedback_tags"` are treated as key/value tags to attach to feedback
-    /// uploads later.
+    /// bundles later.
     pub fn metadata_layer<S>(&self) -> impl Layer<S> + Send + Sync + 'static
     where
         S: tracing::Subscriber + for<'a> LookupSpan<'a>,
@@ -205,6 +210,12 @@ pub struct CodexLogSnapshot {
     pub thread_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistedFeedback {
+    pub thread_id: String,
+    pub saved_path: PathBuf,
+}
+
 impl CodexLogSnapshot {
     pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.bytes
@@ -218,48 +229,80 @@ impl CodexLogSnapshot {
         Ok(path)
     }
 
-    /// Upload feedback to Sentry with optional attachments.
-    pub fn upload_feedback(
+    /// Persist feedback to a local bundle under `CODEY_HOME/feedback/`.
+    pub fn persist_feedback(
         &self,
+        codex_home: &Path,
         classification: &str,
         reason: Option<&str>,
         include_logs: bool,
-        rollout_path: Option<&std::path::Path>,
+        rollout_path: Option<&Path>,
         session_source: Option<SessionSource>,
-    ) -> Result<()> {
-        use std::collections::BTreeMap;
-        use std::fs;
-        use std::str::FromStr;
-        use std::sync::Arc;
+    ) -> Result<PersistedFeedback> {
+        let created_at = OffsetDateTime::now_utc();
+        let timestamp_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+        let saved_path =
+            create_feedback_bundle_dir(codex_home, created_at, timestamp_ms, &self.thread_id)?;
 
-        use sentry::Client;
-        use sentry::ClientOptions;
-        use sentry::protocol::Attachment;
-        use sentry::protocol::Envelope;
-        use sentry::protocol::EnvelopeItem;
-        use sentry::protocol::Event;
-        use sentry::protocol::Level;
-        use sentry::transports::DefaultTransportFactory;
-        use sentry::types::Dsn;
+        let logs_filename = if include_logs {
+            fs::write(saved_path.join(LOG_FILENAME), &self.bytes)?;
+            Some(LOG_FILENAME.to_string())
+        } else {
+            None
+        };
 
-        // Build Sentry client
-        let client = Client::from_config(ClientOptions {
-            dsn: Some(Dsn::from_str(SENTRY_DSN).map_err(|e| anyhow!("invalid DSN: {e}"))?),
-            transport: Some(Arc::new(DefaultTransportFactory {})),
-            ..Default::default()
-        });
+        let rollout_filename = if include_logs {
+            persist_rollout_attachment(&saved_path, rollout_path)?
+        } else {
+            None
+        };
 
-        let cli_version = env!("CARGO_PKG_VERSION");
+        let tags = self.feedback_tags(classification, reason, session_source.as_ref());
+        let metadata = FeedbackMetadata {
+            schema_version: 1,
+            created_at: created_at.format(&Rfc3339)?,
+            thread_id: self.thread_id.clone(),
+            classification: classification.to_string(),
+            reason: reason.map(str::to_string),
+            include_logs,
+            session_source: session_source.map(|source| source.to_string()),
+            cli_version: env!("CARGO_PKG_VERSION").to_string(),
+            tags,
+            files: FeedbackFiles {
+                logs: logs_filename,
+                rollout: rollout_filename,
+            },
+        };
+        fs::write(
+            saved_path.join(METADATA_FILENAME),
+            serde_json::to_vec_pretty(&metadata)?,
+        )?;
+
+        Ok(PersistedFeedback {
+            thread_id: self.thread_id.clone(),
+            saved_path,
+        })
+    }
+
+    fn feedback_tags(
+        &self,
+        classification: &str,
+        reason: Option<&str>,
+        session_source: Option<&SessionSource>,
+    ) -> BTreeMap<String, String> {
         let mut tags = BTreeMap::from([
             (String::from("thread_id"), self.thread_id.to_string()),
             (String::from("classification"), classification.to_string()),
-            (String::from("cli_version"), cli_version.to_string()),
+            (
+                String::from("cli_version"),
+                env!("CARGO_PKG_VERSION").to_string(),
+            ),
         ]);
-        if let Some(source) = session_source.as_ref() {
+        if let Some(source) = session_source {
             tags.insert(String::from("session_source"), source.to_string());
         }
-        if let Some(r) = reason {
-            tags.insert(String::from("reason"), r.to_string());
+        if let Some(value) = reason {
+            tags.insert(String::from("reason"), value.to_string());
         }
 
         let reserved = [
@@ -278,72 +321,84 @@ impl CodexLogSnapshot {
             }
         }
 
-        let level = match classification {
-            "bug" | "bad_result" => Level::Error,
-            _ => Level::Info,
-        };
-
-        let mut envelope = Envelope::new();
-        let title = format!(
-            "[{}]: Codex session {}",
-            display_classification(classification),
-            self.thread_id
-        );
-
-        let mut event = Event {
-            level,
-            message: Some(title.clone()),
-            tags,
-            ..Default::default()
-        };
-        if let Some(r) = reason {
-            use sentry::protocol::Exception;
-            use sentry::protocol::Values;
-
-            event.exception = Values::from(vec![Exception {
-                ty: title.clone(),
-                value: Some(r.to_string()),
-                ..Default::default()
-            }]);
-        }
-        envelope.add_item(EnvelopeItem::Event(event));
-
-        if include_logs {
-            envelope.add_item(EnvelopeItem::Attachment(Attachment {
-                buffer: self.bytes.clone(),
-                filename: String::from("codex-logs.log"),
-                content_type: Some("text/plain".to_string()),
-                ty: None,
-            }));
-        }
-
-        if let Some((path, data)) = rollout_path.and_then(|p| fs::read(p).ok().map(|d| (p, d))) {
-            let fname = path
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| "rollout.jsonl".to_string());
-            let content_type = "text/plain".to_string();
-            envelope.add_item(EnvelopeItem::Attachment(Attachment {
-                buffer: data,
-                filename: fname,
-                content_type: Some(content_type),
-                ty: None,
-            }));
-        }
-
-        client.send_envelope(envelope);
-        client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
-        Ok(())
+        tags
     }
 }
 
-fn display_classification(classification: &str) -> String {
-    match classification {
-        "bug" => "Bug".to_string(),
-        "bad_result" => "Bad result".to_string(),
-        "good_result" => "Good result".to_string(),
-        _ => "Other".to_string(),
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct FeedbackMetadata {
+    schema_version: u32,
+    created_at: String,
+    thread_id: String,
+    classification: String,
+    reason: Option<String>,
+    include_logs: bool,
+    session_source: Option<String>,
+    cli_version: String,
+    tags: BTreeMap<String, String>,
+    files: FeedbackFiles,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct FeedbackFiles {
+    logs: Option<String>,
+    rollout: Option<String>,
+}
+
+fn create_feedback_bundle_dir(
+    codex_home: &Path,
+    created_at: OffsetDateTime,
+    timestamp_ms: u128,
+    thread_id: &str,
+) -> io::Result<PathBuf> {
+    let root = feedback_day_dir(codex_home, created_at);
+    fs::create_dir_all(&root)?;
+
+    let base_name = format!("feedback-{timestamp_ms}-{thread_id}");
+    for suffix in 0.. {
+        let dir_name = if suffix == 0 {
+            base_name.clone()
+        } else {
+            format!("{base_name}-{suffix}")
+        };
+        let candidate = root.join(dir_name);
+        match fs::create_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
     }
+
+    Err(io::Error::other(
+        "failed to create feedback bundle directory",
+    ))
+}
+
+fn feedback_day_dir(codex_home: &Path, created_at: OffsetDateTime) -> PathBuf {
+    codex_home
+        .join(FEEDBACK_SUBDIR)
+        .join(format!("{:04}", created_at.year()))
+        .join(format!("{:02}", u8::from(created_at.month())))
+        .join(format!("{:02}", created_at.day()))
+}
+
+fn persist_rollout_attachment(
+    saved_path: &Path,
+    rollout_path: Option<&Path>,
+) -> io::Result<Option<String>> {
+    let Some(path) = rollout_path else {
+        return Ok(None);
+    };
+    let Ok(data) = fs::read(path) else {
+        return Ok(None);
+    };
+    let filename = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "rollout.jsonl".to_string());
+    fs::write(saved_path.join(&filename), data)?;
+    Ok(Some(filename))
 }
 
 #[derive(Clone)]
@@ -418,6 +473,8 @@ impl Visit for FeedbackTagsVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
@@ -444,7 +501,167 @@ mod tests {
         tracing::info!(target: FEEDBACK_TAGS_TARGET, model = "gpt-5", cached = true, "tags");
 
         let snap = fb.snapshot(None);
-        pretty_assertions::assert_eq!(snap.tags.get("model").map(String::as_str), Some("gpt-5"));
-        pretty_assertions::assert_eq!(snap.tags.get("cached").map(String::as_str), Some("true"));
+        assert_eq!(snap.tags.get("model").map(String::as_str), Some("gpt-5"));
+        assert_eq!(snap.tags.get("cached").map(String::as_str), Some("true"));
+    }
+
+    #[test]
+    fn persist_feedback_without_logs_writes_metadata_only() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let snap = CodexFeedback::new().snapshot(None);
+
+        let persisted = snap
+            .persist_feedback(
+                codex_home.path(),
+                "good_result",
+                Some("nice"),
+                false,
+                None,
+                Some(SessionSource::Cli),
+            )
+            .expect("persist feedback");
+
+        assert!(
+            persisted
+                .saved_path
+                .starts_with(codex_home.path().join(FEEDBACK_SUBDIR))
+        );
+        assert!(!persisted.saved_path.join(LOG_FILENAME).exists());
+        let metadata = read_metadata(&persisted.saved_path);
+        assert_eq!(
+            metadata,
+            FeedbackMetadata {
+                schema_version: 1,
+                created_at: metadata.created_at.clone(),
+                thread_id: persisted.thread_id.clone(),
+                classification: "good_result".to_string(),
+                reason: Some("nice".to_string()),
+                include_logs: false,
+                session_source: Some(SessionSource::Cli.to_string()),
+                cli_version: env!("CARGO_PKG_VERSION").to_string(),
+                tags: BTreeMap::from([
+                    ("classification".to_string(), "good_result".to_string()),
+                    (
+                        "cli_version".to_string(),
+                        env!("CARGO_PKG_VERSION").to_string()
+                    ),
+                    ("reason".to_string(), "nice".to_string()),
+                    ("session_source".to_string(), SessionSource::Cli.to_string()),
+                    ("thread_id".to_string(), persisted.thread_id.clone()),
+                ]),
+                files: FeedbackFiles {
+                    logs: None,
+                    rollout: None,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn persist_feedback_with_logs_and_rollout_writes_bundle_files() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let fb = CodexFeedback::new();
+        {
+            let mut writer = fb.make_writer().make_writer();
+            writer.write_all(b"log line\n").expect("write log");
+        }
+        let rollout_path = codex_home.path().join("input-rollout.jsonl");
+        fs::write(&rollout_path, "rollout line\n").expect("write rollout");
+
+        let persisted = fb
+            .snapshot(None)
+            .persist_feedback(
+                codex_home.path(),
+                "bug",
+                None,
+                true,
+                Some(rollout_path.as_path()),
+                Some(SessionSource::Cli),
+            )
+            .expect("persist feedback");
+
+        assert_eq!(
+            fs::read_to_string(persisted.saved_path.join(LOG_FILENAME)).expect("read logs"),
+            "log line\n"
+        );
+        assert_eq!(
+            fs::read_to_string(persisted.saved_path.join("input-rollout.jsonl"))
+                .expect("read copied rollout"),
+            "rollout line\n"
+        );
+
+        let metadata = read_metadata(&persisted.saved_path);
+        assert_eq!(
+            metadata.files,
+            FeedbackFiles {
+                logs: Some(LOG_FILENAME.to_string()),
+                rollout: Some("input-rollout.jsonl".to_string()),
+            }
+        );
+        assert_eq!(metadata.classification, "bug".to_string());
+        assert_eq!(metadata.include_logs, true);
+    }
+
+    #[test]
+    fn persist_feedback_preserves_feedback_tags() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let fb = CodexFeedback::new();
+        let _guard = tracing_subscriber::registry()
+            .with(fb.metadata_layer())
+            .set_default();
+
+        tracing::info!(target: FEEDBACK_TAGS_TARGET, model = "gpt-5", cached = true, "tags");
+
+        let persisted = fb
+            .snapshot(None)
+            .persist_feedback(
+                codex_home.path(),
+                "other",
+                Some("details"),
+                false,
+                None,
+                Some(SessionSource::Cli),
+            )
+            .expect("persist feedback");
+
+        let metadata = read_metadata(&persisted.saved_path);
+        assert_eq!(
+            metadata.tags.get("model").map(String::as_str),
+            Some("gpt-5")
+        );
+        assert_eq!(
+            metadata.tags.get("cached").map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            metadata.tags.get("reason").map(String::as_str),
+            Some("details")
+        );
+    }
+
+    #[test]
+    fn create_feedback_bundle_dir_appends_suffix_on_collision() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let created_at = OffsetDateTime::now_utc();
+        let first = create_feedback_bundle_dir(codex_home.path(), created_at, 123, "thread")
+            .expect("first dir");
+        let second = create_feedback_bundle_dir(codex_home.path(), created_at, 123, "thread")
+            .expect("second dir");
+
+        assert_eq!(
+            first.file_name().and_then(|name| name.to_str()),
+            Some("feedback-123-thread")
+        );
+        assert_eq!(
+            second.file_name().and_then(|name| name.to_str()),
+            Some("feedback-123-thread-1")
+        );
+    }
+
+    fn read_metadata(saved_path: &Path) -> FeedbackMetadata {
+        serde_json::from_slice(
+            &fs::read(saved_path.join(METADATA_FILENAME)).expect("read metadata"),
+        )
+        .expect("parse metadata")
     }
 }

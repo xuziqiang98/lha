@@ -4730,7 +4730,7 @@ impl CodexMessageProcessor {
         if !self.config.feedback_enabled {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
-                message: "sending feedback is disabled by configuration".to_string(),
+                message: "feedback is disabled by configuration".to_string(),
                 data: None,
             };
             self.outgoing.send_error(request_id, error).await;
@@ -4773,9 +4773,11 @@ impl CodexMessageProcessor {
         };
         let session_source = self.thread_manager.session_source();
 
-        let upload_result = tokio::task::spawn_blocking(move || {
+        let codex_home = self.config.codex_home.clone();
+        let persist_result = tokio::task::spawn_blocking(move || {
             let rollout_path_ref = validated_rollout_path.as_deref();
-            snapshot.upload_feedback(
+            snapshot.persist_feedback(
+                codex_home.as_path(),
                 &classification,
                 reason.as_deref(),
                 include_logs,
@@ -4785,12 +4787,12 @@ impl CodexMessageProcessor {
         })
         .await;
 
-        let upload_result = match upload_result {
+        let persist_result = match persist_result {
             Ok(result) => result,
             Err(join_err) => {
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to upload feedback: {join_err}"),
+                    message: format!("failed to save feedback: {join_err}"),
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;
@@ -4798,15 +4800,18 @@ impl CodexMessageProcessor {
             }
         };
 
-        match upload_result {
-            Ok(()) => {
-                let response = FeedbackUploadResponse { thread_id };
+        match persist_result {
+            Ok(persisted) => {
+                let response = FeedbackUploadResponse {
+                    thread_id,
+                    saved_path: persisted.saved_path,
+                };
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to upload feedback: {err}"),
+                    message: format!("failed to save feedback: {err}"),
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;

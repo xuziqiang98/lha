@@ -2,13 +2,12 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  Upload logs?
+  Save logs locally?
 
-  The following files will be sent:
+  The following files will be saved under CODEY_HOME/feedback:
     • codex-logs.log
 
-› 1. Yes  Share the current Codex session logs with the team for
-          troubleshooting.
-  2. No
+› 1. Yes  Save the current Codex session logs locally for troubleshooting.
+  2. No   Save feedback only, without logs.
 
   Press enter to confirm or esc to go back

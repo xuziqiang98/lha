@@ -11821,11 +11821,15 @@
       "FeedbackUploadResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "savedPath": {
+            "type": "string"
+          },
           "threadId": {
             "type": "string"
           }
         },
         "required": [
+          "savedPath",
           "threadId"
         ],
         "title": "FeedbackUploadResponse",

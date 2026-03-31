@@ -27,30 +27,15 @@ use super::popup_consts::standard_popup_hint_line;
 use super::textarea::TextArea;
 use super::textarea::TextAreaState;
 
-const BASE_BUG_ISSUE_URL: &str =
-    "https://github.com/openai/codex/issues/new?template=2-bug-report.yml";
-/// Internal routing link for employee feedback follow-ups. This must not be shown to external users.
-const CODEX_FEEDBACK_INTERNAL_URL: &str = "http://go/codex-feedback-internal";
-
-/// The target audience for feedback follow-up instructions.
-///
-/// This is used strictly for messaging/links after feedback upload completes. It
-/// must not change feedback upload behavior itself.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FeedbackAudience {
-    OpenAiEmployee,
-    External,
-}
-
-/// Minimal input overlay to collect an optional feedback note, then upload
-/// both logs and rollout with classification + metadata.
+/// Minimal input overlay to collect an optional feedback note, then persist
+/// logs and rollout locally with classification + metadata.
 pub(crate) struct FeedbackNoteView {
     category: FeedbackCategory,
+    codex_home: PathBuf,
     snapshot: codex_feedback::CodexLogSnapshot,
     rollout_path: Option<PathBuf>,
     app_event_tx: AppEventSender,
     include_logs: bool,
-    feedback_audience: FeedbackAudience,
 
     // UI state
     textarea: TextArea,
@@ -61,19 +46,19 @@ pub(crate) struct FeedbackNoteView {
 impl FeedbackNoteView {
     pub(crate) fn new(
         category: FeedbackCategory,
+        codex_home: PathBuf,
         snapshot: codex_feedback::CodexLogSnapshot,
         rollout_path: Option<PathBuf>,
         app_event_tx: AppEventSender,
         include_logs: bool,
-        feedback_audience: FeedbackAudience,
     ) -> Self {
         Self {
             category,
+            codex_home,
             snapshot,
             rollout_path,
             app_event_tx,
             include_logs,
-            feedback_audience,
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
             complete: false,
@@ -87,17 +72,14 @@ impl FeedbackNoteView {
         } else {
             Some(note.as_str())
         };
-        let rollout_path_ref = self.rollout_path.as_deref();
         let classification = feedback_classification(self.category);
-
-        let mut thread_id = self.snapshot.thread_id.clone();
-
-        let result = self.snapshot.upload_feedback(
+        let result = self.snapshot.persist_feedback(
+            self.codex_home.as_path(),
             classification,
             reason_opt,
             self.include_logs,
             if self.include_logs {
-                rollout_path_ref
+                self.rollout_path.as_deref()
             } else {
                 None
             },
@@ -105,63 +87,28 @@ impl FeedbackNoteView {
         );
 
         match result {
-            Ok(()) => {
+            Ok(persisted) => {
                 let prefix = if self.include_logs {
-                    "• Feedback uploaded."
+                    "• Feedback saved locally."
                 } else {
-                    "• Feedback recorded (no logs)."
+                    "• Feedback saved locally (no logs)."
                 };
-                let issue_url =
-                    issue_url_for_category(self.category, &thread_id, self.feedback_audience);
-                let mut lines = vec![Line::from(match issue_url.as_ref() {
-                    Some(_) if self.feedback_audience == FeedbackAudience::OpenAiEmployee => {
-                        format!("{prefix} Please report this in #codex-feedback:")
-                    }
-                    Some(_) => format!("{prefix} Please open an issue using the following URL:"),
-                    None => format!("{prefix} Thanks for the feedback!"),
-                })];
-                match issue_url {
-                    Some(url) if self.feedback_audience == FeedbackAudience::OpenAiEmployee => {
-                        lines.extend([
-                            "".into(),
-                            Line::from(vec!["  ".into(), url.cyan().underlined()]),
-                            "".into(),
-                            Line::from("  Share this and add some info about your problem:"),
-                            Line::from(vec![
-                                "    ".into(),
-                                format!("go/codex-feedback/{thread_id}").bold(),
-                            ]),
-                        ]);
-                    }
-                    Some(url) => {
-                        lines.extend([
-                            "".into(),
-                            Line::from(vec!["  ".into(), url.cyan().underlined()]),
-                            "".into(),
-                            Line::from(vec![
-                                "  Or mention your thread ID ".into(),
-                                std::mem::take(&mut thread_id).bold(),
-                                " in an existing issue.".into(),
-                            ]),
-                        ]);
-                    }
-                    None => {
-                        lines.extend([
-                            "".into(),
-                            Line::from(vec![
-                                "  Thread ID: ".into(),
-                                std::mem::take(&mut thread_id).bold(),
-                            ]),
-                        ]);
-                    }
-                }
+                let saved_path = persisted.saved_path.display().to_string();
+                let lines = vec![
+                    Line::from(prefix),
+                    "".into(),
+                    Line::from(vec!["  Saved to: ".into(), saved_path.bold()]),
+                    Line::from(vec!["  Thread ID: ".into(), persisted.thread_id.bold()]),
+                    "".into(),
+                    Line::from("  Thanks for the feedback!"),
+                ];
                 self.app_event_tx
                     .send_history_cell(Box::new(history_cell::PlainHistoryCell::new(lines)));
             }
             Err(e) => {
                 self.app_event_tx
                     .send_history_cell(Box::new(history_cell::new_error_event(format!(
-                        "Failed to upload feedback: {e}"
+                        "Failed to save feedback: {e}"
                     ))));
             }
         }
@@ -369,35 +316,6 @@ fn feedback_classification(category: FeedbackCategory) -> &'static str {
     }
 }
 
-fn issue_url_for_category(
-    category: FeedbackCategory,
-    thread_id: &str,
-    feedback_audience: FeedbackAudience,
-) -> Option<String> {
-    // Only certain categories provide a follow-up link. We intentionally keep
-    // the external GitHub behavior identical while routing internal users to
-    // the internal go link.
-    match category {
-        FeedbackCategory::Bug | FeedbackCategory::BadResult | FeedbackCategory::Other => {
-            Some(match feedback_audience {
-                FeedbackAudience::OpenAiEmployee => slack_feedback_url(thread_id),
-                FeedbackAudience::External => {
-                    format!("{BASE_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20{thread_id}")
-                }
-            })
-        }
-        FeedbackCategory::GoodResult => None,
-    }
-}
-
-/// Build the internal follow-up URL.
-///
-/// We accept a `thread_id` so the call site stays symmetric with the external
-/// path, but we currently point to a fixed channel without prefilling text.
-fn slack_feedback_url(_thread_id: &str) -> String {
-    CODEX_FEEDBACK_INTERNAL_URL.to_string()
-}
-
 // Build the selection popup params for feedback categories.
 pub(crate) fn feedback_selection_params(
     app_event_tx: AppEventSender,
@@ -437,7 +355,7 @@ pub(crate) fn feedback_selection_params(
 /// Build the selection popup params shown when feedback is disabled.
 pub(crate) fn feedback_disabled_params() -> super::SelectionViewParams {
     super::SelectionViewParams {
-        title: Some("Sending feedback is disabled".to_string()),
+        title: Some("Feedback is disabled".to_string()),
         subtitle: Some("This action is disabled by configuration.".to_string()),
         footer_hint: Some(standard_popup_hint_line()),
         items: vec![super::SelectionItem {
@@ -467,7 +385,7 @@ fn make_feedback_item(
     }
 }
 
-/// Build the upload consent popup params for a given feedback category.
+/// Build the local-save consent popup params for a given feedback category.
 pub(crate) fn feedback_upload_consent_params(
     app_event_tx: AppEventSender,
     category: FeedbackCategory,
@@ -496,11 +414,11 @@ pub(crate) fn feedback_upload_consent_params(
         }
     });
 
-    // Build header listing files that would be sent if user consents.
+    // Build header listing files that would be saved if user consents.
     let mut header_lines: Vec<Box<dyn crate::render::renderable::Renderable>> = vec![
-        Line::from("Upload logs?".bold()).into(),
+        Line::from("Save logs locally?".bold()).into(),
         Line::from("").into(),
-        Line::from("The following files will be sent:".dim()).into(),
+        Line::from("The following files will be saved under CODEY_HOME/feedback:".dim()).into(),
         Line::from(vec!["  • ".into(), "codex-logs.log".into()]).into(),
     ];
     if let Some(path) = rollout_path.as_deref()
@@ -515,8 +433,7 @@ pub(crate) fn feedback_upload_consent_params(
             super::SelectionItem {
                 name: "Yes".to_string(),
                 description: Some(
-                    "Share the current Codex session logs with the team for troubleshooting."
-                        .to_string(),
+                    "Save the current Codex session logs locally for troubleshooting.".to_string(),
                 ),
                 actions: vec![yes_action],
                 dismiss_on_select: true,
@@ -524,7 +441,7 @@ pub(crate) fn feedback_upload_consent_params(
             },
             super::SelectionItem {
                 name: "No".to_string(),
-                description: Some("".to_string()),
+                description: Some("Save feedback only, without logs.".to_string()),
                 actions: vec![no_action],
                 dismiss_on_select: true,
                 ..Default::default()
@@ -577,14 +494,7 @@ mod tests {
         let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
-        FeedbackNoteView::new(
-            category,
-            snapshot,
-            None,
-            tx,
-            true,
-            FeedbackAudience::External,
-        )
+        FeedbackNoteView::new(category, std::env::temp_dir(), snapshot, None, tx, true)
     }
 
     #[test]
@@ -616,43 +526,38 @@ mod tests {
     }
 
     #[test]
-    fn issue_url_available_for_bug_bad_result_and_other() {
-        let bug_url = issue_url_for_category(
+    fn submit_feedback_emits_local_save_details_without_follow_up_instructions() {
+        let codex_home = tempfile::TempDir::new().expect("tempdir");
+        let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
+        let mut view = FeedbackNoteView::new(
             FeedbackCategory::Bug,
-            "thread-1",
-            FeedbackAudience::OpenAiEmployee,
+            codex_home.path().to_path_buf(),
+            snapshot,
+            None,
+            tx,
+            false,
         );
-        let expected_slack_url = "http://go/codex-feedback-internal".to_string();
-        assert_eq!(bug_url.as_deref(), Some(expected_slack_url.as_str()));
 
-        let bad_result_url = issue_url_for_category(
-            FeedbackCategory::BadResult,
-            "thread-2",
-            FeedbackAudience::OpenAiEmployee,
-        );
-        assert!(bad_result_url.is_some());
+        view.submit();
 
-        let other_url = issue_url_for_category(
-            FeedbackCategory::Other,
-            "thread-3",
-            FeedbackAudience::OpenAiEmployee,
-        );
-        assert!(other_url.is_some());
-
-        assert!(
-            issue_url_for_category(
-                FeedbackCategory::GoodResult,
-                "t",
-                FeedbackAudience::OpenAiEmployee
-            )
-            .is_none()
-        );
-        let bug_url_non_employee =
-            issue_url_for_category(FeedbackCategory::Bug, "t", FeedbackAudience::External);
-        let expected_external_url = format!("{BASE_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20t");
-        assert_eq!(
-            bug_url_non_employee.as_deref(),
-            Some(expected_external_url.as_str())
-        );
+        let cell = match rx.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+            other => panic!("expected feedback history cell, got {other:?}"),
+        };
+        let rendered = cell
+            .display_lines(120)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Feedback saved locally"));
+        assert!(rendered.contains("Saved to:"));
+        assert!(rendered.contains("Thread ID:"));
+        assert!(rendered.contains("Thanks for the feedback!"));
+        assert!(!rendered.contains("github.com"));
+        assert!(!rendered.contains("open an issue"));
+        assert!(!rendered.contains("#codex-feedback"));
     }
 }
