@@ -2321,16 +2321,8 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.model.clone())
             .unwrap_or_else(|| model_for_header.clone());
-        let fallback_custom = Settings {
-            model: header_model.clone(),
-            reasoning_effort: None,
-            developer_instructions: None,
-        };
-        // Collaboration modes start in Custom mode (not activated).
-        let current_collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
-            settings: fallback_custom,
-        };
+        let current_collaboration_mode =
+            Self::initial_custom_mode(header_model.clone(), config.model_reasoning_effort);
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
         let transcript_host_mode = Self::transcript_host_mode_from_config(&config);
@@ -2476,16 +2468,8 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.model.clone())
             .unwrap_or_else(|| model_for_header.clone());
-        let fallback_custom = Settings {
-            model: header_model.clone(),
-            reasoning_effort: None,
-            developer_instructions: None,
-        };
-        // Collaboration modes start in Custom mode (not activated).
-        let current_collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
-            settings: fallback_custom,
-        };
+        let current_collaboration_mode =
+            Self::initial_custom_mode(header_model.clone(), config.model_reasoning_effort);
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
         let transcript_host_mode = Self::transcript_host_mode_from_config(&config);
@@ -2617,20 +2601,15 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.model.clone())
             .unwrap_or(header_model);
+        let initial_reasoning_effort = session_configured
+            .reasoning_effort
+            .or(config.model_reasoning_effort);
 
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
-        let fallback_custom = Settings {
-            model: header_model.clone(),
-            reasoning_effort: None,
-            developer_instructions: None,
-        };
-        // Collaboration modes start in Custom mode (not activated).
-        let current_collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
-            settings: fallback_custom,
-        };
+        let current_collaboration_mode =
+            Self::initial_custom_mode(header_model.clone(), initial_reasoning_effort);
         let transcript_host_mode = Self::transcript_host_mode_from_config(&config);
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
 
@@ -5599,6 +5578,20 @@ impl ChatWidget {
         self.config.features.enabled(Feature::CollaborationModes)
     }
 
+    fn initial_custom_mode(
+        model: String,
+        reasoning_effort: Option<ReasoningEffortConfig>,
+    ) -> CollaborationMode {
+        CollaborationMode {
+            mode: ModeKind::Custom,
+            settings: Settings {
+                model,
+                reasoning_effort,
+                developer_instructions: None,
+            },
+        }
+    }
+
     fn initial_collaboration_mask(
         config: &Config,
         models_manager: &ModelsManager,
@@ -5628,33 +5621,6 @@ impl ChatWidget {
         matches!(mode, ModeKind::Plan | ModeKind::Code)
     }
 
-    fn model_for_mask<'a>(&'a self, mask: &'a CollaborationModeMask) -> &'a str {
-        mask.model
-            .as_deref()
-            .unwrap_or_else(|| self.current_collaboration_mode.model())
-    }
-
-    fn model_supports_reasoning_effort(
-        &self,
-        model: &str,
-        effort: Option<ReasoningEffortConfig>,
-    ) -> bool {
-        let Some(effort) = effort else {
-            return true;
-        };
-
-        self.models_manager
-            .try_list_picker_models(&self.config)
-            .ok()
-            .and_then(|models| models.into_iter().find(|preset| preset.model == model))
-            .is_some_and(|preset| {
-                preset
-                    .supported_reasoning_efforts
-                    .iter()
-                    .any(|option| option.effort == effort)
-            })
-    }
-
     fn apply_reasoning_effort_override(
         &self,
         mut mask: CollaborationModeMask,
@@ -5672,24 +5638,7 @@ impl ChatWidget {
         let mode = mask
             .mode
             .filter(|mode| Self::stores_effort_override_for(*mode))?;
-        let model = self.model_for_mask(mask);
-
-        if let Some(effort) = self.reasoning_effort_overrides.get(&mode) {
-            return if self.model_supports_reasoning_effort(model, *effort) {
-                Some(*effort)
-            } else {
-                None
-            };
-        }
-
-        if mode == ModeKind::Plan {
-            let effort = self.current_collaboration_mode.reasoning_effort();
-            if effort.is_some() && self.model_supports_reasoning_effort(model, effort) {
-                return Some(effort);
-            }
-        }
-
-        None
+        self.reasoning_effort_overrides.get(&mode).copied()
     }
 
     fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
@@ -5819,6 +5768,7 @@ impl ChatWidget {
         if !self.collaboration_modes_enabled() {
             return;
         }
+        let mask = collaboration_modes::normalize_mask(mask);
         self.active_collaboration_mask = Some(self.apply_reasoning_effort_override(mask));
         self.update_collaboration_mode_indicator();
         self.refresh_model_display();

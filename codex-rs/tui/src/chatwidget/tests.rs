@@ -3660,6 +3660,58 @@ async fn experimental_mode_plan_applies_on_startup() {
 }
 
 #[tokio::test]
+async fn experimental_mode_plan_preserves_configured_effort_on_startup() {
+    let codex_home = tempdir().expect("tempdir");
+    let cfg = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cli_overrides(vec![
+            (
+                "features.collaboration_modes".to_string(),
+                TomlValue::Boolean(true),
+            ),
+            (
+                "tui.experimental_mode".to_string(),
+                TomlValue::String("plan".to_string()),
+            ),
+            (
+                "model_reasoning_effort".to_string(),
+                TomlValue::String("high".to_string()),
+            ),
+        ])
+        .build()
+        .await
+        .expect("config");
+    let resolved_model = ModelsManager::get_model_offline(cfg.model.as_deref());
+    let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
+    let thread_manager = Arc::new(ThreadManager::with_models_provider(
+        CodexAuth::from_api_key("test"),
+        cfg.model_provider.clone(),
+    ));
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let init = ChatWidgetInit {
+        config: cfg,
+        frame_requester: FrameRequester::test_dummy(),
+        app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
+        initial_user_message: None,
+        enhanced_keys_supported: false,
+        auth_manager,
+        models_manager: thread_manager.get_models_manager(),
+        feedback: codex_feedback::CodexFeedback::new(),
+        is_first_run: true,
+        model: Some(resolved_model.clone()),
+        otel_manager,
+    };
+
+    let chat = ChatWidget::new(init, thread_manager);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.current_model(), resolved_model);
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::High)
+    );
+}
+
+#[tokio::test]
 async fn set_model_updates_active_collaboration_mask() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
@@ -3771,16 +3823,15 @@ async fn plan_effort_override_is_restored_for_supported_model() {
 }
 
 #[tokio::test]
-async fn plan_inherited_code_effort_falls_back_to_medium_when_unsupported() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+async fn plan_inherited_code_effort_is_preserved_for_unknown_model() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("glm-5.1")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
     let code_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Code)
             .expect("expected code collaboration mask");
     chat.set_collaboration_mask(code_mask);
-    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Low));
-    chat.set_model("gpt-5.1-codex-mini");
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
@@ -3788,30 +3839,28 @@ async fn plan_inherited_code_effort_falls_back_to_medium_when_unsupported() {
     chat.set_collaboration_mask(plan_mask);
 
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
-    assert_eq!(chat.current_model(), "gpt-5.1-codex-mini");
+    assert_eq!(chat.current_model(), "glm-5.1");
     assert_eq!(
         chat.current_reasoning_effort(),
-        Some(ReasoningEffortConfig::Medium)
+        Some(ReasoningEffortConfig::High)
     );
 }
 
 #[tokio::test]
-async fn plan_effort_override_is_not_restored_for_unsupported_model() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+async fn plan_effort_override_is_restored_for_unknown_model() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("glm-5.1")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
-    chat.set_model("gpt-5.2-codex");
-    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Low));
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
     let code_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Code)
             .expect("expected code collaboration mask");
     chat.set_collaboration_mask(code_mask);
-    chat.set_model("gpt-5.1-codex-mini");
 
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
@@ -3819,10 +3868,10 @@ async fn plan_effort_override_is_not_restored_for_unsupported_model() {
     chat.set_collaboration_mask(plan_mask);
 
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
-    assert_eq!(chat.current_model(), "gpt-5.1-codex-mini");
+    assert_eq!(chat.current_model(), "glm-5.1");
     assert_eq!(
         chat.current_reasoning_effort(),
-        Some(ReasoningEffortConfig::Medium)
+        Some(ReasoningEffortConfig::High)
     );
 }
 
@@ -3852,7 +3901,7 @@ async fn plan_explicit_default_effort_survives_mode_switch() {
 }
 
 #[tokio::test]
-async fn plan_without_user_override_still_uses_preset_medium() {
+async fn plan_without_user_override_keeps_current_effort() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
@@ -3862,10 +3911,7 @@ async fn plan_without_user_override_still_uses_preset_medium() {
     chat.set_collaboration_mask(plan_mask);
 
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
-    assert_eq!(
-        chat.current_reasoning_effort(),
-        Some(ReasoningEffortConfig::Medium)
-    );
+    assert_eq!(chat.current_reasoning_effort(), None);
 }
 
 #[tokio::test]
