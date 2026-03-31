@@ -1,0 +1,7 @@
+---
+source: tui/src/collab.rs
+assertion_line: 605
+expression: cell_to_text(&cell)
+---
+• Resumed Robie [explorer]
+  └ Interrupted

@@ -131,6 +131,14 @@ mod spawn {
                 "Agent depth limit reached. Solve the task yourself.".to_string(),
             ));
         }
+        let mut config =
+            build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+        apply_role_to_config(&mut config, role_name)
+            .await
+            .map_err(FunctionCallError::RespondToModel)?;
+        apply_spawn_agent_overrides(&mut config, child_depth);
+        let model = config.model.clone().unwrap_or_default();
+        let reasoning_effort = config.model_reasoning_effort.unwrap_or_default();
         session
             .send_event(
                 &turn,
@@ -138,16 +146,12 @@ mod spawn {
                     call_id: call_id.clone(),
                     sender_thread_id: session.conversation_id,
                     prompt: prompt.clone(),
+                    model: model.clone(),
+                    reasoning_effort,
                 }
                 .into(),
             )
             .await;
-        let mut config =
-            build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
-        apply_role_to_config(&mut config, role_name)
-            .await
-            .map_err(FunctionCallError::RespondToModel)?;
-        apply_spawn_agent_overrides(&mut config, child_depth);
 
         let result = session
             .services
@@ -193,6 +197,8 @@ mod spawn {
                     new_agent_nickname,
                     new_agent_role,
                     prompt,
+                    model,
+                    reasoning_effort,
                     status,
                 }
                 .into(),
@@ -627,7 +633,7 @@ pub(crate) mod wait {
         })
     }
 
-    async fn wait_for_final_status(
+    pub(super) async fn wait_for_final_status(
         session: Arc<Session>,
         thread_id: ThreadId,
         mut status_rx: Receiver<AgentStatus>,
@@ -1302,6 +1308,31 @@ mod tests {
             .submit(Op::Shutdown {})
             .await
             .expect("shutdown should submit");
+    }
+
+    #[tokio::test]
+    async fn wait_for_final_status_returns_interrupted_status() {
+        let (session, _turn) = make_session_and_context().await;
+        let session = Arc::new(session);
+        let thread_id = ThreadId::new();
+        let (status_tx, status_rx) = tokio::sync::watch::channel(AgentStatus::Running);
+
+        tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            status_tx
+                .send(AgentStatus::Interrupted)
+                .expect("status send should succeed");
+        });
+
+        let result = timeout(
+            Duration::from_secs(1),
+            wait::wait_for_final_status(session, thread_id, status_rx),
+        )
+        .await
+        .expect("wait should finish")
+        .expect("wait should return a final status");
+
+        assert_eq!(result, (thread_id, AgentStatus::Interrupted));
     }
 
     #[tokio::test]

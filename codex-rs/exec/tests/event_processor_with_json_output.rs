@@ -57,6 +57,7 @@ use codex_exec::exec_events::WebSearchItem;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -548,6 +549,8 @@ fn collab_spawn_begin_and_end_emit_item_events() {
             call_id: "call-10".to_string(),
             sender_thread_id,
             prompt: prompt.clone(),
+            model: "gpt-5".to_string(),
+            reasoning_effort: ReasoningEffortConfig::High,
         }),
     );
     let begin_events = ep.collect_thread_events(&begin);
@@ -577,6 +580,8 @@ fn collab_spawn_begin_and_end_emit_item_events() {
             new_agent_nickname: Some("Atlas".to_string()),
             new_agent_role: Some("worker".to_string()),
             prompt: prompt.clone(),
+            model: "gpt-5".to_string(),
+            reasoning_effort: ReasoningEffortConfig::High,
             status: AgentStatus::Running,
         }),
     );

@@ -7,7 +7,12 @@ pub(crate) fn agent_status_from_event(msg: &EventMsg) -> Option<AgentStatus> {
     match msg {
         EventMsg::TurnStarted(_) => Some(AgentStatus::Running),
         EventMsg::TurnComplete(ev) => Some(AgentStatus::Completed(ev.last_agent_message.clone())),
-        EventMsg::TurnAborted(ev) => Some(AgentStatus::Errored(format!("{:?}", ev.reason))),
+        EventMsg::TurnAborted(ev) => match ev.reason {
+            codex_protocol::protocol::TurnAbortReason::Interrupted => {
+                Some(AgentStatus::Interrupted)
+            }
+            _ => Some(AgentStatus::Errored(format!("{:?}", ev.reason))),
+        },
         EventMsg::Error(ev) => Some(AgentStatus::Errored(ev.message.clone())),
         EventMsg::ShutdownComplete => Some(AgentStatus::Shutdown),
         _ => None,
@@ -16,4 +21,15 @@ pub(crate) fn agent_status_from_event(msg: &EventMsg) -> Option<AgentStatus> {
 
 pub(crate) fn is_final(status: &AgentStatus) -> bool {
     !matches!(status, AgentStatus::PendingInit | AgentStatus::Running)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn interrupted_status_is_final() {
+        assert_eq!(is_final(&AgentStatus::Interrupted), true);
+    }
 }

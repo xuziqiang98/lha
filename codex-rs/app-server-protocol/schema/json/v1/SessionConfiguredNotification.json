@@ -47,6 +47,13 @@
           "type": "string"
         },
         {
+          "description": "Agent's current turn was interrupted and it may receive more input.",
+          "enum": [
+            "interrupted"
+          ],
+          "type": "string"
+        },
+        {
           "additionalProperties": false,
           "description": "Agent is done. Contains the final assistant message.",
           "properties": {
@@ -2547,9 +2554,21 @@
               "description": "Identifier for the collab tool call.",
               "type": "string"
             },
+            "model": {
+              "description": "Effective model used by the spawned agent after inheritance and role overrides.",
+              "type": "string"
+            },
             "prompt": {
               "description": "Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.",
               "type": "string"
+            },
+            "reasoning_effort": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReasoningEffort"
+                }
+              ],
+              "description": "Effective reasoning effort used by the spawned agent after inheritance and role overrides."
             },
             "sender_thread_id": {
               "allOf": [
@@ -2569,7 +2588,9 @@
           },
           "required": [
             "call_id",
+            "model",
             "prompt",
+            "reasoning_effort",
             "sender_thread_id",
             "type"
           ],
@@ -2581,6 +2602,10 @@
           "properties": {
             "call_id": {
               "description": "Identifier for the collab tool call.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Effective model used by the spawned agent after inheritance and role overrides.",
               "type": "string"
             },
             "new_agent_nickname": {
@@ -2612,6 +2637,14 @@
               "description": "Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.",
               "type": "string"
             },
+            "reasoning_effort": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReasoningEffort"
+                }
+              ],
+              "description": "Effective reasoning effort used by the spawned agent after inheritance and role overrides."
+            },
             "sender_thread_id": {
               "allOf": [
                 {
@@ -2638,7 +2671,9 @@
           },
           "required": [
             "call_id",
+            "model",
             "prompt",
+            "reasoning_effort",
             "sender_thread_id",
             "status",
             "type"

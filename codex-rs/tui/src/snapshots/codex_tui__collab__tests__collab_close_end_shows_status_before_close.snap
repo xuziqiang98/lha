@@ -1,0 +1,7 @@
+---
+source: tui/src/collab.rs
+assertion_line: 651
+expression: cell_to_text(&cell)
+---
+• Close result for Robie [explorer]
+  └ Status before close: Error - tool timeout
