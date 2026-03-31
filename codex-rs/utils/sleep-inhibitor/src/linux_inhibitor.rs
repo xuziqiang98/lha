@@ -246,9 +246,8 @@ fn try_wait_retry_interrupted(child: &mut Child) -> std::io::Result<Option<ExitS
 }
 
 fn terminate_backend(child: &mut Child) -> std::io::Result<()> {
-    if let Some(pid) = child.id() {
-        kill_process_group_by_pid(pid)?;
-    }
+    let pid = child.id();
+    kill_process_group_by_pid(pid)?;
 
     wait_for_child(child)
 }
@@ -306,6 +305,7 @@ fn process_not_found(error: &std::io::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::os::unix::process::CommandExt;
     use std::os::unix::process::ExitStatusExt;
     use std::time::Duration;
 
