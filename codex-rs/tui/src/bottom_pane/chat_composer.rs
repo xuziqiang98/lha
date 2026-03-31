@@ -1836,7 +1836,6 @@ impl ChatComposer {
                 let is_builtin = slash_commands::find_builtin_command(
                     name,
                     self.collaboration_modes_enabled,
-                    self.connectors_enabled,
                     self.personality_command_enabled,
                     self.windows_degraded_sandbox_active,
                 )
@@ -2022,7 +2021,6 @@ impl ChatComposer {
             && let Some(cmd) = slash_commands::find_builtin_command(
                 name,
                 self.collaboration_modes_enabled,
-                self.connectors_enabled,
                 self.personality_command_enabled,
                 self.windows_degraded_sandbox_active,
             )
@@ -2051,7 +2049,6 @@ impl ChatComposer {
                 && let Some(cmd) = slash_commands::find_builtin_command(
                     name,
                     self.collaboration_modes_enabled,
-                    self.connectors_enabled,
                     self.personality_command_enabled,
                     self.windows_degraded_sandbox_active,
                 )
@@ -2552,7 +2549,6 @@ impl ChatComposer {
         if slash_commands::has_builtin_prefix(
             name,
             self.collaboration_modes_enabled,
-            self.connectors_enabled,
             self.personality_command_enabled,
             self.windows_degraded_sandbox_active,
         ) {
@@ -2605,13 +2601,11 @@ impl ChatComposer {
             _ => {
                 if is_editing_slash_command_name {
                     let collaboration_modes_enabled = self.collaboration_modes_enabled;
-                    let connectors_enabled = self.connectors_enabled;
                     let personality_command_enabled = self.personality_command_enabled;
                     let mut command_popup = CommandPopup::new(
                         self.custom_prompts.clone(),
                         CommandPopupFlags {
                             collaboration_modes_enabled,
-                            connectors_enabled,
                             personality_command_enabled,
                             windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
                         },

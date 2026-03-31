@@ -37,7 +37,6 @@ pub enum SlashCommand {
     Mention,
     Status,
     Mcp,
-    Apps,
     Logout,
     Quit,
     Exit,
@@ -82,7 +81,6 @@ impl SlashCommand {
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
             SlashCommand::Experimental => "toggle experimental features",
             SlashCommand::Mcp => "list configured MCP tools",
-            SlashCommand::Apps => "manage apps",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
@@ -122,7 +120,6 @@ impl SlashCommand {
             | SlashCommand::Ps
             | SlashCommand::Stop
             | SlashCommand::Mcp
-            | SlashCommand::Apps
             | SlashCommand::Feedback
             | SlashCommand::Quit
             | SlashCommand::Exit => true,
@@ -183,5 +180,18 @@ mod tests {
     #[test]
     fn clean_alias_parses_to_stop_command() {
         assert_eq!(SlashCommand::from_str("clean"), Ok(SlashCommand::Stop));
+    }
+
+    #[test]
+    fn apps_command_is_not_available() {
+        assert_eq!(
+            SlashCommand::from_str("apps"),
+            Err(strum::ParseError::VariantNotFound)
+        );
+        assert!(
+            !built_in_slash_commands()
+                .into_iter()
+                .any(|(command, _)| command == "apps")
+        );
     }
 }

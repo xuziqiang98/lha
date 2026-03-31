@@ -13,7 +13,6 @@
 - [Events](#events)
 - [Approvals](#approvals)
 - [Skills](#skills)
-- [Apps](#apps)
 - [Auth endpoints](#auth-endpoints)
 
 ## Protocol
@@ -93,7 +92,7 @@ Example (from OpenAI's official VSCode extension):
 - `model/list` — list available models (with reasoning effort options).
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination).
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
-- `app/list` — list available apps.
+- `app/list` — retained for backward compatibility; currently returns an empty list.
 - `skills/config/write` — write user-level skill config by path.
 - `mcpServer/oauth/login` — start an OAuth login for a configured MCP server; returns an `authorization_url` and later emits `mcpServer/oauthLogin/completed` once the browser flow finishes.
 - `tool/requestUserInput` — prompt the user with 1–3 short questions for a tool call and return their answers (experimental).
@@ -299,16 +298,13 @@ Invoke a skill explicitly by including `$<skill-name>` in the text input and add
 } } }
 ```
 
-### Example: Start a turn (invoke an app)
-
-Invoke an app by including `$<app-slug>` in the text input and adding a `mention` input item with the app id in `app://<connector-id>` form.
+### Example: Start a turn
 
 ```json
 { "method": "turn/start", "id": 34, "params": {
     "threadId": "thr_123",
     "input": [
-        { "type": "text", "text": "$demo-app Summarize the latest updates." },
-        { "type": "mention", "name": "Demo App", "path": "app://demo-app" }
+        { "type": "text", "text": "Summarize the latest updates." }
     ]
 } }
 { "id": 34, "result": { "turn": {
@@ -624,7 +620,7 @@ To enable or disable a skill by path:
 
 ## Apps
 
-Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, and whether it is currently accessible.
+`app/list` remains in the protocol for backward compatibility, but Apps are not currently exposed to users. The method returns an empty list even if the legacy Apps feature flag is present in config.
 
 ```json
 { "method": "app/list", "id": 50, "params": {
@@ -632,45 +628,9 @@ Use `app/list` to fetch available apps (connectors). Each entry includes metadat
     "limit": 50
 } }
 { "id": 50, "result": {
-    "data": [
-        {
-            "id": "demo-app",
-            "name": "Demo App",
-            "description": "Example connector for documentation.",
-            "logoUrl": "https://example.com/demo-app.png",
-            "logoUrlDark": null,
-            "distributionChannel": null,
-            "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
-            "isAccessible": true
-        }
-    ],
+    "data": [],
     "nextCursor": null
 } }
-```
-
-Invoke an app by inserting `$<app-slug>` in the text input. The slug is derived from the app name and lowercased with non-alphanumeric characters replaced by `-` (for example, "Demo App" becomes `$demo-app`). Add a `mention` input item (recommended) so the server uses the exact `app://<connector-id>` path rather than guessing by name.
-
-Example:
-
-```
-$demo-app Pull the latest updates from the team.
-```
-
-```json
-{
-  "method": "turn/start",
-  "id": 51,
-  "params": {
-    "threadId": "thread-1",
-    "input": [
-      {
-        "type": "text",
-        "text": "$demo-app Pull the latest updates from the team."
-      },
-      { "type": "mention", "name": "Demo App", "path": "app://demo-app" }
-    ]
-  }
-}
 ```
 
 ## Auth endpoints

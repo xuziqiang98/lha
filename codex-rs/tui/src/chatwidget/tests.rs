@@ -4363,6 +4363,23 @@ async fn experimental_features_popup_snapshot() {
 }
 
 #[tokio::test]
+async fn experimental_features_popup_hides_apps() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_experimental_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !popup.contains("Apps"),
+        "expected Apps to be hidden, got {popup}"
+    );
+    assert!(
+        popup.contains("Shell snapshot"),
+        "expected other experimental features to remain visible, got {popup}"
+    );
+}
+
+#[tokio::test]
 async fn experimental_features_toggle_saves_on_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 

@@ -844,13 +844,14 @@ impl App {
         let mut overrides = self.harness_overrides.clone();
         overrides.cwd = Some(cwd.clone());
         let cwd_display = cwd.display().to_string();
-        ConfigBuilder::default()
+        let config = ConfigBuilder::default()
             .codex_home(self.config.codex_home.clone())
             .cli_overrides(self.cli_kv_overrides.clone())
             .harness_overrides(overrides)
             .build()
             .await
-            .wrap_err_with(|| format!("Failed to rebuild config for cwd {cwd_display}"))
+            .wrap_err_with(|| format!("Failed to rebuild config for cwd {cwd_display}"))?;
+        Ok(config)
     }
 
     fn apply_runtime_policy_overrides(&mut self, config: &mut Config) {

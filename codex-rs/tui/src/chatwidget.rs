@@ -406,6 +406,7 @@ enum RateLimitSwitchPromptState {
     Shown,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 enum ConnectorsCacheState {
     #[default]
@@ -3101,9 +3102,6 @@ impl ChatWidget {
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
-            }
-            SlashCommand::Apps => {
-                self.add_connectors_output();
             }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
@@ -5884,6 +5882,7 @@ impl ChatWidget {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn add_connectors_output(&mut self) {
         if !self.connectors_enabled() {
             self.add_info_message(
@@ -5923,6 +5922,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[allow(dead_code)]
     fn open_connectors_popup(&mut self, connectors: &[connectors::AppInfo]) {
         let total = connectors.len();
         let installed = connectors
@@ -6002,6 +6002,7 @@ impl ChatWidget {
         });
     }
 
+    #[allow(dead_code)]
     fn connectors_popup_hint_line() -> Line<'static> {
         Line::from(vec![
             "Press ".into(),
@@ -6010,6 +6011,7 @@ impl ChatWidget {
         ])
     }
 
+    #[allow(dead_code)]
     fn connector_brief_description(connector: &connectors::AppInfo) -> String {
         let status_label = if connector.is_accessible {
             "Connected"
@@ -6022,6 +6024,7 @@ impl ChatWidget {
         }
     }
 
+    #[allow(dead_code)]
     fn connector_description(connector: &connectors::AppInfo) -> Option<String> {
         connector
             .description

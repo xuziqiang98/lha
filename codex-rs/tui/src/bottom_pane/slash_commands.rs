@@ -13,7 +13,6 @@ use crate::slash_command::built_in_slash_commands;
 /// Return the built-ins that should be visible/usable for the current input.
 pub(crate) fn builtins_for_input(
     collaboration_modes_enabled: bool,
-    connectors_enabled: bool,
     personality_command_enabled: bool,
     allow_elevate_sandbox: bool,
 ) -> Vec<(&'static str, SlashCommand)> {
@@ -24,7 +23,6 @@ pub(crate) fn builtins_for_input(
             collaboration_modes_enabled
                 || !matches!(*cmd, SlashCommand::Collab | SlashCommand::Plan)
         })
-        .filter(|(_, cmd)| connectors_enabled || *cmd != SlashCommand::Apps)
         .filter(|(_, cmd)| personality_command_enabled || *cmd != SlashCommand::Personality)
         .collect()
 }
@@ -33,7 +31,6 @@ pub(crate) fn builtins_for_input(
 pub(crate) fn find_builtin_command(
     name: &str,
     collaboration_modes_enabled: bool,
-    connectors_enabled: bool,
     personality_command_enabled: bool,
     allow_elevate_sandbox: bool,
 ) -> Option<SlashCommand> {
@@ -41,7 +38,6 @@ pub(crate) fn find_builtin_command(
 
     builtins_for_input(
         collaboration_modes_enabled,
-        connectors_enabled,
         personality_command_enabled,
         allow_elevate_sandbox,
     )
@@ -54,13 +50,11 @@ pub(crate) fn find_builtin_command(
 pub(crate) fn has_builtin_prefix(
     name: &str,
     collaboration_modes_enabled: bool,
-    connectors_enabled: bool,
     personality_command_enabled: bool,
     allow_elevate_sandbox: bool,
 ) -> bool {
     builtins_for_input(
         collaboration_modes_enabled,
-        connectors_enabled,
         personality_command_enabled,
         allow_elevate_sandbox,
     )
@@ -77,7 +71,7 @@ mod tests {
     #[test]
     fn stop_command_resolves_for_dispatch() {
         assert_eq!(
-            find_builtin_command("stop", true, true, true, true),
+            find_builtin_command("stop", true, true, true),
             Some(SlashCommand::Stop)
         );
     }
@@ -85,8 +79,13 @@ mod tests {
     #[test]
     fn clean_command_alias_resolves_for_dispatch() {
         assert_eq!(
-            find_builtin_command("clean", true, true, true, true),
+            find_builtin_command("clean", true, true, true),
             Some(SlashCommand::Stop)
         );
+    }
+
+    #[test]
+    fn apps_command_does_not_resolve_for_dispatch() {
+        assert_eq!(find_builtin_command("apps", true, true, true), None);
     }
 }
