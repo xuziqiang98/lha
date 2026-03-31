@@ -1,0 +1,8 @@
+---
+source: tui/src/collab.rs
+assertion_line: 632
+expression: cell_to_text(&cell)
+---
+• Input result for Robie [explorer]
+  └ Please continue and return the answer only.
+    Status: Not found

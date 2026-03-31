@@ -1,13 +1,14 @@
 ---
 source: tui/src/collab.rs
-assertion_line: 550
+assertion_line: 557
 expression: snapshot
 ---
 • Spawned Robie [explorer] (gpt-5 high)
   └ Compute 11! and reply with just the integer result.
 
-• Sent input to Robie [explorer]
+• Input result for Robie [explorer]
   └ Please continue and return the answer only.
+    Status: Running
 
 • Waiting for Robie [explorer]
 
@@ -15,4 +16,5 @@ expression: snapshot
   └ Robie [explorer]: Completed - 39916800
     Bob [worker]: Error - tool timeout
 
-• Closed Robie [explorer]
+• Close result for Robie [explorer]
+  └ Status before close: Completed - 39916800

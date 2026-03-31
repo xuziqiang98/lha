@@ -633,7 +633,7 @@ pub(crate) mod wait {
         })
     }
 
-    async fn wait_for_final_status(
+    pub(super) async fn wait_for_final_status(
         session: Arc<Session>,
         thread_id: ThreadId,
         mut status_rx: Receiver<AgentStatus>,
@@ -1308,6 +1308,31 @@ mod tests {
             .submit(Op::Shutdown {})
             .await
             .expect("shutdown should submit");
+    }
+
+    #[tokio::test]
+    async fn wait_for_final_status_returns_interrupted_status() {
+        let (session, _turn) = make_session_and_context().await;
+        let session = Arc::new(session);
+        let thread_id = ThreadId::new();
+        let (status_tx, status_rx) = tokio::sync::watch::channel(AgentStatus::Running);
+
+        tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            status_tx
+                .send(AgentStatus::Interrupted)
+                .expect("status send should succeed");
+        });
+
+        let result = timeout(
+            Duration::from_secs(1),
+            wait::wait_for_final_status(session, thread_id, status_rx),
+        )
+        .await
+        .expect("wait should finish")
+        .expect("wait should return a final status");
+
+        assert_eq!(result, (thread_id, AgentStatus::Interrupted));
     }
 
     #[tokio::test]

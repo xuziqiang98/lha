@@ -20,8 +20,16 @@ pub(crate) fn agent_status_from_event(msg: &EventMsg) -> Option<AgentStatus> {
 }
 
 pub(crate) fn is_final(status: &AgentStatus) -> bool {
-    !matches!(
-        status,
-        AgentStatus::PendingInit | AgentStatus::Running | AgentStatus::Interrupted
-    )
+    !matches!(status, AgentStatus::PendingInit | AgentStatus::Running)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn interrupted_status_is_final() {
+        assert_eq!(is_final(&AgentStatus::Interrupted), true);
+    }
 }
