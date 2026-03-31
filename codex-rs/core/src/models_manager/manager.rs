@@ -174,8 +174,10 @@ impl ModelsManager {
     /// List the models that should be shown by the `/model` command.
     ///
     /// Without ChatGPT auth, this is limited to models explicitly declared in
-    /// `config.toml`. With ChatGPT auth, the full picker list is shown and any
-    /// additional configured models are appended.
+    /// `config.toml`. With ChatGPT auth, `/model` always includes the official
+    /// OpenAI switcher models so users can switch back to them from any active
+    /// provider, even when `remote_models = false`, and any additional
+    /// configured models are appended.
     pub async fn list_model_switcher_models(
         &self,
         config: &Config,
@@ -527,6 +529,9 @@ impl ModelsManager {
             .filter(|preset| preset.model_provider_id.as_deref() == Some(OPENAI_PROVIDER_ID))
             .cloned()
             .collect();
+        // `/model` intentionally keeps the bundled official OpenAI catalog
+        // available for ChatGPT-authenticated users, even when remote models
+        // are filtered out of the general picker/default-model paths.
         let mut picker_models = ModelPreset::merge(
             available_official_models,
             self.bundled_openai_available_models(),
@@ -2599,6 +2604,92 @@ remote_models = false
             .expect("offline default model should resolve");
 
         assert_eq!(model, "gpt-5.3-codex");
+    }
+
+    #[tokio::test]
+    async fn list_model_switcher_models_with_chatgpt_auth_and_remote_models_disabled_includes_official_openai_models()
+     {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "openai",
+            ModelProviderInfo::create_openai_provider(),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "claude-sonnet-4-5"
+model_provider = "provider_a"
+
+[features]
+remote_models = false
+
+[model_providers.provider_a]
+name = "provider_a"
+base_url = "https://example.com/a"
+wire_api = "chat"
+experimental_bearer_token = "sk-a"
+"#,
+        )
+        .await;
+
+        let switcher_models = manager
+            .list_model_switcher_models(&config, RefreshStrategy::Offline)
+            .await;
+
+        assert!(switcher_models.iter().any(|preset| {
+            preset.model == "gpt-5.4"
+                && preset.model_provider_id.as_deref() == Some(OPENAI_PROVIDER_ID)
+                && preset.description == OFFICIAL_OPENAI_PROVIDER_DESCRIPTION
+        }));
+        assert!(switcher_models.iter().any(|preset| {
+            preset.model == "claude-sonnet-4-5"
+                && preset.model_provider_id.as_deref() == Some("provider_a")
+                && preset.description == "User-defined model from provider_a provider."
+        }));
+    }
+
+    #[tokio::test]
+    async fn list_model_switcher_models_with_chatgpt_auth_and_remote_models_disabled_keeps_custom_openai_model()
+     {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "openai",
+            ModelProviderInfo::create_openai_provider(),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "custom-openai-model"
+model_provider = "openai"
+
+[features]
+remote_models = false
+"#,
+        )
+        .await;
+
+        let switcher_models = manager
+            .list_model_switcher_models(&config, RefreshStrategy::Offline)
+            .await;
+
+        assert!(switcher_models.iter().any(|preset| {
+            preset.model == "gpt-5.4"
+                && preset.model_provider_id.as_deref() == Some(OPENAI_PROVIDER_ID)
+                && preset.description == OFFICIAL_OPENAI_PROVIDER_DESCRIPTION
+        }));
+        assert!(switcher_models.iter().any(|preset| {
+            preset.model == "custom-openai-model"
+                && preset.model_provider_id.as_deref() == Some(OPENAI_PROVIDER_ID)
+                && preset.description == "Configured model from openai provider."
+        }));
     }
 
     #[tokio::test]
