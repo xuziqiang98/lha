@@ -6,11 +6,20 @@ fn is_tui_mode(kind: ModeKind) -> bool {
     matches!(kind, ModeKind::Plan | ModeKind::Code)
 }
 
+pub(crate) fn normalize_mask(mut mask: CollaborationModeMask) -> CollaborationModeMask {
+    if mask.mode.is_some_and(is_tui_mode) {
+        mask.model = None;
+        mask.reasoning_effort = None;
+    }
+    mask
+}
+
 fn filtered_presets(models_manager: &ModelsManager) -> Vec<CollaborationModeMask> {
     models_manager
         .list_collaboration_modes()
         .into_iter()
         .filter(|mask| mask.mode.is_some_and(is_tui_mode))
+        .map(normalize_mask)
         .collect()
 }
 

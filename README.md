@@ -1,4 +1,5 @@
 <p align="center"><strong>Codey CLI</strong> is a coding agent forked from OpenAI codex that supports /chat/completions api.
+<br>
 <strong>Note that</strong> codey is not affiliated with OpenAI!
 
 ---
