@@ -623,7 +623,7 @@ mod tests {
             reason: TurnAbortReason::Interrupted,
         }));
 
-        let expected = AgentStatus::Errored("Interrupted".to_string());
+        let expected = AgentStatus::Interrupted;
         assert_eq!(status, Some(expected));
     }
 

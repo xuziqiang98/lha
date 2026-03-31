@@ -131,6 +131,14 @@ mod spawn {
                 "Agent depth limit reached. Solve the task yourself.".to_string(),
             ));
         }
+        let mut config =
+            build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+        apply_role_to_config(&mut config, role_name)
+            .await
+            .map_err(FunctionCallError::RespondToModel)?;
+        apply_spawn_agent_overrides(&mut config, child_depth);
+        let model = config.model.clone().unwrap_or_default();
+        let reasoning_effort = config.model_reasoning_effort.unwrap_or_default();
         session
             .send_event(
                 &turn,
@@ -138,16 +146,12 @@ mod spawn {
                     call_id: call_id.clone(),
                     sender_thread_id: session.conversation_id,
                     prompt: prompt.clone(),
+                    model: model.clone(),
+                    reasoning_effort,
                 }
                 .into(),
             )
             .await;
-        let mut config =
-            build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
-        apply_role_to_config(&mut config, role_name)
-            .await
-            .map_err(FunctionCallError::RespondToModel)?;
-        apply_spawn_agent_overrides(&mut config, child_depth);
 
         let result = session
             .services
@@ -193,6 +197,8 @@ mod spawn {
                     new_agent_nickname,
                     new_agent_role,
                     prompt,
+                    model,
+                    reasoning_effort,
                     status,
                 }
                 .into(),
