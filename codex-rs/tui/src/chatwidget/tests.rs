@@ -85,6 +85,7 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_sleep_inhibitor::SleepInhibitor;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -1706,6 +1707,7 @@ async fn make_chatwidget_manual_with_scrollback_mode(
         },
     };
     let current_collaboration_mode = base_mode;
+    let prevent_idle_sleep = cfg.features.enabled(Feature::PreventIdleSleep);
     let mut widget = ChatWidget {
         app_event_tx,
         codex_op_tx: op_tx,
@@ -1737,6 +1739,7 @@ async fn make_chatwidget_manual_with_scrollback_mode(
         skills_initial_state: None,
         last_unified_wait: None,
         unified_exec_wait_streak: None,
+        turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
         agent_turn_running: false,
@@ -1828,6 +1831,7 @@ async fn make_chatwidget_manual_with_frame_requester(
             developer_instructions: None,
         },
     };
+    let prevent_idle_sleep = cfg.features.enabled(Feature::PreventIdleSleep);
     let mut widget = ChatWidget {
         app_event_tx,
         codex_op_tx: op_tx,
@@ -1859,6 +1863,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         skills_initial_state: None,
         last_unified_wait: None,
         unified_exec_wait_streak: None,
+        turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
         agent_turn_running: false,
@@ -2493,6 +2498,68 @@ async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
         !popup.contains(PLAN_IMPLEMENTATION_TITLE),
         "expected plan popup to be skipped, got {popup:?}"
     );
+}
+
+#[tokio::test]
+async fn prevent_idle_sleep_syncs_with_turn_lifecycle() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::PreventIdleSleep, true);
+
+    chat.on_task_started();
+
+    assert!(chat.agent_turn_running);
+    assert!(chat.turn_sleep_inhibitor.is_turn_running());
+    assert!(chat.bottom_pane.is_task_running());
+
+    chat.on_task_complete(None, false);
+
+    assert!(!chat.agent_turn_running);
+    assert!(!chat.turn_sleep_inhibitor.is_turn_running());
+    assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
+async fn prevent_idle_sleep_resets_when_turn_is_finalized() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::PreventIdleSleep, true);
+    chat.on_task_started();
+
+    chat.finalize_turn();
+
+    assert!(!chat.agent_turn_running);
+    assert!(!chat.turn_sleep_inhibitor.is_turn_running());
+    assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
+async fn replayed_turn_started_syncs_sleep_inhibitor_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::PreventIdleSleep, true);
+
+    chat.replay_initial_messages(vec![EventMsg::TurnStarted(TurnStartedEvent {
+        model_context_window: None,
+        collaboration_mode_kind: ModeKind::Custom,
+    })]);
+
+    assert!(chat.agent_turn_running);
+    assert!(chat.turn_sleep_inhibitor.is_turn_running());
+    assert!(chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
+async fn toggling_prevent_idle_sleep_resyncs_inhibitor_with_running_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.agent_turn_running = true;
+    chat.turn_sleep_inhibitor
+        .set_turn_running(/* turn_running */ false);
+
+    chat.set_feature_enabled(Feature::PreventIdleSleep, true);
+    assert!(chat.turn_sleep_inhibitor.is_turn_running());
+
+    chat.turn_sleep_inhibitor
+        .set_turn_running(/* turn_running */ false);
+    chat.set_feature_enabled(Feature::PreventIdleSleep, false);
+    assert!(chat.turn_sleep_inhibitor.is_turn_running());
 }
 
 // (removed experimental resize snapshot test)

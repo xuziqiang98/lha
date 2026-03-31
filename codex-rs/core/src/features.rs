@@ -127,6 +127,8 @@ pub enum Feature {
     CollaborationModes,
     /// Enable personality selection in the TUI.
     Personality,
+    /// Prevent the computer from sleeping while Codex is running a turn.
+    PreventIdleSleep,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
 }
@@ -579,6 +581,24 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::PreventIdleSleep,
+        key: "prevent_idle_sleep",
+        stage: if cfg!(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows"
+        )) {
+            Stage::Experimental {
+                name: "Prevent sleep while running",
+                menu_description: "Keep your computer awake while Codex is running a thread.",
+                announcement: "NEW: Prevent sleep while running is now available in /experimental.",
+            }
+        } else {
+            Stage::UnderDevelopment
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ResponsesWebsockets,
         key: "responses_websockets",
         stage: Stage::UnderDevelopment,
@@ -682,5 +702,35 @@ mod tests {
             ),
             stage.experimental_announcement()
         );
+    }
+
+    #[test]
+    fn prevent_idle_sleep_has_expected_stage_and_metadata() {
+        let stage = Feature::PreventIdleSleep.stage();
+
+        assert_eq!(false, Feature::PreventIdleSleep.default_enabled());
+        if cfg!(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows"
+        )) {
+            assert_eq!(
+                Some("Prevent sleep while running"),
+                stage.experimental_menu_name()
+            );
+            assert_eq!(
+                Some("Keep your computer awake while Codex is running a thread."),
+                stage.experimental_menu_description()
+            );
+            assert_eq!(
+                Some("NEW: Prevent sleep while running is now available in /experimental."),
+                stage.experimental_announcement()
+            );
+        } else {
+            assert_eq!(Stage::UnderDevelopment, stage);
+            assert_eq!(None, stage.experimental_menu_name());
+            assert_eq!(None, stage.experimental_menu_description());
+            assert_eq!(None, stage.experimental_announcement());
+        }
     }
 }
