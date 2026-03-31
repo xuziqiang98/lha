@@ -115,6 +115,8 @@ pub enum Feature {
     EnableRequestCompression,
     /// Enable multi-agent collaboration tools.
     Collab,
+    /// Run `/review` in a detached review thread that appears in `/agent`.
+    DetachedReview,
     /// Enable apps.
     Apps,
     /// Allow prompting and installing missing MCP dependencies.
@@ -538,6 +540,16 @@ pub const FEATURES: &[FeatureSpec] = &[
             name: "Multi-agents",
             menu_description: "Ask Codex to spawn multiple agents to parallelize the work and win in efficiency.",
             announcement: "NEW: Multi-agents can now be spawned by Codex. Enable in /experimental and restart Codex!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::DetachedReview,
+        key: "detached_review",
+        stage: Stage::Experimental {
+            name: "Detached review threads",
+            menu_description: "Run /review in a separate review thread that appears in /agent while the current thread still shows progress and results.",
+            announcement: "NEW: Detached review threads are available in /experimental.",
         },
         default_enabled: false,
     },

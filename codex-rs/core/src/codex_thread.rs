@@ -77,7 +77,7 @@ impl CodexThread {
         self.codex.thread_config_snapshot().await
     }
 
-    pub(crate) async fn flush_rollout(&self) {
+    pub async fn flush_rollout(&self) {
         self.codex.session.flush_rollout().await;
     }
 

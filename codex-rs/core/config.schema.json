@@ -205,6 +205,9 @@
             "connectors": {
               "type": "boolean"
             },
+            "detached_review": {
+              "type": "boolean"
+            },
             "elevated_windows_sandbox": {
               "type": "boolean"
             },
@@ -1274,6 +1277,9 @@
           "type": "boolean"
         },
         "connectors": {
+          "type": "boolean"
+        },
+        "detached_review": {
           "type": "boolean"
         },
         "elevated_windows_sandbox": {

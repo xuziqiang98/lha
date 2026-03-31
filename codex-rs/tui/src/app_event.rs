@@ -25,6 +25,7 @@ use crate::provider_config::CustomProviderConfig;
 
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
+use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
@@ -52,6 +53,11 @@ pub(crate) struct ConnectorsSnapshot {
 #[derive(Debug)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
+    /// Event emitted by a non-primary thread listener and routed back through the app loop.
+    ThreadEventReceived {
+        thread_id: ThreadId,
+        event: Event,
+    },
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
     /// Switch the active thread to the selected agent.
@@ -80,6 +86,11 @@ pub(crate) enum AppEvent {
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(codex_core::protocol::Op),
+
+    /// Start a review using the current slash/TUI behavior.
+    StartReview {
+        review_request: ReviewRequest,
+    },
 
     /// Kick off an asynchronous file search for the given query (text after
     /// the `@`). Previous searches may be cancelled by the app layer so there

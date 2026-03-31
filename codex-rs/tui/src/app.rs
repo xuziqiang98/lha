@@ -65,9 +65,11 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
 use codex_core::protocol::ListSkillsResponseEvent;
 use codex_core::protocol::Op;
+use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
+use codex_core::protocol::SubAgentSource;
 use codex_core::protocol::TokenUsage;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -568,6 +570,7 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
+    review_parent_by_child: HashMap<ThreadId, ThreadId>,
     non_git_changelog_baselines: HashMap<PathBuf, Arc<NonGitBaselineTracker>>,
 }
 
@@ -608,6 +611,43 @@ impl Default for NonGitBaselineTracker {
         let (result, _) = watch::channel(None);
         Self { result }
     }
+}
+
+fn detached_review_session_source(
+    parent_thread_id: ThreadId,
+    parent_session_source: &SessionSource,
+) -> SessionSource {
+    let depth = match parent_session_source {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) => {
+            (*depth).saturating_add(1)
+        }
+        _ => 1,
+    };
+    SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id,
+        depth,
+        agent_nickname: None,
+        agent_role: Some("review".to_string()),
+    })
+}
+
+fn should_mirror_detached_review_event(msg: &EventMsg) -> bool {
+    matches!(
+        msg,
+        EventMsg::TurnStarted(_)
+            | EventMsg::TurnComplete(_)
+            | EventMsg::TurnAborted(_)
+            | EventMsg::Error(_)
+            | EventMsg::EnteredReviewMode(_)
+            | EventMsg::ExitedReviewMode(_)
+    )
+}
+
+fn is_terminal_detached_review_event(msg: &EventMsg) -> bool {
+    matches!(
+        msg,
+        EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) | EventMsg::Error(_)
+    )
 }
 
 fn normalize_harness_overrides_for_cwd(
@@ -1156,6 +1196,24 @@ impl App {
     }
 
     async fn enqueue_thread_event(&mut self, thread_id: ThreadId, event: Event) -> Result<()> {
+        if let Some(parent_thread_id) = self.review_parent_by_child.get(&thread_id).copied()
+            && should_mirror_detached_review_event(&event.msg)
+        {
+            self.enqueue_thread_event_without_review_mirror(parent_thread_id, event.clone())
+                .await?;
+            if is_terminal_detached_review_event(&event.msg) {
+                self.review_parent_by_child.remove(&thread_id);
+            }
+        }
+        self.enqueue_thread_event_without_review_mirror(thread_id, event)
+            .await
+    }
+
+    async fn enqueue_thread_event_without_review_mirror(
+        &mut self,
+        thread_id: ThreadId,
+        event: Event,
+    ) -> Result<()> {
         let (sender, store) = {
             let channel = self.ensure_thread_channel(thread_id);
             (channel.sender.clone(), Arc::clone(&channel.store))
@@ -1208,6 +1266,86 @@ impl App {
         } else {
             self.pending_primary_events.push_back(event);
         }
+        Ok(())
+    }
+
+    async fn start_review(&mut self, review_request: ReviewRequest) -> Result<()> {
+        if !self.config.features.enabled(Feature::DetachedReview) {
+            self.chat_widget.submit_op(Op::Review { review_request });
+            return Ok(());
+        }
+
+        self.start_detached_review(review_request).await
+    }
+
+    async fn start_detached_review(&mut self, review_request: ReviewRequest) -> Result<()> {
+        let Some(parent_thread_id) = self.active_thread_id.or(self.primary_thread_id) else {
+            self.chat_widget
+                .add_error_message("Current session is not ready to review yet.".to_string());
+            return Ok(());
+        };
+
+        let parent_thread = match self.server.get_thread(parent_thread_id).await {
+            Ok(thread) => thread,
+            Err(err) => {
+                self.chat_widget.add_error_message(format!(
+                    "Failed to start detached review for thread {parent_thread_id}: {err}"
+                ));
+                return Ok(());
+            }
+        };
+        let Some(parent_rollout_path) = parent_thread.rollout_path() else {
+            self.chat_widget
+                .add_error_message("Current session is not ready to review yet.".to_string());
+            return Ok(());
+        };
+        parent_thread.flush_rollout().await;
+        let parent_session_source = parent_thread.config_snapshot().await.session_source;
+        let session_source =
+            detached_review_session_source(parent_thread_id, &parent_session_source);
+
+        let mut review_config = self.chat_widget.config_ref().clone();
+        if let Some(review_model) = &review_config.review_model {
+            review_config.model = Some(review_model.clone());
+        }
+
+        let detached_thread = match self
+            .server
+            .fork_thread_with_source(
+                usize::MAX,
+                review_config,
+                parent_rollout_path,
+                session_source,
+            )
+            .await
+        {
+            Ok(thread) => thread,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to create detached review thread: {err}"));
+                return Ok(());
+            }
+        };
+        let review_thread_id = detached_thread.thread_id;
+
+        if let Err(err) = self.handle_thread_created(review_thread_id).await {
+            self.chat_widget
+                .add_error_message(format!("Failed to attach detached review thread: {err}"));
+            return Ok(());
+        }
+
+        self.review_parent_by_child
+            .insert(review_thread_id, parent_thread_id);
+        if let Err(err) = detached_thread
+            .thread
+            .submit(Op::Review { review_request })
+            .await
+        {
+            self.review_parent_by_child.remove(&review_thread_id);
+            self.chat_widget
+                .add_error_message(format!("Failed to start detached review: {err}"));
+        }
+
         Ok(())
     }
 
@@ -1399,6 +1537,7 @@ impl App {
         self.active_thread_rx = None;
         self.primary_thread_id = None;
         self.pending_primary_events.clear();
+        self.review_parent_by_child.clear();
     }
 
     async fn drain_active_thread_events(&mut self, tui: &mut tui::Tui) -> Result<()> {
@@ -1624,6 +1763,7 @@ impl App {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            review_parent_by_child: HashMap::new(),
             non_git_changelog_baselines: HashMap::new(),
         };
 
@@ -2025,6 +2165,9 @@ impl App {
             AppEvent::CodexEvent(event) => {
                 self.enqueue_primary_event(event).await?;
             }
+            AppEvent::ThreadEventReceived { thread_id, event } => {
+                self.enqueue_thread_event(thread_id, event).await?;
+            }
             AppEvent::Exit(mode) => match mode {
                 ExitMode::ShutdownFirst => self.chat_widget.submit_op(Op::Shutdown),
                 ExitMode::Immediate => {
@@ -2036,6 +2179,9 @@ impl App {
             }
             AppEvent::CodexOp(op) => {
                 self.chat_widget.submit_op(op);
+            }
+            AppEvent::StartReview { review_request } => {
+                self.start_review(review_request).await?;
             }
             AppEvent::RequestChangelog => {
                 self.request_changelog().await;
@@ -2836,9 +2982,8 @@ impl App {
         };
         let channel =
             ThreadEventChannel::new_with_session_configured(THREAD_EVENT_CHANNEL_CAPACITY, event);
-        let sender = channel.sender.clone();
-        let store = Arc::clone(&channel.store);
         self.thread_event_channels.insert(thread_id, channel);
+        let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
             loop {
                 let event = match thread.next_event().await {
@@ -2848,15 +2993,7 @@ impl App {
                         break;
                     }
                 };
-                let should_send = {
-                    let mut guard = store.lock().await;
-                    guard.push_event(event.clone());
-                    guard.active
-                };
-                if should_send && let Err(err) = sender.send(event).await {
-                    tracing::debug!("external thread {thread_id} channel closed: {err}");
-                    break;
-                }
+                app_event_tx.send(AppEvent::ThreadEventReceived { thread_id, event });
             }
         });
         Ok(())
@@ -3114,12 +3251,17 @@ mod tests {
     use codex_core::protocol::Event;
     use codex_core::protocol::EventMsg;
     use codex_core::protocol::ExecCommandSource;
+    use codex_core::protocol::ReviewRequest;
+    use codex_core::protocol::ReviewTarget;
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_core::protocol::SessionSource;
     use codex_core::protocol::ThreadRolledBackEvent;
+    use codex_core::protocol::TurnCompleteEvent;
+    use codex_core::protocol::TurnStartedEvent;
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
+    use codex_protocol::config_types::ModeKind;
     use codex_protocol::user_input::TextElement;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
@@ -3589,6 +3731,194 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn handle_thread_created_routes_live_events_back_through_app() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread = app
+            .server
+            .start_thread(app.config.clone())
+            .await
+            .expect("start thread");
+
+        app.handle_thread_created(thread.thread_id)
+            .await
+            .expect("attach thread listener");
+        thread
+            .thread
+            .submit(Op::SetThreadName {
+                name: "review-child".to_string(),
+            })
+            .await
+            .expect("rename thread");
+
+        let observed_thread_id = time::timeout(Duration::from_secs(2), async {
+            loop {
+                let event = app_event_rx
+                    .recv()
+                    .await
+                    .expect("thread event should be present");
+                if let AppEvent::ThreadEventReceived {
+                    thread_id,
+                    event:
+                        Event {
+                            msg: EventMsg::ThreadNameUpdated(_),
+                            ..
+                        },
+                } = event
+                {
+                    break thread_id;
+                }
+            }
+        })
+        .await
+        .expect("thread rename event should arrive in time");
+        assert_eq!(observed_thread_id, thread.thread_id);
+    }
+
+    #[tokio::test]
+    async fn start_review_submits_inline_review_when_detached_feature_disabled() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let review_request = ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        };
+
+        app.start_review(review_request.clone())
+            .await
+            .expect("start review");
+
+        match op_rx.try_recv() {
+            Ok(Op::Review {
+                review_request: got,
+            }) => {
+                assert_eq!(got, review_request);
+            }
+            other => panic!("expected inline review op, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn start_review_creates_detached_review_thread_when_feature_enabled() {
+        let mut app = make_test_app().await;
+        app.config.features.enable(Feature::DetachedReview);
+        app.chat_widget
+            .set_feature_enabled(Feature::DetachedReview, true);
+
+        let parent = app
+            .server
+            .start_thread(app.config.clone())
+            .await
+            .expect("start parent thread");
+        app.enqueue_primary_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(parent.session_configured.clone()),
+        })
+        .await
+        .expect("enqueue primary event");
+
+        app.start_review(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        })
+        .await
+        .expect("start detached review");
+
+        let child_ids: Vec<_> = app
+            .agent_picker_threads
+            .keys()
+            .copied()
+            .filter(|thread_id| *thread_id != parent.thread_id)
+            .collect();
+        assert_eq!(child_ids.len(), 1, "expected one detached review thread");
+
+        let child_id = child_ids[0];
+        assert_eq!(app.active_thread_id, Some(parent.thread_id));
+        assert!(app.thread_event_channels.contains_key(&child_id));
+        assert_eq!(
+            app.review_parent_by_child.get(&child_id),
+            Some(&parent.thread_id)
+        );
+        assert_eq!(
+            app.agent_picker_threads.get(&child_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: None,
+                agent_role: Some("review".to_string()),
+                is_closed: false,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn detached_review_events_are_mirrored_to_parent_thread() {
+        let mut app = make_test_app().await;
+        let parent_thread_id = ThreadId::new();
+        let child_thread_id = ThreadId::new();
+        app.ensure_thread_channel(parent_thread_id);
+        app.activate_thread_channel(parent_thread_id).await;
+        app.ensure_thread_channel(child_thread_id);
+        app.review_parent_by_child
+            .insert(child_thread_id, parent_thread_id);
+
+        let review_request = ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        };
+        app.enqueue_thread_event(
+            child_thread_id,
+            Event {
+                id: "entered-review".to_string(),
+                msg: EventMsg::TurnStarted(TurnStartedEvent {
+                    model_context_window: None,
+                    collaboration_mode_kind: ModeKind::default(),
+                }),
+            },
+        )
+        .await
+        .expect("enqueue turn started");
+        app.enqueue_thread_event(
+            child_thread_id,
+            Event {
+                id: "review-begin".to_string(),
+                msg: EventMsg::EnteredReviewMode(review_request.clone()),
+            },
+        )
+        .await
+        .expect("enqueue entered review");
+
+        let parent_snapshot = app
+            .thread_event_channels
+            .get(&parent_thread_id)
+            .expect("parent channel")
+            .store
+            .lock()
+            .await
+            .snapshot();
+        assert!(
+            parent_snapshot
+                .events
+                .iter()
+                .any(|event| matches!(&event.msg, EventMsg::TurnStarted(_)))
+        );
+        assert!(parent_snapshot.events.iter().any(|event| matches!(
+            &event.msg,
+            EventMsg::EnteredReviewMode(got) if got == &review_request
+        )));
+
+        app.enqueue_thread_event(
+            child_thread_id,
+            Event {
+                id: "review-complete".to_string(),
+                msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                    last_agent_message: None,
+                }),
+            },
+        )
+        .await
+        .expect("enqueue turn complete");
+
+        assert!(!app.review_parent_by_child.contains_key(&child_thread_id));
+    }
+
     #[test]
     fn agent_picker_item_name_snapshot() {
         let thread_id =
@@ -3670,6 +4000,7 @@ mod tests {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            review_parent_by_child: HashMap::new(),
             non_git_changelog_baselines: HashMap::new(),
         }
     }
@@ -3724,6 +4055,7 @@ mod tests {
                 primary_thread_id: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
+                review_parent_by_child: HashMap::new(),
                 non_git_changelog_baselines: HashMap::new(),
             },
             rx,
