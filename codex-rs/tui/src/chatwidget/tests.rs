@@ -4205,8 +4205,7 @@ async fn review_commit_picker_shows_subjects_without_timestamps() {
     );
 }
 
-/// Submitting the custom prompt view sends Op::Review with the typed prompt
-/// and uses the same text for the user-facing hint.
+/// Submitting the custom prompt view starts a review with the typed prompt.
 #[tokio::test]
 async fn custom_prompt_submit_sends_review_op() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -4216,10 +4215,10 @@ async fn custom_prompt_submit_sends_review_op() {
     chat.handle_paste("  please audit dependencies  ".to_string());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    // Expect AppEvent::CodexOp(Op::Review { .. }) with trimmed prompt
+    // Expect AppEvent::StartReview with trimmed prompt
     let evt = rx.try_recv().expect("expected one app event");
     match evt {
-        AppEvent::CodexOp(Op::Review { review_request }) => {
+        AppEvent::StartReview { review_request } => {
             assert_eq!(
                 review_request,
                 ReviewRequest {
@@ -4243,7 +4242,7 @@ async fn custom_prompt_enter_empty_does_not_send() {
     // Enter without any text
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    // No AppEvent::CodexOp should be sent
+    // No review event should be sent
     assert!(rx.try_recv().is_err(), "no app event should be sent");
 }
 

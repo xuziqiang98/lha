@@ -3179,7 +3179,7 @@ impl ChatWidget {
                 self.dispatch_command(cmd);
             }
             SlashCommand::Review if !trimmed.is_empty() => {
-                self.submit_op(Op::Review {
+                self.app_event_tx.send(AppEvent::StartReview {
                     review_request: ReviewRequest {
                         target: ReviewTarget::Custom {
                             instructions: trimmed.to_string(),
@@ -6257,12 +6257,12 @@ impl ChatWidget {
         items.push(SelectionItem {
             name: "Review uncommitted changes".to_string(),
             actions: vec![Box::new(move |tx: &AppEventSender| {
-                tx.send(AppEvent::CodexOp(Op::Review {
+                tx.send(AppEvent::StartReview {
                     review_request: ReviewRequest {
                         target: ReviewTarget::UncommittedChanges,
                         user_facing_hint: None,
                     },
-                }));
+                });
             })],
             dismiss_on_select: true,
             ..Default::default()
@@ -6310,14 +6310,14 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: format!("{current_branch} -> {branch}"),
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
-                    tx3.send(AppEvent::CodexOp(Op::Review {
+                    tx3.send(AppEvent::StartReview {
                         review_request: ReviewRequest {
                             target: ReviewTarget::BaseBranch {
                                 branch: branch.clone(),
                             },
                             user_facing_hint: None,
                         },
-                    }));
+                    });
                 })],
                 dismiss_on_select: true,
                 search_value: Some(option),
@@ -6347,7 +6347,7 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: subject.clone(),
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
-                    tx3.send(AppEvent::CodexOp(Op::Review {
+                    tx3.send(AppEvent::StartReview {
                         review_request: ReviewRequest {
                             target: ReviewTarget::Commit {
                                 sha: sha.clone(),
@@ -6355,7 +6355,7 @@ impl ChatWidget {
                             },
                             user_facing_hint: None,
                         },
-                    }));
+                    });
                 })],
                 dismiss_on_select: true,
                 search_value: Some(search_val),
@@ -6384,14 +6384,14 @@ impl ChatWidget {
                 if trimmed.is_empty() {
                     return;
                 }
-                tx.send(AppEvent::CodexOp(Op::Review {
+                tx.send(AppEvent::StartReview {
                     review_request: ReviewRequest {
                         target: ReviewTarget::Custom {
                             instructions: trimmed,
                         },
                         user_facing_hint: None,
                     },
-                }));
+                });
             }),
         );
         self.bottom_pane.show_view(Box::new(view));
@@ -6743,7 +6743,7 @@ pub(crate) fn show_review_commit_picker_with_entries(
         items.push(SelectionItem {
             name: subject.clone(),
             actions: vec![Box::new(move |tx3: &AppEventSender| {
-                tx3.send(AppEvent::CodexOp(Op::Review {
+                tx3.send(AppEvent::StartReview {
                     review_request: ReviewRequest {
                         target: ReviewTarget::Commit {
                             sha: sha.clone(),
@@ -6751,7 +6751,7 @@ pub(crate) fn show_review_commit_picker_with_entries(
                         },
                         user_facing_hint: None,
                     },
-                }));
+                });
             })],
             dismiss_on_select: true,
             search_value: Some(search_val),

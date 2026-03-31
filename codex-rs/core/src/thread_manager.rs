@@ -299,6 +299,28 @@ impl ThreadManager {
             .await
     }
 
+    /// Fork an existing thread using the provided session source for the new thread.
+    pub async fn fork_thread_with_source(
+        &self,
+        nth_user_message: usize,
+        config: Config,
+        path: PathBuf,
+        session_source: SessionSource,
+    ) -> CodexResult<NewThread> {
+        let history = RolloutRecorder::get_rollout_history(&path).await?;
+        let history = truncate_before_nth_user_message(history, nth_user_message);
+        self.state
+            .spawn_thread_with_source(
+                config,
+                history,
+                Arc::clone(&self.state.auth_manager),
+                self.agent_control(),
+                session_source,
+                Vec::new(),
+            )
+            .await
+    }
+
     pub(crate) fn agent_control(&self) -> AgentControl {
         AgentControl::new(Arc::downgrade(&self.state))
     }
