@@ -497,7 +497,13 @@ impl ModelsManager {
             return configured_models;
         }
 
-        let mut picker_models = self.build_picker_models(config, available_models);
+        let mut picker_models = self.official_openai_switcher_models(&available_models);
+        for picker_model in self.build_picker_models(config, available_models) {
+            if Self::picker_contains_model_identity(&picker_models, &picker_model) {
+                continue;
+            }
+            picker_models.push(picker_model);
+        }
         self.apply_openai_official_switcher_metadata(&mut picker_models);
         for mut configured_model in configured_models {
             if picker_models
@@ -510,6 +516,58 @@ impl ModelsManager {
             picker_models.push(configured_model);
         }
         picker_models
+    }
+
+    fn official_openai_switcher_models(
+        &self,
+        available_models: &[ModelPreset],
+    ) -> Vec<ModelPreset> {
+        let available_official_models = available_models
+            .iter()
+            .filter(|preset| preset.model_provider_id.as_deref() == Some(OPENAI_PROVIDER_ID))
+            .cloned()
+            .collect();
+        let mut picker_models = ModelPreset::merge(
+            available_official_models,
+            self.bundled_openai_available_models(),
+        );
+        self.apply_openai_official_switcher_metadata(&mut picker_models);
+        picker_models
+            .into_iter()
+            .filter(|preset| preset.show_in_picker)
+            .collect()
+    }
+
+    fn bundled_openai_available_models(&self) -> Vec<ModelPreset> {
+        let mut remote_models = Self::load_remote_models_from_file().unwrap_or_default();
+        remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
+
+        let remote_presets = remote_models
+            .into_iter()
+            .map(Into::into)
+            .map(|preset| self.assign_builtin_model_provider_identity(preset))
+            .collect();
+        let existing_presets = self
+            .local_models
+            .clone()
+            .into_iter()
+            .map(|preset| self.assign_builtin_model_provider_identity(preset))
+            .collect();
+        let mut merged_presets = ModelPreset::merge(remote_presets, existing_presets);
+
+        for preset in &mut merged_presets {
+            preset.is_default = false;
+        }
+        if let Some(default) = merged_presets
+            .iter_mut()
+            .find(|preset| preset.show_in_picker)
+        {
+            default.is_default = true;
+        } else if let Some(default) = merged_presets.first_mut() {
+            default.is_default = true;
+        }
+
+        merged_presets
     }
 
     fn configured_chatgpt_model_switcher_models(
@@ -2934,6 +2992,109 @@ model = "claude-sonnet-4-5"
         assert_eq!(picker_models.len(), 1);
         assert_eq!(picker_models[0].model, "claude-sonnet-4-5");
         assert!(picker_models[0].is_default);
+    }
+
+    #[tokio::test]
+    async fn list_model_switcher_models_with_chatgpt_auth_and_messages_provider_includes_official_openai_models()
+     {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let manager = ModelsManager::with_provider(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "anthropic#messages",
+            messages_provider_for("https://api.anthropic.com/v1".to_string()),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "claude-sonnet-4-5"
+model_provider = "anthropic#messages"
+
+[model_providers.anthropic.variants.messages]
+name = "anthropic"
+base_url = "https://api.anthropic.com/v1"
+wire_api = "messages"
+experimental_bearer_token = "sk-msg"
+"#,
+        )
+        .await;
+
+        let picker_models = manager
+            .list_model_switcher_models(&config, RefreshStrategy::Offline)
+            .await;
+
+        assert!(picker_models.iter().any(|preset| {
+            preset.model == "gpt-5.2-codex"
+                && preset.model_provider_id.as_deref() == Some(OPENAI_PROVIDER_ID)
+                && preset.description == OFFICIAL_OPENAI_PROVIDER_DESCRIPTION
+        }));
+        assert!(picker_models.iter().any(|preset| {
+            preset.model == "claude-sonnet-4-5"
+                && preset.model_provider_id.as_deref() == Some("anthropic#messages")
+                && preset.description == "User-defined model from anthropic (messages) provider."
+        }));
+    }
+
+    #[tokio::test]
+    async fn list_model_switcher_models_with_chatgpt_auth_and_messages_provider_keeps_custom_same_slug()
+     {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let manager = ModelsManager::with_provider(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            "anthropic#messages",
+            messages_provider_for("https://api.anthropic.com/v1".to_string()),
+        );
+        let config = load_config_from_toml(
+            &codex_home,
+            r#"
+model = "gpt-5.2"
+model_provider = "anthropic#messages"
+
+[model_providers.anthropic.variants.messages]
+name = "anthropic"
+base_url = "https://api.anthropic.com/v1"
+wire_api = "messages"
+experimental_bearer_token = "sk-msg"
+"#,
+        )
+        .await;
+
+        let picker_models = manager
+            .list_model_switcher_models(&config, RefreshStrategy::Offline)
+            .await;
+
+        let matching_models = picker_models
+            .iter()
+            .filter(|preset| preset.model == "gpt-5.2")
+            .map(|preset| {
+                (
+                    preset.id.clone(),
+                    preset.model_provider_id.clone(),
+                    preset.description.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            matching_models,
+            vec![
+                (
+                    "gpt-5.2".to_string(),
+                    Some(OPENAI_PROVIDER_ID.to_string()),
+                    OFFICIAL_OPENAI_PROVIDER_DESCRIPTION.to_string(),
+                ),
+                (
+                    generated_provider_profile_name("anthropic#messages", "gpt-5.2"),
+                    Some("anthropic#messages".to_string()),
+                    "User-defined model from anthropic (messages) provider.".to_string(),
+                ),
+            ]
+        );
     }
 
     #[tokio::test]
