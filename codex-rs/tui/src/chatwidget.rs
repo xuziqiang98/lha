@@ -192,6 +192,9 @@ use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::status::format_directory_display;
+use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
+use crate::status_indicator_widget::StatusDetailsCapitalization;
+use crate::text_formatting::capitalize_first;
 use crate::text_formatting::truncate_text;
 use crate::transcript_view::TranscriptScroll;
 use crate::transcript_view::TranscriptView;
@@ -452,6 +455,23 @@ pub(crate) enum ExternalEditorState {
     Active,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StatusIndicatorState {
+    header: String,
+    details: Option<String>,
+    details_max_lines: usize,
+}
+
+impl StatusIndicatorState {
+    fn working() -> Self {
+        Self {
+            header: String::from("Working"),
+            details: None,
+            details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TranscriptHostMode {
     TerminalScrollback,
@@ -541,10 +561,10 @@ pub(crate) struct ChatWidget {
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
-    // Current status header shown in the status indicator.
-    current_status_header: String,
-    // Previous status header to restore after a transient stream retry.
-    retry_status_header: Option<String>,
+    // Full status snapshot shown in the status indicator.
+    current_status: StatusIndicatorState,
+    // Previous status snapshot to restore after a transient stream retry.
+    retry_status: Option<StatusIndicatorState>,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
@@ -817,20 +837,54 @@ impl ChatWidget {
     /// Update the status indicator header and details.
     ///
     /// Passing `None` clears any existing details.
-    fn set_status(&mut self, header: String, details: Option<String>) {
-        self.current_status_header = header.clone();
-        self.bottom_pane.update_status(header, details);
+    fn set_status(
+        &mut self,
+        header: String,
+        details: Option<String>,
+        capitalization: StatusDetailsCapitalization,
+        details_max_lines: usize,
+    ) {
+        let details = details
+            .filter(|details| !details.is_empty())
+            .map(|details| {
+                let trimmed = details.trim_start();
+                match capitalization {
+                    StatusDetailsCapitalization::CapitalizeFirst => capitalize_first(trimmed),
+                    StatusDetailsCapitalization::Preserve => trimmed.to_string(),
+                }
+            });
+        self.current_status = StatusIndicatorState {
+            header: header.clone(),
+            details: details.clone(),
+            details_max_lines,
+        };
+        self.bottom_pane.update_status(
+            header,
+            details,
+            StatusDetailsCapitalization::Preserve,
+            details_max_lines,
+        );
     }
 
     /// Convenience wrapper around [`Self::set_status`];
     /// updates the status indicator header and clears any existing details.
     fn set_status_header(&mut self, header: String) {
-        self.set_status(header, None);
+        self.set_status(
+            header,
+            None,
+            StatusDetailsCapitalization::CapitalizeFirst,
+            STATUS_DETAILS_DEFAULT_MAX_LINES,
+        );
     }
 
-    fn restore_retry_status_header_if_present(&mut self) {
-        if let Some(header) = self.retry_status_header.take() {
-            self.set_status_header(header);
+    fn restore_retry_status_if_present(&mut self) {
+        if let Some(status) = self.retry_status.take() {
+            self.set_status(
+                status.header,
+                status.details,
+                StatusDetailsCapitalization::Preserve,
+                status.details_max_lines,
+            );
         }
     }
 
@@ -1082,7 +1136,8 @@ impl ChatWidget {
         self.quit_shortcut_expires_at = None;
         self.quit_shortcut_key = None;
         self.update_task_running_state();
-        self.retry_status_header = None;
+        self.current_status = StatusIndicatorState::working();
+        self.retry_status = None;
         self.bottom_pane.set_interrupt_hint_visible(true);
         self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
@@ -1657,15 +1712,16 @@ impl ChatWidget {
             .map(|process| process.command_display.clone());
         if ev.stdin.is_empty() {
             // Empty stdin means we are polling for background output.
-            // Surface this in the status header (single "waiting" surface) instead of the transcript.
+            // Surface this in the status indicator (single "waiting" surface) instead of
+            // the transcript. Keep the header short so the interrupt hint remains visible.
             self.bottom_pane.ensure_status_indicator();
             self.bottom_pane.set_interrupt_hint_visible(true);
-            let header = if let Some(command) = &command_display {
-                format!("Waiting for background terminal · {command}")
-            } else {
-                "Waiting for background terminal".to_string()
-            };
-            self.set_status_header(header);
+            self.set_status(
+                "Waiting for background terminal".to_string(),
+                command_display.clone(),
+                StatusDetailsCapitalization::Preserve,
+                1,
+            );
             match &mut self.unified_exec_wait_streak {
                 Some(wait) if wait.process_id == ev.process_id => {
                     wait.update_command_display(command_display);
@@ -1933,10 +1989,16 @@ impl ChatWidget {
     }
 
     fn on_stream_error(&mut self, message: String, additional_details: Option<String>) {
-        if self.retry_status_header.is_none() {
-            self.retry_status_header = Some(self.current_status_header.clone());
+        if self.retry_status.is_none() {
+            self.retry_status = Some(self.current_status.clone());
         }
-        self.set_status(message, additional_details);
+        self.bottom_pane.ensure_status_indicator();
+        self.set_status(
+            message,
+            additional_details,
+            StatusDetailsCapitalization::CapitalizeFirst,
+            STATUS_DETAILS_DEFAULT_MAX_LINES,
+        );
     }
 
     /// Periodic tick to commit at most one queued line to history with a small delay,
@@ -2381,8 +2443,8 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
-            current_status_header: String::from("Working"),
-            retry_status_header: None,
+            current_status: StatusIndicatorState::working(),
+            retry_status: None,
             thread_id: None,
             thread_name: None,
             forked_from: None,
@@ -2529,8 +2591,8 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
-            current_status_header: String::from("Working"),
-            retry_status_header: None,
+            current_status: StatusIndicatorState::working(),
+            retry_status: None,
             thread_id: None,
             thread_name: None,
             forked_from: None,
@@ -2668,8 +2730,8 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
-            current_status_header: String::from("Working"),
-            retry_status_header: None,
+            current_status: StatusIndicatorState::working(),
+            retry_status: None,
             thread_id: None,
             thread_name: None,
             forked_from: None,
@@ -3455,7 +3517,7 @@ impl ChatWidget {
     fn dispatch_event_msg(&mut self, id: Option<String>, msg: EventMsg, from_replay: bool) {
         let is_stream_error = matches!(&msg, EventMsg::StreamError(_));
         if !is_stream_error {
-            self.restore_retry_status_header_if_present();
+            self.restore_retry_status_if_present();
         }
 
         if from_replay

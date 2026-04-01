@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests.rs
+assertion_line: 3390
+expression: rendered
+---
+• Waiting for background terminal (0s • esc to …
+  └ cargo test -p codex-core -- --exact
+
+
+› Ask Codex to do anything
+
+  gpt-5.3-codex · 100% left

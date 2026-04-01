@@ -30,15 +30,27 @@ impl UnifiedExecFooter {
         self.processes.is_empty()
     }
 
-    fn render_lines(&self, width: u16) -> Vec<Line<'static>> {
-        if self.processes.is_empty() || width < 4 {
-            return Vec::new();
+    pub(crate) fn summary_text(&self) -> Option<String> {
+        if self.processes.is_empty() {
+            return None;
         }
 
         let count = self.processes.len();
         let plural = if count == 1 { "" } else { "s" };
-        let message =
-            format!("  {count} background terminal{plural} running · /ps to view · /stop to close");
+        Some(format!(
+            "{count} background terminal{plural} running · /ps to view · /stop to close"
+        ))
+    }
+
+    fn render_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if width < 4 {
+            return Vec::new();
+        }
+
+        let Some(summary) = self.summary_text() else {
+            return Vec::new();
+        };
+        let message = format!("  {summary}");
         let (truncated, _, _) = take_prefix_by_width(&message, width as usize);
         vec![Line::from(truncated.dim())]
     }
@@ -68,6 +80,22 @@ mod tests {
     fn desired_height_empty() {
         let footer = UnifiedExecFooter::new();
         assert_eq!(footer.desired_height(40), 0);
+    }
+
+    #[test]
+    fn summary_text_empty() {
+        let footer = UnifiedExecFooter::new();
+        assert_eq!(footer.summary_text(), None);
+    }
+
+    #[test]
+    fn summary_text_pluralizes() {
+        let mut footer = UnifiedExecFooter::new();
+        footer.set_processes(vec!["rg \"foo\" src".to_string(), "cargo test".to_string()]);
+        assert_eq!(
+            footer.summary_text(),
+            Some("2 background terminals running · /ps to view · /stop to close".to_string())
+        );
     }
 
     #[test]
