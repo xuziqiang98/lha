@@ -3,6 +3,7 @@ use crate::AuthManager;
 use crate::CodexAuth;
 use crate::ModelProviderInfo;
 use crate::agent::AgentControl;
+use crate::agent::status::is_final;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
@@ -20,6 +21,7 @@ use crate::skills::SkillsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
@@ -32,6 +34,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
+use tokio::sync::watch;
 use tracing::warn;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
@@ -57,6 +60,8 @@ pub struct ThreadManager {
 /// function to require an `Arc<&Self>`.
 pub(crate) struct ThreadManagerState {
     threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
+    retained_agent_statuses: Arc<RwLock<HashMap<ThreadId, RetainedAgentStatus>>>,
+    thread_generations: Arc<RwLock<HashMap<ThreadId, u64>>>,
     thread_created_tx: broadcast::Sender<ThreadId>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
@@ -66,6 +71,19 @@ pub(crate) struct ThreadManagerState {
     #[allow(dead_code)]
     // Captures submitted ops for testing purpose.
     ops_log: Arc<std::sync::Mutex<Vec<(ThreadId, Op)>>>,
+}
+
+#[derive(Clone)]
+pub(crate) enum RetainedAgentStatus {
+    Pending {
+        generation: u64,
+        _thread: Arc<CodexThread>,
+        status_rx: watch::Receiver<AgentStatus>,
+    },
+    Final {
+        generation: u64,
+        status: AgentStatus,
+    },
 }
 
 impl ThreadManager {
@@ -80,6 +98,8 @@ impl ThreadManager {
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
+                retained_agent_statuses: Arc::new(RwLock::new(HashMap::new())),
+                thread_generations: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::new(
                     codex_home.clone(),
@@ -124,6 +144,8 @@ impl ThreadManager {
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
+                retained_agent_statuses: Arc::new(RwLock::new(HashMap::new())),
+                thread_generations: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::with_provider(
                     codex_home.clone(),
@@ -264,7 +286,7 @@ impl ThreadManager {
     /// as `Arc<CodexThread>`, it is possible that other references to it exist elsewhere.
     /// Returns the thread if the thread was found and removed.
     pub async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
-        self.state.threads.write().await.remove(thread_id)
+        self.state.remove_thread(thread_id).await
     }
 
     /// Closes all threads open in this ThreadManager
@@ -273,6 +295,8 @@ impl ThreadManager {
             thread.submit(Op::Shutdown).await?;
         }
         self.state.threads.write().await.clear();
+        self.state.retained_agent_statuses.write().await.clear();
+        self.state.thread_generations.write().await.clear();
         Ok(())
     }
 
@@ -346,6 +370,27 @@ impl ThreadManagerState {
             .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))
     }
 
+    pub(crate) async fn get_status_or_retained(&self, thread_id: ThreadId) -> Option<AgentStatus> {
+        if let Ok(thread) = self.get_thread(thread_id).await {
+            return Some(thread.agent_status().await);
+        }
+        let retained = self.retained_agent_statuses.read().await;
+        retained.get(&thread_id).map(RetainedAgentStatus::status)
+    }
+
+    pub(crate) async fn subscribe_status_or_retained(
+        &self,
+        thread_id: ThreadId,
+    ) -> Option<watch::Receiver<AgentStatus>> {
+        if let Ok(thread) = self.get_thread(thread_id).await {
+            return Some(thread.subscribe_status());
+        }
+        let retained = self.retained_agent_statuses.read().await;
+        retained
+            .get(&thread_id)
+            .map(RetainedAgentStatus::subscribe_status)
+    }
+
     pub(crate) async fn list_thread_ids(&self) -> Vec<ThreadId> {
         self.threads.read().await.keys().copied().collect()
     }
@@ -364,7 +409,14 @@ impl ThreadManagerState {
 
     /// Remove a thread from the manager by ID, returning it when present.
     pub(crate) async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
-        self.threads.write().await.remove(thread_id)
+        let thread = self.threads.write().await.remove(thread_id)?;
+        let generation = {
+            let generations = self.thread_generations.read().await;
+            generations.get(thread_id).copied().unwrap_or_default()
+        };
+        self.track_detached_thread(*thread_id, generation, thread.clone())
+            .await;
+        Some(thread)
     }
 
     /// Spawn a new thread with no history using a provided config.
@@ -494,8 +546,7 @@ impl ThreadManagerState {
             codex,
             session_configured.rollout_path.clone(),
         ));
-        let mut threads = self.threads.write().await;
-        threads.insert(thread_id, thread.clone());
+        self.activate_thread(thread_id, thread.clone()).await;
 
         Ok(NewThread {
             thread_id,
@@ -506,6 +557,110 @@ impl ThreadManagerState {
 
     pub(crate) fn notify_thread_created(&self, thread_id: ThreadId) {
         let _ = self.thread_created_tx.send(thread_id);
+    }
+
+    async fn activate_thread(&self, thread_id: ThreadId, thread: Arc<CodexThread>) {
+        {
+            let mut generations = self.thread_generations.write().await;
+            let generation = generations.entry(thread_id).or_insert(0);
+            *generation += 1;
+        }
+        self.retained_agent_statuses
+            .write()
+            .await
+            .remove(&thread_id);
+        self.threads.write().await.insert(thread_id, thread);
+    }
+
+    async fn track_detached_thread(
+        &self,
+        thread_id: ThreadId,
+        generation: u64,
+        thread: Arc<CodexThread>,
+    ) {
+        let status = thread.agent_status().await;
+        if is_final(&status) {
+            self.retained_agent_statuses
+                .write()
+                .await
+                .insert(thread_id, RetainedAgentStatus::Final { generation, status });
+            return;
+        }
+
+        let status_rx = thread.subscribe_status();
+        self.retained_agent_statuses.write().await.insert(
+            thread_id,
+            RetainedAgentStatus::Pending {
+                generation,
+                _thread: thread.clone(),
+                status_rx: status_rx.clone(),
+            },
+        );
+
+        let retained_agent_statuses = Arc::clone(&self.retained_agent_statuses);
+        tokio::spawn(async move {
+            let final_status = wait_for_final_retained_status(status_rx).await;
+            let mut retained = retained_agent_statuses.write().await;
+            let Some(current) = retained.get(&thread_id) else {
+                return;
+            };
+            if current.generation() != generation {
+                return;
+            }
+            match final_status {
+                Some(status) => {
+                    retained.insert(thread_id, RetainedAgentStatus::Final { generation, status });
+                }
+                None => {
+                    retained.remove(&thread_id);
+                }
+            }
+        });
+    }
+}
+
+impl RetainedAgentStatus {
+    fn generation(&self) -> u64 {
+        match self {
+            Self::Pending { generation, .. } | Self::Final { generation, .. } => *generation,
+        }
+    }
+
+    fn status(&self) -> AgentStatus {
+        match self {
+            Self::Pending { status_rx, .. } => status_rx.borrow().clone(),
+            Self::Final { status, .. } => status.clone(),
+        }
+    }
+
+    fn subscribe_status(&self) -> watch::Receiver<AgentStatus> {
+        match self {
+            Self::Pending { status_rx, .. } => status_rx.clone(),
+            Self::Final { status, .. } => {
+                let (_tx, rx) = watch::channel(status.clone());
+                rx
+            }
+        }
+    }
+}
+
+async fn wait_for_final_retained_status(
+    mut status_rx: watch::Receiver<AgentStatus>,
+) -> Option<AgentStatus> {
+    let mut status = status_rx.borrow().clone();
+    if is_final(&status) {
+        return Some(status);
+    }
+
+    loop {
+        if status_rx.changed().await.is_err() {
+            let latest = status_rx.borrow().clone();
+            return is_final(&latest).then_some(latest);
+        }
+        status = status_rx.borrow().clone();
+        if is_final(&status) {
+            return Some(status);
+        }
     }
 }
 
