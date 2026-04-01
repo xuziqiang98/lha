@@ -456,10 +456,10 @@ mod resume_agent {
 pub(crate) mod wait {
     use super::*;
     use crate::agent::status::is_final;
-    use futures::FutureExt;
     use futures::StreamExt;
     use futures::stream::FuturesUnordered;
     use std::collections::HashMap;
+    use std::collections::HashSet;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::watch::Receiver;
@@ -534,19 +534,21 @@ pub(crate) mod wait {
             )
             .await;
 
+        let expected_ids = receiver_thread_ids.iter().copied().collect::<HashSet<_>>();
         let mut status_rxs = Vec::with_capacity(receiver_thread_ids.len());
-        let mut initial_final_statuses = Vec::new();
+        let mut statuses_map = HashMap::with_capacity(receiver_thread_ids.len());
         for id in &receiver_thread_ids {
             match session.services.agent_control.subscribe_status(*id).await {
                 Ok(rx) => {
                     let status = rx.borrow().clone();
                     if is_final(&status) {
-                        initial_final_statuses.push((*id, status));
+                        statuses_map.insert(*id, status);
+                    } else {
+                        status_rxs.push((*id, rx));
                     }
-                    status_rxs.push((*id, rx));
                 }
                 Err(CodexErr::ThreadNotFound(_)) => {
-                    initial_final_statuses.push((*id, AgentStatus::NotFound));
+                    statuses_map.insert(*id, session.services.agent_control.get_status(*id).await);
                 }
                 Err(err) => {
                     let mut statuses = HashMap::with_capacity(1);
@@ -571,43 +573,33 @@ pub(crate) mod wait {
             }
         }
 
-        let statuses = if !initial_final_statuses.is_empty() {
-            initial_final_statuses
-        } else {
+        let result = WaitResult {
+            status: statuses_map.clone(),
+            timed_out: false,
+        };
+        let mut result = result;
+
+        if statuses_map.len() < expected_ids.len() {
             let mut futures = FuturesUnordered::new();
-            for (id, rx) in status_rxs.into_iter() {
+            for (id, rx) in status_rxs {
                 let session = session.clone();
                 futures.push(wait_for_final_status(session, id, rx));
             }
-            let mut results = Vec::new();
             let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-            loop {
+            while statuses_map.len() < expected_ids.len() {
                 match timeout_at(deadline, futures.next()).await {
-                    Ok(Some(Some(result))) => {
-                        results.push(result);
-                        break;
+                    Ok(Some(Some((id, status)))) => {
+                        statuses_map.insert(id, status);
                     }
                     Ok(Some(None)) => continue,
-                    Ok(None) | Err(_) => break,
-                }
-            }
-            if !results.is_empty() {
-                loop {
-                    match futures.next().now_or_never() {
-                        Some(Some(Some(result))) => results.push(result),
-                        Some(Some(None)) => continue,
-                        Some(None) | None => break,
+                    Ok(None) | Err(_) => {
+                        result.timed_out = statuses_map.len() < expected_ids.len();
+                        break;
                     }
                 }
             }
-            results
-        };
-
-        let statuses_map = statuses.clone().into_iter().collect::<HashMap<_, _>>();
-        let result = WaitResult {
-            status: statuses_map.clone(),
-            timed_out: statuses.is_empty(),
-        };
+        }
+        result.status = statuses_map.clone();
 
         session
             .send_event(
@@ -942,6 +934,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::Mutex;
+    use tokio::time::sleep;
     use tokio::time::timeout;
 
     fn invocation(
@@ -971,6 +964,23 @@ mod tests {
             CodexAuth::from_api_key("dummy"),
             built_in_model_providers()["openai"].clone(),
         )
+    }
+
+    async fn wait_for_agent_status(
+        agent_control: &crate::agent::AgentControl,
+        thread_id: ThreadId,
+        expected: AgentStatus,
+    ) {
+        timeout(Duration::from_secs(5), async {
+            loop {
+                if agent_control.get_status(thread_id).await == expected {
+                    break;
+                }
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("agent status should reach expected value");
     }
 
     #[tokio::test]
@@ -1336,6 +1346,127 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wait_returns_retained_shutdown_for_detached_agent() {
+        let (mut session, turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        let config = turn.client.config().as_ref().clone();
+        let thread = manager.start_thread(config).await.expect("start thread");
+        let agent_id = thread.thread_id;
+        let detached = manager
+            .remove_thread(&agent_id)
+            .await
+            .expect("thread should detach");
+
+        tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            detached
+                .submit(Op::Shutdown {})
+                .await
+                .expect("shutdown should submit");
+        });
+
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "wait",
+            function_payload(json!({
+                "ids": [agent_id.to_string()],
+                "timeout_ms": MIN_WAIT_TIMEOUT_MS
+            })),
+        );
+        let output = CollabHandler
+            .handle(invocation)
+            .await
+            .expect("wait should succeed");
+        let ToolOutput::Function {
+            content, success, ..
+        } = output
+        else {
+            panic!("expected function output");
+        };
+        let result: WaitResult =
+            serde_json::from_str(&content).expect("wait result should be json");
+        assert_eq!(
+            result,
+            WaitResult {
+                status: HashMap::from([(agent_id, AgentStatus::Shutdown)]),
+                timed_out: false,
+            }
+        );
+        assert_eq!(success, None);
+    }
+
+    #[tokio::test]
+    async fn wait_collects_initial_and_later_final_statuses() {
+        let (mut session, turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        let config = turn.client.config().as_ref().clone();
+        let first = manager
+            .start_thread(config.clone())
+            .await
+            .expect("start first");
+        let second = manager.start_thread(config).await.expect("start second");
+        let first_id = first.thread_id;
+        let second_id = second.thread_id;
+
+        first
+            .thread
+            .submit(Op::Shutdown {})
+            .await
+            .expect("first shutdown should submit");
+        wait_for_agent_status(
+            &session.services.agent_control,
+            first_id,
+            AgentStatus::Shutdown,
+        )
+        .await;
+
+        let second_thread = second.thread.clone();
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(50)).await;
+            second_thread
+                .submit(Op::Shutdown {})
+                .await
+                .expect("second shutdown should submit");
+        });
+
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "wait",
+            function_payload(json!({
+                "ids": [first_id.to_string(), second_id.to_string()],
+                "timeout_ms": MIN_WAIT_TIMEOUT_MS
+            })),
+        );
+        let output = CollabHandler
+            .handle(invocation)
+            .await
+            .expect("wait should succeed");
+        let ToolOutput::Function {
+            content, success, ..
+        } = output
+        else {
+            panic!("expected function output");
+        };
+        let result: WaitResult =
+            serde_json::from_str(&content).expect("wait result should be json");
+        assert_eq!(
+            result,
+            WaitResult {
+                status: HashMap::from([
+                    (first_id, AgentStatus::Shutdown),
+                    (second_id, AgentStatus::Shutdown),
+                ]),
+                timed_out: false,
+            }
+        );
+        assert_eq!(success, None);
+    }
+
+    #[tokio::test]
     async fn wait_clamps_short_timeouts_to_minimum() {
         let (mut session, turn) = make_session_and_context().await;
         let manager = thread_manager();
@@ -1421,8 +1552,8 @@ mod tests {
             .any(|(id, op)| *id == agent_id && matches!(op, Op::Shutdown));
         assert_eq!(submitted_shutdown, true);
 
-        let status_after = manager.agent_control().get_status(agent_id).await;
-        assert_eq!(status_after, AgentStatus::NotFound);
+        let agent_control = manager.agent_control();
+        wait_for_agent_status(&agent_control, agent_id, AgentStatus::Shutdown).await;
     }
 
     #[tokio::test]

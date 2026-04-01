@@ -290,10 +290,10 @@ impl AgentControl {
         let Ok(state) = self.upgrade() else {
             return AgentStatus::NotFound;
         };
-        let Ok(thread) = state.get_thread(agent_id).await else {
-            return AgentStatus::NotFound;
-        };
-        thread.agent_status().await
+        state
+            .get_status_or_retained(agent_id)
+            .await
+            .unwrap_or(AgentStatus::NotFound)
     }
 
     pub(crate) async fn get_agent_nickname_and_role(
@@ -353,8 +353,10 @@ impl AgentControl {
         agent_id: ThreadId,
     ) -> CodexResult<watch::Receiver<AgentStatus>> {
         let state = self.upgrade()?;
-        let thread = state.get_thread(agent_id).await?;
-        Ok(thread.subscribe_status())
+        state
+            .subscribe_status_or_retained(agent_id)
+            .await
+            .ok_or(CodexErr::ThreadNotFound(agent_id))
     }
 
     fn maybe_start_completion_watcher(
@@ -568,6 +570,23 @@ mod tests {
         }
     }
 
+    async fn wait_for_agent_status(
+        control: &AgentControl,
+        thread_id: ThreadId,
+        expected: AgentStatus,
+    ) {
+        timeout(Duration::from_secs(5), async {
+            loop {
+                if control.get_status(thread_id).await == expected {
+                    break;
+                }
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("agent status should reach expected value");
+    }
+
     #[tokio::test]
     async fn send_prompt_errors_when_manager_dropped() {
         let control = AgentControl::default();
@@ -710,6 +729,31 @@ mod tests {
             .expect("shutdown should submit");
 
         let _ = status_rx.changed().await;
+        assert_eq!(status_rx.borrow().clone(), AgentStatus::Shutdown);
+    }
+
+    #[tokio::test]
+    async fn detached_thread_retains_final_status_after_shutdown() {
+        let harness = AgentControlHarness::new().await;
+        let (thread_id, _thread) = harness.start_thread().await;
+        let detached = harness
+            .manager
+            .remove_thread(&thread_id)
+            .await
+            .expect("thread should detach");
+
+        detached
+            .submit(Op::Shutdown {})
+            .await
+            .expect("shutdown should submit");
+
+        wait_for_agent_status(&harness.control, thread_id, AgentStatus::Shutdown).await;
+
+        let status_rx = harness
+            .control
+            .subscribe_status(thread_id)
+            .await
+            .expect("retained status subscription should succeed");
         assert_eq!(status_rx.borrow().clone(), AgentStatus::Shutdown);
     }
 
@@ -943,6 +987,7 @@ mod tests {
             .shutdown_agent(resumed_thread_id)
             .await
             .expect("resumed child shutdown should submit");
+        wait_for_agent_status(&harness.control, resumed_thread_id, AgentStatus::Shutdown).await;
     }
 
     #[tokio::test]
