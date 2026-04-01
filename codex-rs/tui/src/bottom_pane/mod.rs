@@ -114,6 +114,7 @@ pub(crate) use chat_composer::ChatComposerConfig;
 pub(crate) use chat_composer::InputResult;
 use codex_protocol::custom_prompts::CustomPrompt;
 
+use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
@@ -492,10 +493,16 @@ impl BottomPane {
     /// Update the status indicator header (defaults to "Working") and details below it.
     ///
     /// Passing `None` clears any existing details. No-ops if the status indicator is not active.
-    pub(crate) fn update_status(&mut self, header: String, details: Option<String>) {
+    pub(crate) fn update_status(
+        &mut self,
+        header: String,
+        details: Option<String>,
+        capitalization: StatusDetailsCapitalization,
+        details_max_lines: usize,
+    ) {
         if let Some(status) = self.status.as_mut() {
             status.update_header(header);
-            status.update_details(details);
+            status.update_details(details, capitalization, details_max_lines);
             self.request_redraw();
         }
     }
@@ -579,6 +586,7 @@ impl BottomPane {
                 if let Some(status) = self.status.as_mut() {
                     status.set_interrupt_hint_visible(true);
                 }
+                self.sync_status_inline_message();
                 self.request_redraw();
             }
         } else {
@@ -601,6 +609,7 @@ impl BottomPane {
                 self.frame_requester.clone(),
                 self.animations_enabled,
             ));
+            self.sync_status_inline_message();
             self.request_redraw();
         }
     }
@@ -639,7 +648,14 @@ impl BottomPane {
 
     pub(crate) fn set_unified_exec_processes(&mut self, processes: Vec<String>) {
         if self.unified_exec_footer.set_processes(processes) {
+            self.sync_status_inline_message();
             self.request_redraw();
+        }
+    }
+
+    fn sync_status_inline_message(&mut self) {
+        if let Some(status) = self.status.as_mut() {
+            status.update_inline_message(self.unified_exec_footer.summary_text());
         }
     }
 
@@ -837,7 +853,7 @@ impl BottomPane {
             if let Some(status) = &self.status {
                 flex.push(0, RenderableItem::Borrowed(status));
             }
-            if !self.unified_exec_footer.is_empty() {
+            if self.status.is_none() && !self.unified_exec_footer.is_empty() {
                 flex.push(0, RenderableItem::Borrowed(&self.unified_exec_footer));
             }
             let has_queued_messages = !self.queued_user_messages.messages.is_empty();
@@ -1119,6 +1135,63 @@ mod tests {
     }
 
     #[test]
+    fn unified_exec_inline_with_status_keeps_height_stable() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        let width = 120;
+        let height_before = pane.desired_height(width);
+
+        pane.set_unified_exec_processes(vec!["sleep 5".to_string()]);
+        let height_after = pane.desired_height(width);
+
+        assert_eq!(height_after, height_before);
+        let area = Rect::new(0, 0, width, height_after);
+        let rendered = render_snapshot(&pane, area);
+        assert!(
+            rendered.contains("background terminal running · /ps to view"),
+            "expected unified exec hint visible: {rendered}"
+        );
+    }
+
+    #[test]
+    fn unified_exec_footer_without_status_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_unified_exec_processes(vec!["just fix".to_string()]);
+
+        let width = 48;
+        let height = pane.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        assert_snapshot!(
+            "unified_exec_footer_without_status_snapshot",
+            render_snapshot(&pane, area)
+        );
+    }
+
+    #[test]
     fn status_with_details_and_queued_messages_snapshot() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -1137,6 +1210,8 @@ mod tests {
         pane.update_status(
             "Working".to_string(),
             Some("First detail line\nSecond detail line".to_string()),
+            StatusDetailsCapitalization::CapitalizeFirst,
+            3,
         );
         pane.set_queued_user_messages(vec!["Queued follow-up question".to_string()]);
 

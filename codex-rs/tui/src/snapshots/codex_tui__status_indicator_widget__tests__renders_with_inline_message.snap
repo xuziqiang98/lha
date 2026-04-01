@@ -1,0 +1,7 @@
+---
+source: tui/src/status_indicator_widget.rs
+assertion_line: 390
+expression: terminal.backend()
+---
+"• Working (0s • esc to interrupt) · 1 background terminal running · /ps to view…"
+"                                                                                "

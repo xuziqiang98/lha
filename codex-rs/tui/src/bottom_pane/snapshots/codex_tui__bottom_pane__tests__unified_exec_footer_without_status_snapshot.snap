@@ -1,0 +1,11 @@
+---
+source: tui/src/bottom_pane/mod.rs
+assertion_line: 1180
+expression: "render_snapshot(&pane, area)"
+---
+  1 background terminal running · /ps to view · 
+                                                
+                                                
+› Ask Codex to do anything                      
+                                                
+  loading · 100% left

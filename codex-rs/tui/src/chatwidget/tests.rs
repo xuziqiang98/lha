@@ -1746,8 +1746,8 @@ async fn make_chatwidget_manual_with_scrollback_mode(
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
-        current_status_header: String::from("Working"),
-        retry_status_header: None,
+        current_status: StatusIndicatorState::working(),
+        retry_status: None,
         thread_id: None,
         thread_name: None,
         forked_from: None,
@@ -1870,8 +1870,8 @@ async fn make_chatwidget_manual_with_frame_requester(
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
-        current_status_header: String::from("Working"),
-        retry_status_header: None,
+        current_status: StatusIndicatorState::working(),
+        retry_status: None,
         thread_id: None,
         thread_name: None,
         forked_from: None,
@@ -3334,9 +3334,15 @@ async fn unified_exec_wait_status_header_updates_on_late_command_display() {
 
     assert!(chat.active_cell.is_none());
     assert_eq!(
-        chat.current_status_header,
-        "Waiting for background terminal · sleep 5"
+        chat.current_status.header,
+        "Waiting for background terminal"
     );
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Waiting for background terminal");
+    assert_eq!(status.details(), Some("sleep 5"));
 }
 
 #[tokio::test]
@@ -3348,8 +3354,8 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
     terminal_interaction(&mut chat, "call-wait-1a", "proc-1", "");
     terminal_interaction(&mut chat, "call-wait-1b", "proc-1", "");
     assert_eq!(
-        chat.current_status_header,
-        "Waiting for background terminal · just fix"
+        chat.current_status.header,
+        "Waiting for background terminal"
     );
 
     chat.handle_codex_event(Event {
@@ -3365,6 +3371,26 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
     assert_snapshot!("unified_exec_waiting_multiple_empty_after", combined);
+}
+
+#[tokio::test]
+async fn unified_exec_wait_status_renders_command_in_single_details_row() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    begin_unified_exec_startup(
+        &mut chat,
+        "call-wait-ui",
+        "proc-ui",
+        "cargo test -p codex-core -- --exact",
+    );
+
+    terminal_interaction(&mut chat, "call-wait-ui-stdin", "proc-ui", "");
+
+    let rendered = render_bottom_popup(&chat, 48);
+    assert_snapshot!(
+        "unified_exec_wait_status_renders_command_in_single_details_row",
+        rendered
+    );
 }
 
 #[tokio::test]
@@ -3393,9 +3419,15 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
     terminal_interaction(&mut chat, "call-wait-3a", "proc-3", "pwd\n");
     terminal_interaction(&mut chat, "call-wait-3b", "proc-3", "");
     assert_eq!(
-        chat.current_status_header,
-        "Waiting for background terminal · just fix"
+        chat.current_status.header,
+        "Waiting for background terminal"
     );
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Waiting for background terminal");
+    assert_eq!(status.details(), Some("just fix"));
     let pre_cells = drain_insert_history(&mut rx);
     let active_combined = pre_cells
         .iter()
@@ -6327,7 +6359,7 @@ async fn background_event_updates_status_header() {
     });
 
     assert!(chat.bottom_pane.status_indicator_visible());
-    assert_eq!(chat.current_status_header, "Waiting for `vim`");
+    assert_eq!(chat.current_status.header, "Waiting for `vim`");
     assert!(drain_insert_history(&mut rx).is_empty());
 }
 
@@ -6879,7 +6911,42 @@ async fn stream_recovery_restores_previous_status_header() {
         .expect("status indicator should be visible");
     assert_eq!(status.header(), "Working");
     assert_eq!(status.details(), None);
-    assert!(chat.retry_status_header.is_none());
+    assert!(chat.retry_status.is_none());
+}
+
+#[tokio::test]
+async fn stream_recovery_restores_previous_status_details() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    begin_unified_exec_startup(&mut chat, "call-retry", "proc-retry", "sleep 5");
+
+    terminal_interaction(&mut chat, "call-retry-stdin", "proc-retry", "");
+    drain_insert_history(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "retry".into(),
+        msg: EventMsg::StreamError(StreamErrorEvent {
+            message: "Reconnecting... 1/5".to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
+            additional_details: None,
+        }),
+    });
+    drain_insert_history(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "warning".into(),
+        msg: EventMsg::Warning(WarningEvent {
+            message: "test warning message".to_string(),
+        }),
+    });
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Waiting for background terminal");
+    assert_eq!(status.details(), Some("sleep 5"));
+    assert!(chat.retry_status.is_none());
 }
 
 #[tokio::test]
