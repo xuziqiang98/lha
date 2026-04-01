@@ -9,6 +9,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
+use std::collections::BTreeMap;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -38,6 +39,7 @@ pub(crate) struct ExperimentalFeatureItem {
 
 pub(crate) struct ExperimentalFeaturesView {
     features: Vec<ExperimentalFeatureItem>,
+    initial_feature_states: BTreeMap<Feature, bool>,
     state: ScrollState,
     complete: bool,
     app_event_tx: AppEventSender,
@@ -50,6 +52,10 @@ impl ExperimentalFeaturesView {
         features: Vec<ExperimentalFeatureItem>,
         app_event_tx: AppEventSender,
     ) -> Self {
+        let initial_feature_states = features
+            .iter()
+            .map(|item| (item.feature, item.enabled))
+            .collect();
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Experimental features".bold()));
         header.push(Line::from(
@@ -58,6 +64,7 @@ impl ExperimentalFeaturesView {
 
         let mut view = Self {
             features,
+            initial_feature_states,
             state: ScrollState::new(),
             complete: false,
             app_event_tx,
@@ -198,10 +205,15 @@ impl BottomPaneView for ExperimentalFeaturesView {
             let updates = self
                 .features
                 .iter()
-                .map(|item| (item.feature, item.enabled))
-                .collect();
-            self.app_event_tx
-                .send(AppEvent::UpdateFeatureFlags { updates });
+                .filter_map(|item| {
+                    let initial_enabled = self.initial_feature_states.get(&item.feature)?;
+                    (*initial_enabled != item.enabled).then_some((item.feature, item.enabled))
+                })
+                .collect::<Vec<_>>();
+            if !updates.is_empty() {
+                self.app_event_tx
+                    .send(AppEvent::UpdateFeatureFlags { updates });
+            }
         }
 
         self.complete = true;
