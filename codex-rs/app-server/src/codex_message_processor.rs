@@ -139,6 +139,7 @@ use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
 use codex_core::InitialHistory;
+use codex_core::ModelProviderInfo;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
@@ -166,6 +167,7 @@ use codex_core::find_thread_path_by_id_str;
 use codex_core::git_info::git_diff_to_remote;
 use codex_core::mcp::collect_mcp_snapshot;
 use codex_core::mcp::group_tools_by_server;
+use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::parse_cursor;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -249,6 +251,13 @@ const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 struct ActiveLogin {
     shutdown_handle: ShutdownHandle,
     login_id: Uuid,
+}
+
+#[derive(Clone, Debug)]
+struct EffectiveModelSelection {
+    model: String,
+    provider_id: String,
+    provider: ModelProviderInfo,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -365,6 +374,72 @@ impl CodexMessageProcessor {
                 message: format!("failed to reload config: {err}"),
                 data: None,
             })
+    }
+
+    async fn switch_loaded_threads_following_previous_default(
+        &self,
+        previous_selection: &EffectiveModelSelection,
+        target_selection: &EffectiveModelSelection,
+    ) {
+        for thread_id in self.thread_manager.list_thread_ids().await {
+            let thread = match self.thread_manager.get_thread(thread_id).await {
+                Ok(thread) => thread,
+                Err(err) => {
+                    warn!("failed to load thread {thread_id} for model switch: {err}");
+                    continue;
+                }
+            };
+            let config_snapshot = thread.config_snapshot().await;
+            if config_snapshot.model != previous_selection.model
+                || config_snapshot.model_provider_id != previous_selection.provider_id
+            {
+                continue;
+            }
+
+            thread
+                .switch_provider_and_model(
+                    target_selection.provider_id.clone(),
+                    target_selection.provider.clone(),
+                    target_selection.model.clone(),
+                )
+                .await;
+        }
+    }
+
+    async fn resolve_effective_model_selection(
+        &self,
+        config: &Config,
+    ) -> Result<EffectiveModelSelection, JSONRPCErrorError> {
+        let provider_id = config.model_provider_id.clone();
+        let Some(provider) = config.model_providers.get(&provider_id).cloned() else {
+            return Err(JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!(
+                    "failed to activate model selection: model provider `{provider_id}` was not found after reloading config"
+                ),
+                data: None,
+            });
+        };
+
+        let model = if let Some(model) = config.model.as_ref() {
+            model.clone()
+        } else {
+            self.thread_manager
+                .get_models_manager()
+                .get_default_model(&config.model, config, RefreshStrategy::OnlineIfUncached)
+                .await
+                .map_err(|err| JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to activate model selection: {err}"),
+                    data: None,
+                })?
+        };
+
+        Ok(EffectiveModelSelection {
+            model,
+            provider_id,
+            provider,
+        })
     }
 
     fn review_request_from_target(
@@ -1397,10 +1472,38 @@ impl CodexMessageProcessor {
             model_provider,
             reasoning_effort,
         } = params;
+        let previous_config = match self.load_latest_config().await {
+            Ok(config) => config,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let previous_provider = previous_config
+            .model_providers
+            .get(previous_config.model_provider_id.as_str())
+            .cloned();
+        let previous_effective_selection = match self
+            .resolve_effective_model_selection(&previous_config)
+            .await
+        {
+            Ok(selection) => Some(selection),
+            Err(err) => {
+                warn!(
+                    model_provider_id = previous_config.model_provider_id,
+                    "failed to resolve previous effective model selection for runtime switch: {}",
+                    err.message
+                );
+                None
+            }
+        };
 
         let resolved_model_provider = match (model_provider, model.as_deref()) {
             (Some(model_provider), _) => {
-                if self.config.model_providers.contains_key(&model_provider) {
+                if previous_config
+                    .model_providers
+                    .contains_key(&model_provider)
+                {
                     Ok(Some(model_provider))
                 } else {
                     Err(anyhow::anyhow!(
@@ -1408,8 +1511,7 @@ impl CodexMessageProcessor {
                     ))
                 }
             }
-            (None, Some(model)) => self
-                .config
+            (None, Some(model)) => previous_config
                 .config_layer_stack
                 .effective_config()
                 .try_into()
@@ -1420,14 +1522,16 @@ impl CodexMessageProcessor {
                         .map_err(anyhow::Error::from)
                 })
                 .map(|model_provider| {
-                    Some(model_provider.unwrap_or_else(|| self.config.model_provider_id.clone()))
+                    Some(
+                        model_provider.unwrap_or_else(|| previous_config.model_provider_id.clone()),
+                    )
                 }),
             (None, None) => Ok(None),
         };
 
         match resolved_model_provider {
             Ok(resolved_model_provider) => match ConfigEditsBuilder::new(&self.config.codex_home)
-                .with_profile(self.config.active_profile.as_deref())
+                .with_profile(previous_config.active_profile.as_deref())
                 .set_model(
                     model.as_deref(),
                     reasoning_effort,
@@ -1437,6 +1541,100 @@ impl CodexMessageProcessor {
                 .await
             {
                 Ok(()) => {
+                    let next_config = match self.load_latest_config().await {
+                        Ok(config) => config,
+                        Err(error) => {
+                            self.outgoing.send_error(request_id, error).await;
+                            return;
+                        }
+                    };
+
+                    let Some(next_provider) = next_config
+                        .model_providers
+                        .get(next_config.model_provider_id.as_str())
+                        .cloned()
+                    else {
+                        let error = JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!(
+                                "failed to activate model selection: model provider `{}` was not found after reloading config",
+                                next_config.model_provider_id
+                            ),
+                            data: None,
+                        };
+                        self.outgoing.send_error(request_id, error).await;
+                        return;
+                    };
+
+                    let next_effective_selection = if model.is_none() {
+                        if let Some(previous_effective_selection) =
+                            previous_effective_selection.as_ref()
+                        {
+                            EffectiveModelSelection {
+                                model: previous_effective_selection.model.clone(),
+                                provider_id: next_config.model_provider_id.clone(),
+                                provider: next_provider.clone(),
+                            }
+                        } else {
+                            let should_switch_provider_before_resolution =
+                                next_config.model.is_none()
+                                    && next_config.model_provider_id
+                                        != previous_config.model_provider_id;
+                            if should_switch_provider_before_resolution {
+                                self.thread_manager
+                                    .get_models_manager()
+                                    .switch_provider(
+                                        next_config.model_provider_id.as_str(),
+                                        next_provider.clone(),
+                                    )
+                                    .await;
+                            }
+
+                            match self.resolve_effective_model_selection(&next_config).await {
+                                Ok(selection) => selection,
+                                Err(error) => {
+                                    if should_switch_provider_before_resolution
+                                        && let Some(previous_provider) = previous_provider
+                                    {
+                                        self.thread_manager
+                                            .get_models_manager()
+                                            .switch_provider(
+                                                previous_config.model_provider_id.as_str(),
+                                                previous_provider,
+                                            )
+                                            .await;
+                                    }
+                                    self.outgoing.send_error(request_id, error).await;
+                                    return;
+                                }
+                            }
+                        }
+                    } else {
+                        match self.resolve_effective_model_selection(&next_config).await {
+                            Ok(selection) => selection,
+                            Err(error) => {
+                                self.outgoing.send_error(request_id, error).await;
+                                return;
+                            }
+                        }
+                    };
+
+                    self.thread_manager
+                        .get_models_manager()
+                        .switch_provider(
+                            next_effective_selection.provider_id.as_str(),
+                            next_effective_selection.provider.clone(),
+                        )
+                        .await;
+                    if let Some(previous_effective_selection) =
+                        previous_effective_selection.as_ref()
+                    {
+                        self.switch_loaded_threads_following_previous_default(
+                            previous_effective_selection,
+                            &next_effective_selection,
+                        )
+                        .await;
+                    }
                     let response = SetDefaultModelResponse {};
                     self.outgoing.send_response(request_id, response).await;
                 }
