@@ -9,6 +9,7 @@ use crate::codex::get_last_assistant_message_from_turn;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
+use crate::proposed_plan_parser::extract_proposed_plan_text;
 use crate::protocol::CompactedItem;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnContextItem;
@@ -32,6 +33,8 @@ use tracing::error;
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
+const PROPOSED_PLAN_OPEN_TAG: &str = "<proposed_plan>\n";
+const PROPOSED_PLAN_CLOSE_TAG: &str = "</proposed_plan>";
 
 pub(crate) fn should_use_remote_compact_task(
     session: &Session,
@@ -179,9 +182,19 @@ async fn run_compact_task_inner(
     let summary_suffix = get_last_assistant_message_from_turn(history_items).unwrap_or_default();
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
     let user_messages = collect_user_messages(history_items);
+    let backfilled_plan_text = if sess.enabled(Feature::BackfillCompactPlanContext) {
+        last_completed_plan_from_history(history_items)
+    } else {
+        None
+    };
 
     let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
-    let mut new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
+    let mut new_history = build_compacted_history(
+        initial_context,
+        &user_messages,
+        backfilled_plan_text.as_deref(),
+        &summary_text,
+    );
     let ghost_snapshots: Vec<ResponseItem> = history_items
         .iter()
         .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
@@ -267,11 +280,13 @@ pub(crate) fn is_summary_message(message: &str) -> bool {
 pub(crate) fn build_compacted_history(
     initial_context: Vec<ResponseItem>,
     user_messages: &[String],
+    backfilled_plan_text: Option<&str>,
     summary_text: &str,
 ) -> Vec<ResponseItem> {
     build_compacted_history_with_limit(
         initial_context,
         user_messages,
+        backfilled_plan_text,
         summary_text,
         COMPACT_USER_MESSAGE_MAX_TOKENS,
     )
@@ -280,6 +295,7 @@ pub(crate) fn build_compacted_history(
 fn build_compacted_history_with_limit(
     mut history: Vec<ResponseItem>,
     user_messages: &[String],
+    backfilled_plan_text: Option<&str>,
     summary_text: &str,
     max_tokens: usize,
 ) -> Vec<ResponseItem> {
@@ -327,7 +343,45 @@ fn build_compacted_history_with_limit(
         end_turn: None,
     });
 
+    if let Some(plan_text) = backfilled_plan_text {
+        history.push(proposed_plan_message(plan_text));
+    }
+
     history
+}
+
+pub(crate) fn last_completed_plan_from_history(items: &[ResponseItem]) -> Option<String> {
+    items.iter().rev().find_map(|item| {
+        let ResponseItem::Message { role, content, .. } = item else {
+            return None;
+        };
+        if role != "assistant" {
+            return None;
+        }
+
+        let mut text = String::new();
+        for entry in content {
+            if let ContentItem::OutputText { text: chunk } = entry {
+                text.push_str(chunk);
+            }
+        }
+
+        if text.is_empty() {
+            None
+        } else {
+            extract_proposed_plan_text(&text)
+        }
+    })
+}
+
+pub(crate) fn proposed_plan_message(plan_text: &str) -> ResponseItem {
+    let text = format!("{PROPOSED_PLAN_OPEN_TAG}{plan_text}{PROPOSED_PLAN_CLOSE_TAG}");
+    ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText { text }],
+        end_turn: None,
+    }
 }
 
 async fn drain_to_completed(
@@ -475,6 +529,7 @@ mod tests {
         let history = super::build_compacted_history_with_limit(
             Vec::new(),
             std::slice::from_ref(&big),
+            None,
             "SUMMARY",
             max_tokens,
         );
@@ -514,7 +569,7 @@ mod tests {
         let user_messages = vec!["first user message".to_string()];
         let summary_text = "summary text";
 
-        let history = build_compacted_history(initial_context, &user_messages, summary_text);
+        let history = build_compacted_history(initial_context, &user_messages, None, summary_text);
         assert!(
             !history.is_empty(),
             "expected compacted history to include summary"
@@ -555,7 +610,7 @@ mod tests {
         ];
 
         let user_messages = collect_user_messages(&items);
-        let history = build_compacted_history(Vec::new(), &user_messages, "SUMMARY");
+        let history = build_compacted_history(Vec::new(), &user_messages, None, "SUMMARY");
 
         let found_marker = history.iter().any(|item| match item {
             ResponseItem::Message { role, content, .. } if role == "user" => {
@@ -567,5 +622,53 @@ mod tests {
             found_marker,
             "expected compacted history to retain <turn_aborted> marker"
         );
+    }
+
+    #[test]
+    fn last_completed_plan_from_history_extracts_latest_plan() {
+        let items = vec![
+            proposed_plan_message("- Step 1\n"),
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "Intro\n<proposed_plan>\n- Step 2\n</proposed_plan>\nOutro".to_string(),
+                }],
+                end_turn: None,
+            },
+        ];
+
+        let plan = last_completed_plan_from_history(&items);
+
+        assert_eq!(Some("- Step 2\n".to_string()), plan);
+    }
+
+    #[test]
+    fn last_completed_plan_from_history_returns_none_when_missing() {
+        let items = vec![ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "No plan here".to_string(),
+            }],
+            end_turn: None,
+        }];
+
+        let plan = last_completed_plan_from_history(&items);
+
+        assert_eq!(None, plan);
+    }
+
+    #[test]
+    fn build_compacted_history_appends_backfilled_plan_as_assistant_message() {
+        let history = build_compacted_history(
+            Vec::new(),
+            &["user".to_string()],
+            Some("- Step 1\n"),
+            "SUMMARY",
+        );
+
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[2], proposed_plan_message("- Step 1\n"));
     }
 }

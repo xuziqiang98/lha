@@ -125,6 +125,8 @@ pub enum Feature {
     SkillEnvVarDependencyPrompt,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
+    /// Backfill the latest proposed plan into compacted history as an assistant message.
+    BackfillCompactPlanContext,
     /// Enable collaboration modes (Plan, Code, Pair Programming, Execute).
     CollaborationModes,
     /// Enable personality selection in the TUI.
@@ -583,6 +585,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::BackfillCompactPlanContext,
+        key: "backfill_compact_plan_context",
+        stage: Stage::Experimental {
+            name: "Backfill compact plan context",
+            menu_description: "After compaction, keep the last completed proposed plan in model context as an assistant message.",
+            announcement: "NEW! Preserve the latest proposed plan across compaction in /experimental.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::CollaborationModes,
         key: "collaboration_modes",
         stage: Stage::Stable,
@@ -811,6 +823,27 @@ mod tests {
             assert_eq!(None, stage.experimental_menu_description());
             assert_eq!(None, stage.experimental_announcement());
         }
+    }
+
+    #[test]
+    fn backfill_compact_plan_context_is_experimental_and_disabled_by_default() {
+        let stage = Feature::BackfillCompactPlanContext.stage();
+
+        assert_eq!(false, Feature::BackfillCompactPlanContext.default_enabled());
+        assert_eq!(
+            Some("Backfill compact plan context"),
+            stage.experimental_menu_name()
+        );
+        assert_eq!(
+            Some(
+                "After compaction, keep the last completed proposed plan in model context as an assistant message.",
+            ),
+            stage.experimental_menu_description()
+        );
+        assert_eq!(
+            Some("NEW! Preserve the latest proposed plan across compaction in /experimental."),
+            stage.experimental_announcement()
+        );
     }
 
     #[test]

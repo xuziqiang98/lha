@@ -16,7 +16,10 @@ use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::WarningEvent;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::Settings;
 use codex_protocol::items::TurnItem;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_local_shell_call;
@@ -109,6 +112,20 @@ fn contains_user_text(input: &[serde_json::Value], expected: &str) -> bool {
     input.iter().any(|item| {
         item.get("type").and_then(|v| v.as_str()) == Some("message")
             && item.get("role").and_then(|v| v.as_str()) == Some("user")
+            && item
+                .get("content")
+                .and_then(|v| v.as_array())
+                .is_some_and(|arr| {
+                    arr.iter()
+                        .any(|entry| entry.get("text").and_then(|v| v.as_str()) == Some(expected))
+                })
+    })
+}
+
+fn contains_assistant_text(input: &[serde_json::Value], expected: &str) -> bool {
+    input.iter().any(|item| {
+        item.get("type").and_then(|v| v.as_str()) == Some("message")
+            && item.get("role").and_then(|v| v.as_str()) == Some("assistant")
             && item
                 .get("content")
                 .and_then(|v| v.as_array())
@@ -475,6 +492,115 @@ async fn summarize_context_three_requests_and_instructions() {
     assert!(
         saw_compacted_summary,
         "expected a Compacted entry containing the summarizer output"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_compact_backfills_latest_plan_as_assistant_context() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let plan_block = "<proposed_plan>\n- Step 1\n- Step 2\n</proposed_plan>\n";
+    let full_plan_message = format!("Intro\n{plan_block}Outro");
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", &full_plan_message),
+                ev_completed("r1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", SUMMARY_TEXT),
+                ev_completed("r2"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", FINAL_REPLY),
+                ev_completed("r3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.features.enable(Feature::BackfillCompactPlanContext);
+        })
+        .build(&server)
+        .await
+        .unwrap();
+    let codex = test.codex;
+
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Plan,
+        settings: Settings {
+            model: test.session_configured.model.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "please plan".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: std::env::current_dir().expect("current dir"),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: Some(collaboration_mode),
+            personality: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: THIRD_USER_MSG.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 3);
+
+    let follow_up_input = requests[2]
+        .body_json()
+        .get("input")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .expect("follow-up input should be an array");
+    let expected_plan = "<proposed_plan>\n- Step 1\n- Step 2\n</proposed_plan>";
+    assert!(
+        contains_assistant_text(&follow_up_input, expected_plan),
+        "expected compacted follow-up history to include backfilled proposed plan"
+    );
+    let follow_up_body = requests[2].body_json().to_string();
+    assert!(
+        !follow_up_body.contains("Intro"),
+        "expected compacted history to strip assistant prose around the plan"
+    );
+    assert!(
+        !follow_up_body.contains("Outro"),
+        "expected compacted history to strip assistant prose around the plan"
     );
 }
 

@@ -1904,9 +1904,16 @@ impl Session {
                         history.replace(replacement.clone());
                     } else {
                         let user_messages = collect_user_messages(history.raw_items());
+                        let backfilled_plan_text =
+                            if self.enabled(Feature::BackfillCompactPlanContext) {
+                                compact::last_completed_plan_from_history(history.raw_items())
+                            } else {
+                                None
+                            };
                         let rebuilt = compact::build_compacted_history(
                             self.build_initial_context(turn_context).await,
                             &user_messages,
+                            backfilled_plan_text.as_deref(),
                             &compacted.message,
                         );
                         history.replace(rebuilt);
@@ -4955,6 +4962,7 @@ mod tests {
     use crate::protocol::RateLimitSnapshot;
     use crate::protocol::RateLimitWindow;
     use crate::protocol::ResumedHistory;
+    use crate::protocol::ThreadRolledBackEvent;
     use crate::protocol::TokenCountEvent;
     use crate::protocol::TokenUsage;
     use crate::protocol::TokenUsageInfo;
@@ -5248,6 +5256,79 @@ mod tests {
 
         let actual = session.state.lock().await.token_info();
         assert_eq!(actual, Some(info2));
+    }
+
+    #[tokio::test]
+    async fn reconstruct_history_backfills_latest_surviving_plan_after_local_compaction() {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(codex_home.path()).await;
+        config.features.enable(Feature::BackfillCompactPlanContext);
+        let (session, turn_context) = make_session_and_context_for_config(config).await;
+
+        let initial_context = session.build_initial_context(&turn_context).await;
+        let mut rollout_items: Vec<RolloutItem> = initial_context
+            .iter()
+            .cloned()
+            .map(RolloutItem::ResponseItem)
+            .collect();
+
+        let user_one = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "first user".to_string(),
+            }],
+            end_turn: None,
+        };
+        let first_plan = ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "Intro\n<proposed_plan>\n- Step 1\n</proposed_plan>\nOutro".to_string(),
+            }],
+            end_turn: None,
+        };
+        rollout_items.push(RolloutItem::ResponseItem(user_one.clone()));
+        rollout_items.push(RolloutItem::ResponseItem(first_plan));
+        rollout_items.push(RolloutItem::Compacted(CompactedItem {
+            message: "summary one".to_string(),
+            replacement_history: None,
+        }));
+
+        let user_two = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "second user".to_string(),
+            }],
+            end_turn: None,
+        };
+        let second_plan = ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "<proposed_plan>\n- Step 2\n</proposed_plan>\n".to_string(),
+            }],
+            end_turn: None,
+        };
+        rollout_items.push(RolloutItem::ResponseItem(user_two));
+        rollout_items.push(RolloutItem::ResponseItem(second_plan));
+        rollout_items.push(RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+            ThreadRolledBackEvent { num_turns: 1 },
+        )));
+        rollout_items.push(RolloutItem::Compacted(CompactedItem {
+            message: "summary two".to_string(),
+            replacement_history: None,
+        }));
+
+        let reconstructed = session
+            .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+            .await;
+
+        assert_eq!(
+            reconstructed.last(),
+            Some(&compact::proposed_plan_message("- Step 1\n"))
+        );
     }
 
     #[tokio::test]
@@ -6880,6 +6961,7 @@ model_context_window = 64_000
         let rebuilt1 = compact::build_compacted_history(
             session.build_initial_context(turn_context).await,
             &user_messages1,
+            None,
             summary1,
         );
         live_history.replace(rebuilt1);
@@ -6916,6 +6998,7 @@ model_context_window = 64_000
         let rebuilt2 = compact::build_compacted_history(
             session.build_initial_context(turn_context).await,
             &user_messages2,
+            None,
             summary2,
         );
         live_history.replace(rebuilt2);

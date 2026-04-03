@@ -3,7 +3,10 @@ use std::sync::Arc;
 use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::compact::last_completed_plan_from_history;
+use crate::compact::proposed_plan_message;
 use crate::error::Result as CodexResult;
+use crate::features::Feature;
 use crate::protocol::CompactedItem;
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
@@ -46,6 +49,11 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
     let history = sess.clone_history().await;
+    let backfilled_plan_text = if sess.enabled(Feature::BackfillCompactPlanContext) {
+        last_completed_plan_from_history(history.raw_items())
+    } else {
+        None
+    };
 
     // Required to keep `/undo` available after compaction
     let ghost_snapshots: Vec<ResponseItem> = history
@@ -69,6 +77,9 @@ async fn run_remote_compact_task_inner_impl(
         .compact_conversation_history(&prompt)
         .await?;
 
+    if let Some(plan_text) = backfilled_plan_text.as_deref() {
+        new_history.push(proposed_plan_message(plan_text));
+    }
     if !ghost_snapshots.is_empty() {
         new_history.extend(ghost_snapshots);
     }

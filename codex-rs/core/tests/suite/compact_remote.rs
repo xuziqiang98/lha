@@ -11,6 +11,10 @@ use codex_core::protocol::ItemStartedEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::Settings;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -413,6 +417,122 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
     assert!(
         saw_compacted_history,
         "expected rollout to persist remote compaction history"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_backfills_latest_plan_into_replacement_history() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.features.enable(Feature::RemoteCompaction);
+                config.features.enable(Feature::BackfillCompactPlanContext);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let plan_block = "<proposed_plan>\n- Step 1\n- Step 2\n</proposed_plan>\n";
+    let full_plan_message = format!("Intro\n{plan_block}Outro");
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", &full_plan_message),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_COMPACT_REPLY"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let compacted_history = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "REMOTE_COMPACTED_SUMMARY".to_string(),
+            }],
+            end_turn: None,
+        },
+        ResponseItem::Compaction {
+            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        },
+    ];
+    let compact_mock = responses::mount_compact_json_once(
+        harness.server(),
+        serde_json::json!({ "output": compacted_history }),
+    )
+    .await;
+
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Plan,
+        settings: Settings {
+            model: harness.test().session_configured.model.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "please plan".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: std::env::current_dir()?,
+            approval_policy: codex_core::protocol::AskForApproval::Never,
+            sandbox_policy: codex_core::protocol::SandboxPolicy::DangerFullAccess,
+            model: harness.test().session_configured.model.clone(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: Some(collaboration_mode),
+            personality: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "after compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let follow_up_body = responses_mock
+        .requests()
+        .last()
+        .expect("follow-up request missing")
+        .body_json()
+        .to_string();
+    assert!(
+        follow_up_body.contains("<proposed_plan>\\n- Step 1\\n- Step 2\\n</proposed_plan>"),
+        "expected remote compacted history to backfill the proposed plan"
+    );
+    assert!(
+        !follow_up_body.contains("Intro"),
+        "expected remote compacted history to strip assistant prose around the plan"
+    );
+    assert!(
+        !follow_up_body.contains("Outro"),
+        "expected remote compacted history to strip assistant prose around the plan"
     );
 
     Ok(())
