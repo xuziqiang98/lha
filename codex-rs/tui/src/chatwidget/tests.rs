@@ -4519,6 +4519,10 @@ async fn experimental_features_popup_hides_apps() {
         "expected Apps to be hidden, got {popup}"
     );
     assert!(
+        !popup.contains("Multi-agents"),
+        "expected Multi-agents to be hidden, got {popup}"
+    );
+    assert!(
         popup.contains("Shell snapshot"),
         "expected other experimental features to remain visible, got {popup}"
     );
@@ -4610,38 +4614,6 @@ async fn experimental_features_toggle_saves_on_exit() {
 
     let updates = updates.expect("expected UpdateFeatureFlags event");
     assert_eq!(updates, vec![(expected_feature, true)]);
-}
-
-#[tokio::test]
-async fn multi_agent_enable_prompt_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    chat.open_multi_agent_enable_prompt();
-
-    let popup = render_bottom_popup(&chat, 80);
-    assert_snapshot!("multi_agent_enable_prompt", popup);
-}
-
-#[tokio::test]
-async fn multi_agent_enable_prompt_updates_feature_and_emits_notice() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    chat.open_multi_agent_enable_prompt();
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-
-    match rx.try_recv() {
-        Ok(AppEvent::UpdateFeatureFlags { updates }) => {
-            assert_eq!(updates, vec![(Feature::Collab, true)]);
-        }
-        other => panic!("expected UpdateFeatureFlags event, got {other:?}"),
-    }
-    let cell = match rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell))
-        | Ok(AppEvent::InsertThreadHistoryCell { cell, .. }) => cell,
-        other => panic!("expected InsertHistoryCell event, got {other:?}"),
-    };
-    let rendered = lines_to_single_string(&cell.display_lines(120));
-    assert!(rendered.contains("Multi-agent will be enabled in the next session."));
 }
 
 #[tokio::test]

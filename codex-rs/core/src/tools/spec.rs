@@ -2081,6 +2081,16 @@ mod tests {
         ] {
             expected.insert(tool_name(&spec).to_string(), spec);
         }
+        for (name, spec) in [
+            ("spawn_agent", create_spawn_agent_tool(&config)),
+            ("send_input", create_send_input_tool()),
+            ("resume_agent", create_resume_agent_tool()),
+            ("wait", create_wait_tool()),
+            ("close_agent", create_close_agent_tool()),
+            ("spawn_agents_on_csv", create_spawn_agents_on_csv_tool()),
+        ] {
+            expected.insert(name.to_string(), spec);
+        }
 
         // Exact name set match — this is the only test allowed to fail when tools change.
         let actual_names: HashSet<_> = actual.keys().cloned().collect();
@@ -2290,8 +2300,20 @@ mod tests {
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
+        let mut expected_tool_names = expected_tools.to_vec();
+        if features.enabled(Feature::Collab) {
+            expected_tool_names.extend([
+                "spawn_agent",
+                "send_input",
+                "resume_agent",
+                "wait",
+                "close_agent",
+                "spawn_agents_on_csv",
+            ]);
+        }
+
         let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
-        assert_eq!(&tool_names, &expected_tools,);
+        assert_eq!(&tool_names, &expected_tool_names,);
     }
 
     fn assert_default_model_tools(

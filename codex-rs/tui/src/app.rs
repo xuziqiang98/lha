@@ -1368,15 +1368,6 @@ impl App {
             }
         }
 
-        let has_non_primary_agent_thread = self
-            .agent_picker_threads
-            .keys()
-            .any(|thread_id| Some(*thread_id) != self.primary_thread_id);
-        if !self.config.features.enabled(Feature::Collab) && !has_non_primary_agent_thread {
-            self.chat_widget.open_multi_agent_enable_prompt();
-            return;
-        }
-
         if self.agent_picker_threads.is_empty() {
             self.chat_widget
                 .add_info_message("No agents available yet.".to_string(), None);
@@ -3599,35 +3590,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn open_agent_picker_prompts_to_enable_multi_agent_when_disabled() {
+    async fn open_agent_picker_shows_no_agents_message_when_empty() {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
 
         app.open_agent_picker().await;
-        app.chat_widget
-            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-        match app_event_rx.try_recv() {
-            Ok(AppEvent::UpdateFeatureFlags { updates }) => {
-                assert_eq!(updates, vec![(Feature::Collab, true)]);
-            }
-            other => panic!("expected UpdateFeatureFlags event, got {other:?}"),
+        assert!(app.chat_widget.no_modal_or_popup_active());
+        while let Ok(event) = app_event_rx.try_recv() {
+            assert!(
+                !matches!(event, AppEvent::UpdateFeatureFlags { .. }),
+                "did not expect feature flag update event: {event:?}"
+            );
         }
-        let cell = match app_event_rx.try_recv() {
-            Ok(AppEvent::InsertHistoryCell(cell))
-            | Ok(AppEvent::InsertThreadHistoryCell { cell, .. }) => cell,
-            other => panic!("expected InsertHistoryCell event, got {other:?}"),
-        };
-        let rendered = cell
-            .display_lines(120)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(rendered.contains("Multi-agent will be enabled in the next session."));
     }
 
     #[tokio::test]
-    async fn open_agent_picker_allows_existing_agent_threads_when_feature_is_disabled() {
+    async fn open_agent_picker_allows_existing_agent_threads() {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
 
         let thread_id = ThreadId::new();

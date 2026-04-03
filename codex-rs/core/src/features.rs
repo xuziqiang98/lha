@@ -323,6 +323,7 @@ impl Features {
 
         overrides.apply(&mut features);
         disable_removed_features(&mut features);
+        enable_always_on_features(&mut features);
 
         features
     }
@@ -334,6 +335,10 @@ impl Features {
 
 fn disable_removed_features(features: &mut Features) {
     features.disable(Feature::Apps);
+}
+
+fn enable_always_on_features(features: &mut Features) {
+    features.enable(Feature::Collab);
 }
 
 fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>) {
@@ -536,12 +541,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Collab,
         key: "multi_agent",
-        stage: Stage::Experimental {
-            name: "Multi-agents",
-            menu_description: "Ask Codex to spawn multiple agents to parallelize the work and win in efficiency.",
-            announcement: "NEW: Multi-agents can now be spawned by Codex. Enable in /experimental and restart Codex!",
-        },
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::DetachedReview,
@@ -673,9 +674,15 @@ pub fn maybe_push_unstable_features_warning(
 #[cfg(test)]
 mod tests {
     use super::Feature;
+    use super::FeatureOverrides;
+    use super::Features;
+    use super::FeaturesToml;
     use super::Stage;
     use super::feature_for_key;
+    use crate::config::ConfigToml;
+    use crate::config::profile::ConfigProfile;
     use pretty_assertions::assert_eq;
+    use std::collections::BTreeMap;
 
     #[test]
     fn unified_exec_is_stable_and_enabled_by_default_off_windows() {
@@ -689,9 +696,68 @@ mod tests {
     }
 
     #[test]
+    fn collab_is_stable_and_enabled_by_default() {
+        let stage = Feature::Collab.stage();
+
+        assert_eq!(Stage::Stable, stage);
+        assert_eq!(true, Feature::Collab.default_enabled());
+        assert_eq!(None, stage.experimental_menu_name());
+        assert_eq!(None, stage.experimental_menu_description());
+        assert_eq!(None, stage.experimental_announcement());
+    }
+
+    #[test]
     fn collab_is_legacy_alias_for_multi_agent() {
         assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
         assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
+    }
+
+    #[test]
+    fn collab_stays_enabled_when_base_config_sets_multi_agent_false() {
+        let cfg = ConfigToml {
+            features: Some(FeaturesToml {
+                entries: BTreeMap::from([("multi_agent".to_string(), false)]),
+            }),
+            ..Default::default()
+        };
+
+        let features =
+            Features::from_config(&cfg, &ConfigProfile::default(), FeatureOverrides::default());
+
+        assert!(features.enabled(Feature::Collab));
+    }
+
+    #[test]
+    fn collab_stays_enabled_when_profile_sets_multi_agent_false() {
+        let profile = ConfigProfile {
+            features: Some(FeaturesToml {
+                entries: BTreeMap::from([("multi_agent".to_string(), false)]),
+            }),
+            ..Default::default()
+        };
+
+        let features = Features::from_config(
+            &ConfigToml::default(),
+            &profile,
+            FeatureOverrides::default(),
+        );
+
+        assert!(features.enabled(Feature::Collab));
+    }
+
+    #[test]
+    fn collab_stays_enabled_when_legacy_alias_sets_collab_false() {
+        let cfg = ConfigToml {
+            features: Some(FeaturesToml {
+                entries: BTreeMap::from([("collab".to_string(), false)]),
+            }),
+            ..Default::default()
+        };
+
+        let features =
+            Features::from_config(&cfg, &ConfigProfile::default(), FeatureOverrides::default());
+
+        assert!(features.enabled(Feature::Collab));
     }
 
     #[test]
