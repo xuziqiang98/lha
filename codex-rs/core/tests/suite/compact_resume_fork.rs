@@ -846,7 +846,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn compact_resume_preserves_backfilled_plan_context() {
+async fn compact_resume_and_fork_preserve_persisted_backfilled_plan_context() {
     if network_disabled() {
         println!("Skipping test because network is disabled in this sandbox");
         return;
@@ -873,6 +873,10 @@ async fn compact_resume_preserves_backfilled_plan_context() {
             sse(vec![
                 ev_assistant_message("m4", "AFTER_RESUME_REPLY"),
                 ev_completed("r4"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m5", "AFTER_FORK_REPLY"),
+                ev_completed("r5"),
             ]),
         ],
     )
@@ -913,12 +917,21 @@ async fn compact_resume_preserves_backfilled_plan_context() {
     user_turn(&base, "AFTER_COMPACT").await;
     let base_path = fetch_conversation_path(&base).await;
 
-    let resumed = resume_conversation(&manager, &config, base_path).await;
+    let mut resumed_config = config.clone();
+    resumed_config
+        .features
+        .disable(Feature::BackfillCompactPlanContext);
+    let resumed = resume_conversation(&manager, &resumed_config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
+    let resumed_path = fetch_conversation_path(&resumed).await;
+
+    let forked = fork_thread(&manager, &resumed_config, resumed_path, 2).await;
+    user_turn(&forked, "AFTER_FORK").await;
 
     let requests = gather_request_bodies(std::slice::from_ref(&request_log));
     let after_compact_body = requests[2].to_string();
     let after_resume_body = requests[3].to_string();
+    let after_fork_body = requests[4].to_string();
     let expected_plan = "<proposed_plan>\\n- Step 1\\n- Step 2\\n</proposed_plan>";
 
     assert!(
@@ -929,8 +942,14 @@ async fn compact_resume_preserves_backfilled_plan_context() {
         after_resume_body.contains(expected_plan),
         "expected resumed request to preserve the backfilled plan"
     );
+    assert!(
+        after_fork_body.contains(expected_plan),
+        "expected forked request to preserve the backfilled plan"
+    );
     assert!(!after_resume_body.contains("Intro"));
     assert!(!after_resume_body.contains("Outro"));
+    assert!(!after_fork_body.contains("Intro"));
+    assert!(!after_fork_body.contains("Outro"));
 }
 
 fn normalize_line_endings(value: &mut Value) {

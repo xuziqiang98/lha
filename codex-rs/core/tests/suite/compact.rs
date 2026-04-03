@@ -605,6 +605,237 @@ async fn local_compact_backfills_latest_plan_as_assistant_context() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_compact_backfills_plan_from_pre_compaction_history() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let plan_a_block = "<proposed_plan>\n- Plan A\n</proposed_plan>\n";
+    let plan_b_block = "<proposed_plan>\n- Plan B\n</proposed_plan>\n";
+    let full_plan_message = format!("Intro\n{plan_a_block}Outro");
+    let misleading_summary = format!("Summary text\n{plan_b_block}");
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", &full_plan_message),
+                ev_completed("r1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", &misleading_summary),
+                ev_completed("r2"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", FINAL_REPLY),
+                ev_completed("r3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.features.enable(Feature::BackfillCompactPlanContext);
+        })
+        .build(&server)
+        .await
+        .unwrap();
+    let codex = test.codex;
+
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Plan,
+        settings: Settings {
+            model: test.session_configured.model.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "please plan".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: std::env::current_dir().expect("current dir"),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: Some(collaboration_mode),
+            personality: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: THIRD_USER_MSG.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 3);
+
+    let follow_up_input = requests[2]
+        .body_json()
+        .get("input")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .expect("follow-up input should be an array");
+    let expected_plan_a = "<proposed_plan>\n- Plan A\n</proposed_plan>";
+    let unexpected_plan_b = "<proposed_plan>\n- Plan B\n</proposed_plan>";
+
+    assert!(
+        contains_assistant_text(&follow_up_input, expected_plan_a),
+        "expected compacted follow-up history to backfill Plan A from pre-compaction history"
+    );
+    assert!(
+        !contains_assistant_text(&follow_up_input, unexpected_plan_b),
+        "expected compacted follow-up history to ignore plan blocks that only appear in the compact summary"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_compact_persists_replacement_history_in_rollout() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let plan_block = "<proposed_plan>\n- Step 1\n- Step 2\n</proposed_plan>\n";
+    let full_plan_message = format!("Intro\n{plan_block}Outro");
+
+    mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", &full_plan_message),
+                ev_completed("r1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", SUMMARY_TEXT),
+                ev_completed("r2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.features.enable(Feature::BackfillCompactPlanContext);
+        })
+        .build(&server)
+        .await
+        .unwrap();
+    let codex = test.codex.clone();
+    let rollout_path = test.session_configured.rollout_path.expect("rollout path");
+
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Plan,
+        settings: Settings {
+            model: test.session_configured.model.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "please plan".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: std::env::current_dir().expect("current dir"),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: Some(collaboration_mode),
+            personality: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Shutdown).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
+
+    let rollout_text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
+        panic!(
+            "failed to read rollout file {}: {e}",
+            rollout_path.display()
+        )
+    });
+    let expected_summary_message = summary_with_prefix(SUMMARY_TEXT);
+    let expected_plan = "<proposed_plan>\n- Step 1\n- Step 2\n</proposed_plan>";
+    let mut saw_persisted_replacement_history = false;
+
+    for line in rollout_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let Ok(entry) = serde_json::from_str::<RolloutLine>(line) else {
+            continue;
+        };
+        if let RolloutItem::Compacted(compacted) = entry.item
+            && compacted.message == expected_summary_message
+            && compacted
+                .replacement_history
+                .as_ref()
+                .is_some_and(|history| {
+                    history.iter().any(|item| {
+                        matches!(
+                            item,
+                            codex_protocol::models::ResponseItem::Message { role, content, .. }
+                                if role == "assistant"
+                                    && content.iter().any(|content_item| {
+                                        matches!(
+                                            content_item,
+                                            codex_protocol::models::ContentItem::OutputText { text }
+                                                if text == expected_plan
+                                        )
+                                    })
+                        )
+                    })
+                })
+        {
+            saw_persisted_replacement_history = true;
+            break;
+        }
+    }
+
+    assert!(
+        saw_persisted_replacement_history,
+        "expected rollout to persist local compaction replacement history with the backfilled plan"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn manual_compact_uses_custom_prompt() {
     skip_if_no_network!();
 

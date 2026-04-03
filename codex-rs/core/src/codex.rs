@@ -1903,6 +1903,8 @@ impl Session {
                     if let Some(replacement) = &compacted.replacement_history {
                         history.replace(replacement.clone());
                     } else {
+                        // Compatibility path for older local compaction rollouts that did not
+                        // persist replacement_history.
                         let user_messages = collect_user_messages(history.raw_items());
                         let backfilled_plan_text =
                             if self.enabled(Feature::BackfillCompactPlanContext) {

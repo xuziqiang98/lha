@@ -81,6 +81,11 @@ async fn run_compact_task_inner(
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let mut history = sess.clone_history().await;
+    let backfilled_plan_text = if sess.enabled(Feature::BackfillCompactPlanContext) {
+        last_completed_plan_from_history(history.raw_items())
+    } else {
+        None
+    };
     history.record_items(
         &[initial_input_for_turn.into()],
         turn_context.truncation_policy,
@@ -182,12 +187,6 @@ async fn run_compact_task_inner(
     let summary_suffix = get_last_assistant_message_from_turn(history_items).unwrap_or_default();
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
     let user_messages = collect_user_messages(history_items);
-    let backfilled_plan_text = if sess.enabled(Feature::BackfillCompactPlanContext) {
-        last_completed_plan_from_history(history_items)
-    } else {
-        None
-    };
-
     let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
     let mut new_history = build_compacted_history(
         initial_context,
@@ -201,12 +200,13 @@ async fn run_compact_task_inner(
         .cloned()
         .collect();
     new_history.extend(ghost_snapshots);
+    let replacement_history = new_history.clone();
     sess.replace_history(new_history).await;
     sess.recompute_token_usage(&turn_context).await;
 
     let rollout_item = RolloutItem::Compacted(CompactedItem {
         message: summary_text.clone(),
-        replacement_history: None,
+        replacement_history: Some(replacement_history),
     });
     sess.persist_rollout_items(&[rollout_item]).await;
 
