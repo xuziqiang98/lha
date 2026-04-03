@@ -124,9 +124,9 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_receiver_fires_after_limit() {
+        let start = Instant::now();
         let stopwatch = Stopwatch::new(Duration::from_millis(50));
         let token = stopwatch.cancellation_token();
-        let start = Instant::now();
         token.cancelled().await;
         assert!(start.elapsed() >= Duration::from_millis(50));
     }

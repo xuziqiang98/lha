@@ -22,8 +22,9 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.
 
-Experimental toggles exposed in the TUI `/experimental` menu are persisted under the `[features]`
-table in `config.toml`, including `tui_managed_scrollback`.
+Feature toggles are persisted under the `[features]` table in `config.toml`.
+Experimental toggles exposed in the TUI `/experimental` menu, including
+`tui_managed_scrollback`, also write to `[features]`.
 
 ## Custom Anthropic provider
 
