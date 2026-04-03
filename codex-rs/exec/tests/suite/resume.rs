@@ -1,11 +1,18 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use anyhow::Context;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::SessionSource;
 use codex_utils_cargo_bin::find_resource;
 use core_test_support::test_codex_exec::test_codex_exec;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use serde_json::json;
 use std::fs::FileTimes;
 use std::fs::OpenOptions;
+use std::path::Path;
+use std::path::PathBuf;
 use std::string::ToString;
 use std::time::Duration;
 use std::time::SystemTime;
@@ -106,6 +113,71 @@ fn last_user_image_count(path: &std::path::Path) -> usize {
             .count();
     }
     last_count
+}
+
+fn write_fake_rollout(
+    codex_home: &Path,
+    filename_ts: &str,
+    meta_rfc3339: &str,
+    preview: &str,
+    cwd: &Path,
+    model_provider: Option<&str>,
+) -> anyhow::Result<PathBuf> {
+    let uuid = Uuid::new_v4();
+    let conversation_id = ThreadId::from_string(&uuid.to_string())?;
+    let year = &filename_ts[0..4];
+    let month = &filename_ts[5..7];
+    let day = &filename_ts[8..10];
+    let dir = codex_home.join("sessions").join(year).join(month).join(day);
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("rollout-{filename_ts}-{uuid}.jsonl"));
+    let meta = SessionMeta {
+        id: conversation_id,
+        forked_from_id: None,
+        timestamp: meta_rfc3339.to_string(),
+        cwd: cwd.to_path_buf(),
+        originator: "codex".to_string(),
+        cli_version: "0.0.0".to_string(),
+        source: SessionSource::Cli,
+        model_provider: model_provider.map(str::to_string),
+        base_instructions: None,
+        dynamic_tools: None,
+    };
+    let lines = [
+        json!({
+            "timestamp": meta_rfc3339,
+            "type": "session_meta",
+            "payload": serde_json::to_value(SessionMetaLine { meta, git: None })?
+        }),
+        json!({
+            "timestamp": meta_rfc3339,
+            "type":"response_item",
+            "payload": {
+                "type":"message",
+                "role":"user",
+                "content":[{"type":"input_text","text": preview}]
+            }
+        }),
+        json!({
+            "timestamp": meta_rfc3339,
+            "type":"event_msg",
+            "payload": {
+                "type":"user_message",
+                "message": preview,
+                "kind":"plain"
+            }
+        }),
+    ];
+    std::fs::write(
+        &path,
+        lines
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n",
+    )?;
+    Ok(path)
 }
 
 fn exec_fixture() -> anyhow::Result<std::path::PathBuf> {
@@ -231,47 +303,77 @@ fn exec_resume_last_respects_cwd_filter_and_all_flag() -> anyhow::Result<()> {
 
     let dir_a = TempDir::new()?;
     let dir_b = TempDir::new()?;
+    let sessions_dir = test.home_path().join("sessions");
 
     let marker_a = format!("resume-cwd-a-{}", Uuid::new_v4());
-    let prompt_a = format!("echo {marker_a}");
+    let path_a = write_fake_rollout(
+        test.home_path(),
+        "2024-12-31T23-59-58",
+        "2024-12-31T23:59:58Z",
+        &marker_a,
+        dir_a.path(),
+        Some("openai"),
+    )?;
+
+    let marker_b = format!("resume-cwd-b-{}", Uuid::new_v4());
+    let path_b = write_fake_rollout(
+        test.home_path(),
+        "2024-12-31T23-59-59",
+        "2024-12-31T23:59:59Z",
+        &marker_b,
+        dir_b.path(),
+        Some("openai"),
+    )?;
+
+    let marker_cross = format!("resume-cwd-cross-{}", Uuid::new_v4());
+    let path_cross = write_fake_rollout(
+        test.home_path(),
+        "2025-01-01T00-00-00",
+        "2025-01-01T00:00:00Z",
+        &marker_cross,
+        dir_a.path(),
+        Some("anthropic"),
+    )?;
+
+    // Files are ordered by `updated_at`, then by `uuid`.
+    // We mutate the mtimes to ensure file_b is the newest file overall, while
+    // path_cross is the newest session within dir_a.
+    let file_a = OpenOptions::new().write(true).open(&path_a)?;
+    file_a.set_times(
+        FileTimes::new().set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1)),
+    )?;
+    let file_cross = OpenOptions::new().write(true).open(&path_cross)?;
+    file_cross.set_times(
+        FileTimes::new().set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(2)),
+    )?;
+    let file_b = OpenOptions::new().write(true).open(&path_b)?;
+    file_b.set_times(
+        FileTimes::new().set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(3)),
+    )?;
+
+    let marker_a2 = format!("resume-cwd-a-2-{}", Uuid::new_v4());
+    let prompt_a2 = format!("echo {marker_a2}");
     test.cmd()
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
         .env("OPENAI_BASE_URL", "http://unused.local")
         .arg("--skip-git-repo-check")
         .arg("-C")
         .arg(dir_a.path())
-        .arg(&prompt_a)
+        .arg("resume")
+        .arg("--last")
+        .arg(&prompt_a2)
         .assert()
         .success();
 
-    let marker_b = format!("resume-cwd-b-{}", Uuid::new_v4());
-    let prompt_b = format!("echo {marker_b}");
-    test.cmd()
-        .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        .env("OPENAI_BASE_URL", "http://unused.local")
-        .arg("--skip-git-repo-check")
-        .arg("-C")
-        .arg(dir_b.path())
-        .arg(&prompt_b)
-        .assert()
-        .success();
+    let resumed_path_cwd = find_session_file_containing_marker(&sessions_dir, &marker_a2)
+        .expect("no resumed session file containing marker_a2");
+    assert_eq!(
+        resumed_path_cwd, path_cross,
+        "resume --last should include sessions from other providers when cwd matches"
+    );
 
-    let sessions_dir = test.home_path().join("sessions");
-    let path_a = find_session_file_containing_marker(&sessions_dir, &marker_a)
-        .expect("no session file found for marker_a");
-    let path_b = find_session_file_containing_marker(&sessions_dir, &marker_b)
-        .expect("no session file found for marker_b");
-
-    // Files are ordered by `updated_at`, then by `uuid`.
-    // We mutate the mtimes to ensure file_b is the newest file.
-    let file_a = OpenOptions::new().write(true).open(&path_a)?;
-    file_a.set_times(
-        FileTimes::new().set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1)),
-    )?;
     let file_b = OpenOptions::new().write(true).open(&path_b)?;
-    file_b.set_times(
-        FileTimes::new().set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(2)),
-    )?;
+    file_b.set_times(FileTimes::new().set_modified(SystemTime::now() + Duration::from_secs(2)))?;
 
     let marker_b2 = format!("resume-cwd-b-2-{}", Uuid::new_v4());
     let prompt_b2 = format!("echo {marker_b2}");
@@ -293,27 +395,6 @@ fn exec_resume_last_respects_cwd_filter_and_all_flag() -> anyhow::Result<()> {
     assert_eq!(
         resumed_path_all, path_b,
         "resume --last --all should pick newest session"
-    );
-
-    let marker_a2 = format!("resume-cwd-a-2-{}", Uuid::new_v4());
-    let prompt_a2 = format!("echo {marker_a2}");
-    test.cmd()
-        .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        .env("OPENAI_BASE_URL", "http://unused.local")
-        .arg("--skip-git-repo-check")
-        .arg("-C")
-        .arg(dir_a.path())
-        .arg("resume")
-        .arg("--last")
-        .arg(&prompt_a2)
-        .assert()
-        .success();
-
-    let resumed_path_cwd = find_session_file_containing_marker(&sessions_dir, &marker_a2)
-        .expect("no resumed session file containing marker_a2");
-    assert_eq!(
-        resumed_path_cwd, path_a,
-        "resume --last should prefer sessions from the same cwd"
     );
 
     Ok(())

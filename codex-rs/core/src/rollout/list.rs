@@ -11,10 +11,13 @@ use time::PrimitiveDateTime;
 use time::format_description::FormatItem;
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncSeekExt;
 use uuid::Uuid;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
+use crate::path_utils;
 use crate::protocol::EventMsg;
 use crate::state_db;
 use codex_file_search as file_search;
@@ -44,6 +47,9 @@ pub struct ThreadItem {
     pub path: PathBuf,
     /// First up to `HEAD_RECORD_LIMIT` JSONL records parsed as JSON (includes meta line).
     pub head: Vec<serde_json::Value>,
+    /// Effective working directory for the thread. Uses the latest TurnContext cwd when present
+    /// and falls back to the session meta cwd.
+    pub cwd: Option<PathBuf>,
     /// RFC3339 timestamp string for when the session was created, if available.
     /// created_at comes from the filename timestamp with second precision.
     pub created_at: Option<String>,
@@ -64,6 +70,7 @@ struct HeadTailSummary {
     head: Vec<serde_json::Value>,
     saw_session_meta: bool,
     saw_user_event: bool,
+    session_cwd: Option<PathBuf>,
     source: Option<SessionSource>,
     model_provider: Option<String>,
     created_at: Option<String>,
@@ -74,6 +81,7 @@ struct HeadTailSummary {
 const MAX_SCAN_FILES: usize = 10000;
 const HEAD_RECORD_LIMIT: usize = 10;
 const USER_EVENT_SCAN_LIMIT: usize = 200;
+const TAIL_SCAN_CHUNK_SIZE: usize = 8 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadSortKey {
@@ -90,6 +98,7 @@ pub(crate) enum ThreadListLayout {
 pub(crate) struct ThreadListConfig<'a> {
     pub(crate) allowed_sources: &'a [SessionSource],
     pub(crate) model_providers: Option<&'a [String]>,
+    pub(crate) cwd_filter: Option<&'a Path>,
     pub(crate) default_provider: &'a str,
     pub(crate) layout: ThreadListLayout,
 }
@@ -171,6 +180,7 @@ struct FilesByCreatedAtVisitor<'a> {
     more_matches_available: bool,
     allowed_sources: &'a [SessionSource],
     provider_matcher: Option<&'a ProviderMatcher<'a>>,
+    cwd_filter: Option<&'a Path>,
 }
 
 #[async_trait]
@@ -201,6 +211,7 @@ impl<'a> RolloutFileVisitor for FilesByCreatedAtVisitor<'a> {
             path,
             self.allowed_sources,
             self.provider_matcher,
+            self.cwd_filter,
             updated_at,
         )
         .await
@@ -265,6 +276,7 @@ impl<'de> serde::Deserialize<'de> for Cursor {
 /// can be supplied on the next call to resume after the last returned item, resilient to
 /// concurrent new sessions being appended. Ordering is stable by the requested sort key
 /// (timestamp desc, then UUID desc).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn get_threads(
     codex_home: &Path,
     page_size: usize,
@@ -273,6 +285,7 @@ pub(crate) async fn get_threads(
     allowed_sources: &[SessionSource],
     model_providers: Option<&[String]>,
     default_provider: &str,
+    cwd_filter: Option<&Path>,
 ) -> io::Result<ThreadsPage> {
     let root = codex_home.join(SESSIONS_SUBDIR);
     get_threads_in_root(
@@ -283,6 +296,7 @@ pub(crate) async fn get_threads(
         ThreadListConfig {
             allowed_sources,
             model_providers,
+            cwd_filter,
             default_provider,
             layout: ThreadListLayout::NestedByDate,
         },
@@ -321,6 +335,7 @@ pub(crate) async fn get_threads_in_root(
                 sort_key,
                 config.allowed_sources,
                 provider_matcher.as_ref(),
+                config.cwd_filter,
             )
             .await?
         }
@@ -332,6 +347,7 @@ pub(crate) async fn get_threads_in_root(
                 sort_key,
                 config.allowed_sources,
                 provider_matcher.as_ref(),
+                config.cwd_filter,
             )
             .await?
         }
@@ -350,6 +366,7 @@ async fn traverse_directories_for_paths(
     sort_key: ThreadSortKey,
     allowed_sources: &[SessionSource],
     provider_matcher: Option<&ProviderMatcher<'_>>,
+    cwd_filter: Option<&Path>,
 ) -> io::Result<ThreadsPage> {
     match sort_key {
         ThreadSortKey::CreatedAt => {
@@ -359,6 +376,7 @@ async fn traverse_directories_for_paths(
                 anchor,
                 allowed_sources,
                 provider_matcher,
+                cwd_filter,
             )
             .await
         }
@@ -369,6 +387,7 @@ async fn traverse_directories_for_paths(
                 anchor,
                 allowed_sources,
                 provider_matcher,
+                cwd_filter,
             )
             .await
         }
@@ -382,15 +401,30 @@ async fn traverse_flat_paths(
     sort_key: ThreadSortKey,
     allowed_sources: &[SessionSource],
     provider_matcher: Option<&ProviderMatcher<'_>>,
+    cwd_filter: Option<&Path>,
 ) -> io::Result<ThreadsPage> {
     match sort_key {
         ThreadSortKey::CreatedAt => {
-            traverse_flat_paths_created(root, page_size, anchor, allowed_sources, provider_matcher)
-                .await
+            traverse_flat_paths_created(
+                root,
+                page_size,
+                anchor,
+                allowed_sources,
+                provider_matcher,
+                cwd_filter,
+            )
+            .await
         }
         ThreadSortKey::UpdatedAt => {
-            traverse_flat_paths_updated(root, page_size, anchor, allowed_sources, provider_matcher)
-                .await
+            traverse_flat_paths_updated(
+                root,
+                page_size,
+                anchor,
+                allowed_sources,
+                provider_matcher,
+                cwd_filter,
+            )
+            .await
         }
     }
 }
@@ -407,6 +441,7 @@ async fn traverse_directories_for_paths_created(
     anchor: Option<Cursor>,
     allowed_sources: &[SessionSource],
     provider_matcher: Option<&ProviderMatcher<'_>>,
+    cwd_filter: Option<&Path>,
 ) -> io::Result<ThreadsPage> {
     let mut items: Vec<ThreadItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
@@ -418,6 +453,7 @@ async fn traverse_directories_for_paths_created(
         more_matches_available,
         allowed_sources,
         provider_matcher,
+        cwd_filter,
     };
     walk_rollout_files(&root, &mut scanned_files, &mut visitor).await?;
     more_matches_available = visitor.more_matches_available;
@@ -454,6 +490,7 @@ async fn traverse_directories_for_paths_updated(
     anchor: Option<Cursor>,
     allowed_sources: &[SessionSource],
     provider_matcher: Option<&ProviderMatcher<'_>>,
+    cwd_filter: Option<&Path>,
 ) -> io::Result<ThreadsPage> {
     let mut items: Vec<ThreadItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
@@ -482,6 +519,7 @@ async fn traverse_directories_for_paths_updated(
             candidate.path,
             allowed_sources,
             provider_matcher,
+            cwd_filter,
             updated_at_fallback,
         )
         .await
@@ -514,6 +552,7 @@ async fn traverse_flat_paths_created(
     anchor: Option<Cursor>,
     allowed_sources: &[SessionSource],
     provider_matcher: Option<&ProviderMatcher<'_>>,
+    cwd_filter: Option<&Path>,
 ) -> io::Result<ThreadsPage> {
     let mut items: Vec<ThreadItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
@@ -533,8 +572,14 @@ async fn traverse_flat_paths_created(
             .await
             .unwrap_or(None)
             .and_then(format_rfc3339);
-        if let Some(item) =
-            build_thread_item(path, allowed_sources, provider_matcher, updated_at).await
+        if let Some(item) = build_thread_item(
+            path,
+            allowed_sources,
+            provider_matcher,
+            cwd_filter,
+            updated_at,
+        )
+        .await
         {
             items.push(item);
         }
@@ -564,6 +609,7 @@ async fn traverse_flat_paths_updated(
     anchor: Option<Cursor>,
     allowed_sources: &[SessionSource],
     provider_matcher: Option<&ProviderMatcher<'_>>,
+    cwd_filter: Option<&Path>,
 ) -> io::Result<ThreadsPage> {
     let mut items: Vec<ThreadItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
@@ -592,6 +638,7 @@ async fn traverse_flat_paths_updated(
             candidate.path,
             allowed_sources,
             provider_matcher,
+            cwd_filter,
             updated_at_fallback,
         )
         .await
@@ -653,6 +700,7 @@ async fn build_thread_item(
     path: PathBuf,
     allowed_sources: &[SessionSource],
     provider_matcher: Option<&ProviderMatcher<'_>>,
+    cwd_filter: Option<&Path>,
     updated_at: Option<String>,
 ) -> Option<ThreadItem> {
     // Read head and detect message events; stop once meta + user are found.
@@ -675,16 +723,30 @@ async fn build_thread_item(
     if summary.saw_session_meta && summary.saw_user_event {
         let HeadTailSummary {
             head,
+            session_cwd,
             created_at,
             updated_at: mut summary_updated_at,
             ..
         } = summary;
+        let cwd = read_effective_thread_cwd_with_fallback(&path, session_cwd.as_deref())
+            .await
+            .ok()
+            .flatten()
+            .or(session_cwd);
+        if let Some(filter_cwd) = cwd_filter
+            && !cwd
+                .as_deref()
+                .is_some_and(|thread_cwd| paths_match(thread_cwd, filter_cwd))
+        {
+            return None;
+        }
         if summary_updated_at.is_none() {
             summary_updated_at = updated_at.or_else(|| created_at.clone());
         }
         return Some(ThreadItem {
             path,
             head,
+            cwd,
             created_at,
             updated_at: summary_updated_at,
         });
@@ -967,6 +1029,7 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             RolloutItem::SessionMeta(session_meta_line) => {
                 summary.source = Some(session_meta_line.meta.source.clone());
                 summary.model_provider = session_meta_line.meta.model_provider.clone();
+                summary.session_cwd = Some(session_meta_line.meta.cwd.clone());
                 summary.created_at = summary
                     .created_at
                     .clone()
@@ -1017,6 +1080,14 @@ pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Va
     Ok(summary.head)
 }
 
+pub async fn read_effective_thread_cwd(path: &Path) -> io::Result<Option<PathBuf>> {
+    let session_cwd = read_session_meta_line(path)
+        .await
+        .ok()
+        .map(|meta| meta.meta.cwd);
+    read_effective_thread_cwd_with_fallback(path, session_cwd.as_deref()).await
+}
+
 /// Read the SessionMetaLine from the head of a rollout file for reuse by
 /// callers that need the session metadata (e.g. to derive a cwd for config).
 pub async fn read_session_meta_line(path: &Path) -> io::Result<SessionMetaLine> {
@@ -1033,6 +1104,66 @@ pub async fn read_session_meta_line(path: &Path) -> io::Result<SessionMetaLine> 
             path.display()
         ))
     })
+}
+
+async fn read_effective_thread_cwd_with_fallback(
+    path: &Path,
+    fallback_cwd: Option<&Path>,
+) -> io::Result<Option<PathBuf>> {
+    if let Some(cwd) = read_latest_turn_context_cwd(path).await? {
+        return Ok(Some(cwd));
+    }
+    Ok(fallback_cwd.map(Path::to_path_buf))
+}
+
+async fn read_latest_turn_context_cwd(path: &Path) -> io::Result<Option<PathBuf>> {
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut offset = file.metadata().await?.len();
+    let mut trailing = Vec::new();
+
+    while offset > 0 {
+        let chunk_size = offset.min(TAIL_SCAN_CHUNK_SIZE as u64) as usize;
+        offset -= chunk_size as u64;
+        file.seek(std::io::SeekFrom::Start(offset)).await?;
+
+        let mut chunk = vec![0; chunk_size];
+        file.read_exact(&mut chunk).await?;
+        chunk.extend_from_slice(&trailing);
+
+        let mut line_end = chunk.len();
+        while let Some(newline_idx) = chunk[..line_end].iter().rposition(|byte| *byte == b'\n') {
+            if let Some(cwd) = parse_turn_context_cwd(&chunk[newline_idx + 1..line_end]) {
+                return Ok(Some(cwd));
+            }
+            line_end = newline_idx;
+        }
+        trailing = chunk[..line_end].to_vec();
+    }
+
+    Ok(parse_turn_context_cwd(&trailing))
+}
+
+fn parse_turn_context_cwd(line: &[u8]) -> Option<PathBuf> {
+    let line = std::str::from_utf8(line).ok()?;
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let rollout_line = serde_json::from_str::<RolloutLine>(trimmed).ok()?;
+    let RolloutItem::TurnContext(item) = rollout_line.item else {
+        return None;
+    };
+    Some(item.cwd)
+}
+
+fn paths_match(a: &Path, b: &Path) -> bool {
+    if let (Ok(canonical_a), Ok(canonical_b)) = (
+        path_utils::normalize_for_path_comparison(a),
+        path_utils::normalize_for_path_comparison(b),
+    ) {
+        return canonical_a == canonical_b;
+    }
+    a == b
 }
 
 async fn file_modified_time(path: &Path) -> io::Result<Option<OffsetDateTime>> {

@@ -3126,6 +3126,7 @@ impl CodexMessageProcessor {
                     allowed_sources,
                     model_provider_filter.as_deref(),
                     fallback_provider.as_str(),
+                    None,
                 )
                 .await
                 .map_err(|err| JSONRPCErrorError {
@@ -3142,6 +3143,7 @@ impl CodexMessageProcessor {
                     allowed_sources,
                     model_provider_filter.as_deref(),
                     fallback_provider.as_str(),
+                    None,
                 )
                 .await
                 .map_err(|err| JSONRPCErrorError {
@@ -3163,6 +3165,7 @@ impl CodexMessageProcessor {
                         it.path,
                         &it.head,
                         &session_meta_line.meta,
+                        it.cwd.as_deref(),
                         session_meta_line.git.as_ref(),
                         fallback_provider.as_str(),
                         updated_at,
@@ -5215,6 +5218,7 @@ pub(crate) async fn read_summary_from_rollout(
         path.to_path_buf(),
         &head,
         &session_meta,
+        None,
         git.as_ref(),
         fallback_provider,
         updated_at.clone(),
@@ -5270,6 +5274,7 @@ fn extract_conversation_summary(
     path: PathBuf,
     head: &[serde_json::Value],
     session_meta: &SessionMeta,
+    effective_cwd: Option<&Path>,
     git: Option<&CoreGitInfo>,
     fallback_provider: &str,
     updated_at: Option<String>,
@@ -5307,7 +5312,9 @@ fn extract_conversation_summary(
         path,
         preview: preview.to_string(),
         model_provider,
-        cwd: session_meta.cwd.clone(),
+        cwd: effective_cwd
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| session_meta.cwd.clone()),
         cli_version: session_meta.cli_version.clone(),
         source: session_meta.source.clone(),
         git_info,
@@ -5466,6 +5473,7 @@ mod tests {
             path.clone(),
             &head,
             &session_meta,
+            None,
             None,
             "test-provider",
             timestamp.clone(),
