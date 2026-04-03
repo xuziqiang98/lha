@@ -369,7 +369,7 @@ impl ModelsManager {
             client.list_models(&client_version, HeaderMap::new()),
         )
         .await
-        .map_err(|_| CodexErr::Timeout)?
+        .map_err(|_| CodexErr::RequestTimeout)?
         .map_err(map_api_error)?;
 
         self.apply_remote_models(models.clone()).await;
