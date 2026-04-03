@@ -1975,6 +1975,7 @@ impl App {
                     tui,
                     &self.config.codex_home,
                     &self.config.model_provider_id,
+                    Some(self.config.cwd.as_path()),
                     false,
                 )
                 .await?

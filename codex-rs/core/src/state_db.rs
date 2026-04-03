@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::features::Feature;
+use crate::path_utils;
 use crate::rollout::list::Cursor;
 use crate::rollout::list::ThreadSortKey;
 use crate::rollout::metadata;
@@ -136,6 +137,7 @@ pub async fn list_thread_ids_db(
     sort_key: ThreadSortKey,
     allowed_sources: &[SessionSource],
     model_providers: Option<&[String]>,
+    cwd_filter: Option<&Path>,
     archived_only: bool,
     stage: &str,
 ) -> Option<Vec<ThreadId>> {
@@ -158,26 +160,97 @@ pub async fn list_thread_ids_db(
         })
         .collect();
     let model_providers = model_providers.map(<[String]>::to_vec);
-    match ctx
-        .list_thread_ids(
+    let sort_key = match sort_key {
+        ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
+        ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
+    };
+    let result = if let Some(cwd_filter) = cwd_filter {
+        collect_thread_ids_with_cwd_filter(
+            ctx,
             page_size,
             anchor.as_ref(),
-            match sort_key {
-                ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
-                ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
-            },
+            sort_key,
+            allowed_sources.as_slice(),
+            model_providers.as_deref(),
+            cwd_filter,
+            archived_only,
+        )
+        .await
+    } else {
+        ctx.list_thread_ids(
+            page_size,
+            anchor.as_ref(),
+            sort_key,
             allowed_sources.as_slice(),
             model_providers.as_deref(),
             archived_only,
         )
         .await
-    {
+    };
+    match result {
         Ok(ids) => Some(ids),
         Err(err) => {
             warn!("state db list_thread_ids failed during {stage}: {err}");
             None
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn collect_thread_ids_with_cwd_filter(
+    context: &codex_state::StateRuntime,
+    page_size: usize,
+    anchor: Option<&codex_state::Anchor>,
+    sort_key: codex_state::SortKey,
+    allowed_sources: &[String],
+    model_providers: Option<&[String]>,
+    cwd_filter: &Path,
+    archived_only: bool,
+) -> anyhow::Result<Vec<ThreadId>> {
+    let mut ids = Vec::with_capacity(page_size);
+    let mut next_anchor = anchor.cloned();
+
+    while ids.len() < page_size {
+        let page = context
+            .list_threads(
+                page_size,
+                next_anchor.as_ref(),
+                sort_key,
+                allowed_sources,
+                model_providers,
+                archived_only,
+            )
+            .await?;
+        if page.items.is_empty() {
+            break;
+        }
+
+        for item in page.items {
+            if paths_match(item.cwd.as_path(), cwd_filter) {
+                ids.push(item.id);
+                if ids.len() == page_size {
+                    break;
+                }
+            }
+        }
+
+        let Some(anchor) = page.next_anchor else {
+            break;
+        };
+        next_anchor = Some(anchor);
+    }
+
+    Ok(ids)
+}
+
+fn paths_match(a: &Path, b: &Path) -> bool {
+    if let (Ok(canonical_a), Ok(canonical_b)) = (
+        path_utils::normalize_for_path_comparison(a),
+        path_utils::normalize_for_path_comparison(b),
+    ) {
+        return canonical_a == canonical_b;
+    }
+    a == b
 }
 
 /// Look up the rollout path for a thread id using SQLite.

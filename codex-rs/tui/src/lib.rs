@@ -31,14 +31,12 @@ use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
 use codex_core::path_utils;
 use codex_core::protocol::AskForApproval;
-use codex_core::read_session_meta_line;
+use codex_core::read_effective_thread_cwd;
 use codex_core::terminal::Multiplexer;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_state::log_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use cwd_prompt::CwdPromptAction;
@@ -547,30 +545,32 @@ async fn run_ratatui_app(
                 None => return missing_session_exit(id_str, "fork"),
             }
         } else if cli.fork_last {
-            let provider_filter = vec![config.model_provider_id.clone()];
-            match RolloutRecorder::list_threads(
+            let filter_cwd = if cli.fork_show_all {
+                None
+            } else {
+                Some(config.cwd.as_path())
+            };
+            match RolloutRecorder::find_latest_thread_path(
                 &config.codex_home,
                 1,
                 None,
                 ThreadSortKey::UpdatedAt,
                 INTERACTIVE_SESSION_SOURCES,
-                Some(provider_filter.as_slice()),
+                None,
                 &config.model_provider_id,
+                filter_cwd,
             )
             .await
             {
-                Ok(page) => page
-                    .items
-                    .first()
-                    .map(|it| resume_picker::SessionSelection::Fork(it.path.clone()))
-                    .unwrap_or(resume_picker::SessionSelection::StartFresh),
-                Err(_) => resume_picker::SessionSelection::StartFresh,
+                Ok(Some(path)) => resume_picker::SessionSelection::Fork(path),
+                _ => resume_picker::SessionSelection::StartFresh,
             }
         } else if cli.fork_picker {
             match resume_picker::run_fork_picker(
                 &mut tui,
                 &config.codex_home,
                 &config.model_provider_id,
+                Some(config.cwd.as_path()),
                 cli.fork_show_all,
             )
             .await?
@@ -603,7 +603,6 @@ async fn run_ratatui_app(
             None => return missing_session_exit(id_str, "resume"),
         }
     } else if cli.resume_last {
-        let provider_filter = vec![config.model_provider_id.clone()];
         let filter_cwd = if cli.resume_show_all {
             None
         } else {
@@ -615,7 +614,7 @@ async fn run_ratatui_app(
             None,
             ThreadSortKey::UpdatedAt,
             INTERACTIVE_SESSION_SOURCES,
-            Some(provider_filter.as_slice()),
+            None,
             &config.model_provider_id,
             filter_cwd,
         )
@@ -629,6 +628,7 @@ async fn run_ratatui_app(
             &mut tui,
             &config.codex_home,
             &config.model_provider_id,
+            Some(config.cwd.as_path()),
             cli.resume_show_all,
         )
         .await?
@@ -713,16 +713,8 @@ async fn run_ratatui_app(
 }
 
 pub(crate) async fn read_session_cwd(path: &Path) -> Option<PathBuf> {
-    // Prefer the latest TurnContext cwd so resume/fork reflects the most recent
-    // session directory (for the changed-cwd prompt). The alternative would be
-    // mutating the SessionMeta line when the session cwd changes, but the rollout
-    // is an append-only JSONL log and rewriting the head would be error-prone.
-    // When rollouts move to SQLite, we can drop this scan.
-    if let Some(cwd) = parse_latest_turn_context_cwd(path).await {
-        return Some(cwd);
-    }
-    match read_session_meta_line(path).await {
-        Ok(meta_line) => Some(meta_line.meta.cwd),
+    match read_effective_thread_cwd(path).await {
+        Ok(cwd) => cwd,
         Err(err) => {
             let rollout_path = path.display().to_string();
             tracing::warn!(
@@ -733,23 +725,6 @@ pub(crate) async fn read_session_cwd(path: &Path) -> Option<PathBuf> {
             None
         }
     }
-}
-
-async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
-    let text = tokio::fs::read_to_string(path).await.ok()?;
-    for line in text.lines().rev() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
-            continue;
-        };
-        if let RolloutItem::TurnContext(item) = rollout_line.item {
-            return Some(item.cwd);
-        }
-    }
-    None
 }
 
 pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
@@ -926,6 +901,10 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
+    use codex_core::INTERACTIVE_SESSION_SOURCES;
+    use codex_core::RolloutRecorder;
+    use codex_core::ThreadSortKey;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ProjectConfig;
@@ -936,7 +915,9 @@ mod tests {
     use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::TurnContextItem;
     use serial_test::serial;
+    use std::time::Duration;
     use tempfile::TempDir;
+    use uuid::Uuid;
 
     async fn build_config(temp_dir: &TempDir) -> std::io::Result<Config> {
         ConfigBuilder::default()
@@ -1030,6 +1011,67 @@ mod tests {
         }
     }
 
+    fn write_rollout(
+        codex_home: &std::path::Path,
+        file_ts: &str,
+        cwd: &std::path::Path,
+        provider: &str,
+        preview: &str,
+    ) -> std::io::Result<PathBuf> {
+        let sessions_root = codex_home.join("sessions");
+        let date = &file_ts[..10];
+        let year = &date[..4];
+        let month = &date[5..7];
+        let day = &date[8..10];
+        let dir = sessions_root.join(year).join(month).join(day);
+        std::fs::create_dir_all(&dir)?;
+
+        let filename = format!(
+            "rollout-{}-{}.jsonl",
+            file_ts.replace(':', "-"),
+            Uuid::new_v4()
+        );
+        let path = dir.join(filename);
+        let now = Utc::now().to_rfc3339();
+        let meta = RolloutLine {
+            timestamp: now.clone(),
+            item: RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    id: codex_protocol::ThreadId::default(),
+                    timestamp: now.clone(),
+                    cwd: cwd.to_path_buf(),
+                    originator: "test".to_string(),
+                    cli_version: "0.0.0".to_string(),
+                    source: codex_protocol::protocol::SessionSource::Cli,
+                    model_provider: Some(provider.to_string()),
+                    base_instructions: None,
+                    dynamic_tools: None,
+                    forked_from_id: None,
+                },
+                git: None,
+            }),
+        };
+        let user = RolloutLine {
+            timestamp: now,
+            item: RolloutItem::EventMsg(codex_protocol::protocol::EventMsg::UserMessage(
+                codex_protocol::protocol::UserMessageEvent {
+                    message: preview.to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                },
+            )),
+        };
+
+        let mut text = String::new();
+        for line in [meta, user] {
+            text.push_str(&serde_json::to_string(&line).expect("serialize rollout"));
+            text.push('\n');
+        }
+        std::fs::write(&path, text)?;
+        Ok(path)
+    }
+
     #[tokio::test]
     async fn read_session_cwd_prefers_latest_turn_context() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
@@ -1100,6 +1142,58 @@ mod tests {
         let session_cwd = read_session_cwd(&rollout_path).await.expect("expected cwd");
         assert_eq!(session_cwd, latest);
         assert!(cwds_differ(&current, &session_cwd));
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn find_latest_thread_path_prefers_same_cwd_across_providers() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        let current_cwd = temp_dir.path().join("project");
+        let other_cwd = temp_dir.path().join("other");
+        std::fs::create_dir_all(&current_cwd)?;
+        std::fs::create_dir_all(&other_cwd)?;
+        config.cwd = current_cwd.clone();
+        config.model_provider_id = "openai".to_string();
+
+        let _same_provider_same_cwd = write_rollout(
+            temp_dir.path(),
+            "2025-01-02T00:00:00",
+            &current_cwd,
+            "openai",
+            "same provider same cwd",
+        )?;
+        std::thread::sleep(Duration::from_secs(1));
+        let expected = write_rollout(
+            temp_dir.path(),
+            "2025-01-03T00:00:00",
+            &current_cwd,
+            "anthropic",
+            "other provider same cwd",
+        )?;
+        std::thread::sleep(Duration::from_secs(1));
+        let _same_provider_other_cwd = write_rollout(
+            temp_dir.path(),
+            "2025-01-04T00:00:00",
+            &other_cwd,
+            "openai",
+            "same provider other cwd",
+        )?;
+
+        let latest = RolloutRecorder::find_latest_thread_path(
+            &config.codex_home,
+            1,
+            None,
+            ThreadSortKey::UpdatedAt,
+            INTERACTIVE_SESSION_SOURCES,
+            None,
+            &config.model_provider_id,
+            Some(config.cwd.as_path()),
+        )
+        .await?;
+
+        assert_eq!(latest, Some(expected));
         Ok(())
     }
 

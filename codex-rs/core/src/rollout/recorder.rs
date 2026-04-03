@@ -34,7 +34,6 @@ use super::policy::is_persisted_response_item;
 use crate::config::Config;
 use crate::default_client::originator;
 use crate::git_info::collect_git_info;
-use crate::path_utils;
 use crate::state_db;
 use crate::state_db::StateDbHandle;
 use codex_protocol::protocol::InitialHistory;
@@ -111,6 +110,7 @@ impl RolloutRecorderParams {
 
 impl RolloutRecorder {
     /// List threads (rollout files) under the provided Codex home directory.
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_threads(
         codex_home: &Path,
         page_size: usize,
@@ -119,6 +119,7 @@ impl RolloutRecorder {
         allowed_sources: &[SessionSource],
         model_providers: Option<&[String]>,
         default_provider: &str,
+        cwd_filter: Option<&Path>,
     ) -> std::io::Result<ThreadsPage> {
         let stage = "list_threads";
         let page = get_threads(
@@ -129,6 +130,7 @@ impl RolloutRecorder {
             allowed_sources,
             model_providers,
             default_provider,
+            cwd_filter,
         )
         .await?;
 
@@ -142,6 +144,7 @@ impl RolloutRecorder {
             sort_key,
             allowed_sources,
             model_providers,
+            cwd_filter,
             false,
             stage,
         )
@@ -161,6 +164,7 @@ impl RolloutRecorder {
     }
 
     /// List archived threads (rollout files) under the archived sessions directory.
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_archived_threads(
         codex_home: &Path,
         page_size: usize,
@@ -169,6 +173,7 @@ impl RolloutRecorder {
         allowed_sources: &[SessionSource],
         model_providers: Option<&[String]>,
         default_provider: &str,
+        cwd_filter: Option<&Path>,
     ) -> std::io::Result<ThreadsPage> {
         let stage = "list_archived_threads";
         let root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
@@ -180,6 +185,7 @@ impl RolloutRecorder {
             ThreadListConfig {
                 allowed_sources,
                 model_providers,
+                cwd_filter,
                 default_provider,
                 layout: ThreadListLayout::Flat,
             },
@@ -196,6 +202,7 @@ impl RolloutRecorder {
             sort_key,
             allowed_sources,
             model_providers,
+            cwd_filter,
             true,
             stage,
         )
@@ -236,9 +243,10 @@ impl RolloutRecorder {
                 allowed_sources,
                 model_providers,
                 default_provider,
+                filter_cwd,
             )
             .await?;
-            if let Some(path) = select_resume_path(&page, filter_cwd) {
+            if let Some(path) = page.items.first().map(|item| item.path.clone()) {
                 return Ok(Some(path));
             }
             cursor = page.next_cursor;
@@ -643,37 +651,4 @@ impl JsonlWriter {
         self.file.flush().await?;
         Ok(())
     }
-}
-
-fn select_resume_path(page: &ThreadsPage, filter_cwd: Option<&Path>) -> Option<PathBuf> {
-    match filter_cwd {
-        Some(cwd) => page.items.iter().find_map(|item| {
-            if session_cwd_matches(&item.head, cwd) {
-                Some(item.path.clone())
-            } else {
-                None
-            }
-        }),
-        None => page.items.first().map(|item| item.path.clone()),
-    }
-}
-
-fn session_cwd_matches(head: &[serde_json::Value], cwd: &Path) -> bool {
-    let Some(session_cwd) = extract_session_cwd(head) else {
-        return false;
-    };
-    if let (Ok(ca), Ok(cb)) = (
-        path_utils::normalize_for_path_comparison(&session_cwd),
-        path_utils::normalize_for_path_comparison(cwd),
-    ) {
-        return ca == cb;
-    }
-    session_cwd == cwd
-}
-
-fn extract_session_cwd(head: &[serde_json::Value]) -> Option<PathBuf> {
-    head.iter().find_map(|value| {
-        let meta_line = serde_json::from_value::<SessionMetaLine>(value.clone()).ok()?;
-        Some(meta_line.meta.cwd)
-    })
 }

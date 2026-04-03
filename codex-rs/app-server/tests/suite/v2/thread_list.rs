@@ -1,6 +1,7 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
+use app_test_support::create_fake_rollout_with_cwds;
 use app_test_support::create_fake_rollout_with_source;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
@@ -1091,6 +1092,44 @@ async fn thread_list_archived_filter() -> Result<()> {
     .await?;
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].id, archived_id);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_uses_latest_turn_context_cwd() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let session_cwd = codex_home.path().join("session");
+    let latest_cwd = codex_home.path().join("latest");
+    fs::create_dir_all(&session_cwd)?;
+    fs::create_dir_all(&latest_cwd)?;
+
+    create_fake_rollout_with_cwds(
+        codex_home.path(),
+        "2025-03-02T10-00-00",
+        "2025-03-02T10:00:00Z",
+        "Hello",
+        Some("mock_provider"),
+        None,
+        session_cwd,
+        Some(latest_cwd.clone()),
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+    let ThreadListResponse { data, .. } = list_threads(
+        &mut mcp,
+        None,
+        Some(10),
+        Some(vec!["mock_provider".to_string()]),
+        None,
+        None,
+    )
+    .await?;
+
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].cwd, latest_cwd);
 
     Ok(())
 }

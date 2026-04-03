@@ -75,6 +75,7 @@ async fn has_recorded_sessions(codex_home: &Path, default_provider: &str) -> io:
             ThreadSortKey::CreatedAt,
             allowed_sources,
             None,
+            None,
             false,
             "personality_migration",
         )
@@ -92,6 +93,7 @@ async fn has_recorded_sessions(codex_home: &Path, default_provider: &str) -> io:
         ThreadListConfig {
             allowed_sources,
             model_providers: None,
+            cwd_filter: None,
             default_provider,
             layout: ThreadListLayout::NestedByDate,
         },
@@ -109,6 +111,7 @@ async fn has_recorded_sessions(codex_home: &Path, default_provider: &str) -> io:
         ThreadListConfig {
             allowed_sources,
             model_providers: None,
+            cwd_filter: None,
             default_provider,
             layout: ThreadListLayout::Flat,
         },

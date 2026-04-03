@@ -22,17 +22,22 @@ use crate::rollout::list::ThreadItem;
 use crate::rollout::list::ThreadSortKey;
 use crate::rollout::list::ThreadsPage;
 use crate::rollout::list::get_threads;
+use crate::rollout::list::read_effective_thread_cwd;
 use crate::rollout::rollout_date_parts;
 use anyhow::Result;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::UserMessageEvent;
 
 const NO_SOURCE_FILTER: &[SessionSource] = &[];
@@ -138,6 +143,87 @@ fn write_session_file_with_provider(
         });
         writeln!(file, "{rec}")?;
     }
+    let times = FileTimes::new().set_modified(dt.into());
+    file.set_times(times)?;
+    Ok((dt, uuid))
+}
+
+fn write_session_file_with_cwds(
+    root: &Path,
+    ts_str: &str,
+    uuid: Uuid,
+    session_cwd: &Path,
+    latest_turn_context_cwd: Option<&Path>,
+    model_provider: Option<&str>,
+) -> std::io::Result<(OffsetDateTime, Uuid)> {
+    let format: &[FormatItem] =
+        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+    let dt = PrimitiveDateTime::parse(ts_str, format)
+        .unwrap()
+        .assume_utc();
+    let dir = root
+        .join("sessions")
+        .join(format!("{:04}", dt.year()))
+        .join(format!("{:02}", u8::from(dt.month())))
+        .join(format!("{:02}", dt.day()));
+    fs::create_dir_all(&dir)?;
+
+    let filename = format!("rollout-{ts_str}-{uuid}.jsonl");
+    let file_path = dir.join(filename);
+    let mut file = File::create(file_path)?;
+
+    let mut payload = serde_json::json!({
+        "id": uuid,
+        "timestamp": ts_str,
+        "cwd": session_cwd,
+        "originator": "test_originator",
+        "cli_version": "test_version",
+        "source": "vscode",
+        "base_instructions": null,
+    });
+    if let Some(provider) = model_provider {
+        payload["model_provider"] = serde_json::Value::String(provider.to_string());
+    }
+
+    let meta = serde_json::json!({
+        "timestamp": ts_str,
+        "type": "session_meta",
+        "payload": payload,
+    });
+    writeln!(file, "{meta}")?;
+
+    let user_event = serde_json::json!({
+        "timestamp": ts_str,
+        "type": "event_msg",
+        "payload": {
+            "type": "user_message",
+            "message": "Hello from user",
+            "kind": "plain"
+        }
+    });
+    writeln!(file, "{user_event}")?;
+
+    if let Some(turn_context_cwd) = latest_turn_context_cwd {
+        let turn_context = RolloutLine {
+            timestamp: ts_str.to_string(),
+            item: RolloutItem::TurnContext(TurnContextItem {
+                cwd: turn_context_cwd.to_path_buf(),
+                approval_policy: AskForApproval::OnRequest,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                model: "test-model".to_string(),
+                personality: None,
+                collaboration_mode: None,
+                effort: None,
+                summary: ReasoningSummary::Auto,
+                user_instructions: None,
+                developer_instructions: None,
+                final_output_json_schema: None,
+                truncation_policy: None,
+            }),
+        };
+        writeln!(file, "{}", serde_json::to_string(&turn_context).unwrap())?;
+    }
+
     let times = FileTimes::new().set_modified(dt.into());
     file.set_times(times)?;
     Ok((dt, uuid))
@@ -287,6 +373,7 @@ async fn test_list_conversations_latest_first() {
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
+        None,
     )
     .await
     .unwrap();
@@ -350,18 +437,21 @@ async fn test_list_conversations_latest_first() {
             ThreadItem {
                 path: p1,
                 head: head_3,
+                cwd: Some(".".into()),
                 created_at: Some("2025-01-03T12-00-00".into()),
                 updated_at: updated_times.first().cloned().flatten(),
             },
             ThreadItem {
                 path: p2,
                 head: head_2,
+                cwd: Some(".".into()),
                 created_at: Some("2025-01-02T12-00-00".into()),
                 updated_at: updated_times.get(1).cloned().flatten(),
             },
             ThreadItem {
                 path: p3,
                 head: head_1,
+                cwd: Some(".".into()),
                 created_at: Some("2025-01-01T12-00-00".into()),
                 updated_at: updated_times.get(2).cloned().flatten(),
             },
@@ -437,6 +527,7 @@ async fn test_pagination_cursor() {
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
+        None,
     )
     .await
     .unwrap();
@@ -481,12 +572,14 @@ async fn test_pagination_cursor() {
             ThreadItem {
                 path: p5,
                 head: head_5,
+                cwd: Some(".".into()),
                 created_at: Some("2025-03-05T09-00-00".into()),
                 updated_at: updated_page1.first().cloned().flatten(),
             },
             ThreadItem {
                 path: p4,
                 head: head_4,
+                cwd: Some(".".into()),
                 created_at: Some("2025-03-04T09-00-00".into()),
                 updated_at: updated_page1.get(1).cloned().flatten(),
             },
@@ -505,6 +598,7 @@ async fn test_pagination_cursor() {
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
+        None,
     )
     .await
     .unwrap();
@@ -549,12 +643,14 @@ async fn test_pagination_cursor() {
             ThreadItem {
                 path: p3,
                 head: head_3,
+                cwd: Some(".".into()),
                 created_at: Some("2025-03-03T09-00-00".into()),
                 updated_at: updated_page2.first().cloned().flatten(),
             },
             ThreadItem {
                 path: p2,
                 head: head_2,
+                cwd: Some(".".into()),
                 created_at: Some("2025-03-02T09-00-00".into()),
                 updated_at: updated_page2.get(1).cloned().flatten(),
             },
@@ -573,6 +669,7 @@ async fn test_pagination_cursor() {
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
+        None,
     )
     .await
     .unwrap();
@@ -598,6 +695,7 @@ async fn test_pagination_cursor() {
         items: vec![ThreadItem {
             path: p1,
             head: head_1,
+            cwd: Some(".".into()),
             created_at: Some("2025-03-01T09-00-00".into()),
             updated_at: updated_page3.first().cloned().flatten(),
         }],
@@ -626,6 +724,7 @@ async fn test_list_threads_scans_past_head_for_user_event() {
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
+        None,
     )
     .await
     .unwrap();
@@ -651,6 +750,7 @@ async fn test_get_thread_contents() {
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
+        None,
     )
     .await
     .unwrap();
@@ -679,6 +779,7 @@ async fn test_get_thread_contents() {
         items: vec![ThreadItem {
             path: expected_path,
             head: expected_head,
+            cwd: Some(".".into()),
             created_at: Some(ts.into()),
             updated_at: page.items[0].updated_at.clone(),
         }],
@@ -741,6 +842,7 @@ async fn test_base_instructions_missing_in_meta_defaults_to_null() {
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
+        None,
     )
     .await
     .unwrap();
@@ -785,6 +887,7 @@ async fn test_base_instructions_present_in_meta_is_preserved() {
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
+        None,
     )
     .await
     .unwrap();
@@ -837,6 +940,7 @@ async fn test_created_at_sort_uses_file_mtime_for_updated_at() -> Result<()> {
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
+        None,
     )
     .await?;
 
@@ -917,6 +1021,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
+        None,
     )
     .await?;
     let item = page.items.first().expect("conversation item");
@@ -957,6 +1062,7 @@ async fn test_stable_ordering_same_second_pagination() {
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
+        None,
     )
     .await
     .unwrap();
@@ -993,12 +1099,14 @@ async fn test_stable_ordering_same_second_pagination() {
             ThreadItem {
                 path: p3,
                 head: head(u3),
+                cwd: Some(".".into()),
                 created_at: Some(ts.to_string()),
                 updated_at: updated_page1.first().cloned().flatten(),
             },
             ThreadItem {
                 path: p2,
                 head: head(u2),
+                cwd: Some(".".into()),
                 created_at: Some(ts.to_string()),
                 updated_at: updated_page1.get(1).cloned().flatten(),
             },
@@ -1017,6 +1125,7 @@ async fn test_stable_ordering_same_second_pagination() {
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
+        None,
     )
     .await
     .unwrap();
@@ -1032,6 +1141,7 @@ async fn test_stable_ordering_same_second_pagination() {
         items: vec![ThreadItem {
             path: p1,
             head: head(u1),
+            cwd: Some(".".into()),
             created_at: Some(ts.to_string()),
             updated_at: updated_page2.first().cloned().flatten(),
         }],
@@ -1076,6 +1186,7 @@ async fn test_source_filter_excludes_non_matching_sessions() {
         INTERACTIVE_SESSION_SOURCES,
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
+        None,
     )
     .await
     .unwrap();
@@ -1098,6 +1209,7 @@ async fn test_source_filter_excludes_non_matching_sessions() {
         NO_SOURCE_FILTER,
         None,
         TEST_PROVIDER,
+        None,
     )
     .await
     .unwrap();
@@ -1160,6 +1272,7 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
         NO_SOURCE_FILTER,
         Some(openai_filter.as_slice()),
         "openai",
+        None,
     )
     .await?;
     assert_eq!(openai_sessions.items.len(), 2);
@@ -1186,6 +1299,7 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
         NO_SOURCE_FILTER,
         Some(beta_filter.as_slice()),
         "openai",
+        None,
     )
     .await?;
     assert_eq!(beta_sessions.items.len(), 1);
@@ -1207,6 +1321,7 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
         NO_SOURCE_FILTER,
         Some(unknown_filter.as_slice()),
         "openai",
+        None,
     )
     .await?;
     assert!(unknown_sessions.items.is_empty());
@@ -1219,9 +1334,118 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
         NO_SOURCE_FILTER,
         None,
         "openai",
+        None,
     )
     .await?;
     assert_eq!(all_sessions.items.len(), 3);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cwd_filter_selects_sessions_across_providers() -> Result<()> {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let current_cwd = temp.path().join("project");
+    let other_cwd = temp.path().join("other");
+    fs::create_dir_all(&current_cwd)?;
+    fs::create_dir_all(&other_cwd)?;
+
+    let current_provider_id = Uuid::from_u128(10);
+    let other_provider_id = Uuid::from_u128(11);
+    let other_cwd_id = Uuid::from_u128(12);
+
+    write_session_file_with_cwds(
+        home,
+        "2025-10-01T10-00-00",
+        current_provider_id,
+        current_cwd.as_path(),
+        None,
+        Some("openai"),
+    )?;
+    write_session_file_with_cwds(
+        home,
+        "2025-10-01T11-00-00",
+        other_provider_id,
+        current_cwd.as_path(),
+        None,
+        Some("anthropic"),
+    )?;
+    write_session_file_with_cwds(
+        home,
+        "2025-10-01T12-00-00",
+        other_cwd_id,
+        other_cwd.as_path(),
+        None,
+        Some("anthropic"),
+    )?;
+
+    let page = get_threads(
+        home,
+        10,
+        None,
+        ThreadSortKey::CreatedAt,
+        NO_SOURCE_FILTER,
+        None,
+        "openai",
+        Some(current_cwd.as_path()),
+    )
+    .await?;
+
+    let ids: Vec<_> = page
+        .items
+        .iter()
+        .filter_map(|item| {
+            item.head
+                .first()
+                .and_then(|value| value.get("id"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            other_provider_id.to_string(),
+            current_provider_id.to_string()
+        ]
+    );
+    assert!(
+        page.items
+            .iter()
+            .all(|item| item.cwd.as_deref() == Some(current_cwd.as_path()))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_effective_thread_cwd_prefers_latest_turn_context() -> Result<()> {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let session_cwd = temp.path().join("session");
+    let latest_cwd = temp.path().join("latest");
+    fs::create_dir_all(&session_cwd)?;
+    fs::create_dir_all(&latest_cwd)?;
+
+    let uuid = Uuid::from_u128(20);
+    let (_dt, _uuid) = write_session_file_with_cwds(
+        home,
+        "2025-10-02T10-00-00",
+        uuid,
+        session_cwd.as_path(),
+        Some(latest_cwd.as_path()),
+        Some("openai"),
+    )?;
+    let rollout_path = home
+        .join("sessions")
+        .join("2025")
+        .join("10")
+        .join("02")
+        .join(format!("rollout-2025-10-02T10-00-00-{uuid}.jsonl"));
+
+    let cwd = read_effective_thread_cwd(&rollout_path).await?;
+    assert_eq!(cwd, Some(latest_cwd));
 
     Ok(())
 }

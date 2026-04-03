@@ -11,7 +11,6 @@ use codex_core::RolloutRecorder;
 use codex_core::ThreadItem;
 use codex_core::ThreadSortKey;
 use codex_core::ThreadsPage;
-use codex_core::path_utils;
 use codex_protocol::items::TurnItem;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
@@ -84,6 +83,7 @@ struct PageLoadRequest {
     request_token: usize,
     search_token: Option<usize>,
     default_provider: String,
+    cwd_filter: Option<PathBuf>,
 }
 
 type PageLoader = Arc<dyn Fn(PageLoadRequest) + Send + Sync>;
@@ -103,12 +103,14 @@ pub async fn run_resume_picker(
     tui: &mut Tui,
     codex_home: &Path,
     default_provider: &str,
+    resolved_cwd: Option<&Path>,
     show_all: bool,
 ) -> Result<SessionSelection> {
     run_session_picker(
         tui,
         codex_home,
         default_provider,
+        resolved_cwd,
         show_all,
         SessionPickerAction::Resume,
     )
@@ -119,12 +121,14 @@ pub async fn run_fork_picker(
     tui: &mut Tui,
     codex_home: &Path,
     default_provider: &str,
+    resolved_cwd: Option<&Path>,
     show_all: bool,
 ) -> Result<SessionSelection> {
     run_session_picker(
         tui,
         codex_home,
         default_provider,
+        resolved_cwd,
         show_all,
         SessionPickerAction::Fork,
     )
@@ -135,6 +139,7 @@ async fn run_session_picker(
     tui: &mut Tui,
     codex_home: &Path,
     default_provider: &str,
+    resolved_cwd: Option<&Path>,
     show_all: bool,
     action: SessionPickerAction,
 ) -> Result<SessionSelection> {
@@ -142,25 +147,21 @@ async fn run_session_picker(
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
     let default_provider = default_provider.to_string();
-    let filter_cwd = if show_all {
-        None
-    } else {
-        std::env::current_dir().ok()
-    };
+    let cwd_filter = picker_filter_cwd(show_all, resolved_cwd);
 
     let loader_tx = bg_tx.clone();
     let page_loader: PageLoader = Arc::new(move |request: PageLoadRequest| {
         let tx = loader_tx.clone();
         tokio::spawn(async move {
-            let provider_filter = vec![request.default_provider.clone()];
             let page = RolloutRecorder::list_threads(
                 &request.codex_home,
                 PAGE_SIZE,
                 request.cursor.as_ref(),
                 ThreadSortKey::CreatedAt,
                 INTERACTIVE_SESSION_SOURCES,
-                Some(provider_filter.as_slice()),
+                None,
                 request.default_provider.as_str(),
+                request.cwd_filter.as_deref(),
             )
             .await;
             let _ = tx.send(BackgroundEvent::PageLoaded {
@@ -177,7 +178,7 @@ async fn run_session_picker(
         page_loader,
         default_provider.clone(),
         show_all,
-        filter_cwd,
+        cwd_filter,
         action,
     );
     state.start_initial_load();
@@ -255,7 +256,7 @@ struct PickerState {
     view_rows: Option<usize>,
     default_provider: String,
     show_all: bool,
-    filter_cwd: Option<PathBuf>,
+    cwd_filter: Option<PathBuf>,
     action: SessionPickerAction,
 }
 
@@ -325,7 +326,7 @@ impl PickerState {
         page_loader: PageLoader,
         default_provider: String,
         show_all: bool,
-        filter_cwd: Option<PathBuf>,
+        cwd_filter: Option<PathBuf>,
         action: SessionPickerAction,
     ) -> Self {
         Self {
@@ -350,7 +351,7 @@ impl PickerState {
             view_rows: None,
             default_provider,
             show_all,
-            filter_cwd,
+            cwd_filter,
             action,
         }
     }
@@ -450,6 +451,7 @@ impl PickerState {
             request_token,
             search_token: None,
             default_provider: self.default_provider.clone(),
+            cwd_filter: self.cwd_filter.clone(),
         });
     }
 
@@ -509,15 +511,13 @@ impl PickerState {
     }
 
     fn apply_filter(&mut self) {
-        let base_iter = self
-            .all_rows
-            .iter()
-            .filter(|row| self.row_matches_filter(row));
         if self.query.is_empty() {
-            self.filtered_rows = base_iter.cloned().collect();
+            self.filtered_rows = self.all_rows.clone();
         } else {
             let q = self.query.to_lowercase();
-            self.filtered_rows = base_iter
+            self.filtered_rows = self
+                .all_rows
+                .iter()
                 .filter(|r| r.preview.to_lowercase().contains(&q))
                 .cloned()
                 .collect();
@@ -530,19 +530,6 @@ impl PickerState {
         }
         self.ensure_selected_visible();
         self.request_frame();
-    }
-
-    fn row_matches_filter(&self, row: &Row) -> bool {
-        if self.show_all {
-            return true;
-        }
-        let Some(filter_cwd) = self.filter_cwd.as_ref() else {
-            return true;
-        };
-        let Some(row_cwd) = row.cwd.as_ref() else {
-            return false;
-        };
-        paths_match(row_cwd, filter_cwd)
     }
 
     fn set_query(&mut self, new_query: String) {
@@ -680,6 +667,7 @@ impl PickerState {
             request_token,
             search_token,
             default_provider: self.default_provider.clone(),
+            cwd_filter: self.cwd_filter.clone(),
         });
     }
 
@@ -712,7 +700,7 @@ fn head_to_row(item: &ThreadItem) -> Row {
         .and_then(parse_timestamp_str)
         .or(created_at);
 
-    let (cwd, git_branch) = extract_session_meta_from_head(&item.head);
+    let git_branch = extract_git_branch_from_head(&item.head);
     let preview = preview_from_head(&item.head)
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -723,30 +711,26 @@ fn head_to_row(item: &ThreadItem) -> Row {
         preview,
         created_at,
         updated_at,
-        cwd,
+        cwd: item.cwd.clone(),
         git_branch,
     }
 }
 
-fn extract_session_meta_from_head(head: &[serde_json::Value]) -> (Option<PathBuf>, Option<String>) {
+fn extract_git_branch_from_head(head: &[serde_json::Value]) -> Option<String> {
     for value in head {
         if let Ok(meta_line) = serde_json::from_value::<SessionMetaLine>(value.clone()) {
-            let cwd = Some(meta_line.meta.cwd);
-            let git_branch = meta_line.git.and_then(|git| git.branch);
-            return (cwd, git_branch);
+            return meta_line.git.and_then(|git| git.branch);
         }
     }
-    (None, None)
+    None
 }
 
-fn paths_match(a: &Path, b: &Path) -> bool {
-    if let (Ok(ca), Ok(cb)) = (
-        path_utils::normalize_for_path_comparison(a),
-        path_utils::normalize_for_path_comparison(b),
-    ) {
-        return ca == cb;
+fn picker_filter_cwd(show_all: bool, resolved_cwd: Option<&Path>) -> Option<PathBuf> {
+    if show_all {
+        None
+    } else {
+        resolved_cwd.map(Path::to_path_buf)
     }
-    a == b
 }
 
 fn parse_timestamp_str(ts: &str) -> Option<DateTime<Utc>> {
@@ -1121,14 +1105,25 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
 mod tests {
     use super::*;
     use chrono::Duration;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::GitInfo;
+    use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::protocol::RolloutLine;
+    use codex_protocol::protocol::SessionMeta;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::UserMessageEvent;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use serde_json::json;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Mutex;
+    use uuid::Uuid;
 
     fn head_with_ts_and_user_text(ts: &str, texts: &[&str]) -> Vec<serde_json::Value> {
         vec![
@@ -1148,6 +1143,7 @@ mod tests {
         ThreadItem {
             path: PathBuf::from(path),
             head: head_with_ts_and_user_text(ts, &[preview]),
+            cwd: None,
             created_at: Some(ts.to_string()),
             updated_at: Some(ts.to_string()),
         }
@@ -1156,6 +1152,77 @@ mod tests {
     fn cursor_from_str(repr: &str) -> Cursor {
         serde_json::from_str::<Cursor>(&format!("\"{repr}\""))
             .expect("cursor format should deserialize")
+    }
+
+    fn write_rollout(
+        sessions_root: &std::path::Path,
+        ts: DateTime<Utc>,
+        cwd: &str,
+        provider: &str,
+        branch: &str,
+        preview: &str,
+    ) {
+        let dir = sessions_root
+            .join(ts.format("%Y").to_string())
+            .join(ts.format("%m").to_string())
+            .join(ts.format("%d").to_string());
+        std::fs::create_dir_all(&dir).expect("mkdir date dirs");
+        let filename = format!(
+            "rollout-{}-{}.jsonl",
+            ts.format("%Y-%m-%dT%H-%M-%S"),
+            Uuid::new_v4()
+        );
+        let path = dir.join(filename);
+        let lines = vec![
+            RolloutLine {
+                timestamp: ts.to_rfc3339(),
+                item: RolloutItem::SessionMeta(SessionMetaLine {
+                    meta: SessionMeta {
+                        id: codex_protocol::ThreadId::default(),
+                        forked_from_id: None,
+                        timestamp: ts.to_rfc3339(),
+                        cwd: PathBuf::from(cwd),
+                        originator: "user".to_string(),
+                        cli_version: "0.0.0".to_string(),
+                        source: SessionSource::Cli,
+                        model_provider: Some(provider.to_string()),
+                        base_instructions: None,
+                        dynamic_tools: None,
+                    },
+                    git: Some(GitInfo {
+                        commit_hash: None,
+                        branch: Some(branch.to_string()),
+                        repository_url: None,
+                    }),
+                }),
+            },
+            RolloutLine {
+                timestamp: ts.to_rfc3339(),
+                item: RolloutItem::ResponseItem(ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: preview.to_string(),
+                    }],
+                    end_turn: None,
+                }),
+            },
+            RolloutLine {
+                timestamp: ts.to_rfc3339(),
+                item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                    message: preview.to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                })),
+            },
+        ];
+        let mut content = String::new();
+        for line in lines {
+            content.push_str(&serde_json::to_string(&line).expect("serialize rollout"));
+            content.push('\n');
+        }
+        std::fs::write(&path, content).expect("write rollout");
     }
 
     fn page(
@@ -1214,12 +1281,14 @@ mod tests {
         let a = ThreadItem {
             path: PathBuf::from("/tmp/a.jsonl"),
             head: head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["A"]),
+            cwd: None,
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T00:00:00Z".into()),
         };
         let b = ThreadItem {
             path: PathBuf::from("/tmp/b.jsonl"),
             head: head_with_ts_and_user_text("2025-01-02T00:00:00Z", &["B"]),
+            cwd: None,
             created_at: Some("2025-01-02T00:00:00Z".into()),
             updated_at: Some("2025-01-02T00:00:00Z".into()),
         };
@@ -1236,6 +1305,7 @@ mod tests {
         let item = ThreadItem {
             path: PathBuf::from("/tmp/a.jsonl"),
             head,
+            cwd: None,
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T01:00:00Z".into()),
         };
@@ -1250,6 +1320,21 @@ mod tests {
 
         assert_eq!(row.created_at, Some(expected_created));
         assert_eq!(row.updated_at, Some(expected_updated));
+    }
+
+    #[test]
+    fn row_uses_thread_item_cwd() {
+        let cwd = PathBuf::from("/tmp/project");
+        let item = ThreadItem {
+            path: PathBuf::from("/tmp/a.jsonl"),
+            head: head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["Hello"]),
+            cwd: Some(cwd.clone()),
+            created_at: Some("2025-01-01T00:00:00Z".into()),
+            updated_at: Some("2025-01-01T00:00:00Z".into()),
+        };
+
+        let row = head_to_row(&item);
+        assert_eq!(row.cwd, Some(cwd));
     }
 
     #[test]
@@ -1330,7 +1415,6 @@ mod tests {
     async fn resume_picker_screen_snapshot() {
         use crate::custom_terminal::Terminal;
         use crate::test_backend::VT100Backend;
-        use uuid::Uuid;
 
         // Create real rollout files so the snapshot uses the actual listing pipeline.
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -1339,71 +1423,19 @@ mod tests {
 
         let now = Utc::now();
 
-        // Helper to write a rollout file with minimal meta + one user message.
-        let write_rollout = |ts: DateTime<Utc>, cwd: &str, branch: &str, preview: &str| {
-            let dir = sessions_root
-                .join(ts.format("%Y").to_string())
-                .join(ts.format("%m").to_string())
-                .join(ts.format("%d").to_string());
-            std::fs::create_dir_all(&dir).expect("mkdir date dirs");
-            let filename = format!(
-                "rollout-{}-{}.jsonl",
-                ts.format("%Y-%m-%dT%H-%M-%S"),
-                Uuid::new_v4()
-            );
-            let path = dir.join(filename);
-            let meta = serde_json::json!({
-                "timestamp": ts.to_rfc3339(),
-                "item": {
-                    "SessionMeta": {
-                        "meta": {
-                            "id": Uuid::new_v4(),
-                            "timestamp": ts.to_rfc3339(),
-                            "cwd": cwd,
-                            "originator": "user",
-                            "cli_version": "0.0.0",
-                            "source": "Cli",
-                            "model_provider": "openai",
-                        }
-                    }
-                }
-            });
-            let user = serde_json::json!({
-                "timestamp": ts.to_rfc3339(),
-                "item": {
-                    "EventMsg": {
-                        "UserMessage": {
-                            "message": preview,
-                            "images": null
-                        }
-                    }
-                }
-            });
-            let branch_meta = serde_json::json!({
-                "timestamp": ts.to_rfc3339(),
-                "item": {
-                    "EventMsg": {
-                        "SessionMeta": {
-                            "meta": {
-                                "git_branch": branch
-                            }
-                        }
-                    }
-                }
-            });
-            std::fs::write(&path, format!("{meta}\n{user}\n{branch_meta}\n"))
-                .expect("write rollout");
-        };
-
         write_rollout(
+            &sessions_root,
             now - Duration::seconds(42),
             "/tmp/project",
+            "openai",
             "feature/resume",
             "Fix resume picker timestamps",
         );
         write_rollout(
+            &sessions_root,
             now - Duration::minutes(35),
             "/tmp/other",
+            "openai",
             "main",
             "Investigate lazy pagination cap",
         );
@@ -1425,8 +1457,9 @@ mod tests {
             None,
             ThreadSortKey::CreatedAt,
             INTERACTIVE_SESSION_SOURCES,
-            Some(&[String::from("openai")]),
+            None,
             "openai",
+            None,
         )
         .await
         .expect("list conversations");
@@ -1486,6 +1519,14 @@ mod tests {
 
         let snapshot = terminal.backend().to_string();
         assert_snapshot!("resume_picker_screen", snapshot);
+    }
+
+    #[test]
+    fn picker_filter_cwd_uses_resolved_cwd_when_show_all_disabled() {
+        let cwd = Path::new("/tmp/project");
+        assert_eq!(picker_filter_cwd(false, Some(cwd)), Some(cwd.to_path_buf()));
+        assert_eq!(picker_filter_cwd(true, Some(cwd)), None);
+        assert_eq!(picker_filter_cwd(false, None), None);
     }
 
     #[test]

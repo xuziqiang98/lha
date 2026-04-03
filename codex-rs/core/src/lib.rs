@@ -118,6 +118,7 @@ pub use rollout::list::ThreadItem;
 pub use rollout::list::ThreadSortKey;
 pub use rollout::list::ThreadsPage;
 pub use rollout::list::parse_cursor;
+pub use rollout::list::read_effective_thread_cwd;
 pub use rollout::list::read_head_for_summary;
 pub use rollout::list::read_session_meta_line;
 pub use rollout::rollout_date_parts;
