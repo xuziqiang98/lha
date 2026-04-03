@@ -104,7 +104,7 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                 status: http::StatusCode::INTERNAL_SERVER_ERROR,
                 request_id: None,
             }),
-            TransportError::Timeout => CodexErr::Timeout,
+            TransportError::Timeout => CodexErr::RequestTimeout,
             TransportError::Network(msg) | TransportError::Build(msg) => {
                 CodexErr::Stream(msg, None)
             }
@@ -146,6 +146,13 @@ mod tests {
         };
         assert_eq!(model_cap.model, "boomslang");
         assert_eq!(model_cap.reset_after_seconds, Some(120));
+    }
+
+    #[test]
+    fn map_api_error_maps_timeout_to_request_timeout() {
+        let err = map_api_error(ApiError::Transport(TransportError::Timeout));
+
+        assert!(matches!(err, CodexErr::RequestTimeout));
     }
 }
 

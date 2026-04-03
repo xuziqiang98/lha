@@ -86,7 +86,11 @@ pub enum CodexErr {
 
     /// Returned by run_command_stream when the spawned child process timed out (10s).
     #[error("timeout waiting for child process to exit")]
-    Timeout,
+    ChildProcessExitTimeout,
+
+    /// Returned when an HTTP request times out while waiting for the server response.
+    #[error("request timed out while waiting for the server response")]
+    RequestTimeout,
 
     /// Returned by run_command_stream when the child could not be spawned (its stdout/stderr pipes
     /// could not be captured). Analogous to the previous `CodexError::Spawn` variant.
@@ -211,7 +215,8 @@ impl CodexErr {
             | CodexErr::UsageLimitReached(_)
             | CodexErr::ModelCap(_) => false,
             CodexErr::Stream(..)
-            | CodexErr::Timeout
+            | CodexErr::ChildProcessExitTimeout
+            | CodexErr::RequestTimeout
             | CodexErr::UnexpectedStatus(_)
             | CodexErr::ResponseStreamFailed(_)
             | CodexErr::ConnectionFailed(_)
@@ -799,6 +804,29 @@ mod tests {
                 http_status_code: Some(429)
             })
         );
+    }
+
+    #[test]
+    fn to_error_event_preserves_request_timeout_context() {
+        let event = CodexErr::RequestTimeout
+            .to_error_event(Some("Error running remote compact task".to_string()));
+
+        assert_eq!(
+            event.message,
+            "Error running remote compact task: request timed out while waiting for the server response"
+        );
+        assert_eq!(event.codex_error_info, Some(CodexErrorInfo::Other));
+    }
+
+    #[test]
+    fn to_error_event_preserves_child_process_timeout_context() {
+        let event = CodexErr::ChildProcessExitTimeout.to_error_event(Some("prefix".to_string()));
+
+        assert_eq!(
+            event.message,
+            "prefix: timeout waiting for child process to exit"
+        );
+        assert_eq!(event.codex_error_info, Some(CodexErrorInfo::Other));
     }
 
     #[test]
