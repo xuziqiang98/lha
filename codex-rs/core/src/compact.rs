@@ -16,6 +16,7 @@ use crate::protocol::TurnContextItem;
 use crate::protocol::TurnStartedEvent;
 use crate::protocol::WarningEvent;
 use crate::session_prefix::TURN_ABORTED_OPEN_TAG;
+use crate::tools::handlers::UPDATE_PLAN_SUCCESS_OUTPUT;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
@@ -23,8 +24,11 @@ use crate::util::backoff;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 use futures::prelude::*;
@@ -35,6 +39,7 @@ pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_pref
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 const PROPOSED_PLAN_OPEN_TAG: &str = "<proposed_plan>\n";
 const PROPOSED_PLAN_CLOSE_TAG: &str = "</proposed_plan>";
+const BACKFILLED_UPDATE_PLAN_CALL_ID: &str = "compact_backfill_update_plan";
 
 pub(crate) fn should_use_remote_compact_task(
     session: &Session,
@@ -81,11 +86,15 @@ async fn run_compact_task_inner(
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let mut history = sess.clone_history().await;
-    let backfilled_plan_text = if sess.enabled(Feature::BackfillCompactPlanContext) {
-        last_completed_plan_from_history(history.raw_items())
-    } else {
-        None
-    };
+    let (backfilled_plan_text, backfilled_update_plan) =
+        if sess.enabled(Feature::BackfillCompactPlanContext) {
+            (
+                last_completed_plan_from_history(history.raw_items()),
+                last_backfillable_update_plan_from_history(history.raw_items()),
+            )
+        } else {
+            (None, None)
+        };
     history.record_items(
         &[initial_input_for_turn.into()],
         turn_context.truncation_policy,
@@ -192,6 +201,7 @@ async fn run_compact_task_inner(
         initial_context,
         &user_messages,
         backfilled_plan_text.as_deref(),
+        backfilled_update_plan.as_ref(),
         &summary_text,
     );
     let ghost_snapshots: Vec<ResponseItem> = history_items
@@ -281,12 +291,14 @@ pub(crate) fn build_compacted_history(
     initial_context: Vec<ResponseItem>,
     user_messages: &[String],
     backfilled_plan_text: Option<&str>,
+    backfilled_update_plan: Option<&UpdatePlanArgs>,
     summary_text: &str,
 ) -> Vec<ResponseItem> {
     build_compacted_history_with_limit(
         initial_context,
         user_messages,
         backfilled_plan_text,
+        backfilled_update_plan,
         summary_text,
         COMPACT_USER_MESSAGE_MAX_TOKENS,
     )
@@ -296,6 +308,7 @@ fn build_compacted_history_with_limit(
     mut history: Vec<ResponseItem>,
     user_messages: &[String],
     backfilled_plan_text: Option<&str>,
+    backfilled_update_plan: Option<&UpdatePlanArgs>,
     summary_text: &str,
     max_tokens: usize,
 ) -> Vec<ResponseItem> {
@@ -347,6 +360,10 @@ fn build_compacted_history_with_limit(
         history.push(proposed_plan_message(plan_text));
     }
 
+    if let Some(update_plan) = backfilled_update_plan {
+        history.extend(backfilled_update_plan_items(update_plan));
+    }
+
     history
 }
 
@@ -372,6 +389,82 @@ pub(crate) fn last_completed_plan_from_history(items: &[ResponseItem]) -> Option
             extract_proposed_plan_text(&text)
         }
     })
+}
+
+pub(crate) fn last_backfillable_update_plan_from_history(
+    items: &[ResponseItem],
+) -> Option<UpdatePlanArgs> {
+    for (idx, item) in items.iter().enumerate().rev() {
+        let ResponseItem::FunctionCall {
+            name,
+            arguments,
+            call_id,
+            ..
+        } = item
+        else {
+            continue;
+        };
+        if name != "update_plan" {
+            continue;
+        }
+
+        let Some(output) = items[idx + 1..]
+            .iter()
+            .find_map(|candidate| match candidate {
+                ResponseItem::FunctionCallOutput {
+                    call_id: existing,
+                    output,
+                } if existing == call_id => Some(output),
+                _ => None,
+            })
+        else {
+            continue;
+        };
+        if output.content != UPDATE_PLAN_SUCCESS_OUTPUT {
+            continue;
+        }
+
+        let Ok(args) = serde_json::from_str::<UpdatePlanArgs>(arguments) else {
+            continue;
+        };
+        if args
+            .plan
+            .iter()
+            .all(|item| matches!(item.status, StepStatus::Completed))
+        {
+            return None;
+        }
+
+        return Some(args);
+    }
+
+    None
+}
+
+pub(crate) fn backfilled_update_plan_items(args: &UpdatePlanArgs) -> Vec<ResponseItem> {
+    let arguments = match serde_json::to_string(args) {
+        Ok(arguments) => arguments,
+        Err(err) => {
+            error!("failed to serialize backfilled update_plan args: {err}");
+            return Vec::new();
+        }
+    };
+    vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "update_plan".to_string(),
+            arguments,
+            call_id: BACKFILLED_UPDATE_PLAN_CALL_ID.to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: BACKFILLED_UPDATE_PLAN_CALL_ID.to_string(),
+            output: FunctionCallOutputPayload {
+                content: UPDATE_PLAN_SUCCESS_OUTPUT.to_string(),
+                success: Some(true),
+                ..Default::default()
+            },
+        },
+    ]
 }
 
 pub(crate) fn proposed_plan_message(plan_text: &str) -> ResponseItem {
@@ -530,6 +623,7 @@ mod tests {
             Vec::new(),
             std::slice::from_ref(&big),
             None,
+            None,
             "SUMMARY",
             max_tokens,
         );
@@ -569,7 +663,8 @@ mod tests {
         let user_messages = vec!["first user message".to_string()];
         let summary_text = "summary text";
 
-        let history = build_compacted_history(initial_context, &user_messages, None, summary_text);
+        let history =
+            build_compacted_history(initial_context, &user_messages, None, None, summary_text);
         assert!(
             !history.is_empty(),
             "expected compacted history to include summary"
@@ -610,7 +705,7 @@ mod tests {
         ];
 
         let user_messages = collect_user_messages(&items);
-        let history = build_compacted_history(Vec::new(), &user_messages, None, "SUMMARY");
+        let history = build_compacted_history(Vec::new(), &user_messages, None, None, "SUMMARY");
 
         let found_marker = history.iter().any(|item| match item {
             ResponseItem::Message { role, content, .. } if role == "user" => {
@@ -665,10 +760,259 @@ mod tests {
             Vec::new(),
             &["user".to_string()],
             Some("- Step 1\n"),
+            None,
             "SUMMARY",
         );
 
         assert_eq!(history.len(), 3);
         assert_eq!(history[2], proposed_plan_message("- Step 1\n"));
+    }
+
+    #[test]
+    fn last_backfillable_update_plan_from_history_returns_none_for_latest_completed_plan() {
+        let older_args = UpdatePlanArgs {
+            explanation: Some("Keep going".to_string()),
+            plan: vec![
+                codex_protocol::plan_tool::PlanItemArg {
+                    step: "Inspect workspace".to_string(),
+                    status: StepStatus::Completed,
+                },
+                codex_protocol::plan_tool::PlanItemArg {
+                    step: "Patch compact".to_string(),
+                    status: StepStatus::InProgress,
+                },
+            ],
+        };
+        let latest_completed_args = UpdatePlanArgs {
+            explanation: None,
+            plan: vec![codex_protocol::plan_tool::PlanItemArg {
+                step: "Wrap up".to_string(),
+                status: StepStatus::Completed,
+            }],
+        };
+        let older_args_json = serde_json::to_string(&older_args).expect("serialize args");
+        let newer_args_json =
+            serde_json::to_string(&latest_completed_args).expect("serialize args");
+        let items = vec![
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "update_plan".to_string(),
+                arguments: older_args_json,
+                call_id: "call-1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: UPDATE_PLAN_SUCCESS_OUTPUT.to_string(),
+                    success: Some(true),
+                    ..Default::default()
+                },
+            },
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "update_plan".to_string(),
+                arguments: newer_args_json,
+                call_id: "call-2".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-2".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: UPDATE_PLAN_SUCCESS_OUTPUT.to_string(),
+                    success: Some(true),
+                    ..Default::default()
+                },
+            },
+        ];
+
+        assert!(last_backfillable_update_plan_from_history(&items).is_none());
+    }
+
+    #[test]
+    fn last_backfillable_update_plan_from_history_extracts_latest_unfinished_success() {
+        let older_args = UpdatePlanArgs {
+            explanation: Some("Keep going".to_string()),
+            plan: vec![codex_protocol::plan_tool::PlanItemArg {
+                step: "Inspect workspace".to_string(),
+                status: StepStatus::Pending,
+            }],
+        };
+        let latest_args = UpdatePlanArgs {
+            explanation: Some("Patch compact".to_string()),
+            plan: vec![codex_protocol::plan_tool::PlanItemArg {
+                step: "Patch compact".to_string(),
+                status: StepStatus::InProgress,
+            }],
+        };
+        let older_args_json = serde_json::to_string(&older_args).expect("serialize args");
+        let latest_args_json = serde_json::to_string(&latest_args).expect("serialize args");
+        let items = vec![
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "update_plan".to_string(),
+                arguments: older_args_json,
+                call_id: "call-1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: UPDATE_PLAN_SUCCESS_OUTPUT.to_string(),
+                    success: Some(true),
+                    ..Default::default()
+                },
+            },
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "update_plan".to_string(),
+                arguments: latest_args_json,
+                call_id: "call-2".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-2".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: UPDATE_PLAN_SUCCESS_OUTPUT.to_string(),
+                    success: Some(true),
+                    ..Default::default()
+                },
+            },
+        ];
+
+        let backfilled = last_backfillable_update_plan_from_history(&items)
+            .expect("expected latest unfinished update_plan to be backfilled");
+
+        assert_eq!(
+            serde_json::to_value(&backfilled).expect("serialize backfilled args"),
+            serde_json::to_value(&latest_args).expect("serialize expected args")
+        );
+    }
+
+    #[test]
+    fn last_backfillable_update_plan_from_history_skips_failed_and_invalid_calls() {
+        let valid_args = UpdatePlanArgs {
+            explanation: Some("Recover".to_string()),
+            plan: vec![codex_protocol::plan_tool::PlanItemArg {
+                step: "Retry compact".to_string(),
+                status: StepStatus::Pending,
+            }],
+        };
+        let valid_args_json = serde_json::to_string(&valid_args).expect("serialize args");
+        let items = vec![
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "update_plan".to_string(),
+                arguments: valid_args_json,
+                call_id: "call-1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: UPDATE_PLAN_SUCCESS_OUTPUT.to_string(),
+                    success: Some(true),
+                    ..Default::default()
+                },
+            },
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "update_plan".to_string(),
+                arguments: "{".to_string(),
+                call_id: "call-2".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-2".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: UPDATE_PLAN_SUCCESS_OUTPUT.to_string(),
+                    success: Some(true),
+                    ..Default::default()
+                },
+            },
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "update_plan".to_string(),
+                arguments: serde_json::json!({
+                    "explanation": "Bad latest",
+                    "plan": [
+                        {
+                            "step": "Broken",
+                            "status": "in_progress"
+                        }
+                    ]
+                })
+                .to_string(),
+                call_id: "call-3".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-3".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: "update_plan is a TODO/checklist tool and is not allowed in Plan mode"
+                        .to_string(),
+                    ..Default::default()
+                },
+            },
+        ];
+
+        let backfilled = last_backfillable_update_plan_from_history(&items)
+            .expect("expected fallback update_plan to be backfilled");
+
+        assert_eq!(
+            serde_json::to_value(&backfilled).expect("serialize backfilled args"),
+            serde_json::to_value(&valid_args).expect("serialize expected args")
+        );
+    }
+
+    #[test]
+    fn last_backfillable_update_plan_from_history_accepts_deserialized_success_output() {
+        let args = UpdatePlanArgs {
+            explanation: Some("Continue".to_string()),
+            plan: vec![codex_protocol::plan_tool::PlanItemArg {
+                step: "Do work".to_string(),
+                status: StepStatus::InProgress,
+            }],
+        };
+        let args_json = serde_json::to_string(&args).expect("serialize args");
+        let items = vec![
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "update_plan".to_string(),
+                arguments: args_json,
+                call_id: "call-1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: UPDATE_PLAN_SUCCESS_OUTPUT.to_string(),
+                    success: None,
+                    ..Default::default()
+                },
+            },
+        ];
+
+        let backfilled = last_backfillable_update_plan_from_history(&items)
+            .expect("expected deserialized success output to remain backfillable");
+
+        assert_eq!(
+            serde_json::to_value(&backfilled).expect("serialize backfilled args"),
+            serde_json::to_value(&args).expect("serialize expected args")
+        );
+    }
+
+    #[test]
+    fn build_compacted_history_appends_backfilled_update_plan_pair() {
+        let args = UpdatePlanArgs {
+            explanation: Some("Continue".to_string()),
+            plan: vec![codex_protocol::plan_tool::PlanItemArg {
+                step: "Do work".to_string(),
+                status: StepStatus::InProgress,
+            }],
+        };
+
+        let history = build_compacted_history(
+            Vec::new(),
+            &["user".to_string()],
+            None,
+            Some(&args),
+            "SUMMARY",
+        );
+
+        assert_eq!(history.len(), 4);
+        assert_eq!(history[2..], backfilled_update_plan_items(&args),);
     }
 }

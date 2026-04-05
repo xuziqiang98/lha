@@ -1906,16 +1906,22 @@ impl Session {
                         // Compatibility path for older local compaction rollouts that did not
                         // persist replacement_history.
                         let user_messages = collect_user_messages(history.raw_items());
-                        let backfilled_plan_text =
+                        let (backfilled_plan_text, backfilled_update_plan) =
                             if self.enabled(Feature::BackfillCompactPlanContext) {
-                                compact::last_completed_plan_from_history(history.raw_items())
+                                (
+                                    compact::last_completed_plan_from_history(history.raw_items()),
+                                    compact::last_backfillable_update_plan_from_history(
+                                        history.raw_items(),
+                                    ),
+                                )
                             } else {
-                                None
+                                (None, None)
                             };
                         let rebuilt = compact::build_compacted_history(
                             self.build_initial_context(turn_context).await,
                             &user_messages,
                             backfilled_plan_text.as_deref(),
+                            backfilled_update_plan.as_ref(),
                             &compacted.message,
                         );
                         history.replace(rebuilt);
@@ -6964,6 +6970,7 @@ model_context_window = 64_000
             session.build_initial_context(turn_context).await,
             &user_messages1,
             None,
+            None,
             summary1,
         );
         live_history.replace(rebuilt1);
@@ -7000,6 +7007,7 @@ model_context_window = 64_000
         let rebuilt2 = compact::build_compacted_history(
             session.build_initial_context(turn_context).await,
             &user_messages2,
+            None,
             None,
             summary2,
         );

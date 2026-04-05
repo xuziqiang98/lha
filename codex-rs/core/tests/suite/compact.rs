@@ -21,6 +21,9 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::items::TurnItem;
+use codex_protocol::plan_tool::PlanItemArg;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_reasoning_item;
@@ -133,6 +136,26 @@ fn contains_assistant_text(input: &[serde_json::Value], expected: &str) -> bool 
                     arr.iter()
                         .any(|entry| entry.get("text").and_then(|v| v.as_str()) == Some(expected))
                 })
+    })
+}
+
+fn contains_function_call(input: &[serde_json::Value], name: &str, arguments: &str) -> bool {
+    input.iter().any(|item| {
+        item.get("type").and_then(|v| v.as_str()) == Some("function_call")
+            && item.get("name").and_then(|v| v.as_str()) == Some(name)
+            && item.get("arguments").and_then(|v| v.as_str()) == Some(arguments)
+    })
+}
+
+fn contains_function_call_output(
+    input: &[serde_json::Value],
+    call_id: &str,
+    expected_output: &str,
+) -> bool {
+    input.iter().any(|item| {
+        item.get("type").and_then(|v| v.as_str()) == Some("function_call_output")
+            && item.get("call_id").and_then(|v| v.as_str()) == Some(call_id)
+            && item.get("output").and_then(|v| v.as_str()) == Some(expected_output)
     })
 }
 
@@ -832,6 +855,414 @@ async fn local_compact_persists_replacement_history_in_rollout() {
     assert!(
         saw_persisted_replacement_history,
         "expected rollout to persist local compaction replacement history with the backfilled plan"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_compact_backfills_latest_unfinished_update_plan() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let call_id = "plan-call-1";
+    let update_plan_args = serde_json::json!({
+        "explanation": "Keep moving",
+        "plan": [
+            { "step": "Inspect compact flow", "status": "completed" },
+            { "step": "Backfill checklist", "status": "in_progress" }
+        ]
+    })
+    .to_string();
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call(call_id, "update_plan", &update_plan_args),
+                ev_completed("r1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", SUMMARY_TEXT),
+                ev_completed("r2"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", FINAL_REPLY),
+                ev_completed("r3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.features.enable(Feature::BackfillCompactPlanContext);
+        })
+        .build(&server)
+        .await
+        .unwrap()
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "please track progress".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: THIRD_USER_MSG.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 3);
+
+    let follow_up_input = requests[2]
+        .body_json()
+        .get("input")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .expect("follow-up input should be an array");
+
+    assert!(
+        contains_function_call(&follow_up_input, "update_plan", &update_plan_args),
+        "expected compacted follow-up history to include a backfilled update_plan call"
+    );
+    assert!(
+        contains_function_call_output(
+            &follow_up_input,
+            "compact_backfill_update_plan",
+            "Plan updated",
+        ),
+        "expected compacted follow-up history to include a matching update_plan output"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_compact_does_not_backfill_completed_update_plan() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let call_id = "plan-call-complete";
+    let completed_plan_args = serde_json::json!({
+        "explanation": "Done",
+        "plan": [
+            { "step": "Inspect compact flow", "status": "completed" }
+        ]
+    })
+    .to_string();
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call(call_id, "update_plan", &completed_plan_args),
+                ev_completed("r1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", SUMMARY_TEXT),
+                ev_completed("r2"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", FINAL_REPLY),
+                ev_completed("r3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.features.enable(Feature::BackfillCompactPlanContext);
+        })
+        .build(&server)
+        .await
+        .unwrap()
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "finish the checklist".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: THIRD_USER_MSG.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    let follow_up_body = requests[2].body_json().to_string();
+    assert!(
+        !follow_up_body.contains("\"name\":\"update_plan\""),
+        "expected compacted follow-up history to omit fully completed update_plan state"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_compact_does_not_revive_older_unfinished_update_plan_after_completion() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let unfinished_plan_args = serde_json::json!({
+        "explanation": "Keep moving",
+        "plan": [
+            { "step": "Inspect compact flow", "status": "completed" },
+            { "step": "Backfill checklist", "status": "in_progress" }
+        ]
+    })
+    .to_string();
+    let completed_plan_args = serde_json::json!({
+        "explanation": "Done",
+        "plan": [
+            { "step": "Inspect compact flow", "status": "completed" },
+            { "step": "Backfill checklist", "status": "completed" }
+        ]
+    })
+    .to_string();
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call("plan-call-1", "update_plan", &unfinished_plan_args),
+                ev_completed("r1"),
+            ]),
+            sse(vec![
+                ev_function_call("plan-call-2", "update_plan", &completed_plan_args),
+                ev_completed("r2"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", SUMMARY_TEXT),
+                ev_completed("r3"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m4", FINAL_REPLY),
+                ev_completed("r4"),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.features.enable(Feature::BackfillCompactPlanContext);
+        })
+        .build(&server)
+        .await
+        .unwrap()
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "please track progress".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "finish the checklist".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: THIRD_USER_MSG.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    let follow_up_body = requests[3].body_json().to_string();
+    assert!(
+        !follow_up_body.contains("\"name\":\"update_plan\""),
+        "expected compacted follow-up history to omit stale unfinished checklist after a later completed update_plan"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_compact_persists_backfilled_update_plan_in_rollout() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let call_id = "plan-rollout-call";
+    let update_plan_args = UpdatePlanArgs {
+        explanation: Some("Keep moving".to_string()),
+        plan: vec![
+            PlanItemArg {
+                step: "Inspect compact flow".to_string(),
+                status: StepStatus::Completed,
+            },
+            PlanItemArg {
+                step: "Backfill checklist".to_string(),
+                status: StepStatus::InProgress,
+            },
+        ],
+    };
+    let update_plan_args_json =
+        serde_json::to_string(&update_plan_args).expect("serialize update_plan args");
+
+    mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call(call_id, "update_plan", &update_plan_args_json),
+                ev_completed("r1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", SUMMARY_TEXT),
+                ev_completed("r2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.features.enable(Feature::BackfillCompactPlanContext);
+        })
+        .build(&server)
+        .await
+        .unwrap();
+    let codex = test.codex.clone();
+    let rollout_path = test.session_configured.rollout_path.expect("rollout path");
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "track work".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Shutdown).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
+
+    let rollout_text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
+        panic!(
+            "failed to read rollout file {}: {e}",
+            rollout_path.display()
+        )
+    });
+    let expected_summary_message = summary_with_prefix(SUMMARY_TEXT);
+    let mut saw_persisted_replacement_history = false;
+
+    for line in rollout_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let Ok(entry) = serde_json::from_str::<RolloutLine>(line) else {
+            continue;
+        };
+        if let RolloutItem::Compacted(compacted) = entry.item
+            && compacted.message == expected_summary_message
+            && compacted
+                .replacement_history
+                .as_ref()
+                .is_some_and(|history| {
+                    history.iter().any(|item| {
+                        matches!(
+                            item,
+                            codex_protocol::models::ResponseItem::FunctionCall {
+                                name,
+                                arguments,
+                                ..
+                            } if name == "update_plan" && arguments == &update_plan_args_json
+                        )
+                    }) && history.iter().any(|item| {
+                        matches!(
+                            item,
+                            codex_protocol::models::ResponseItem::FunctionCallOutput {
+                                call_id,
+                                output,
+                            } if call_id == "compact_backfill_update_plan"
+                                && output.content == "Plan updated"
+                        )
+                    })
+                })
+        {
+            saw_persisted_replacement_history = true;
+            break;
+        }
+    }
+
+    assert!(
+        saw_persisted_replacement_history,
+        "expected rollout to persist local compaction replacement history with the backfilled update_plan"
     );
 }
 

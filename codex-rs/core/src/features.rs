@@ -589,8 +589,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "backfill_compact_plan_context",
         stage: Stage::Experimental {
             name: "Backfill compact plan context",
-            menu_description: "After compaction, keep the last completed proposed plan in model context as an assistant message.",
-            announcement: "NEW! Preserve the latest proposed plan across compaction in /experimental.",
+            menu_description: "After compaction, keep the latest proposed plan and unfinished update_plan checklist in model context.",
+            announcement: "NEW! Preserve the latest proposed plan and unfinished checklist across compaction in /experimental.",
         },
         default_enabled: false,
     },
@@ -836,12 +836,14 @@ mod tests {
         );
         assert_eq!(
             Some(
-                "After compaction, keep the last completed proposed plan in model context as an assistant message.",
+                "After compaction, keep the latest proposed plan and unfinished update_plan checklist in model context.",
             ),
             stage.experimental_menu_description()
         );
         assert_eq!(
-            Some("NEW! Preserve the latest proposed plan across compaction in /experimental."),
+            Some(
+                "NEW! Preserve the latest proposed plan and unfinished checklist across compaction in /experimental.",
+            ),
             stage.experimental_announcement()
         );
     }

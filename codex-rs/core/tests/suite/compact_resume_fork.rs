@@ -56,6 +56,17 @@ fn json_fragment(text: &str) -> String {
         .to_string()
 }
 
+fn update_plan_args_json() -> String {
+    serde_json::json!({
+        "explanation": "Keep going",
+        "plan": [
+            { "step": "Inspect compact flow", "status": "completed" },
+            { "step": "Backfill checklist", "status": "in_progress" }
+        ]
+    })
+    .to_string()
+}
+
 fn filter_out_ghost_snapshot_entries(items: &[Value]) -> Vec<Value> {
     items
         .iter()
@@ -950,6 +961,101 @@ async fn compact_resume_and_fork_preserve_persisted_backfilled_plan_context() {
     assert!(!after_resume_body.contains("Outro"));
     assert!(!after_fork_body.contains("Intro"));
     assert!(!after_fork_body.contains("Outro"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compacted_update_plan_survives_resume_and_fork_when_flag_is_disabled_later() {
+    if network_disabled() {
+        return;
+    }
+
+    let server = MockServer::start().await;
+    let update_plan_args = update_plan_args_json();
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                core_test_support::responses::ev_function_call(
+                    "plan-call-1",
+                    "update_plan",
+                    &update_plan_args,
+                ),
+                ev_completed("r1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", SUMMARY_TEXT),
+                ev_completed("r2"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", "AFTER_COMPACT_REPLY"),
+                ev_completed("r3"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m4", "AFTER_RESUME_REPLY"),
+                ev_completed("r4"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m5", "AFTER_FORK_REPLY"),
+                ev_completed("r5"),
+            ]),
+        ],
+    )
+    .await;
+
+    let (_home, config, manager, base) =
+        start_test_conversation_with_plan_backfill(&server, None).await;
+
+    base.submit(Op::UserInput {
+        items: vec![UserInput::Text {
+            text: "please track progress".into(),
+            text_elements: Vec::new(),
+        }],
+        final_output_json_schema: None,
+    })
+    .await
+    .expect("submit update_plan turn");
+    wait_for_event(&base, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    compact_conversation(&base).await;
+    user_turn(&base, "AFTER_COMPACT").await;
+    let base_path = fetch_conversation_path(&base).await;
+
+    let mut resumed_config = config.clone();
+    resumed_config
+        .features
+        .disable(Feature::BackfillCompactPlanContext);
+    let resumed = resume_conversation(&manager, &resumed_config, base_path).await;
+    user_turn(&resumed, "AFTER_RESUME").await;
+    let resumed_path = fetch_conversation_path(&resumed).await;
+
+    let forked = fork_thread(&manager, &resumed_config, resumed_path, 2).await;
+    user_turn(&forked, "AFTER_FORK").await;
+
+    let requests = gather_request_bodies(std::slice::from_ref(&request_log));
+    let after_compact_body = requests[2].to_string();
+    let after_resume_body = requests[3].to_string();
+    let after_fork_body = requests[4].to_string();
+
+    assert!(
+        after_compact_body.contains("\"name\":\"update_plan\""),
+        "expected post-compact request to preserve the backfilled checklist"
+    );
+    assert!(
+        after_resume_body.contains("\"name\":\"update_plan\""),
+        "expected resumed request to preserve the backfilled checklist"
+    );
+    assert!(
+        after_fork_body.contains("\"name\":\"update_plan\""),
+        "expected forked request to preserve the backfilled checklist"
+    );
+    assert!(
+        after_resume_body.contains(&json_fragment(&update_plan_args)),
+        "expected resumed request to preserve the backfilled checklist arguments"
+    );
+    assert!(
+        after_fork_body.contains(&json_fragment(&update_plan_args)),
+        "expected forked request to preserve the backfilled checklist arguments"
+    );
 }
 
 fn normalize_line_endings(value: &mut Value) {

@@ -537,3 +537,102 @@ async fn remote_compact_backfills_latest_plan_into_replacement_history() -> Resu
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_backfills_latest_unfinished_update_plan() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.features.enable(Feature::RemoteCompaction);
+                config.features.enable(Feature::BackfillCompactPlanContext);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let update_plan_args = serde_json::json!({
+        "explanation": "Keep going",
+        "plan": [
+            { "step": "Inspect compact flow", "status": "completed" },
+            { "step": "Backfill checklist", "status": "in_progress" }
+        ]
+    })
+    .to_string();
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_function_call("plan-call-1", "update_plan", &update_plan_args),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_COMPACT_REPLY"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let compacted_history = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "REMOTE_COMPACTED_SUMMARY".to_string(),
+        }],
+        end_turn: None,
+    }];
+    responses::mount_compact_json_once(
+        harness.server(),
+        serde_json::json!({ "output": compacted_history }),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "please track progress".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "after compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let follow_up_body = responses_mock
+        .requests()
+        .last()
+        .expect("follow-up request missing")
+        .body_json()
+        .to_string();
+    assert!(
+        follow_up_body.contains("\"name\":\"update_plan\""),
+        "expected remote compacted history to backfill update_plan call"
+    );
+    assert!(
+        follow_up_body.contains(&serde_json::to_string(&update_plan_args)?),
+        "expected remote compacted history to preserve update_plan arguments"
+    );
+    assert!(
+        follow_up_body.contains("\"call_id\":\"compact_backfill_update_plan\""),
+        "expected remote compacted history to include the synthetic update_plan output"
+    );
+
+    Ok(())
+}
