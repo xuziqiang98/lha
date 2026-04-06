@@ -203,6 +203,7 @@ async fn run_compact_task_inner(
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
     let user_messages = collect_user_messages(history_items);
     let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+    let initial_context_len = initial_context.len();
     let mut new_history = build_compacted_history(
         initial_context,
         &user_messages,
@@ -217,13 +218,15 @@ async fn run_compact_task_inner(
         .cloned()
         .collect();
     new_history.extend(ghost_snapshots);
-    let replacement_history = new_history.clone();
+    let replacement_history =
+        replacement_history_without_initial_context(&new_history, initial_context_len);
     sess.replace_history(new_history).await;
     sess.recompute_token_usage(&turn_context).await;
 
     let rollout_item = RolloutItem::Compacted(CompactedItem {
         message: summary_text.clone(),
         replacement_history: Some(replacement_history),
+        replacement_history_omits_initial_context: true,
     });
     sess.persist_rollout_items(&[rollout_item]).await;
 
@@ -311,6 +314,13 @@ pub(crate) fn build_compacted_history(
         summary_text,
         COMPACT_USER_MESSAGE_MAX_TOKENS,
     )
+}
+
+pub(crate) fn replacement_history_without_initial_context(
+    compacted_history: &[ResponseItem],
+    initial_context_len: usize,
+) -> Vec<ResponseItem> {
+    compacted_history[initial_context_len..].to_vec()
 }
 
 fn build_compacted_history_with_limit(
@@ -775,6 +785,42 @@ mod tests {
             other => panic!("unexpected item in history: {other:?}"),
         };
         assert_eq!(summary_text, "SUMMARY");
+    }
+
+    #[test]
+    fn replacement_history_without_initial_context_omits_prefix_items() {
+        let initial_context = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "developer instructions".to_string(),
+                }],
+                end_turn: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<environment_context>\n  <cwd>/source</cwd>\n</environment_context>"
+                        .to_string(),
+                }],
+                end_turn: None,
+            },
+        ];
+        let history = build_compacted_history(
+            initial_context.clone(),
+            &["user".to_string()],
+            None,
+            None,
+            &[],
+            "SUMMARY",
+        );
+
+        let replacement =
+            replacement_history_without_initial_context(&history, initial_context.len());
+
+        assert_eq!(replacement, history[initial_context.len()..].to_vec());
     }
 
     #[test]

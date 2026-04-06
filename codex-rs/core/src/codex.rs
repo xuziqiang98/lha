@@ -5194,6 +5194,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resumed_history_keeps_prefixless_local_compaction_until_seeded() {
+        let (source_session, source_turn_context) = make_session_and_context_with_prefix_overrides(
+            "/source",
+            "source developer instructions",
+            "source user instructions",
+        )
+        .await;
+        let (rollout_items, replacement_history) =
+            prefixless_local_compaction_rollout(&source_session, &source_turn_context, "summary")
+                .await;
+
+        let (session, turn_context) = make_session_and_context_with_prefix_overrides(
+            "/target",
+            "target developer instructions",
+            "target user instructions",
+        )
+        .await;
+
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }))
+            .await;
+
+        let history_before_seed = session.clone_history().await;
+        assert_eq!(replacement_history, history_before_seed.raw_items());
+
+        session.seed_initial_context_if_needed(&turn_context).await;
+        let mut expected = replacement_history;
+        expected.extend(session.build_initial_context(&turn_context).await);
+        let history_after_seed = session.clone_history().await;
+        assert_eq!(expected, history_after_seed.raw_items());
+    }
+
+    #[tokio::test]
+    async fn forked_history_appends_current_initial_context_after_prefixless_local_compaction() {
+        let (source_session, source_turn_context) = make_session_and_context_with_prefix_overrides(
+            "/source",
+            "source developer instructions",
+            "source user instructions",
+        )
+        .await;
+        let (rollout_items, replacement_history) =
+            prefixless_local_compaction_rollout(&source_session, &source_turn_context, "summary")
+                .await;
+
+        let (session, turn_context) = make_session_and_context_with_prefix_overrides(
+            "/target",
+            "target developer instructions",
+            "target user instructions",
+        )
+        .await;
+
+        session
+            .record_initial_history(InitialHistory::Forked(rollout_items))
+            .await;
+
+        let mut expected = replacement_history;
+        expected.extend(session.build_initial_context(&turn_context).await);
+        let history = session.state.lock().await.clone_history();
+        assert_eq!(expected, history.raw_items());
+    }
+
+    #[tokio::test]
     async fn record_initial_history_seeds_token_info_from_rollout() {
         let (session, turn_context) = make_session_and_context().await;
         let (mut rollout_items, _expected) = sample_rollout(&session, &turn_context).await;
@@ -5305,6 +5371,7 @@ mod tests {
         rollout_items.push(RolloutItem::Compacted(CompactedItem {
             message: "summary one".to_string(),
             replacement_history: None,
+            replacement_history_omits_initial_context: false,
         }));
 
         let user_two = ResponseItem::Message {
@@ -5331,6 +5398,7 @@ mod tests {
         rollout_items.push(RolloutItem::Compacted(CompactedItem {
             message: "summary two".to_string(),
             replacement_history: None,
+            replacement_history_omits_initial_context: false,
         }));
 
         let reconstructed = session
@@ -6331,6 +6399,46 @@ mod tests {
         make_session_and_context_for_config(config).await
     }
 
+    async fn make_session_and_context_with_prefix_overrides(
+        cwd: &str,
+        developer_instructions: &str,
+        user_instructions: &str,
+    ) -> (Session, TurnContext) {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(codex_home.path()).await;
+        config.personality = None;
+        config.cwd = PathBuf::from(cwd);
+        config.developer_instructions = Some(developer_instructions.to_string());
+        config.user_instructions = Some(user_instructions.to_string());
+        make_session_and_context_for_config(config).await
+    }
+
+    async fn prefixless_local_compaction_rollout(
+        session: &Session,
+        turn_context: &TurnContext,
+        summary: &str,
+    ) -> (Vec<RolloutItem>, Vec<ResponseItem>) {
+        let initial_context = session.build_initial_context(turn_context).await;
+        let compacted_history = compact::build_compacted_history(
+            initial_context.clone(),
+            &["source user".to_string()],
+            None,
+            None,
+            &[],
+            summary,
+        );
+        let replacement_history = compact::replacement_history_without_initial_context(
+            &compacted_history,
+            initial_context.len(),
+        );
+        let rollout_items = vec![RolloutItem::Compacted(CompactedItem {
+            message: summary.to_string(),
+            replacement_history: Some(replacement_history.clone()),
+            replacement_history_omits_initial_context: true,
+        })];
+        (rollout_items, replacement_history)
+    }
+
     // Like make_session_and_context, but returns Arc<Session> and the event receiver
     // so tests can assert on emitted events.
     pub(crate) async fn make_session_and_context_with_rx() -> (
@@ -6982,6 +7090,7 @@ model_context_window = 64_000
         rollout_items.push(RolloutItem::Compacted(CompactedItem {
             message: summary1.to_string(),
             replacement_history: None,
+            replacement_history_omits_initial_context: false,
         }));
 
         let user2 = ResponseItem::Message {
@@ -7021,6 +7130,7 @@ model_context_window = 64_000
         rollout_items.push(RolloutItem::Compacted(CompactedItem {
             message: summary2.to_string(),
             replacement_history: None,
+            replacement_history_omits_initial_context: false,
         }));
 
         let user3 = ResponseItem::Message {
