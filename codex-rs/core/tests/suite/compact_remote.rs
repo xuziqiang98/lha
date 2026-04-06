@@ -28,6 +28,16 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
+use std::path::Path;
+
+fn write_skill(home: &Path, name: &str, description: &str, body: &str) -> std::path::PathBuf {
+    let skill_dir = home.join("skills").join(name);
+    fs::create_dir_all(&skill_dir).expect("create skill dir");
+    let contents = format!("---\nname: {name}\ndescription: {description}\n---\n\n{body}\n");
+    let path = skill_dir.join("SKILL.md");
+    fs::write(&path, contents).expect("write skill");
+    path
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_replaces_history_for_followups() -> Result<()> {
@@ -534,6 +544,144 @@ async fn remote_compact_backfills_latest_plan_into_replacement_history() -> Resu
         !follow_up_body.contains("Outro"),
         "expected remote compacted history to strip assistant prose around the plan"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_backfills_recent_skills_into_replacement_history() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let skill_body = "follow the remote demo skill";
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_pre_build_hook(|home| {
+                write_skill(home, "demo", "demo skill", skill_body);
+            })
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.features.enable(Feature::RemoteCompaction);
+                config.features.enable(Feature::BackfillCompactPlanContext);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+    let skill_path = std::fs::canonicalize(
+        harness
+            .test()
+            .codex_home_path()
+            .join("skills/demo/SKILL.md"),
+    )?;
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "FIRST_REMOTE_REPLY"),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_SECOND_COMPACT_REPLY"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let compacted_history = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "REMOTE_COMPACTED_SUMMARY".to_string(),
+            }],
+            end_turn: None,
+        },
+        ResponseItem::Compaction {
+            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        },
+    ];
+    responses::mount_compact_json_once(
+        harness.server(),
+        serde_json::json!({ "output": compacted_history.clone() }),
+    )
+    .await;
+    responses::mount_compact_json_once(
+        harness.server(),
+        serde_json::json!({ "output": compacted_history.clone() }),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![
+                UserInput::Text {
+                    text: "please use $demo".to_string(),
+                    text_elements: Vec::new(),
+                },
+                UserInput::Skill {
+                    name: "demo".to_string(),
+                    path: skill_path.clone(),
+                },
+            ],
+            final_output_json_schema: None,
+            cwd: harness.test().cwd_path().to_path_buf(),
+            approval_policy: codex_core::protocol::AskForApproval::Never,
+            sandbox_policy: codex_core::protocol::SandboxPolicy::DangerFullAccess,
+            model: harness.test().session_configured.model.clone(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "after compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let follow_up_body = responses_mock
+        .requests()
+        .last()
+        .expect("follow-up request missing")
+        .body_json()
+        .to_string();
+    let compact_requests = harness
+        .server()
+        .received_requests()
+        .await
+        .expect("received requests");
+    let compact_bodies = compact_requests
+        .iter()
+        .filter(|request| request.url.path() == "/v1/responses/compact")
+        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+        .collect::<Vec<_>>();
+    let second_compact_body = compact_bodies
+        .last()
+        .expect("second compact request missing");
+    let synthetic_skill_prefix = "<skill source=\\\"compact_backfill\\\">\\n<name>demo</name>";
+
+    assert!(!second_compact_body.contains(synthetic_skill_prefix));
+    assert!(!second_compact_body.contains(skill_path.to_string_lossy().as_ref()));
+    assert!(!second_compact_body.contains(skill_body));
+
+    assert!(follow_up_body.contains(synthetic_skill_prefix));
+    assert!(follow_up_body.contains(skill_path.to_string_lossy().as_ref()));
+    assert!(follow_up_body.contains(skill_body));
 
     Ok(())
 }

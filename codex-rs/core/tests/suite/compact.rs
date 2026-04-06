@@ -48,6 +48,8 @@ use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::fs;
+use std::path::Path;
 use std::process::Command as StdCommand;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -84,6 +86,15 @@ fn auto_summary(summary: &str) -> String {
 
 fn summary_with_prefix(summary: &str) -> String {
     format!("{SUMMARY_PREFIX}\n{summary}")
+}
+
+fn write_skill(home: &Path, name: &str, description: &str, body: &str) -> std::path::PathBuf {
+    let skill_dir = home.join("skills").join(name);
+    fs::create_dir_all(&skill_dir).expect("create skill dir");
+    let contents = format!("---\nname: {name}\ndescription: {description}\n---\n\n{body}\n");
+    let path = skill_dir.join("SKILL.md");
+    fs::write(&path, contents).expect("write skill");
+    path
 }
 
 fn drop_call_id(value: &mut serde_json::Value) {
@@ -953,6 +964,131 @@ async fn local_compact_backfills_latest_unfinished_update_plan() {
             "Plan updated",
         ),
         "expected compacted follow-up history to include a matching update_plan output"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_compact_backfills_recent_skills_into_follow_up_history() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let skill_body = "follow the demo skill";
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_pre_build_hook(|home| {
+            write_skill(home, "demo", "demo skill", skill_body);
+        })
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.features.enable(Feature::BackfillCompactPlanContext);
+        })
+        .build(&server)
+        .await
+        .unwrap();
+    let codex = test.codex.clone();
+    let skill_path = std::fs::canonicalize(test.codex_home_path().join("skills/demo/SKILL.md"))
+        .expect("canonicalize skill path");
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", FIRST_REPLY),
+                ev_completed("r1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", SUMMARY_TEXT),
+                ev_completed("r2"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", "SECOND_SUMMARY"),
+                ev_completed("r3"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m4", FINAL_REPLY),
+                ev_completed("r4"),
+            ]),
+        ],
+    )
+    .await;
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![
+                UserInput::Text {
+                    text: "please use $demo".to_string(),
+                    text_elements: Vec::new(),
+                },
+                UserInput::Skill {
+                    name: "demo".to_string(),
+                    path: skill_path.clone(),
+                },
+            ],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: THIRD_USER_MSG.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    let second_compact_body = requests[2].body_json().to_string();
+    let follow_up_body = requests[3].body_json().to_string();
+    let skill_path_text = skill_path.to_string_lossy();
+    let synthetic_skill_prefix = "<skill source=\\\"compact_backfill\\\">\\n<name>demo</name>";
+
+    assert!(
+        !second_compact_body.contains(synthetic_skill_prefix),
+        "expected second compact prompt to exclude synthetic skill backfill"
+    );
+    assert!(
+        !second_compact_body.contains(skill_path_text.as_ref()),
+        "expected second compact prompt to exclude synthetic skill path"
+    );
+    assert!(
+        !second_compact_body.contains(skill_body),
+        "expected second compact prompt to exclude synthetic skill contents"
+    );
+
+    assert!(
+        follow_up_body.contains(synthetic_skill_prefix),
+        "expected follow-up request to preserve synthetic skill backfill"
+    );
+    assert!(
+        follow_up_body.contains(skill_path_text.as_ref()),
+        "expected follow-up request to retain synthetic skill path"
+    );
+    assert!(
+        follow_up_body.contains(skill_body),
+        "expected follow-up request to retain synthetic skill contents"
     );
 }
 

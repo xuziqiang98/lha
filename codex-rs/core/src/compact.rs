@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::ModelProviderInfo;
@@ -9,6 +10,8 @@ use crate::codex::get_last_assistant_message_from_turn;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
+use crate::instructions::SkillInstructionSource;
+use crate::instructions::SkillInstructions;
 use crate::proposed_plan_parser::extract_proposed_plan_text;
 use crate::protocol::CompactedItem;
 use crate::protocol::EventMsg;
@@ -37,6 +40,8 @@ use tracing::error;
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
+const BACKFILLED_SKILL_MAX_TOKENS_PER_SKILL: usize = 5_000;
+const BACKFILLED_SKILL_TOTAL_MAX_TOKENS: usize = 20_000;
 const PROPOSED_PLAN_OPEN_TAG: &str = "<proposed_plan>\n";
 const PROPOSED_PLAN_CLOSE_TAG: &str = "</proposed_plan>";
 const BACKFILLED_UPDATE_PLAN_CALL_ID: &str = "compact_backfill_update_plan";
@@ -86,14 +91,15 @@ async fn run_compact_task_inner(
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let mut history = sess.clone_history().await;
-    let (backfilled_plan_text, backfilled_update_plan) =
+    let (backfilled_plan_text, backfilled_update_plan, backfilled_skills) =
         if sess.enabled(Feature::BackfillCompactPlanContext) {
             (
                 last_completed_plan_from_history(history.raw_items()),
                 last_backfillable_update_plan_from_history(history.raw_items()),
+                recent_backfillable_skills_from_history(history.raw_items()),
             )
         } else {
-            (None, None)
+            (None, None, Vec::new())
         };
     history.record_items(
         &[initial_input_for_turn.into()],
@@ -128,7 +134,7 @@ async fn run_compact_task_inner(
 
     loop {
         // Clone is required because of the loop
-        let turn_input = history.clone().for_prompt();
+        let turn_input = history.clone().for_compaction_prompt();
         let turn_input_len = turn_input.len();
         let prompt = Prompt {
             input: turn_input,
@@ -202,6 +208,7 @@ async fn run_compact_task_inner(
         &user_messages,
         backfilled_plan_text.as_deref(),
         backfilled_update_plan.as_ref(),
+        &backfilled_skills,
         &summary_text,
     );
     let ghost_snapshots: Vec<ResponseItem> = history_items
@@ -292,6 +299,7 @@ pub(crate) fn build_compacted_history(
     user_messages: &[String],
     backfilled_plan_text: Option<&str>,
     backfilled_update_plan: Option<&UpdatePlanArgs>,
+    backfilled_skills: &[SkillInstructions],
     summary_text: &str,
 ) -> Vec<ResponseItem> {
     build_compacted_history_with_limit(
@@ -299,6 +307,7 @@ pub(crate) fn build_compacted_history(
         user_messages,
         backfilled_plan_text,
         backfilled_update_plan,
+        backfilled_skills,
         summary_text,
         COMPACT_USER_MESSAGE_MAX_TOKENS,
     )
@@ -309,6 +318,7 @@ fn build_compacted_history_with_limit(
     user_messages: &[String],
     backfilled_plan_text: Option<&str>,
     backfilled_update_plan: Option<&UpdatePlanArgs>,
+    backfilled_skills: &[SkillInstructions],
     summary_text: &str,
     max_tokens: usize,
 ) -> Vec<ResponseItem> {
@@ -362,6 +372,10 @@ fn build_compacted_history_with_limit(
 
     if let Some(update_plan) = backfilled_update_plan {
         history.extend(backfilled_update_plan_items(update_plan));
+    }
+
+    if !backfilled_skills.is_empty() {
+        history.extend(backfilled_skill_items(backfilled_skills));
     }
 
     history
@@ -467,6 +481,110 @@ pub(crate) fn backfilled_update_plan_items(args: &UpdatePlanArgs) -> Vec<Respons
     ]
 }
 
+pub(crate) fn recent_backfillable_skills_from_history(
+    items: &[ResponseItem],
+) -> Vec<SkillInstructions> {
+    let compact_backfilled =
+        collect_backfillable_skills_from_history(items, SkillInstructionSource::CompactBackfill);
+    let direct = collect_backfillable_skills_from_history(items, SkillInstructionSource::Direct);
+    let merged = merge_backfillable_skills(compact_backfilled, direct);
+
+    apply_backfilled_skill_budget(merged)
+}
+
+pub(crate) fn backfilled_skill_items(skills: &[SkillInstructions]) -> Vec<ResponseItem> {
+    skills
+        .iter()
+        .cloned()
+        .map(SkillInstructions::into_backfilled_response_item)
+        .collect()
+}
+
+fn rendered_skill_message_text(skill: &SkillInstructions) -> String {
+    let item = skill.clone().into_backfilled_response_item();
+    let ResponseItem::Message { content, .. } = item else {
+        return String::new();
+    };
+    content_items_to_text(&content).unwrap_or_default()
+}
+
+fn collect_backfillable_skills_from_history(
+    items: &[ResponseItem],
+    expected_source: SkillInstructionSource,
+) -> Vec<SkillInstructions> {
+    let mut seen_paths = HashSet::new();
+    let mut collected = Vec::new();
+
+    for item in items.iter().rev() {
+        let ResponseItem::Message { role, content, .. } = item else {
+            continue;
+        };
+        if role != "user" {
+            continue;
+        }
+
+        let Some((skill, source)) = SkillInstructions::from_message_with_source(content) else {
+            continue;
+        };
+        if source != expected_source {
+            continue;
+        }
+        if !seen_paths.insert(skill.path.clone()) {
+            continue;
+        }
+
+        collected.push(skill);
+    }
+
+    collected.reverse();
+    collected
+}
+
+fn merge_backfillable_skills(
+    compact_backfilled: Vec<SkillInstructions>,
+    direct: Vec<SkillInstructions>,
+) -> Vec<SkillInstructions> {
+    let mut merged = compact_backfilled;
+
+    for skill in direct {
+        if let Some(index) = merged
+            .iter()
+            .position(|existing| existing.path == skill.path)
+        {
+            merged.remove(index);
+        }
+        merged.push(skill);
+    }
+
+    merged
+}
+
+fn apply_backfilled_skill_budget(skills: Vec<SkillInstructions>) -> Vec<SkillInstructions> {
+    let mut selected = Vec::new();
+    let mut used_tokens = 0usize;
+
+    for skill in skills.into_iter().rev() {
+        let truncated = SkillInstructions {
+            contents: truncate_text(
+                &skill.contents,
+                TruncationPolicy::Tokens(BACKFILLED_SKILL_MAX_TOKENS_PER_SKILL),
+            ),
+            ..skill
+        };
+        let rendered = rendered_skill_message_text(&truncated);
+        let tokens = approx_token_count(&rendered);
+        if used_tokens + tokens > BACKFILLED_SKILL_TOTAL_MAX_TOKENS {
+            break;
+        }
+
+        used_tokens += tokens;
+        selected.push(truncated);
+    }
+
+    selected.reverse();
+    selected
+}
+
 pub(crate) fn proposed_plan_message(plan_text: &str) -> ResponseItem {
     let text = format!("{PROPOSED_PLAN_OPEN_TAG}{plan_text}{PROPOSED_PLAN_CLOSE_TAG}");
     ResponseItem::Message {
@@ -518,6 +636,7 @@ async fn drain_to_completed(
 mod tests {
 
     use super::*;
+    use crate::instructions::SkillInstructions;
     use crate::session_prefix::TURN_ABORTED_OPEN_TAG;
     use pretty_assertions::assert_eq;
 
@@ -624,6 +743,7 @@ mod tests {
             std::slice::from_ref(&big),
             None,
             None,
+            &[],
             "SUMMARY",
             max_tokens,
         );
@@ -663,8 +783,14 @@ mod tests {
         let user_messages = vec!["first user message".to_string()];
         let summary_text = "summary text";
 
-        let history =
-            build_compacted_history(initial_context, &user_messages, None, None, summary_text);
+        let history = build_compacted_history(
+            initial_context,
+            &user_messages,
+            None,
+            None,
+            &[],
+            summary_text,
+        );
         assert!(
             !history.is_empty(),
             "expected compacted history to include summary"
@@ -705,7 +831,8 @@ mod tests {
         ];
 
         let user_messages = collect_user_messages(&items);
-        let history = build_compacted_history(Vec::new(), &user_messages, None, None, "SUMMARY");
+        let history =
+            build_compacted_history(Vec::new(), &user_messages, None, None, &[], "SUMMARY");
 
         let found_marker = history.iter().any(|item| match item {
             ResponseItem::Message { role, content, .. } if role == "user" => {
@@ -761,6 +888,7 @@ mod tests {
             &["user".to_string()],
             Some("- Step 1\n"),
             None,
+            &[],
             "SUMMARY",
         );
 
@@ -1009,10 +1137,255 @@ mod tests {
             &["user".to_string()],
             None,
             Some(&args),
+            &[],
             "SUMMARY",
         );
 
         assert_eq!(history.len(), 4);
         assert_eq!(history[2..], backfilled_update_plan_items(&args),);
+    }
+
+    #[test]
+    fn recent_backfillable_skills_from_history_returns_latest_unique_skills() {
+        let older = ResponseItem::from(SkillInstructions {
+            name: "demo".to_string(),
+            path: "skills/demo/SKILL.md".to_string(),
+            contents: "older".to_string(),
+        });
+        let newer = ResponseItem::from(SkillInstructions {
+            name: "demo".to_string(),
+            path: "skills/demo/SKILL.md".to_string(),
+            contents: "newer".to_string(),
+        });
+        let second = ResponseItem::from(SkillInstructions {
+            name: "verify".to_string(),
+            path: "skills/verify/SKILL.md".to_string(),
+            contents: "verify".to_string(),
+        });
+
+        let backfilled = recent_backfillable_skills_from_history(&[older, second, newer]);
+
+        assert_eq!(
+            backfilled,
+            vec![
+                SkillInstructions {
+                    name: "verify".to_string(),
+                    path: "skills/verify/SKILL.md".to_string(),
+                    contents: "verify".to_string(),
+                },
+                SkillInstructions {
+                    name: "demo".to_string(),
+                    path: "skills/demo/SKILL.md".to_string(),
+                    contents: "newer".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn recent_backfillable_skills_from_history_skips_invalid_messages() {
+        let items = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<skill>\n<name>demo</name>\nmissing path\n</skill>".to_string(),
+                }],
+                end_turn: None,
+            },
+            ResponseItem::from(SkillInstructions {
+                name: "valid".to_string(),
+                path: "skills/valid/SKILL.md".to_string(),
+                contents: "body".to_string(),
+            }),
+        ];
+
+        let backfilled = recent_backfillable_skills_from_history(&items);
+
+        assert_eq!(
+            backfilled,
+            vec![SkillInstructions {
+                name: "valid".to_string(),
+                path: "skills/valid/SKILL.md".to_string(),
+                contents: "body".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn recent_backfillable_skills_from_history_preserves_compact_backfilled_skills() {
+        let backfilled = SkillInstructions {
+            name: "demo".to_string(),
+            path: "skills/demo/SKILL.md".to_string(),
+            contents: "backfilled".to_string(),
+        }
+        .into_backfilled_response_item();
+
+        let backfilled = recent_backfillable_skills_from_history(&[backfilled]);
+
+        assert_eq!(
+            backfilled,
+            vec![SkillInstructions {
+                name: "demo".to_string(),
+                path: "skills/demo/SKILL.md".to_string(),
+                contents: "backfilled".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn recent_backfillable_skills_from_history_direct_skill_overrides_older_compact_backfill() {
+        let backfilled = SkillInstructions {
+            name: "demo".to_string(),
+            path: "skills/demo/SKILL.md".to_string(),
+            contents: "backfilled".to_string(),
+        }
+        .into_backfilled_response_item();
+        let direct = ResponseItem::from(SkillInstructions {
+            name: "demo".to_string(),
+            path: "skills/demo/SKILL.md".to_string(),
+            contents: "direct".to_string(),
+        });
+
+        let backfilled = recent_backfillable_skills_from_history(&[backfilled, direct]);
+
+        assert_eq!(
+            backfilled,
+            vec![SkillInstructions {
+                name: "demo".to_string(),
+                path: "skills/demo/SKILL.md".to_string(),
+                contents: "direct".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn recent_backfillable_skills_from_history_keeps_persisted_then_newer_direct_order() {
+        let persisted_alpha = SkillInstructions {
+            name: "alpha".to_string(),
+            path: "skills/alpha/SKILL.md".to_string(),
+            contents: "persisted alpha".to_string(),
+        }
+        .into_backfilled_response_item();
+        let persisted_beta = SkillInstructions {
+            name: "beta".to_string(),
+            path: "skills/beta/SKILL.md".to_string(),
+            contents: "persisted beta".to_string(),
+        }
+        .into_backfilled_response_item();
+        let direct_gamma = ResponseItem::from(SkillInstructions {
+            name: "gamma".to_string(),
+            path: "skills/gamma/SKILL.md".to_string(),
+            contents: "direct gamma".to_string(),
+        });
+        let direct_delta = ResponseItem::from(SkillInstructions {
+            name: "delta".to_string(),
+            path: "skills/delta/SKILL.md".to_string(),
+            contents: "direct delta".to_string(),
+        });
+
+        let backfilled = recent_backfillable_skills_from_history(&[
+            persisted_alpha,
+            persisted_beta,
+            direct_gamma,
+            direct_delta,
+        ]);
+
+        assert_eq!(
+            backfilled
+                .iter()
+                .map(|skill| skill.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha", "beta", "gamma", "delta"]
+        );
+    }
+
+    #[test]
+    fn recent_backfillable_skills_from_history_truncates_large_skills() {
+        let big_contents = "word ".repeat(6_000);
+        let backfilled =
+            recent_backfillable_skills_from_history(&[ResponseItem::from(SkillInstructions {
+                name: "big".to_string(),
+                path: "skills/big/SKILL.md".to_string(),
+                contents: big_contents,
+            })]);
+
+        assert_eq!(backfilled.len(), 1);
+        assert!(
+            backfilled[0].contents.contains("tokens truncated"),
+            "expected truncated skill contents to include truncation marker"
+        );
+        assert_ne!(backfilled[0].contents, "word ".repeat(6_000));
+    }
+
+    #[test]
+    fn recent_backfillable_skills_from_history_stops_at_first_over_budget_skill_after_merge() {
+        let make_large_skill = |name: &str, path: &str| {
+            ResponseItem::from(SkillInstructions {
+                name: name.to_string(),
+                path: path.to_string(),
+                contents: "word ".repeat(6_000),
+            })
+        };
+        let items = vec![
+            SkillInstructions {
+                name: "alpha".to_string(),
+                path: "skills/alpha/SKILL.md".to_string(),
+                contents: "persisted alpha".to_string(),
+            }
+            .into_backfilled_response_item(),
+            make_large_skill("beta", "skills/beta/SKILL.md"),
+            make_large_skill("gamma", "skills/gamma/SKILL.md"),
+            make_large_skill("delta", "skills/delta/SKILL.md"),
+            make_large_skill("epsilon", "skills/epsilon/SKILL.md"),
+        ];
+
+        let backfilled = recent_backfillable_skills_from_history(&items);
+        let total_tokens: usize = backfilled
+            .iter()
+            .map(rendered_skill_message_text)
+            .map(|text| approx_token_count(&text))
+            .sum();
+
+        assert!(total_tokens <= BACKFILLED_SKILL_TOTAL_MAX_TOKENS);
+        assert_eq!(
+            backfilled
+                .iter()
+                .map(|skill| skill.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["gamma", "delta", "epsilon"]
+        );
+    }
+
+    #[test]
+    fn build_compacted_history_appends_backfilled_skills_after_plan_items() {
+        let args = UpdatePlanArgs {
+            explanation: Some("Continue".to_string()),
+            plan: vec![codex_protocol::plan_tool::PlanItemArg {
+                step: "Do work".to_string(),
+                status: StepStatus::InProgress,
+            }],
+        };
+        let skills = vec![SkillInstructions {
+            name: "demo".to_string(),
+            path: "skills/demo/SKILL.md".to_string(),
+            contents: "body".to_string(),
+        }];
+
+        let history = build_compacted_history(
+            Vec::new(),
+            &["user".to_string()],
+            Some("- Step 1\n"),
+            Some(&args),
+            &skills,
+            "SUMMARY",
+        );
+
+        assert_eq!(history[2], proposed_plan_message("- Step 1\n"));
+        assert_eq!(history[3..5], backfilled_update_plan_items(&args));
+        assert_eq!(
+            history[5],
+            skills[0].clone().into_backfilled_response_item()
+        );
     }
 }
