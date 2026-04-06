@@ -1,5 +1,6 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
+use crate::instructions::SkillInstructionSource;
 use crate::instructions::SkillInstructions;
 use crate::instructions::UserInstructions;
 use crate::session_prefix::is_session_prefix;
@@ -74,6 +75,23 @@ impl ContextManager {
         self.normalize_history();
         self.items
             .retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
+        self.items
+    }
+
+    /// Returns the history prepared for sending to the model during compaction.
+    /// Synthetic compact-backfilled skills are preserved in history for follow-up
+    /// turns, but excluded from the next compaction prompt to avoid re-summarizing
+    /// their contents.
+    pub(crate) fn for_compaction_prompt(mut self) -> Vec<ResponseItem> {
+        self.normalize_history();
+        self.items.retain(|item| match item {
+            ResponseItem::GhostSnapshot { .. } => false,
+            ResponseItem::Message { role, content, .. } if role == "user" => !matches!(
+                SkillInstructions::from_message_with_source(content),
+                Some((_, SkillInstructionSource::CompactBackfill))
+            ),
+            _ => true,
+        });
         self.items
     }
 

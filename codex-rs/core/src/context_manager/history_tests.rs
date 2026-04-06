@@ -1,4 +1,5 @@
 use super::*;
+use crate::instructions::SkillInstructions;
 use crate::truncate;
 use crate::truncate::TruncationPolicy;
 use codex_git::GhostCommit;
@@ -170,6 +171,51 @@ fn get_history_for_prompt_drops_ghost_commits() {
     let history = create_history_with_items(items);
     let filtered = history.for_prompt();
     assert_eq!(filtered, vec![]);
+}
+
+#[test]
+fn get_history_for_compaction_prompt_drops_compact_backfilled_skills() {
+    let items = vec![
+        SkillInstructions {
+            name: "demo".to_string(),
+            path: "skills/demo/SKILL.md".to_string(),
+            contents: "body".to_string(),
+        }
+        .into_backfilled_response_item(),
+        assistant_msg("summary"),
+    ];
+    let history = create_history_with_items(items);
+
+    assert_eq!(
+        history.for_compaction_prompt(),
+        vec![assistant_msg("summary")]
+    );
+}
+
+#[test]
+fn get_history_for_compaction_prompt_keeps_direct_skills() {
+    let direct: ResponseItem = SkillInstructions {
+        name: "demo".to_string(),
+        path: "skills/demo/SKILL.md".to_string(),
+        contents: "body".to_string(),
+    }
+    .into();
+    let history = create_history_with_items(vec![direct.clone()]);
+
+    assert_eq!(history.for_compaction_prompt(), vec![direct]);
+}
+
+#[test]
+fn get_history_for_prompt_keeps_compact_backfilled_skills() {
+    let backfilled = SkillInstructions {
+        name: "demo".to_string(),
+        path: "skills/demo/SKILL.md".to_string(),
+        contents: "body".to_string(),
+    }
+    .into_backfilled_response_item();
+    let history = create_history_with_items(vec![backfilled.clone()]);
+
+    assert_eq!(history.for_prompt(), vec![backfilled]);
 }
 
 #[test]

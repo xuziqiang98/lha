@@ -3,7 +3,14 @@ use std::sync::Arc;
 use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::compact::backfilled_skill_items;
+use crate::compact::backfilled_update_plan_items;
+use crate::compact::last_backfillable_update_plan_from_history;
+use crate::compact::last_completed_plan_from_history;
+use crate::compact::proposed_plan_message;
+use crate::compact::recent_backfillable_skills_from_history;
 use crate::error::Result as CodexResult;
+use crate::features::Feature;
 use crate::protocol::CompactedItem;
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
@@ -46,6 +53,16 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
     let history = sess.clone_history().await;
+    let (backfilled_plan_text, backfilled_update_plan, backfilled_skills) =
+        if sess.enabled(Feature::BackfillCompactPlanContext) {
+            (
+                last_completed_plan_from_history(history.raw_items()),
+                last_backfillable_update_plan_from_history(history.raw_items()),
+                recent_backfillable_skills_from_history(history.raw_items()),
+            )
+        } else {
+            (None, None, Vec::new())
+        };
 
     // Required to keep `/undo` available after compaction
     let ghost_snapshots: Vec<ResponseItem> = history
@@ -56,7 +73,7 @@ async fn run_remote_compact_task_inner_impl(
         .collect();
 
     let prompt = Prompt {
-        input: history.for_prompt(),
+        input: history.for_compaction_prompt(),
         tools: vec![],
         parallel_tool_calls: false,
         base_instructions: sess.get_base_instructions().await,
@@ -69,6 +86,15 @@ async fn run_remote_compact_task_inner_impl(
         .compact_conversation_history(&prompt)
         .await?;
 
+    if let Some(plan_text) = backfilled_plan_text.as_deref() {
+        new_history.push(proposed_plan_message(plan_text));
+    }
+    if let Some(update_plan) = backfilled_update_plan.as_ref() {
+        new_history.extend(backfilled_update_plan_items(update_plan));
+    }
+    if !backfilled_skills.is_empty() {
+        new_history.extend(backfilled_skill_items(&backfilled_skills));
+    }
     if !ghost_snapshots.is_empty() {
         new_history.extend(ghost_snapshots);
     }
@@ -78,6 +104,7 @@ async fn run_remote_compact_task_inner_impl(
     let compacted_item = CompactedItem {
         message: String::new(),
         replacement_history: Some(new_history),
+        replacement_history_omits_initial_context: false,
     };
     sess.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
         .await;

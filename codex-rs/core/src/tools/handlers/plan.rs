@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 pub struct PlanHandler;
+pub(crate) const UPDATE_PLAN_SUCCESS_OUTPUT: &str = "Plan updated";
 
 pub static PLAN_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut plan_item_props = BTreeMap::new();
@@ -113,7 +114,7 @@ pub(crate) async fn handle_update_plan(
     session
         .send_event(turn_context, EventMsg::PlanUpdate(args))
         .await;
-    Ok("Plan updated".to_string())
+    Ok(UPDATE_PLAN_SUCCESS_OUTPUT.to_string())
 }
 
 fn parse_update_plan_arguments(arguments: &str) -> Result<UpdatePlanArgs, FunctionCallError> {

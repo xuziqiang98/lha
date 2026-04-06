@@ -14,15 +14,21 @@ use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
+use codex_core::features::Feature;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::WarningEvent;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::Settings;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -48,6 +54,17 @@ fn json_fragment(text: &str) -> String {
         .expect("serialize text to JSON")
         .trim_matches('"')
         .to_string()
+}
+
+fn update_plan_args_json() -> String {
+    serde_json::json!({
+        "explanation": "Keep going",
+        "plan": [
+            { "step": "Inspect compact flow", "status": "completed" },
+            { "step": "Backfill checklist", "status": "in_progress" }
+        ]
+    })
+    .to_string()
 }
 
 fn filter_out_ghost_snapshot_entries(items: &[Value]) -> Vec<Value> {
@@ -839,6 +856,208 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     assert_eq!(expected, last_request_after_2_compacts);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compact_resume_and_fork_preserve_persisted_backfilled_plan_context() {
+    if network_disabled() {
+        println!("Skipping test because network is disabled in this sandbox");
+        return;
+    }
+
+    let server = MockServer::start().await;
+    let plan_block = "<proposed_plan>\n- Step 1\n- Step 2\n</proposed_plan>\n";
+    let full_plan_message = format!("Intro\n{plan_block}Outro");
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", &full_plan_message),
+                ev_completed("r1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", SUMMARY_TEXT),
+                ev_completed("r2"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", "AFTER_COMPACT_REPLY"),
+                ev_completed("r3"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m4", "AFTER_RESUME_REPLY"),
+                ev_completed("r4"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m5", "AFTER_FORK_REPLY"),
+                ev_completed("r5"),
+            ]),
+        ],
+    )
+    .await;
+
+    let (_home, config, manager, base) =
+        start_test_conversation_with_plan_backfill(&server, None).await;
+
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Plan,
+        settings: Settings {
+            model: "gpt-5.1-codex".to_string(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+
+    base.submit(Op::UserTurn {
+        items: vec![UserInput::Text {
+            text: "please plan".into(),
+            text_elements: Vec::new(),
+        }],
+        final_output_json_schema: None,
+        cwd: std::env::current_dir().expect("cwd"),
+        approval_policy: codex_core::protocol::AskForApproval::Never,
+        sandbox_policy: codex_core::protocol::SandboxPolicy::DangerFullAccess,
+        model: "gpt-5.1-codex".to_string(),
+        effort: None,
+        summary: ReasoningSummary::Auto,
+        collaboration_mode: Some(collaboration_mode),
+        personality: None,
+    })
+    .await
+    .expect("submit plan turn");
+    wait_for_event(&base, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    compact_conversation(&base).await;
+    user_turn(&base, "AFTER_COMPACT").await;
+    let base_path = fetch_conversation_path(&base).await;
+
+    let mut resumed_config = config.clone();
+    resumed_config
+        .features
+        .disable(Feature::BackfillCompactPlanContext);
+    let resumed = resume_conversation(&manager, &resumed_config, base_path).await;
+    user_turn(&resumed, "AFTER_RESUME").await;
+    let resumed_path = fetch_conversation_path(&resumed).await;
+
+    let forked = fork_thread(&manager, &resumed_config, resumed_path, 2).await;
+    user_turn(&forked, "AFTER_FORK").await;
+
+    let requests = gather_request_bodies(std::slice::from_ref(&request_log));
+    let after_compact_body = requests[2].to_string();
+    let after_resume_body = requests[3].to_string();
+    let after_fork_body = requests[4].to_string();
+    let expected_plan = "<proposed_plan>\\n- Step 1\\n- Step 2\\n</proposed_plan>";
+
+    assert!(
+        after_compact_body.contains(expected_plan),
+        "expected post-compact request to preserve the backfilled plan"
+    );
+    assert!(
+        after_resume_body.contains(expected_plan),
+        "expected resumed request to preserve the backfilled plan"
+    );
+    assert!(
+        after_fork_body.contains(expected_plan),
+        "expected forked request to preserve the backfilled plan"
+    );
+    assert!(!after_resume_body.contains("Intro"));
+    assert!(!after_resume_body.contains("Outro"));
+    assert!(!after_fork_body.contains("Intro"));
+    assert!(!after_fork_body.contains("Outro"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compacted_update_plan_survives_resume_and_fork_when_flag_is_disabled_later() {
+    if network_disabled() {
+        return;
+    }
+
+    let server = MockServer::start().await;
+    let update_plan_args = update_plan_args_json();
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                core_test_support::responses::ev_function_call(
+                    "plan-call-1",
+                    "update_plan",
+                    &update_plan_args,
+                ),
+                ev_completed("r1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", SUMMARY_TEXT),
+                ev_completed("r2"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", "AFTER_COMPACT_REPLY"),
+                ev_completed("r3"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m4", "AFTER_RESUME_REPLY"),
+                ev_completed("r4"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m5", "AFTER_FORK_REPLY"),
+                ev_completed("r5"),
+            ]),
+        ],
+    )
+    .await;
+
+    let (_home, config, manager, base) =
+        start_test_conversation_with_plan_backfill(&server, None).await;
+
+    base.submit(Op::UserInput {
+        items: vec![UserInput::Text {
+            text: "please track progress".into(),
+            text_elements: Vec::new(),
+        }],
+        final_output_json_schema: None,
+    })
+    .await
+    .expect("submit update_plan turn");
+    wait_for_event(&base, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    compact_conversation(&base).await;
+    user_turn(&base, "AFTER_COMPACT").await;
+    let base_path = fetch_conversation_path(&base).await;
+
+    let mut resumed_config = config.clone();
+    resumed_config
+        .features
+        .disable(Feature::BackfillCompactPlanContext);
+    let resumed = resume_conversation(&manager, &resumed_config, base_path).await;
+    user_turn(&resumed, "AFTER_RESUME").await;
+    let resumed_path = fetch_conversation_path(&resumed).await;
+
+    let forked = fork_thread(&manager, &resumed_config, resumed_path, 2).await;
+    user_turn(&forked, "AFTER_FORK").await;
+
+    let requests = gather_request_bodies(std::slice::from_ref(&request_log));
+    let after_compact_body = requests[2].to_string();
+    let after_resume_body = requests[3].to_string();
+    let after_fork_body = requests[4].to_string();
+
+    assert!(
+        after_compact_body.contains("\"name\":\"update_plan\""),
+        "expected post-compact request to preserve the backfilled checklist"
+    );
+    assert!(
+        after_resume_body.contains("\"name\":\"update_plan\""),
+        "expected resumed request to preserve the backfilled checklist"
+    );
+    assert!(
+        after_fork_body.contains("\"name\":\"update_plan\""),
+        "expected forked request to preserve the backfilled checklist"
+    );
+    assert!(
+        after_resume_body.contains(&json_fragment(&update_plan_args)),
+        "expected resumed request to preserve the backfilled checklist arguments"
+    );
+    assert!(
+        after_fork_body.contains(&json_fragment(&update_plan_args)),
+        "expected forked request to preserve the backfilled checklist arguments"
+    );
+}
+
 fn normalize_line_endings(value: &mut Value) {
     match value {
         Value::String(text) => {
@@ -957,6 +1176,25 @@ async fn start_test_conversation(
         config.model_provider.name = "Non-OpenAI Model provider".to_string();
         config.model_provider.base_url = Some(base_url);
         config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+        if let Some(model) = model {
+            config.model = Some(model);
+        }
+    });
+    let test = builder.build(server).await.expect("create conversation");
+    (test.home, test.config, test.thread_manager, test.codex)
+}
+
+async fn start_test_conversation_with_plan_backfill(
+    server: &MockServer,
+    model: Option<&str>,
+) -> (Arc<TempDir>, Config, Arc<ThreadManager>, Arc<CodexThread>) {
+    let base_url = format!("{}/v1", server.uri());
+    let model = model.map(str::to_string);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider.name = "Non-OpenAI Model provider".to_string();
+        config.model_provider.base_url = Some(base_url);
+        config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+        config.features.enable(Feature::BackfillCompactPlanContext);
         if let Some(model) = model {
             config.model = Some(model);
         }
