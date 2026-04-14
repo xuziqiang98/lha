@@ -5,8 +5,6 @@ members = [
     "async-utils",
     "app-server",
     "app-server-protocol",
-    "app-server-test-client",
-    "debug-client",
     "apply-patch",
     "arg0",
     "feedback",
@@ -18,9 +16,7 @@ members = [
     "common",
     "core",
     "exec",
-    "exec-server",
     "execpolicy",
-    "execpolicy-legacy",
     "keyring-store",
     "file-search",
     "linux-sandbox",
@@ -28,7 +24,6 @@ members = [
     "login",
     "mcp-server",
     "mcp-types",
-    "network-proxy",
     "ollama",
     "process-hardening",
     "protocol",
@@ -111,7 +106,6 @@ codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
 codex-utils-string = { path = "utils/string" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
-exec_server_test_support = { path = "exec-server/tests/common" }
 mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }
 
