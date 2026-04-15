@@ -1,17 +1,24 @@
 ## Quickstart
 
 ### Building
+From the repository root:
+
 ```
-cd codex-rs && cargo build -p codex-cli --bin codey --release
+cargo build -p codex-cli --bin codey --release
 
 export PATH="<codey binary path>:$PATH" >> ~/.bashrc
 ```
 
-## Docs
+The resulting binary is written to `target/release/codey`.
 
-- [**Codex Documentation**](https://developers.openai.com/codex)
-- [**Contributing**](./docs/contributing.md)
-- [**Installing & building**](./docs/install.md)
-- [**Open source fund**](./docs/open-source-fund.md)
+## Structure
+
+The workspace is organized under [`src/`](./src) with five top-level domains:
+
+- `harness`: agent shell and execution framework
+- `session`: durable task/session state
+- `sandbox`: isolated execution environment
+- `resources`: tools, skills, MCP, and external capabilities
+- `orchestration`: multi-step flow control and component wiring
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).

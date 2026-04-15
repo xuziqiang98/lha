@@ -13,6 +13,8 @@ bazel-*
 build/
 out/
 storybook-static/
+target/
+target-*/
 
 # ignore README for publishing
 codex-cli/README.md
@@ -90,4 +92,3 @@ CHANGELOG.ignore.md
 # Python bytecode files
 __pycache__/
 *.pyc
-

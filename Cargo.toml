@@ -1,0 +1,303 @@
+[workspace]
+members = [
+    "src/resources/backend-client",
+    "src/harness/ansi-escape",
+    "src/harness/foundation/async-utils",
+    "src/orchestration/app-server",
+    "src/orchestration/app-server-protocol",
+    "src/resources/apply-patch",
+    "src/harness/foundation/arg0",
+    "src/harness/feedback",
+    "src/resources/chatgpt",
+    "src/resources/codex-backend-openapi-models",
+    "src/orchestration/cloud-requirements",
+    "src/orchestration/cloud-tasks",
+    "src/orchestration/cloud-tasks-client",
+    "src/harness/cli",
+    "src/harness/foundation/common",
+    "src/harness/core",
+    "src/harness/exec",
+    "src/sandbox/execpolicy",
+    "src/resources/keyring-store",
+    "src/resources/file-search",
+    "src/sandbox/linux",
+    "src/resources/lmstudio",
+    "src/harness/login",
+    "src/resources/mcp-server",
+    "src/resources/mcp-types",
+    "src/resources/ollama",
+    "src/sandbox/process-hardening",
+    "src/harness/foundation/protocol",
+    "src/resources/rmcp-client",
+    "src/resources/responses-api-proxy",
+    "src/orchestration/stdio-to-uds",
+    "src/harness/foundation/otel",
+    "src/harness/tui",
+    "src/harness/foundation/utils/absolute-path",
+    "src/harness/foundation/utils/cargo-bin",
+    "src/harness/foundation/utils/git",
+    "src/harness/foundation/utils/cache",
+    "src/harness/foundation/utils/image",
+    "src/harness/foundation/utils/json-to-toml",
+    "src/harness/foundation/utils/home-dir",
+    "src/harness/foundation/utils/pty",
+    "src/harness/foundation/utils/readiness",
+    "src/harness/foundation/utils/sleep-inhibitor",
+    "src/harness/foundation/utils/string",
+    "src/resources/codex-client",
+    "src/resources/codex-api",
+    "src/session/state",
+    "src/sandbox/windows",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.94.4"
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+# Internal
+app_test_support = { path = "src/orchestration/app-server/tests/common" }
+codex-ansi-escape = { path = "src/harness/ansi-escape" }
+codex-api = { path = "src/resources/codex-api" }
+codex-app-server = { path = "src/orchestration/app-server" }
+codex-app-server-protocol = { path = "src/orchestration/app-server-protocol" }
+codex-apply-patch = { path = "src/resources/apply-patch" }
+codex-arg0 = { path = "src/harness/foundation/arg0" }
+codex-async-utils = { path = "src/harness/foundation/async-utils" }
+codex-backend-client = { path = "src/resources/backend-client" }
+codex-cloud-requirements = { path = "src/orchestration/cloud-requirements" }
+codex-chatgpt = { path = "src/resources/chatgpt" }
+codex-cli = { path = "src/harness/cli" }
+codex-client = { path = "src/resources/codex-client" }
+codex-common = { path = "src/harness/foundation/common" }
+codex-core = { path = "src/harness/core" }
+codex-exec = { path = "src/harness/exec" }
+codex-execpolicy = { path = "src/sandbox/execpolicy" }
+codex-feedback = { path = "src/harness/feedback" }
+codex-file-search = { path = "src/resources/file-search" }
+codex-git = { path = "src/harness/foundation/utils/git" }
+codex-keyring-store = { path = "src/resources/keyring-store" }
+codex-linux-sandbox = { path = "src/sandbox/linux" }
+codex-lmstudio = { path = "src/resources/lmstudio" }
+codex-login = { path = "src/harness/login" }
+codex-mcp-server = { path = "src/resources/mcp-server" }
+codex-ollama = { path = "src/resources/ollama" }
+codex-otel = { path = "src/harness/foundation/otel" }
+codex-process-hardening = { path = "src/sandbox/process-hardening" }
+codex-protocol = { path = "src/harness/foundation/protocol" }
+codex-responses-api-proxy = { path = "src/resources/responses-api-proxy" }
+codex-rmcp-client = { path = "src/resources/rmcp-client" }
+codex-state = { path = "src/session/state" }
+codex-stdio-to-uds = { path = "src/orchestration/stdio-to-uds" }
+codex-tui = { path = "src/harness/tui" }
+codex-utils-absolute-path = { path = "src/harness/foundation/utils/absolute-path" }
+codex-utils-cache = { path = "src/harness/foundation/utils/cache" }
+codex-utils-cargo-bin = { path = "src/harness/foundation/utils/cargo-bin" }
+codex-utils-image = { path = "src/harness/foundation/utils/image" }
+codex-utils-json-to-toml = { path = "src/harness/foundation/utils/json-to-toml" }
+codex-utils-home-dir = { path = "src/harness/foundation/utils/home-dir" }
+codex-utils-pty = { path = "src/harness/foundation/utils/pty" }
+codex-utils-readiness = { path = "src/harness/foundation/utils/readiness" }
+codex-utils-sleep-inhibitor = { path = "src/harness/foundation/utils/sleep-inhibitor" }
+codex-utils-string = { path = "src/harness/foundation/utils/string" }
+codex-windows-sandbox = { path = "src/sandbox/windows" }
+core_test_support = { path = "src/harness/core/tests/common" }
+mcp-types = { path = "src/resources/mcp-types" }
+mcp_test_support = { path = "src/resources/mcp-server/tests/common" }
+
+# External
+allocative = "0.3.3"
+ansi-to-tui = "7.0.0"
+anyhow = "1"
+arboard = { version = "3", features = ["wayland-data-control"] }
+assert_cmd = "2"
+assert_matches = "1.5.0"
+async-channel = "2.3.1"
+async-stream = "0.3.6"
+async-trait = "0.1.89"
+axum = { version = "0.8", default-features = false }
+base64 = "0.22.1"
+bytes = "1.10.1"
+chardetng = "0.1.17"
+chrono = "0.4.43"
+clap = "4"
+clap_complete = "4"
+color-eyre = "0.6.3"
+crossterm = "0.28.1"
+crossbeam-channel = "0.5.15"
+csv = "1.4.0"
+ctor = "0.6.3"
+derive_more = "2"
+diffy = "0.4.2"
+dirs = "6"
+dotenvy = "0.15.7"
+dunce = "1.0.4"
+encoding_rs = "0.8.35"
+env-flags = "0.1.1"
+env_logger = "0.11.5"
+eventsource-stream = "0.2.3"
+futures = { version = "0.3", default-features = false }
+globset = "0.4"
+http = "1.3.1"
+icu_decimal = "2.1"
+icu_locale_core = "2.1"
+icu_provider = { version = "2.1", features = ["sync"] }
+ignore = "0.4.23"
+indoc = "2.0"
+image = { version = "^0.25.9", default-features = false }
+include_dir = "0.7.4"
+indexmap = "2.12.0"
+insta = "1.46.0"
+itertools = "0.14.0"
+keyring = { version = "3.6", default-features = false }
+landlock = "0.4.4"
+lazy_static = "1"
+libc = "0.2.177"
+log = "0.4"
+lru = "0.16.3"
+maplit = "1.0.2"
+mime_guess = "2.0.5"
+multimap = "0.10.0"
+notify = "8.2.0"
+nucleo = { git = "https://github.com/helix-editor/nucleo.git", rev = "4253de9faabb4e5c6d81d946a5e35a90f87347ee" }
+once_cell = "1.20.2"
+openssl-sys = "*"
+opentelemetry = "0.31.0"
+opentelemetry-appender-tracing = "0.31.0"
+opentelemetry-otlp = "0.31.0"
+opentelemetry-semantic-conventions = "0.31.0"
+opentelemetry_sdk = "0.31.0"
+tracing-opentelemetry = "0.32.0"
+os_info = "3.12.0"
+owo-colors = "4.2.0"
+path-absolutize = "3.1.1"
+pathdiff = "0.2"
+portable-pty = "0.9.0"
+predicates = "3"
+pretty_assertions = "1.4.1"
+pulldown-cmark = "0.10"
+rand = "0.9"
+ratatui = "0.29.0"
+ratatui-macros = "0.6.0"
+regex = "1.12.2"
+regex-lite = "0.1.8"
+reqwest = "0.12"
+rmcp = { version = "0.12.0", default-features = false }
+runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
+schemars = "0.8.22"
+seccompiler = "0.5.0"
+sentry = "0.46.0"
+serde = "1"
+serde_json = "1"
+serde_path_to_error = "0.1.20"
+serde_with = "3.16"
+serde_yaml = "0.9"
+serial_test = "3.2.0"
+sha1 = "0.10.6"
+sha2 = "0.10"
+semver = "1.0"
+shlex = "1.3.0"
+similar = "2.7.0"
+socket2 = "0.6.1"
+sqlx = { version = "0.8.6", default-features = false, features = ["chrono", "json", "macros", "migrate", "runtime-tokio-rustls", "sqlite", "time", "uuid"] }
+starlark = "0.13.0"
+strum = "0.27.2"
+strum_macros = "0.27.2"
+supports-color = "3.0.2"
+sys-locale = "0.3.2"
+tempfile = "3.23.0"
+test-log = "0.2.19"
+textwrap = "0.16.2"
+thiserror = "2.0.17"
+time = "0.3"
+tiny_http = "0.12"
+tokio = "1"
+tokio-stream = "0.1.18"
+tokio-test = "0.4"
+tokio-tungstenite = { version = "0.28.0", features = ["proxy", "rustls-tls-native-roots"] }
+tokio-util = "0.7.18"
+toml = "0.9.5"
+toml_edit = "0.24.0"
+tracing = "0.1.44"
+tracing-appender = "0.2.3"
+tracing-subscriber = "0.3.22"
+tracing-test = "0.2.5"
+tree-sitter = "0.25.10"
+tree-sitter-bash = "0.25"
+tree-sitter-highlight = "0.25.10"
+ts-rs = "11"
+uds_windows = "1.1.0"
+unicode-segmentation = "1.12.0"
+unicode-width = "0.2"
+url = "2"
+urlencoding = "2.1"
+uuid = "1"
+vt100 = "0.16.2"
+walkdir = "2.5.0"
+webbrowser = "1.0"
+which = "8"
+wildmatch = "2.6.1"
+wiremock = "0.6"
+zeroize = "1.8.2"
+zstd = "0.13"
+
+[workspace.lints]
+rust = {}
+
+[workspace.lints.clippy]
+expect_used = "deny"
+identity_op = "deny"
+manual_clamp = "deny"
+manual_filter = "deny"
+manual_find = "deny"
+manual_flatten = "deny"
+manual_map = "deny"
+manual_memcpy = "deny"
+manual_non_exhaustive = "deny"
+manual_ok_or = "deny"
+manual_range_contains = "deny"
+manual_retain = "deny"
+manual_strip = "deny"
+manual_try_fold = "deny"
+manual_unwrap_or = "deny"
+needless_borrow = "deny"
+needless_borrowed_reference = "deny"
+needless_collect = "deny"
+needless_late_init = "deny"
+needless_option_as_deref = "deny"
+needless_question_mark = "deny"
+needless_update = "deny"
+redundant_clone = "deny"
+redundant_closure = "deny"
+redundant_closure_for_method_calls = "deny"
+redundant_static_lifetimes = "deny"
+trivially_copy_pass_by_ref = "deny"
+uninlined_format_args = "deny"
+unnecessary_filter_map = "deny"
+unnecessary_lazy_evaluations = "deny"
+unnecessary_sort_by = "deny"
+unnecessary_to_owned = "deny"
+unwrap_used = "deny"
+
+[workspace.metadata.cargo-shear]
+ignored = ["icu_provider", "openssl-sys", "codex-utils-readiness"]
+
+[profile.release]
+lto = "fat"
+strip = "symbols"
+codegen-units = 1
+
+[profile.ci-test]
+debug = 1
+inherits = "test"
+opt-level = 0
+
+[patch.crates-io]
+crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }
+ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
+tokio-tungstenite = { git = "https://github.com/JakkuSakura/tokio-tungstenite", rev = "2ae536b0de793f3ddf31fc2f22d445bf1ef2023d" }
+
+[patch."ssh://git@github.com/JakkuSakura/tungstenite-rs.git"]
+tungstenite = { git = "https://github.com/JakkuSakura/tungstenite-rs", rev = "f514de8644821113e5d18a027d6d28a5c8cc0a6e" }
