@@ -96,9 +96,8 @@ fn collect_files_recursive(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
             let entry =
                 entry.with_context(|| format!("failed to read dir entry in {}", dir.display()))?;
             let path = entry.path();
-            // On some platforms, Bazel runfiles are symlinks. `DirEntry::file_type()` does not
-            // follow symlinks, so use `metadata()` here to treat symlinks as the files/dirs they
-            // point to.
+            // `DirEntry::file_type()` does not follow symlinks, so use `metadata()` here to
+            // treat symlinks as the files/dirs they point to.
             let metadata = std::fs::metadata(&path)
                 .with_context(|| format!("failed to stat {}", path.display()))?;
             if metadata.is_dir() {

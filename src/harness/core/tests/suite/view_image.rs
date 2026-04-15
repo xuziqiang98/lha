@@ -98,7 +98,7 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
     wait_for_event_with_timeout(
         &codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
-        // Empirically, image attachment can be slow under Bazel/RBE.
+        // Empirically, image attachment can be slow in some CI environments.
         Duration::from_secs(10),
     )
     .await;
@@ -208,8 +208,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
             EventMsg::TurnComplete(_) => true,
             _ => false,
         },
-        // Empirically, we have seen this run slow when run under
-        // Bazel on arm Linux.
+        // Empirically, we have seen this run slowly on some Linux CI workers.
         Duration::from_secs(10),
     )
     .await;

@@ -1694,7 +1694,6 @@ name = "codex-utils-cargo-bin"
 version = "0.94.4"
 dependencies = [
  "assert_cmd",
- "runfiles",
  "thiserror 2.0.17",
 ]
 
@@ -5581,11 +5580,6 @@ dependencies = [
  "subtle",
  "zeroize",
 ]
-
-[[package]]
-name = "runfiles"
-version = "0.1.0"
-source = "git+https://github.com/dzbarsky/rules_rust?rev=b56cbaa8465e74127f1ea216f813cd377295ad81#b56cbaa8465e74127f1ea216f813cd377295ad81"
 
 [[package]]
 name = "rustc-demangle"

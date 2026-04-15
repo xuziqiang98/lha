@@ -64,8 +64,7 @@ Run `just write-app-server-schema` to overwrite with your changes.\n\n{diff}",
 }
 
 fn schema_root() -> Result<std::path::PathBuf> {
-    // In Bazel runfiles (especially manifest-only mode), resolving directories is not
-    // reliable. Resolve a known file, then walk up to the schema root.
+    // Resolve a known file, then walk up to the schema root.
     let typescript_index = codex_utils_cargo_bin::find_resource!("schema/typescript/index.ts")
         .context("resolve TypeScript schema index.ts")?;
     let schema_root = typescript_index
