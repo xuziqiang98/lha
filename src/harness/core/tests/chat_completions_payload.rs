@@ -123,8 +123,10 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
     )
     .new_session();
 
-    let mut prompt = Prompt::default();
-    prompt.input = input;
+    let prompt = Prompt {
+        input,
+        ..Default::default()
+    };
 
     let mut stream = match client_session.stream(&prompt).await {
         Ok(s) => s,
@@ -194,8 +196,10 @@ async fn build_client(provider: ModelProviderInfo) -> ModelClient {
 
 async fn run_turn(client: &ModelClient, input: Vec<ResponseItem>) -> Result<(), String> {
     let mut client_session = client.new_session();
-    let mut prompt = Prompt::default();
-    prompt.input = input;
+    let prompt = Prompt {
+        input,
+        ..Default::default()
+    };
 
     let mut stream = client_session
         .stream(&prompt)

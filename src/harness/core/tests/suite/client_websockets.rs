@@ -215,9 +215,10 @@ fn message_item(text: &str) -> ResponseItem {
 }
 
 fn prompt_with_input(input: Vec<ResponseItem>) -> Prompt {
-    let mut prompt = Prompt::default();
-    prompt.input = input;
-    prompt
+    Prompt {
+        input,
+        ..Default::default()
+    }
 }
 
 fn websocket_provider(server: &WebSocketTestServer) -> ModelProviderInfo {

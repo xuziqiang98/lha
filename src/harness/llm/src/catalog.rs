@@ -1,0 +1,53 @@
+use crate::Result;
+use crate::auth::AuthContext;
+use crate::auth::auth_provider_from_context;
+use codex_api::ModelsClient;
+use codex_api::ReqwestTransport;
+use codex_client::HttpTransport;
+use codex_protocol::openai_models::ModelInfo;
+use http::HeaderMap;
+use reqwest::Client;
+use std::time::Duration;
+use tokio::time::timeout;
+
+pub async fn fetch_remote_models(
+    http_client: Client,
+    provider: &crate::provider::ModelProviderInfo,
+    auth: Option<AuthContext>,
+    client_version: &str,
+    extra_headers: HeaderMap,
+    request_timeout: Duration,
+) -> Result<(Vec<ModelInfo>, Option<String>)> {
+    let transport = ReqwestTransport::new(http_client);
+    fetch_remote_models_with_transport(
+        transport,
+        provider.to_api_provider(auth.as_ref().is_some_and(|auth| auth.use_chatgpt_base_url))?,
+        auth_provider_from_context(auth),
+        client_version,
+        extra_headers,
+        request_timeout,
+    )
+    .await
+}
+
+async fn fetch_remote_models_with_transport<T, A>(
+    transport: T,
+    provider: codex_api::Provider,
+    auth: A,
+    client_version: &str,
+    extra_headers: HeaderMap,
+    request_timeout: Duration,
+) -> Result<(Vec<ModelInfo>, Option<String>)>
+where
+    T: HttpTransport,
+    A: codex_api::AuthProvider,
+{
+    let client = ModelsClient::new(transport, provider, auth);
+    timeout(
+        request_timeout,
+        client.list_models(client_version, extra_headers),
+    )
+    .await
+    .map_err(|_| crate::Error::RequestTimeout)?
+    .map_err(Into::into)
+}

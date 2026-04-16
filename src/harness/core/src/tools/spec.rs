@@ -1,7 +1,6 @@
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::config::AgentRoleConfig;
-use crate::error::CodexErr;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::model_provider_info::WireApi;
@@ -28,6 +27,10 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+pub use crate::client_common::tools::JsonSchema;
+#[allow(dead_code)]
+pub type AdditionalProperties = crate::client_common::tools::AdditionalProperties;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
@@ -158,62 +161,6 @@ fn maybe_push_spec_with_parallel_support_and_register_handler<H>(
     if tool_is_exposed_on_wire_api(config, &spec) {
         builder.push_spec_with_parallel_support(spec, parallel);
         builder.register_handler(name, handler);
-    }
-}
-
-/// Generic JSON‑Schema subset needed for our tool definitions
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum JsonSchema {
-    Boolean {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
-    },
-    String {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
-    },
-    /// MCP schema allows "number" | "integer" for Number
-    #[serde(alias = "integer")]
-    Number {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
-    },
-    Array {
-        items: Box<JsonSchema>,
-
-        #[serde(skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
-    },
-    Object {
-        properties: BTreeMap<String, JsonSchema>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        required: Option<Vec<String>>,
-        #[serde(
-            rename = "additionalProperties",
-            skip_serializing_if = "Option::is_none"
-        )]
-        additional_properties: Option<AdditionalProperties>,
-    },
-}
-
-/// Whether additional properties are allowed, and if so, any required schema
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(untagged)]
-pub enum AdditionalProperties {
-    Boolean(bool),
-    Schema(Box<JsonSchema>),
-}
-
-impl From<bool> for AdditionalProperties {
-    fn from(b: bool) -> Self {
-        Self::Boolean(b)
-    }
-}
-
-impl From<JsonSchema> for AdditionalProperties {
-    fn from(s: JsonSchema) -> Self {
-        Self::Schema(Box::new(s))
     }
 }
 
@@ -1320,82 +1267,28 @@ pub(crate) struct ApplyPatchToolArgs {
 /// Returns JSON values that are compatible with Function Calling in the
 /// Responses API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=responses
+#[allow(dead_code)]
 pub fn create_tools_json_for_responses_api(
     tools: &[ToolSpec],
 ) -> crate::error::Result<Vec<serde_json::Value>> {
-    let mut tools_json = Vec::new();
-
-    for tool in tools {
-        let json = serde_json::to_value(tool)?;
-        tools_json.push(json);
-    }
-
-    Ok(tools_json)
+    codex_llm::create_tools_json_for_responses_api(tools).map_err(Into::into)
 }
 
+#[allow(dead_code)]
 pub fn create_tools_json_for_messages_api(
     tools: &[ToolSpec],
 ) -> crate::error::Result<Vec<serde_json::Value>> {
-    let mut tools_json = Vec::new();
-
-    for tool in tools {
-        match tool {
-            ToolSpec::Function(tool) => tools_json.push(serde_json::json!({
-                "name": tool.name,
-                "description": tool.description,
-                "input_schema": tool.parameters,
-            })),
-            ToolSpec::LocalShell {} | ToolSpec::WebSearch { .. } | ToolSpec::Freeform(_) => {
-                // Messages requests should only receive function tools because
-                // build_specs() filters unsupported tool types up front.
-                // Keep this error as a defensive invariant in case a future
-                // caller bypasses that filtering.
-                return Err(CodexErr::UnsupportedOperation(format!(
-                    "Messages API only supports function tools; unsupported tool: {}",
-                    tool.name()
-                )));
-            }
-        }
-    }
-
-    Ok(tools_json)
+    codex_llm::create_tools_json_for_messages_api(tools).map_err(Into::into)
 }
 
 /// Returns JSON values that are compatible with Function Calling in the
 /// Chat Completions API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=chat
+#[allow(dead_code)]
 pub(crate) fn create_tools_json_for_chat_completions_api(
     tools: &[ToolSpec],
 ) -> crate::error::Result<Vec<serde_json::Value>> {
-    // We start with the JSON for the Responses API and than rewrite it to match
-    // the chat completions tool call format.
-    let responses_api_tools_json = create_tools_json_for_responses_api(tools)?;
-    let tools_json = responses_api_tools_json
-        .into_iter()
-        .filter_map(|mut tool| {
-            if tool.get("type") != Some(&serde_json::Value::String("function".to_string())) {
-                return None;
-            }
-
-            if let Some(map) = tool.as_object_mut() {
-                let name = map
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                // Remove "type" field as it is not needed in chat completions.
-                map.remove("type");
-                Some(json!({
-                    "type": "function",
-                    "name": name,
-                    "function": map,
-                }))
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<serde_json::Value>>();
-    Ok(tools_json)
+    codex_llm::create_tools_json_for_chat_completions_api(tools).map_err(Into::into)
 }
 
 pub(crate) fn mcp_tool_to_openai_tool(

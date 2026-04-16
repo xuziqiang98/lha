@@ -1,68 +1,22 @@
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::OnceLock;
 
-use crate::api_bridge::CoreAuthProvider;
-use crate::api_bridge::auth_provider_from_auth;
-use crate::api_bridge::map_api_error;
-use crate::auth::UnauthorizedRecovery;
-use codex_api::AggregateStreamExt;
-use codex_api::ChatClient as ApiChatClient;
-use codex_api::ChatRequestBuilder as ApiChatRequestBuilder;
-use codex_api::CompactClient as ApiCompactClient;
-use codex_api::CompactionInput as ApiCompactionInput;
-use codex_api::DeveloperRoleHandling;
-use codex_api::MessagesClient as ApiMessagesClient;
-use codex_api::MessagesRequestBuilder as ApiMessagesRequestBuilder;
-use codex_api::Prompt as ApiPrompt;
-use codex_api::RequestTelemetry;
-use codex_api::ReqwestTransport;
-use codex_api::ResponseAppendWsRequest;
-use codex_api::ResponseCreateWsRequest;
-use codex_api::ResponseStream as ApiResponseStream;
-use codex_api::ResponsesClient as ApiResponsesClient;
-use codex_api::ResponsesOptions as ApiResponsesOptions;
-use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
-use codex_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
-use codex_api::SseTelemetry;
-use codex_api::TransportError;
-use codex_api::WebsocketTelemetry;
-use codex_api::build_conversation_headers;
-use codex_api::common::Reasoning;
-use codex_api::common::ResponsesWsRequest;
-use codex_api::create_text_param_for_request;
-use codex_api::error::ApiError;
-use codex_api::requests::responses::Compression;
+use futures::StreamExt;
+use tokio::sync::mpsc;
+
+use codex_llm::LlmClient;
+use codex_llm::LlmClientSession;
+pub use codex_llm::WEB_SEARCH_ELIGIBLE_HEADER;
 use codex_otel::OtelManager;
-
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::TokenUsage;
-use eventsource_stream::Event;
-use eventsource_stream::EventStreamError;
-use futures::StreamExt;
-use http::HeaderMap as ApiHeaderMap;
-use http::HeaderValue;
-use http::StatusCode as HttpStatusCode;
-use reqwest::StatusCode;
-use serde_json::Value;
-use std::time::Duration;
-use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::Error;
-use tokio_tungstenite::tungstenite::Message;
-use tracing::info;
-use tracing::warn;
 
 use crate::AuthManager;
-use crate::auth::CodexAuth;
-use crate::auth::RefreshTokenError;
-use crate::chat_role_compatibility::ChatRoleCompatibility;
+use crate::chat_role_compatibility::ChatRoleCompatibilityHandle;
 use crate::chat_role_compatibility::ChatRoleCompatibilityState;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
@@ -72,38 +26,26 @@ use crate::default_client::build_reqwest_client;
 use crate::dynamic_context_window::DynamicContextWindowFailure;
 use crate::dynamic_context_window::DynamicContextWindowState;
 use crate::dynamic_context_window::DynamicContextWindowSuccess;
-use crate::error::CodexErr;
 use crate::error::Result;
-use crate::features::FEATURES;
-use crate::features::Feature;
-use crate::flags::CODEX_RS_SSE_FIXTURE;
+use crate::llm_adapter::CoreAuthSource;
+use crate::llm_adapter::llm_runtime_config_from_core_config;
 use crate::model_provider_info::ModelProviderInfo;
-use crate::model_provider_info::WireApi;
-use crate::tools::spec::create_tools_json_for_chat_completions_api;
-use crate::tools::spec::create_tools_json_for_messages_api;
-use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::transport_manager::TransportManager;
-use crate::util::try_parse_error_message;
 
-pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
-pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
-const APPROX_CHARS_PER_TOKEN: usize = 4;
-const ANTHROPIC_MESSAGES_MAX_TOKENS: u32 = 8_192;
-
-#[derive(Debug)]
 struct ModelClientState {
     config: Arc<Config>,
     auth_manager: Option<Arc<AuthManager>>,
     model_info: ModelInfo,
     dynamic_context_window: Option<Arc<Mutex<DynamicContextWindowState>>>,
-    chat_role_compatibility: Option<Arc<Mutex<ChatRoleCompatibilityState>>>,
+    #[cfg_attr(not(test), allow(dead_code))]
+    chat_role_compatibility: Option<ChatRoleCompatibilityHandle>,
     otel_manager: OtelManager,
     provider: ModelProviderInfo,
-    conversation_id: ThreadId,
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
     session_source: SessionSource,
     transport_manager: TransportManager,
+    llm_client: LlmClient,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,27 +54,13 @@ pub(crate) struct DynamicContextWindowStatus {
     pub(crate) locked: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ModelClient {
     state: Arc<ModelClientState>,
 }
 
 pub struct ModelClientSession {
-    state: Arc<ModelClientState>,
-    connection: Option<ApiWebSocketConnection>,
-    websocket_last_items: Vec<ResponseItem>,
-    transport_manager: TransportManager,
-    /// Turn state for sticky routing.
-    ///
-    /// This is an `OnceLock` that stores the turn state value received from the server
-    /// on turn start via the `x-codex-turn-state` response header. Once set, this value
-    /// should be sent back to the server in the `x-codex-turn-state` request header for
-    /// all subsequent requests within the same turn to maintain sticky routing.
-    ///
-    /// This is a contract between the client and server: we receive it at turn start,
-    /// keep sending it unchanged between turn requests (e.g., for retries, incremental
-    /// appends, or continuation requests), and must not send it between different turns.
-    turn_state: Arc<OnceLock<String>>,
+    inner: LlmClientSession,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -179,6 +107,23 @@ impl ModelClient {
         session_source: SessionSource,
         transport_manager: TransportManager,
     ) -> Self {
+        let runtime_config = Arc::new(llm_runtime_config_from_core_config(&config));
+        let auth_source = CoreAuthSource::boxed(auth_manager.clone(), provider.clone());
+        let llm_client = LlmClient::new(
+            runtime_config,
+            auth_source,
+            build_reqwest_client(),
+            model_info.clone(),
+            chat_role_compatibility.clone(),
+            otel_manager.clone(),
+            provider.clone(),
+            effort,
+            summary,
+            conversation_id,
+            session_source.clone(),
+            transport_manager.clone(),
+        );
+
         Self {
             state: Arc::new(ModelClientState {
                 config,
@@ -188,27 +133,21 @@ impl ModelClient {
                 chat_role_compatibility,
                 otel_manager,
                 provider,
-                conversation_id,
                 effort,
                 summary,
                 session_source,
                 transport_manager,
+                llm_client,
             }),
         }
     }
 
     pub fn new_session(&self) -> ModelClientSession {
         ModelClientSession {
-            state: Arc::clone(&self.state),
-            connection: None,
-            websocket_last_items: Vec::new(),
-            transport_manager: self.state.transport_manager.clone(),
-            turn_state: Arc::new(OnceLock::new()),
+            inner: self.state.llm_client.new_session(),
         }
     }
-}
 
-impl ModelClient {
     fn effective_model_info(&self) -> ModelInfo {
         let mut model_info = self.state.model_info.clone();
         if let Some(dynamic_context_window) = &self.state.dynamic_context_window
@@ -220,30 +159,6 @@ impl ModelClient {
             model_info.context_window = Some(dynamic_context_window.current_context_window());
         }
         model_info
-    }
-
-    fn chat_role_compatibility_status(&self) -> ChatRoleCompatibility {
-        self.state
-            .chat_role_compatibility
-            .as_ref()
-            .map(|state| {
-                state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .current()
-            })
-            .unwrap_or(ChatRoleCompatibility::Unknown)
-    }
-
-    fn developer_role_handling(&self) -> DeveloperRoleHandling {
-        match self.chat_role_compatibility_status() {
-            ChatRoleCompatibility::Unknown | ChatRoleCompatibility::SupportsDeveloper => {
-                DeveloperRoleHandling::Preserve
-            }
-            ChatRoleCompatibility::RequiresSystemForDeveloper => {
-                DeveloperRoleHandling::DowngradeToSystem
-            }
-        }
     }
 
     pub fn get_model_context_window(&self) -> Option<i64> {
@@ -278,7 +193,6 @@ impl ModelClient {
         self.state.transport_manager.clone()
     }
 
-    /// Returns the currently configured model slug.
     pub fn get_model(&self) -> String {
         self.state.model_info.slug.clone()
     }
@@ -287,12 +201,10 @@ impl ModelClient {
         self.effective_model_info()
     }
 
-    /// Returns the current reasoning effort setting.
     pub fn get_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
         self.state.effort
     }
 
-    /// Returns the current reasoning summary setting.
     pub fn get_reasoning_summary(&self) -> ReasoningSummaryConfig {
         self.state.summary
     }
@@ -399,1265 +311,50 @@ impl ModelClient {
     }
 
     pub(crate) fn estimated_input_tokens_for_prompt(&self, prompt: &Prompt) -> Option<i64> {
-        if self.state.provider.wire_api != WireApi::Chat {
-            return None;
-        }
-
-        let instructions = prompt.base_instructions.text.clone();
-        let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools).ok()?;
-        let api_prompt = build_api_prompt(prompt, instructions, tools_json);
-        let api_provider = self.state.provider.to_api_provider(None).ok()?;
-        let handling = self.developer_role_handling();
-        let request = ApiChatRequestBuilder::new(
-            &self.state.model_info.slug,
-            &api_prompt.instructions,
-            &api_prompt.input,
-            &api_prompt.tools,
-        )
-        .conversation_id(Some(self.state.conversation_id.to_string()))
-        .session_source(Some(self.state.session_source.clone()))
-        .developer_role_handling(handling)
-        .build(&api_provider)
-        .ok()?;
-
-        Some(estimate_chat_input_tokens_from_request_body(&request.body))
+        self.state
+            .llm_client
+            .estimated_input_tokens_for_prompt(prompt)
     }
 
-    /// Compacts the current conversation history using the Compact endpoint.
-    ///
-    /// This is a unary call (no streaming) that returns a new list of
-    /// `ResponseItem`s representing the compacted transcript.
     pub async fn compact_conversation_history(&self, prompt: &Prompt) -> Result<Vec<ResponseItem>> {
-        if prompt.input.is_empty() {
-            return Ok(Vec::new());
-        }
-        let auth_manager = self.state.auth_manager.clone();
-        let auth = match auth_manager.as_ref() {
-            Some(manager) => manager.auth().await,
-            None => None,
-        };
-        let api_provider = self
-            .state
-            .provider
-            .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
-        let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
-        let transport = ReqwestTransport::new(build_reqwest_client());
-        let request_telemetry = self.build_request_telemetry();
-        let client = ApiCompactClient::new(transport, api_provider, api_auth)
-            .with_telemetry(Some(request_telemetry));
-
-        let instructions = prompt.base_instructions.text.clone();
-        let payload = ApiCompactionInput {
-            model: &self.state.model_info.slug,
-            input: &prompt.input,
-            instructions: &instructions,
-        };
-
-        let mut extra_headers = ApiHeaderMap::new();
-        if let SessionSource::SubAgent(sub) = &self.state.session_source {
-            let subagent = match sub {
-                crate::protocol::SubAgentSource::Review => "review".to_string(),
-                crate::protocol::SubAgentSource::Compact => "compact".to_string(),
-                crate::protocol::SubAgentSource::ThreadSpawn { .. } => "collab_spawn".to_string(),
-                crate::protocol::SubAgentSource::Other(label) => label.clone(),
-            };
-            if let Ok(val) = HeaderValue::from_str(&subagent) {
-                extra_headers.insert("x-openai-subagent", val);
-            }
-        }
-        client
-            .compact_input(&payload, extra_headers)
+        self.state
+            .llm_client
+            .compact_conversation_history(prompt)
             .await
-            .map_err(map_api_error)
+            .map_err(Into::into)
     }
 }
 
 impl ModelClientSession {
-    fn chat_role_compatibility_status(&self) -> ChatRoleCompatibility {
-        self.state
-            .chat_role_compatibility
-            .as_ref()
-            .map(|state| {
-                state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .current()
-            })
-            .unwrap_or(ChatRoleCompatibility::Unknown)
-    }
-
-    fn developer_role_handling(&self) -> DeveloperRoleHandling {
-        match self.chat_role_compatibility_status() {
-            ChatRoleCompatibility::Unknown | ChatRoleCompatibility::SupportsDeveloper => {
-                DeveloperRoleHandling::Preserve
-            }
-            ChatRoleCompatibility::RequiresSystemForDeveloper => {
-                DeveloperRoleHandling::DowngradeToSystem
-            }
-        }
-    }
-
-    fn record_chat_role_supports_developer(&self) {
-        if let Some(state) = &self.state.chat_role_compatibility {
-            state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .record_supports_developer();
-        }
-    }
-
-    fn record_chat_role_requires_system(&self) {
-        if let Some(state) = &self.state.chat_role_compatibility {
-            state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .record_requires_system();
-        }
-    }
-
-    /// Streams a single model turn using either the Responses or Chat
-    /// Completions wire API, depending on the configured provider.
-    ///
-    /// For Chat providers, the underlying stream is optionally aggregated
-    /// based on the `show_raw_agent_reasoning` flag in the config.
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
-        let wire_api = self.state.provider.wire_api;
-        match wire_api {
-            WireApi::Responses => {
-                let websocket_enabled = self.responses_websocket_enabled()
-                    && !self.transport_manager.disable_websockets();
+        let mut inner_stream = self
+            .inner
+            .stream(prompt)
+            .await
+            .map_err(crate::error::CodexErr::from)?;
+        let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
 
-                if websocket_enabled {
-                    self.stream_responses_websocket(prompt).await
-                } else {
-                    self.stream_responses_api(prompt).await
+        tokio::spawn(async move {
+            while let Some(event) = inner_stream.next().await {
+                if tx_event.send(event.map_err(Into::into)).await.is_err() {
+                    return;
                 }
             }
-            WireApi::Chat => {
-                let (api_stream, estimated_input_tokens) =
-                    self.stream_chat_completions(prompt).await?;
+        });
 
-                if self.state.config.show_raw_agent_reasoning {
-                    Ok(map_chat_response_stream(
-                        api_stream.streaming_mode(),
-                        self.state.otel_manager.clone(),
-                        estimated_input_tokens,
-                    ))
-                } else {
-                    Ok(map_chat_response_stream(
-                        api_stream.aggregate(),
-                        self.state.otel_manager.clone(),
-                        estimated_input_tokens,
-                    ))
-                }
-            }
-            WireApi::Messages => self.stream_messages_api(prompt).await,
-        }
+        Ok(ResponseStream { rx_event })
     }
 
     pub(crate) fn try_switch_fallback_transport(&mut self) -> bool {
-        let websocket_enabled = self.responses_websocket_enabled();
-        let activated = self
-            .transport_manager
-            .activate_http_fallback(websocket_enabled);
-        if activated {
-            warn!("falling back to HTTP");
-            self.state.otel_manager.counter(
-                "codex.transport.fallback_to_http",
-                1,
-                &[("from_wire_api", "responses_websocket")],
-            );
-
-            self.connection = None;
-            self.websocket_last_items.clear();
-        }
-        activated
-    }
-
-    fn responses_websocket_enabled(&self) -> bool {
-        self.state.provider.supports_websockets
-            && self
-                .state
-                .config
-                .features
-                .enabled(Feature::ResponsesWebsockets)
-    }
-
-    fn build_responses_request(&self, prompt: &Prompt) -> Result<ApiPrompt> {
-        let instructions = prompt.base_instructions.text.clone();
-        let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
-        Ok(build_api_prompt(prompt, instructions, tools_json))
-    }
-
-    fn build_messages_request(&self, prompt: &Prompt) -> Result<ApiPrompt> {
-        let instructions = prompt.base_instructions.text.clone();
-        let tools_json: Vec<Value> = create_tools_json_for_messages_api(&prompt.tools)?;
-        Ok(build_api_prompt(prompt, instructions, tools_json))
-    }
-
-    fn build_responses_options(
-        &self,
-        prompt: &Prompt,
-        compression: Compression,
-    ) -> ApiResponsesOptions {
-        let model_info = &self.state.model_info;
-
-        let default_reasoning_effort = model_info.default_reasoning_level;
-        let reasoning = if model_info.supports_reasoning_summaries {
-            Some(Reasoning {
-                effort: self.state.effort.or(default_reasoning_effort),
-                summary: if self.state.summary == ReasoningSummaryConfig::None {
-                    None
-                } else {
-                    Some(self.state.summary)
-                },
-            })
-        } else {
-            None
-        };
-
-        let include = if reasoning.is_some() {
-            vec!["reasoning.encrypted_content".to_string()]
-        } else {
-            Vec::new()
-        };
-
-        let verbosity = if model_info.support_verbosity {
-            self.state
-                .config
-                .model_verbosity
-                .or(model_info.default_verbosity)
-        } else {
-            if self.state.config.model_verbosity.is_some() {
-                warn!(
-                    "model_verbosity is set but ignored as the model does not support verbosity: {}",
-                    model_info.slug
-                );
-            }
-            None
-        };
-
-        let text = create_text_param_for_request(verbosity, &prompt.output_schema);
-        let conversation_id = self.state.conversation_id.to_string();
-
-        ApiResponsesOptions {
-            reasoning,
-            include,
-            prompt_cache_key: Some(conversation_id.clone()),
-            text,
-            store_override: None,
-            conversation_id: Some(conversation_id),
-            session_source: Some(self.state.session_source.clone()),
-            extra_headers: build_responses_headers(&self.state.config, Some(&self.turn_state)),
-            compression,
-            turn_state: Some(Arc::clone(&self.turn_state)),
-        }
-    }
-
-    fn get_incremental_items(&self, input_items: &[ResponseItem]) -> Option<Vec<ResponseItem>> {
-        // Checks whether the current request input is an incremental append to the previous request.
-        // If items in the new request contain all the items from the previous request we build
-        // a response.append request otherwise we start with a fresh response.create request.
-        let previous_len = self.websocket_last_items.len();
-        let can_append = previous_len > 0
-            && input_items.starts_with(&self.websocket_last_items)
-            && previous_len < input_items.len();
-        if can_append {
-            Some(input_items[previous_len..].to_vec())
-        } else {
-            None
-        }
-    }
-
-    fn prepare_websocket_request(
-        &self,
-        api_prompt: &ApiPrompt,
-        options: &ApiResponsesOptions,
-    ) -> ResponsesWsRequest {
-        if let Some(append_items) = self.get_incremental_items(&api_prompt.input) {
-            return ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest {
-                input: append_items,
-            });
-        }
-
-        let ApiResponsesOptions {
-            reasoning,
-            include,
-            prompt_cache_key,
-            text,
-            store_override,
-            ..
-        } = options;
-
-        let store = store_override.unwrap_or(false);
-        let payload = ResponseCreateWsRequest {
-            model: self.state.model_info.slug.clone(),
-            instructions: api_prompt.instructions.clone(),
-            input: api_prompt.input.clone(),
-            tools: api_prompt.tools.clone(),
-            tool_choice: "auto".to_string(),
-            parallel_tool_calls: api_prompt.parallel_tool_calls,
-            reasoning: reasoning.clone(),
-            store,
-            stream: true,
-            include: include.clone(),
-            prompt_cache_key: prompt_cache_key.clone(),
-            text: text.clone(),
-        };
-
-        ResponsesWsRequest::ResponseCreate(payload)
-    }
-
-    async fn websocket_connection(
-        &mut self,
-        api_provider: codex_api::Provider,
-        api_auth: CoreAuthProvider,
-        options: &ApiResponsesOptions,
-    ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
-        let needs_new = match self.connection.as_ref() {
-            Some(conn) => conn.is_closed().await,
-            None => true,
-        };
-
-        if needs_new {
-            let mut headers = options.extra_headers.clone();
-            headers.extend(build_conversation_headers(options.conversation_id.clone()));
-            let websocket_telemetry = self.build_websocket_telemetry();
-            let new_conn: ApiWebSocketConnection =
-                ApiWebSocketResponsesClient::new(api_provider, api_auth)
-                    .connect(
-                        headers,
-                        options.turn_state.clone(),
-                        Some(websocket_telemetry),
-                    )
-                    .await?;
-            self.connection = Some(new_conn);
-        }
-
-        self.connection.as_ref().ok_or(ApiError::Stream(
-            "websocket connection is unavailable".to_string(),
-        ))
-    }
-
-    fn responses_request_compression(&self, auth: Option<&crate::auth::CodexAuth>) -> Compression {
-        if self
-            .state
-            .config
-            .features
-            .enabled(Feature::EnableRequestCompression)
-            && auth.is_some_and(CodexAuth::is_chatgpt_auth)
-            && self.state.provider.is_openai()
-        {
-            Compression::Zstd
-        } else {
-            Compression::None
-        }
-    }
-
-    /// Streams a turn via the OpenAI Chat Completions API.
-    ///
-    /// This path is only used when the provider is configured with
-    /// `WireApi::Chat`; it does not support `output_schema` today.
-    async fn stream_chat_completions(&self, prompt: &Prompt) -> Result<(ApiResponseStream, i64)> {
-        if prompt.output_schema.is_some() {
-            return Err(CodexErr::UnsupportedOperation(
-                "output_schema is not supported for Chat Completions API".to_string(),
-            ));
-        }
-
-        let auth_manager = self.state.auth_manager.clone();
-        let instructions = prompt.base_instructions.text.clone();
-        let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
-        let api_prompt = build_api_prompt(prompt, instructions, tools_json);
-        let contains_developer_message = prompt_contains_developer_message(&api_prompt.input);
-        let conversation_id = self.state.conversation_id.to_string();
-        let session_source = self.state.session_source.clone();
-
-        let mut auth_recovery = auth_manager
-            .as_ref()
-            .map(super::auth::AuthManager::unauthorized_recovery);
-        loop {
-            let auth = match auth_manager.as_ref() {
-                Some(manager) => manager.auth().await,
-                None => None,
-            };
-            let api_provider = self
-                .state
-                .provider
-                .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
-            let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
-            let request_provider = api_provider.clone();
-            let transport = ReqwestTransport::new(build_reqwest_client());
-            let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
-            let client = ApiChatClient::new(transport, api_provider, api_auth)
-                .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
-
-            let handling = self.developer_role_handling();
-            let request = build_chat_request(
-                &self.state.model_info.slug,
-                &api_prompt,
-                conversation_id.as_str(),
-                &session_source,
-                handling,
-                &request_provider,
-            )
-            .map_err(map_api_error)?;
-            let estimated_input_tokens =
-                estimate_chat_input_tokens_from_request_body(&request.body);
-
-            let stream_result = client.stream_request(request).await;
-
-            match stream_result {
-                Ok(stream) => {
-                    if handling == DeveloperRoleHandling::Preserve && contains_developer_message {
-                        self.record_chat_role_supports_developer();
-                    }
-                    return Ok((stream, estimated_input_tokens));
-                }
-                Err(ApiError::Transport(TransportError::Http { status, .. }))
-                    if status == StatusCode::UNAUTHORIZED =>
-                {
-                    handle_unauthorized(status, &mut auth_recovery).await?;
-                    continue;
-                }
-                Err(err)
-                    if handling == DeveloperRoleHandling::Preserve
-                        && contains_developer_message
-                        && is_unsupported_developer_role_error(&err) =>
-                {
-                    info!(
-                        provider = self.state.config.model_provider_id,
-                        "chat provider rejected developer role; retrying with system"
-                    );
-                    self.record_chat_role_requires_system();
-                    let retry_request = build_chat_request(
-                        &self.state.model_info.slug,
-                        &api_prompt,
-                        conversation_id.as_str(),
-                        &session_source,
-                        DeveloperRoleHandling::DowngradeToSystem,
-                        &request_provider,
-                    )
-                    .map_err(map_api_error)?;
-                    let retry_estimated_input_tokens =
-                        estimate_chat_input_tokens_from_request_body(&retry_request.body);
-                    let retry_stream = client.stream_request(retry_request).await;
-                    match retry_stream {
-                        Ok(stream) => return Ok((stream, retry_estimated_input_tokens)),
-                        Err(ApiError::Transport(TransportError::Http { status, .. }))
-                            if status == StatusCode::UNAUTHORIZED =>
-                        {
-                            handle_unauthorized(status, &mut auth_recovery).await?;
-                            continue;
-                        }
-                        Err(err) => return Err(map_api_error(err)),
-                    }
-                }
-                Err(err) => return Err(map_api_error(err)),
-            }
-        }
-    }
-
-    async fn stream_messages_api(&self, prompt: &Prompt) -> Result<ResponseStream> {
-        if prompt.output_schema.is_some() {
-            return Err(CodexErr::UnsupportedOperation(
-                "output_schema is not supported for Messages API".to_string(),
-            ));
-        }
-
-        let auth_manager = self.state.auth_manager.clone();
-        let api_prompt = self.build_messages_request(prompt)?;
-
-        let mut auth_recovery = auth_manager
-            .as_ref()
-            .map(super::auth::AuthManager::unauthorized_recovery);
-        loop {
-            let auth = match auth_manager.as_ref() {
-                Some(manager) => manager.auth().await,
-                None => None,
-            };
-            let api_provider = self
-                .state
-                .provider
-                .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
-            let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
-            let transport = ReqwestTransport::new(build_reqwest_client());
-            let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
-            let request = ApiMessagesRequestBuilder::new(
-                &self.state.model_info.slug,
-                &api_prompt.instructions,
-                &api_prompt.input,
-                &api_prompt.tools,
-            )
-            .parallel_tool_calls(api_prompt.parallel_tool_calls)
-            .max_tokens(ANTHROPIC_MESSAGES_MAX_TOKENS)
-            .build(&api_provider)
-            .map_err(map_api_error)?;
-            let client = ApiMessagesClient::new(transport, api_provider, api_auth)
-                .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
-
-            let stream_result = client.stream_request(request).await;
-            match stream_result {
-                Ok(stream) => {
-                    return Ok(map_response_stream(stream, self.state.otel_manager.clone()));
-                }
-                Err(ApiError::Transport(TransportError::Http { status, .. }))
-                    if status == StatusCode::UNAUTHORIZED =>
-                {
-                    handle_unauthorized(status, &mut auth_recovery).await?;
-                    continue;
-                }
-                Err(err) => return Err(map_api_error(err)),
-            }
-        }
-    }
-
-    /// Streams a turn via the OpenAI Responses API.
-    ///
-    /// Handles SSE fixtures, reasoning summaries, verbosity, and the
-    /// `text` controls used for output schemas.
-    async fn stream_responses_api(&self, prompt: &Prompt) -> Result<ResponseStream> {
-        if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
-            warn!(path, "Streaming from fixture");
-            let stream =
-                codex_api::stream_from_fixture(path, self.state.provider.stream_idle_timeout())
-                    .map_err(map_api_error)?;
-            return Ok(map_response_stream(stream, self.state.otel_manager.clone()));
-        }
-
-        let auth_manager = self.state.auth_manager.clone();
-        let api_prompt = self.build_responses_request(prompt)?;
-
-        let mut auth_recovery = auth_manager
-            .as_ref()
-            .map(super::auth::AuthManager::unauthorized_recovery);
-        loop {
-            let auth = match auth_manager.as_ref() {
-                Some(manager) => manager.auth().await,
-                None => None,
-            };
-            let api_provider = self
-                .state
-                .provider
-                .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
-            let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
-            let transport = ReqwestTransport::new(build_reqwest_client());
-            let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
-            let compression = self.responses_request_compression(auth.as_ref());
-
-            let client = ApiResponsesClient::new(transport, api_provider, api_auth)
-                .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
-
-            let options = self.build_responses_options(prompt, compression);
-
-            let stream_result = client
-                .stream_prompt(&self.state.model_info.slug, &api_prompt, options)
-                .await;
-
-            match stream_result {
-                Ok(stream) => {
-                    return Ok(map_response_stream(stream, self.state.otel_manager.clone()));
-                }
-                Err(ApiError::Transport(TransportError::Http { status, .. }))
-                    if status == StatusCode::UNAUTHORIZED =>
-                {
-                    handle_unauthorized(status, &mut auth_recovery).await?;
-                    continue;
-                }
-                Err(err) => return Err(map_api_error(err)),
-            }
-        }
-    }
-
-    /// Streams a turn via the Responses API over WebSocket transport.
-    async fn stream_responses_websocket(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
-        let auth_manager = self.state.auth_manager.clone();
-        let api_prompt = self.build_responses_request(prompt)?;
-
-        let mut auth_recovery = auth_manager
-            .as_ref()
-            .map(super::auth::AuthManager::unauthorized_recovery);
-        loop {
-            let auth = match auth_manager.as_ref() {
-                Some(manager) => manager.auth().await,
-                None => None,
-            };
-            let api_provider = self
-                .state
-                .provider
-                .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
-            let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
-            let compression = self.responses_request_compression(auth.as_ref());
-
-            let options = self.build_responses_options(prompt, compression);
-            let request = self.prepare_websocket_request(&api_prompt, &options);
-
-            let connection = match self
-                .websocket_connection(api_provider.clone(), api_auth.clone(), &options)
-                .await
-            {
-                Ok(connection) => connection,
-                Err(ApiError::Transport(TransportError::Http { status, .. }))
-                    if status == StatusCode::UNAUTHORIZED =>
-                {
-                    handle_unauthorized(status, &mut auth_recovery).await?;
-                    continue;
-                }
-                Err(err) => return Err(map_api_error(err)),
-            };
-
-            let stream_result = connection
-                .stream_request(request)
-                .await
-                .map_err(map_api_error)?;
-            self.websocket_last_items = api_prompt.input.clone();
-
-            return Ok(map_response_stream(
-                stream_result,
-                self.state.otel_manager.clone(),
-            ));
-        }
-    }
-
-    /// Builds request and SSE telemetry for streaming API calls (Chat/Responses).
-    fn build_streaming_telemetry(&self) -> (Arc<dyn RequestTelemetry>, Arc<dyn SseTelemetry>) {
-        let telemetry = Arc::new(ApiTelemetry::new(self.state.otel_manager.clone()));
-        let request_telemetry: Arc<dyn RequestTelemetry> = telemetry.clone();
-        let sse_telemetry: Arc<dyn SseTelemetry> = telemetry;
-        (request_telemetry, sse_telemetry)
-    }
-
-    /// Builds telemetry for the Responses API WebSocket transport.
-    fn build_websocket_telemetry(&self) -> Arc<dyn WebsocketTelemetry> {
-        let telemetry = Arc::new(ApiTelemetry::new(self.state.otel_manager.clone()));
-        let websocket_telemetry: Arc<dyn WebsocketTelemetry> = telemetry;
-        websocket_telemetry
+        self.inner.try_switch_fallback_transport()
     }
 }
 
-impl ModelClient {
-    /// Builds request telemetry for unary API calls (e.g., Compact endpoint).
-    fn build_request_telemetry(&self) -> Arc<dyn RequestTelemetry> {
-        let telemetry = Arc::new(ApiTelemetry::new(self.state.otel_manager.clone()));
-        let request_telemetry: Arc<dyn RequestTelemetry> = telemetry;
-        request_telemetry
-    }
-}
-
-/// Adapts the core `Prompt` type into the `codex-api` payload shape.
-fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value>) -> ApiPrompt {
-    ApiPrompt {
-        instructions,
-        input: prompt.get_formatted_input(),
-        tools: tools_json,
-        parallel_tool_calls: prompt.parallel_tool_calls,
-        output_schema: prompt.output_schema.clone(),
-    }
-}
-
-fn experimental_feature_headers(config: &Config) -> ApiHeaderMap {
-    let enabled = FEATURES
-        .iter()
-        .filter_map(|spec| {
-            if spec.stage.experimental_menu_description().is_some()
-                && config.features.enabled(spec.id)
-            {
-                Some(spec.key)
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-    let value = enabled.join(",");
-    let mut headers = ApiHeaderMap::new();
-    if !value.is_empty()
-        && let Ok(header_value) = HeaderValue::from_str(value.as_str())
-    {
-        headers.insert("x-codex-beta-features", header_value);
-    }
-    headers
-}
-
-fn build_responses_headers(
-    config: &Config,
-    turn_state: Option<&Arc<OnceLock<String>>>,
-) -> ApiHeaderMap {
-    let mut headers = experimental_feature_headers(config);
-    headers.insert(
-        WEB_SEARCH_ELIGIBLE_HEADER,
-        HeaderValue::from_static(
-            if matches!(config.web_search_mode, Some(WebSearchMode::Disabled)) {
-                "false"
-            } else {
-                "true"
-            },
-        ),
-    );
-    if let Some(turn_state) = turn_state
-        && let Some(state) = turn_state.get()
-        && let Ok(header_value) = HeaderValue::from_str(state)
-    {
-        headers.insert(X_CODEX_TURN_STATE_HEADER, header_value);
-    }
-    headers
-}
-
-fn build_chat_request(
-    model: &str,
-    prompt: &ApiPrompt,
-    conversation_id: &str,
-    session_source: &SessionSource,
-    developer_role_handling: DeveloperRoleHandling,
-    provider: &codex_api::Provider,
-) -> std::result::Result<codex_api::ChatRequest, ApiError> {
-    ApiChatRequestBuilder::new(model, &prompt.instructions, &prompt.input, &prompt.tools)
-        .conversation_id(Some(conversation_id.to_string()))
-        .session_source(Some(session_source.clone()))
-        .developer_role_handling(developer_role_handling)
-        .build(provider)
-}
-
-fn prompt_contains_developer_message(input: &[ResponseItem]) -> bool {
-    input.iter().any(|item| {
-        matches!(
-            item,
-            ResponseItem::Message { role, .. } if role == "developer"
-        )
-    })
-}
-
-fn is_unsupported_developer_role_error(err: &ApiError) -> bool {
-    let ApiError::Transport(TransportError::Http {
-        status,
-        body: Some(body),
-        ..
-    }) = err
-    else {
-        return false;
-    };
-
-    if *status != StatusCode::BAD_REQUEST {
-        return false;
-    }
-
-    let message = try_parse_error_message(body).to_ascii_lowercase();
-    message.contains("developer is not one of")
-        && message.contains("messages")
-        && message.contains("role")
-}
-
-fn map_response_stream<S>(api_stream: S, otel_manager: OtelManager) -> ResponseStream
-where
-    S: futures::Stream<Item = std::result::Result<ResponseEvent, ApiError>>
-        + Unpin
-        + Send
-        + 'static,
-{
-    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
-
-    tokio::spawn(async move {
-        let mut logged_error = false;
-        let mut api_stream = api_stream;
-        while let Some(event) = api_stream.next().await {
-            match event {
-                Ok(ResponseEvent::Completed {
-                    response_id,
-                    token_usage,
-                }) => {
-                    if let Some(usage) = &token_usage {
-                        otel_manager.sse_event_completed(
-                            usage.input_tokens,
-                            usage.output_tokens,
-                            Some(usage.cached_input_tokens),
-                            Some(usage.reasoning_output_tokens),
-                            usage.total_tokens,
-                        );
-                    }
-                    if tx_event
-                        .send(Ok(ResponseEvent::Completed {
-                            response_id,
-                            token_usage,
-                        }))
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-                Ok(event) => {
-                    if tx_event.send(Ok(event)).await.is_err() {
-                        return;
-                    }
-                }
-                Err(err) => {
-                    let mapped = map_api_error(err);
-                    if !logged_error {
-                        otel_manager.see_event_completed_failed(&mapped);
-                        logged_error = true;
-                    }
-                    if tx_event.send(Err(mapped)).await.is_err() {
-                        return;
-                    }
-                }
-            }
-        }
-    });
-
-    ResponseStream { rx_event }
-}
-
-fn map_chat_response_stream<S>(
-    api_stream: S,
-    otel_manager: OtelManager,
-    estimated_input_tokens: i64,
-) -> ResponseStream
-where
-    S: futures::Stream<Item = std::result::Result<ResponseEvent, ApiError>>
-        + Unpin
-        + Send
-        + 'static,
-{
-    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
-
-    tokio::spawn(async move {
-        let mut logged_error = false;
-        let mut api_stream = api_stream;
-        let mut estimated_output_tokens = 0i64;
-        while let Some(event) = api_stream.next().await {
-            match event {
-                Ok(ResponseEvent::OutputItemDone(item)) => {
-                    estimated_output_tokens = estimated_output_tokens
-                        .saturating_add(estimate_chat_output_tokens_for_item(&item));
-                    if tx_event
-                        .send(Ok(ResponseEvent::OutputItemDone(item)))
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-                Ok(ResponseEvent::Completed {
-                    response_id,
-                    token_usage,
-                }) => {
-                    let token_usage = token_usage.or_else(|| {
-                        let total_tokens =
-                            estimated_input_tokens.saturating_add(estimated_output_tokens);
-                        Some(TokenUsage {
-                            input_tokens: estimated_input_tokens,
-                            cached_input_tokens: 0,
-                            output_tokens: estimated_output_tokens,
-                            reasoning_output_tokens: 0,
-                            total_tokens,
-                        })
-                    });
-                    if let Some(usage) = &token_usage {
-                        otel_manager.sse_event_completed(
-                            usage.input_tokens,
-                            usage.output_tokens,
-                            Some(usage.cached_input_tokens),
-                            Some(usage.reasoning_output_tokens),
-                            usage.total_tokens,
-                        );
-                    }
-                    if tx_event
-                        .send(Ok(ResponseEvent::Completed {
-                            response_id,
-                            token_usage,
-                        }))
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-                Ok(event) => {
-                    if tx_event.send(Ok(event)).await.is_err() {
-                        return;
-                    }
-                }
-                Err(err) => {
-                    let mapped = map_api_error(err);
-                    if !logged_error {
-                        otel_manager.see_event_completed_failed(&mapped);
-                        logged_error = true;
-                    }
-                    if tx_event.send(Err(mapped)).await.is_err() {
-                        return;
-                    }
-                }
-            }
-        }
-    });
-
-    ResponseStream { rx_event }
-}
-
-fn estimate_chat_input_tokens_from_request_body(body: &Value) -> i64 {
-    let message_chars = body
-        .get("messages")
-        .and_then(Value::as_array)
-        .map(|messages| {
-            messages
-                .iter()
-                .map(estimate_chat_message_chars)
-                .fold(0usize, usize::saturating_add)
-        })
-        .unwrap_or(0);
-    let tool_chars = body
-        .get("tools")
-        .and_then(Value::as_array)
-        .map(|tools| {
-            tools
-                .iter()
-                .map(estimate_chat_tool_schema_chars)
-                .fold(0usize, usize::saturating_add)
-        })
-        .unwrap_or(0);
-
-    approx_chars_to_tokens(message_chars.saturating_add(tool_chars))
-}
-
-fn estimate_chat_message_chars(message: &Value) -> usize {
-    let content_chars = message
-        .get("content")
-        .map(estimate_chat_message_content_chars)
-        .unwrap_or(0);
-    let reasoning_chars = message
-        .get("reasoning")
-        .and_then(Value::as_str)
-        .map(count_chars)
-        .unwrap_or(0);
-    let tool_call_chars = message
-        .get("tool_calls")
-        .and_then(Value::as_array)
-        .map(|tool_calls| {
-            tool_calls
-                .iter()
-                .map(estimate_chat_tool_call_chars)
-                .fold(0usize, usize::saturating_add)
-        })
-        .unwrap_or(0);
-
-    content_chars
-        .saturating_add(reasoning_chars)
-        .saturating_add(tool_call_chars)
-}
-
-fn estimate_chat_message_content_chars(content: &Value) -> usize {
-    match content {
-        Value::String(text) => count_chars(text),
-        Value::Array(items) => items
-            .iter()
-            .map(|item| {
-                let text_chars = item
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .map(count_chars)
-                    .unwrap_or(0);
-                let image_chars = item
-                    .get("image_url")
-                    .and_then(Value::as_object)
-                    .and_then(|image| image.get("url"))
-                    .and_then(Value::as_str)
-                    .map(count_chars)
-                    .unwrap_or(0);
-                text_chars.saturating_add(image_chars)
-            })
-            .fold(0usize, usize::saturating_add),
-        _ => 0,
-    }
-}
-
-fn estimate_chat_tool_call_chars(tool_call: &Value) -> usize {
-    let Some(object) = tool_call.as_object() else {
-        return 0;
-    };
-
-    if let Some(function) = object.get("function") {
-        return estimate_chat_function_call_chars(function);
-    }
-    if let Some(custom) = object.get("custom") {
-        return estimate_chat_semantic_value_chars(custom);
-    }
-    if let Some(action) = object.get("action") {
-        return object
-            .get("status")
-            .map(estimate_chat_semantic_value_chars)
-            .unwrap_or(0)
-            .saturating_add(estimate_chat_semantic_value_chars(action));
-    }
-
-    object
-        .iter()
-        .filter(|(key, _)| !matches!(key.as_str(), "id" | "type"))
-        .map(|(_, value)| estimate_chat_semantic_value_chars(value))
-        .fold(0usize, usize::saturating_add)
-}
-
-fn estimate_chat_function_call_chars(function: &Value) -> usize {
-    let Some(object) = function.as_object() else {
-        return estimate_chat_semantic_value_chars(function);
-    };
-
-    object
-        .iter()
-        .filter(|(key, _)| matches!(key.as_str(), "name" | "arguments"))
-        .map(|(_, value)| estimate_chat_semantic_value_chars(value))
-        .fold(0usize, usize::saturating_add)
-}
-
-fn estimate_chat_tool_schema_chars(tool: &Value) -> usize {
-    count_chars(&serde_json::to_string(tool).unwrap_or_default())
-}
-
-fn estimate_chat_semantic_value_chars(value: &Value) -> usize {
-    match value {
-        Value::Null => 0,
-        Value::Bool(boolean) => boolean.to_string().len(),
-        Value::Number(number) => number.to_string().len(),
-        Value::String(text) => count_chars(text),
-        Value::Array(items) => items
-            .iter()
-            .map(estimate_chat_semantic_value_chars)
-            .fold(0usize, usize::saturating_add),
-        Value::Object(object) => object
-            .values()
-            .map(estimate_chat_semantic_value_chars)
-            .fold(0usize, usize::saturating_add),
-    }
-}
-
-fn estimate_chat_output_tokens_for_item(item: &ResponseItem) -> i64 {
-    let chars = match item {
-        ResponseItem::Message { role, content, .. } if role == "assistant" => content
-            .iter()
-            .map(|content_item| match content_item {
-                ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-                    count_chars(text)
-                }
-                ContentItem::InputImage { image_url } => count_chars(image_url),
-            })
-            .fold(0usize, usize::saturating_add),
-        ResponseItem::FunctionCall {
-            name, arguments, ..
-        } => count_chars(name).saturating_add(count_chars(arguments)),
-        _ => 0,
-    };
-
-    approx_chars_to_tokens(chars)
-}
-
-fn approx_chars_to_tokens(chars: usize) -> i64 {
-    let tokens =
-        chars.saturating_add(APPROX_CHARS_PER_TOKEN.saturating_sub(1)) / APPROX_CHARS_PER_TOKEN;
-    i64::try_from(tokens).unwrap_or(i64::MAX)
-}
-
-fn count_chars(text: &str) -> usize {
-    text.chars().count()
-}
-
-/// Handles a 401 response by optionally refreshing ChatGPT tokens once.
-///
-/// When refresh succeeds, the caller should retry the API call; otherwise
-/// the mapped `CodexErr` is returned to the caller.
-async fn handle_unauthorized(
-    status: StatusCode,
-    auth_recovery: &mut Option<UnauthorizedRecovery>,
-) -> Result<()> {
-    if let Some(recovery) = auth_recovery
-        && recovery.has_next()
-    {
-        return match recovery.next().await {
-            Ok(_) => Ok(()),
-            Err(RefreshTokenError::Permanent(failed)) => Err(CodexErr::RefreshTokenFailed(failed)),
-            Err(RefreshTokenError::Transient(other)) => Err(CodexErr::Io(other)),
-        };
-    }
-
-    Err(map_unauthorized_status(status))
-}
-
-fn map_unauthorized_status(status: StatusCode) -> CodexErr {
-    map_api_error(ApiError::Transport(TransportError::Http {
-        status,
-        url: None,
-        headers: None,
-        body: None,
-    }))
-}
-
-struct ApiTelemetry {
-    otel_manager: OtelManager,
-}
-
-impl ApiTelemetry {
-    fn new(otel_manager: OtelManager) -> Self {
-        Self { otel_manager }
-    }
-}
-
-impl RequestTelemetry for ApiTelemetry {
-    fn on_request(
-        &self,
-        attempt: u64,
-        status: Option<HttpStatusCode>,
-        error: Option<&TransportError>,
-        duration: Duration,
-    ) {
-        let error_message = error.map(std::string::ToString::to_string);
-        self.otel_manager.record_api_request(
-            attempt,
-            status.map(|s| s.as_u16()),
-            error_message.as_deref(),
-            duration,
-        );
-    }
-}
-
-impl SseTelemetry for ApiTelemetry {
-    fn on_sse_poll(
-        &self,
-        result: &std::result::Result<
-            Option<std::result::Result<Event, EventStreamError<TransportError>>>,
-            tokio::time::error::Elapsed,
-        >,
-        duration: Duration,
-    ) {
-        self.otel_manager.log_sse_event(result, duration);
-    }
-}
-
-impl WebsocketTelemetry for ApiTelemetry {
-    fn on_ws_request(&self, duration: Duration, error: Option<&ApiError>) {
-        let error_message = error.map(std::string::ToString::to_string);
-        self.otel_manager
-            .record_websocket_request(duration, error_message.as_deref());
-    }
-
-    fn on_ws_event(
-        &self,
-        result: &std::result::Result<Option<std::result::Result<Message, Error>>, ApiError>,
-        duration: Duration,
-    ) {
-        self.otel_manager.record_websocket_event(result, duration);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use codex_protocol::models::ReasoningItemContent;
-    use pretty_assertions::assert_eq;
-    use serde_json::json;
-
-    #[test]
-    fn estimate_chat_input_tokens_counts_semantic_content() {
-        let tool = json!({
-            "type": "function",
-            "name": "read_file",
-            "description": "Read a file from disk",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Absolute path"
-                    }
-                }
-            }
-        });
-        let body = json!({
-            "model": "gpt-test",
-            "messages": [
-                {"role": "system", "content": "inst"},
-                {"role": "user", "content": "hello"},
-                {
-                    "role": "assistant",
-                    "content": "answer",
-                    "reasoning": "why",
-                    "tool_calls": [
-                        {
-                            "id": "call_1",
-                            "type": "function",
-                            "function": {
-                                "name": "read_file",
-                                "arguments": "{\"path\":\"src/lib.rs\"}"
-                            }
-                        }
-                    ]
-                },
-                {
-                    "role": "tool",
-                    "tool_call_id": "call_1",
-                    "content": [
-                        {"type": "text", "text": "file body"},
-                        {"type": "image_url", "image_url": {"url": "https://x/y.png"}}
-                    ]
-                }
-            ],
-            "stream": true,
-            "tools": [tool]
-        });
-
-        let chars = count_chars("inst")
-            + count_chars("hello")
-            + count_chars("answer")
-            + count_chars("why")
-            + count_chars("read_file")
-            + count_chars("{\"path\":\"src/lib.rs\"}")
-            + count_chars("file body")
-            + count_chars("https://x/y.png")
-            + count_chars(&serde_json::to_string(&tool).unwrap());
-
-        assert_eq!(
-            estimate_chat_input_tokens_from_request_body(&body),
-            approx_chars_to_tokens(chars)
-        );
-    }
-
-    #[test]
-    fn estimate_chat_output_tokens_counts_messages_and_tool_calls() {
-        let assistant = ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: "hello".to_string(),
-            }],
-            end_turn: None,
-        };
-        let tool_call = ResponseItem::FunctionCall {
-            id: None,
-            name: "read_file".to_string(),
-            arguments: "{\"path\":\"src/lib.rs\"}".to_string(),
-            call_id: "call_1".to_string(),
-        };
-        let reasoning = ResponseItem::Reasoning {
-            id: String::new(),
-            summary: Vec::new(),
-            content: Some(vec![ReasoningItemContent::ReasoningText {
-                text: "internal".to_string(),
-            }]),
-            encrypted_content: None,
-        };
-
-        assert_eq!(
-            estimate_chat_output_tokens_for_item(&assistant),
-            approx_chars_to_tokens(count_chars("hello"))
-        );
-        assert_eq!(
-            estimate_chat_output_tokens_for_item(&tool_call),
-            approx_chars_to_tokens(
-                count_chars("read_file") + count_chars("{\"path\":\"src/lib.rs\"}")
-            )
-        );
-        assert_eq!(estimate_chat_output_tokens_for_item(&reasoning), 0);
-    }
-
-    #[test]
-    fn approx_chars_to_tokens_uses_char_count() {
-        assert_eq!(approx_chars_to_tokens(count_chars("abcdefg")), 2);
-        assert_eq!(approx_chars_to_tokens(count_chars("你好世界a")), 2);
+impl std::fmt::Debug for ModelClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModelClient")
+            .field("model", &self.state.model_info.slug)
+            .field("provider", &self.state.provider.name)
+            .finish()
     }
 }

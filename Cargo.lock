@@ -1161,6 +1161,7 @@ dependencies = [
  "codex-file-search",
  "codex-git",
  "codex-keyring-store",
+ "codex-llm",
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
@@ -1355,6 +1356,29 @@ dependencies = [
  "seccompiler",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "codex-llm"
+version = "0.94.4"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "codex-api",
+ "codex-client",
+ "codex-otel",
+ "codex-protocol",
+ "eventsource-stream",
+ "futures",
+ "http",
+ "reqwest",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
 ]
 
 [[package]]

@@ -1,6 +1,4 @@
 use super::cache::ModelsCacheManager;
-use crate::api_bridge::auth_provider_from_auth;
-use crate::api_bridge::map_api_error;
 use crate::auth::AuthManager;
 use crate::auth::AuthMode;
 use crate::config::Config;
@@ -12,13 +10,13 @@ use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result as CoreResult;
 use crate::features::Feature;
+use crate::llm_adapter::auth_context_from_auth;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::models_manager::model_info;
 use crate::models_manager::model_presets::builtin_model_presets;
-use codex_api::ModelsClient;
-use codex_api::ReqwestTransport;
+use codex_llm::fetch_remote_models;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
@@ -33,7 +31,6 @@ use std::sync::RwLock as StdRwLock;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::TryLockError;
-use tokio::time::timeout;
 use tracing::error;
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
@@ -356,21 +353,19 @@ impl ModelsManager {
             return Ok(());
         }
         let auth = self.auth_manager.auth().await;
-        let auth_mode = self.auth_manager.get_internal_auth_mode();
         let provider = self.provider_snapshot();
-        let api_provider = provider.to_api_provider(auth_mode)?;
-        let api_auth = auth_provider_from_auth(auth.clone(), &provider)?;
-        let transport = ReqwestTransport::new(build_reqwest_client());
-        let client = ModelsClient::new(transport, api_provider, api_auth);
+        let auth_context = auth_context_from_auth(auth.clone(), &provider)?;
 
         let client_version = format_client_version_to_whole();
-        let (models, etag) = timeout(
+        let (models, etag) = fetch_remote_models(
+            build_reqwest_client(),
+            &provider,
+            auth_context,
+            &client_version,
+            HeaderMap::new(),
             MODELS_REFRESH_TIMEOUT,
-            client.list_models(&client_version, HeaderMap::new()),
         )
-        .await
-        .map_err(|_| CodexErr::RequestTimeout)?
-        .map_err(map_api_error)?;
+        .await?;
 
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();

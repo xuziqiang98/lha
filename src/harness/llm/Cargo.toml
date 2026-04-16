@@ -1,0 +1,32 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-llm"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_llm"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+chrono = { workspace = true }
+codex-api = { workspace = true }
+codex-client = { workspace = true }
+codex-otel = { workspace = true }
+codex-protocol = { workspace = true }
+eventsource-stream = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
+reqwest = { workspace = true, features = ["json", "stream"] }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tokio-tungstenite = { workspace = true }
+tracing = { workspace = true }

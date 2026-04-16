@@ -17,6 +17,7 @@ members = [
     "src/harness/foundation/common",
     "src/harness/core",
     "src/harness/exec",
+    "src/harness/llm",
     "src/sandbox/execpolicy",
     "src/resources/keyring-store",
     "src/resources/file-search",
@@ -79,6 +80,7 @@ codex-feedback = { path = "src/harness/feedback" }
 codex-file-search = { path = "src/resources/file-search" }
 codex-git = { path = "src/harness/foundation/utils/git" }
 codex-keyring-store = { path = "src/resources/keyring-store" }
+codex-llm = { path = "src/harness/llm" }
 codex-linux-sandbox = { path = "src/sandbox/linux" }
 codex-lmstudio = { path = "src/resources/lmstudio" }
 codex-login = { path = "src/harness/login" }

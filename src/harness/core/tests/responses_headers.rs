@@ -100,15 +100,17 @@ async fn responses_stream_includes_subagent_header_on_review() {
     )
     .new_session();
 
-    let mut prompt = Prompt::default();
-    prompt.input = vec![ResponseItem::Message {
-        id: None,
-        role: "user".into(),
-        content: vec![ContentItem::InputText {
-            text: "hello".into(),
+    let prompt = Prompt {
+        input: vec![ResponseItem::Message {
+            id: None,
+            role: "user".into(),
+            content: vec![ContentItem::InputText {
+                text: "hello".into(),
+            }],
+            end_turn: None,
         }],
-        end_turn: None,
-    }];
+        ..Default::default()
+    };
 
     let mut stream = client_session.stream(&prompt).await.expect("stream failed");
     while let Some(event) = stream.next().await {
@@ -199,15 +201,17 @@ async fn responses_stream_includes_subagent_header_on_other() {
     )
     .new_session();
 
-    let mut prompt = Prompt::default();
-    prompt.input = vec![ResponseItem::Message {
-        id: None,
-        role: "user".into(),
-        content: vec![ContentItem::InputText {
-            text: "hello".into(),
+    let prompt = Prompt {
+        input: vec![ResponseItem::Message {
+            id: None,
+            role: "user".into(),
+            content: vec![ContentItem::InputText {
+                text: "hello".into(),
+            }],
+            end_turn: None,
         }],
-        end_turn: None,
-    }];
+        ..Default::default()
+    };
 
     let mut stream = client_session.stream(&prompt).await.expect("stream failed");
     while let Some(event) = stream.next().await {
@@ -356,15 +360,17 @@ async fn responses_respects_model_info_overrides_from_config() {
     )
     .new_session();
 
-    let mut prompt = Prompt::default();
-    prompt.input = vec![ResponseItem::Message {
-        id: None,
-        role: "user".into(),
-        content: vec![ContentItem::InputText {
-            text: "hello".into(),
+    let prompt = Prompt {
+        input: vec![ResponseItem::Message {
+            id: None,
+            role: "user".into(),
+            content: vec![ContentItem::InputText {
+                text: "hello".into(),
+            }],
+            end_turn: None,
         }],
-        end_turn: None,
-    }];
+        ..Default::default()
+    };
 
     let mut stream = client.stream(&prompt).await.expect("stream failed");
     while let Some(event) = stream.next().await {
