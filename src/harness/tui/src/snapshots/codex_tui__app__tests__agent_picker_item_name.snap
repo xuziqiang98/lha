@@ -1,5 +1,5 @@
 ---
-source: tui/src/app.rs
+source: src/harness/tui/src/app.rs
 expression: snapshot
 ---
 Main [default] | 00000000-0000-0000-0000-000000000123

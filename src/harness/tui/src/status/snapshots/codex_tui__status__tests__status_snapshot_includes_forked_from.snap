@@ -1,5 +1,5 @@
 ---
-source: tui/src/status/tests.rs
+source: src/harness/tui/src/status/tests.rs
 expression: sanitized
 ---
 /status

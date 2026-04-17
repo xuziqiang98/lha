@@ -1,5 +1,5 @@
 ---
-source: tui/src/model_migration.rs
+source: src/harness/tui/src/model_migration.rs
 expression: terminal.backend()
 ---
 

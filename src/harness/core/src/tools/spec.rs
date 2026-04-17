@@ -34,7 +34,8 @@ pub type AdditionalProperties = crate::client_common::tools::AdditionalPropertie
 
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
-    pub wire_api: WireApi,
+    pub enforce_declared_tool_names: bool,
+    pub restrict_tool_specs_to_functions: bool,
     pub shell_type: ConfigShellToolType,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
@@ -102,8 +103,10 @@ impl ToolsConfig {
             }
         };
 
+        let messages_style_tool_contract = *wire_api == WireApi::Messages;
         Self {
-            wire_api: *wire_api,
+            enforce_declared_tool_names: messages_style_tool_contract,
+            restrict_tool_specs_to_functions: messages_style_tool_contract,
             shell_type,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
@@ -123,12 +126,12 @@ impl ToolsConfig {
     }
 }
 
-fn tool_is_exposed_on_wire_api(config: &ToolsConfig, spec: &ToolSpec) -> bool {
-    config.wire_api != WireApi::Messages || matches!(spec, ToolSpec::Function(_))
+fn tool_is_exposed_for_runtime(config: &ToolsConfig, spec: &ToolSpec) -> bool {
+    !config.restrict_tool_specs_to_functions || matches!(spec, ToolSpec::Function(_))
 }
 
 fn maybe_push_spec(builder: &mut ToolRegistryBuilder, config: &ToolsConfig, spec: ToolSpec) {
-    if tool_is_exposed_on_wire_api(config, &spec) {
+    if tool_is_exposed_for_runtime(config, &spec) {
         builder.push_spec(spec);
     }
 }
@@ -142,7 +145,7 @@ fn maybe_push_spec_and_register_handler<H>(
 ) where
     H: ToolHandler + 'static,
 {
-    if tool_is_exposed_on_wire_api(config, &spec) {
+    if tool_is_exposed_for_runtime(config, &spec) {
         builder.push_spec(spec);
         builder.register_handler(name, handler);
     }
@@ -158,7 +161,7 @@ fn maybe_push_spec_with_parallel_support_and_register_handler<H>(
 ) where
     H: ToolHandler + 'static,
 {
-    if tool_is_exposed_on_wire_api(config, &spec) {
+    if tool_is_exposed_for_runtime(config, &spec) {
         builder.push_spec_with_parallel_support(spec, parallel);
         builder.register_handler(name, handler);
     }
@@ -1531,24 +1534,24 @@ pub(crate) fn build_specs(
         }
     }
 
-    if config.wire_api == WireApi::Messages {
+    if config.enforce_declared_tool_names {
         match config.shell_type {
             ConfigShellToolType::Default => {
                 let shell_spec = create_shell_tool(config.request_rule_enabled);
-                if tool_is_exposed_on_wire_api(config, &shell_spec) {
+                if tool_is_exposed_for_runtime(config, &shell_spec) {
                     builder.register_handler("shell", shell_handler);
                 }
             }
             ConfigShellToolType::Local => {
                 let local_shell_spec = ToolSpec::LocalShell {};
-                if tool_is_exposed_on_wire_api(config, &local_shell_spec) {
+                if tool_is_exposed_for_runtime(config, &local_shell_spec) {
                     builder.register_handler("local_shell", shell_handler);
                 }
             }
             ConfigShellToolType::UnifiedExec | ConfigShellToolType::Disabled => {}
             ConfigShellToolType::ShellCommand => {
                 let shell_command_spec = create_shell_command_tool(config.request_rule_enabled);
-                if tool_is_exposed_on_wire_api(config, &shell_command_spec) {
+                if tool_is_exposed_for_runtime(config, &shell_command_spec) {
                     builder.register_handler("shell_command", shell_command_handler);
                 }
             }

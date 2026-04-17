@@ -1,5 +1,6 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: src/harness/tui/src/chatwidget/tests.rs
 expression: combined
 ---
+
 • Here is the result.

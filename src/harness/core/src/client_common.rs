@@ -1,6 +1,6 @@
 use crate::error::Result;
-pub use codex_llm::prompt::Prompt;
-pub use codex_llm::prompt::ResponseEvent;
+pub use codex_llm::AgentEvent as ResponseEvent;
+pub use codex_llm::AgentTurnInput as Prompt;
 use futures::Stream;
 use std::pin::Pin;
 use std::task::Context;

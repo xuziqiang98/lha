@@ -108,7 +108,7 @@ async fn run_compact_task_inner(
 
     let mut truncated_count = 0usize;
 
-    let max_retries = turn_context.client.get_provider().stream_max_retries();
+    let max_retries = turn_context.client.runtime_metadata().stream_max_retries;
     let mut retries = 0;
 
     // TODO: If we need to guarantee the persisted mode always matches the prompt used for this

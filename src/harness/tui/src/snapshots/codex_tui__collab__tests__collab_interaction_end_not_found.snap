@@ -1,6 +1,5 @@
 ---
-source: tui/src/collab.rs
-assertion_line: 632
+source: src/harness/tui/src/collab.rs
 expression: cell_to_text(&cell)
 ---
 • Input result for Robie [explorer]

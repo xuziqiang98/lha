@@ -1,6 +1,5 @@
 ---
-source: tui/src/bottom_pane/mod.rs
-assertion_line: 1101
+source: src/harness/tui/src/bottom_pane/mod.rs
 expression: "render_snapshot(&pane, area)"
 ---
 • Working (0s • esc to interr…

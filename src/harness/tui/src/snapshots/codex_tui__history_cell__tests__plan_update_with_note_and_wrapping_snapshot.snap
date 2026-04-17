@@ -1,5 +1,5 @@
 ---
-source: tui/src/history_cell.rs
+source: src/harness/tui/src/history_cell.rs
 expression: rendered
 ---
 • Updated Plan

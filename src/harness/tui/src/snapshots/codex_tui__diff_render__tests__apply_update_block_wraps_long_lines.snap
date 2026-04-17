@@ -1,5 +1,5 @@
 ---
-source: tui/src/diff_render.rs
+source: src/harness/tui/src/diff_render.rs
 expression: terminal.backend()
 ---
 "• Edited long_example.txt (+1 -1)                                               "

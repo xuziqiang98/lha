@@ -4,8 +4,13 @@ use std::sync::Mutex;
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
-use codex_llm::LlmClient;
-use codex_llm::LlmClientSession;
+use codex_llm::AgentRuntime;
+use codex_llm::AgentRuntimeFactory;
+use codex_llm::AgentRuntimeSession;
+use codex_llm::DefaultAgentRuntimeFactory;
+use codex_llm::RuntimeBuildSpec;
+use codex_llm::RuntimeCapabilities;
+use codex_llm::RuntimeMetadata;
 pub use codex_llm::WEB_SEARCH_ELIGIBLE_HEADER;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
@@ -45,7 +50,7 @@ struct ModelClientState {
     summary: ReasoningSummaryConfig,
     session_source: SessionSource,
     transport_manager: TransportManager,
-    llm_client: LlmClient,
+    runtime: Arc<dyn AgentRuntime>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,7 +65,7 @@ pub struct ModelClient {
 }
 
 pub struct ModelClientSession {
-    inner: LlmClientSession,
+    inner: Box<dyn AgentRuntimeSession>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -109,20 +114,21 @@ impl ModelClient {
     ) -> Self {
         let runtime_config = Arc::new(llm_runtime_config_from_core_config(&config));
         let auth_source = CoreAuthSource::boxed(auth_manager.clone(), provider.clone());
-        let llm_client = LlmClient::new(
+        let runtime_factory = DefaultAgentRuntimeFactory;
+        let runtime = runtime_factory.build_runtime(RuntimeBuildSpec {
             runtime_config,
             auth_source,
-            build_reqwest_client(),
-            model_info.clone(),
-            chat_role_compatibility.clone(),
-            otel_manager.clone(),
-            provider.clone(),
+            http_client: build_reqwest_client(),
+            model_info: model_info.clone(),
+            chat_role_compatibility: chat_role_compatibility.clone(),
+            otel_manager: otel_manager.clone(),
+            provider: provider.clone(),
             effort,
             summary,
             conversation_id,
-            session_source.clone(),
-            transport_manager.clone(),
-        );
+            session_source: session_source.clone(),
+            transport_manager: transport_manager.clone(),
+        });
 
         Self {
             state: Arc::new(ModelClientState {
@@ -137,14 +143,14 @@ impl ModelClient {
                 summary,
                 session_source,
                 transport_manager,
-                llm_client,
+                runtime,
             }),
         }
     }
 
     pub fn new_session(&self) -> ModelClientSession {
         ModelClientSession {
-            inner: self.state.llm_client.new_session(),
+            inner: self.state.runtime.new_session(),
         }
     }
 
@@ -207,6 +213,14 @@ impl ModelClient {
 
     pub fn get_reasoning_summary(&self) -> ReasoningSummaryConfig {
         self.state.summary
+    }
+
+    pub fn runtime_capabilities(&self) -> RuntimeCapabilities {
+        self.state.runtime.capabilities()
+    }
+
+    pub fn runtime_metadata(&self) -> RuntimeMetadata {
+        self.state.runtime.metadata()
     }
 
     pub fn get_auth_manager(&self) -> Option<Arc<AuthManager>> {
@@ -311,14 +325,12 @@ impl ModelClient {
     }
 
     pub(crate) fn estimated_input_tokens_for_prompt(&self, prompt: &Prompt) -> Option<i64> {
-        self.state
-            .llm_client
-            .estimated_input_tokens_for_prompt(prompt)
+        self.state.runtime.estimated_input_tokens(prompt)
     }
 
     pub async fn compact_conversation_history(&self, prompt: &Prompt) -> Result<Vec<ResponseItem>> {
         self.state
-            .llm_client
+            .runtime
             .compact_conversation_history(prompt)
             .await
             .map_err(Into::into)
@@ -329,7 +341,7 @@ impl ModelClientSession {
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
         let mut inner_stream = self
             .inner
-            .stream(prompt)
+            .run_turn(prompt)
             .await
             .map_err(crate::error::CodexErr::from)?;
         let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);

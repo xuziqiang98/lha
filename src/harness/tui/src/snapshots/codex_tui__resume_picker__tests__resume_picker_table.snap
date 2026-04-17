@@ -1,5 +1,5 @@
 ---
-source: tui/src/resume_picker.rs
+source: src/harness/tui/src/resume_picker.rs
 expression: snapshot
 ---
   Updated         Branch  CWD  Conversation

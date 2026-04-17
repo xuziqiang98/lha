@@ -1,5 +1,5 @@
 ---
-source: tui/src/bottom_pane/queued_user_messages.rs
+source: src/harness/tui/src/bottom_pane/queued_user_messages.rs
 expression: "format!(\"{buf:?}\")"
 ---
 Buffer {

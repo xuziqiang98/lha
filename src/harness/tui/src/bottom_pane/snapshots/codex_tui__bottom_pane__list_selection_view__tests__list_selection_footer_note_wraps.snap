@@ -1,6 +1,5 @@
 ---
-source: tui/src/bottom_pane/list_selection_view.rs
-assertion_line: 683
+source: src/harness/tui/src/bottom_pane/list_selection_view.rs
 expression: "render_lines_with_width(&view, 40)"
 ---
                                         

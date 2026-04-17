@@ -1,8 +1,7 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: src/harness/tui/src/chatwidget/tests.rs
 expression: terminal.backend().vt100().screen().contents()
 ---
-
 
   Would you like to make the following edits?
 

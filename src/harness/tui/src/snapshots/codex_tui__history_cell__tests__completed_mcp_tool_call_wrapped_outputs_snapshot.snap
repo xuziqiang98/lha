@@ -1,6 +1,5 @@
 ---
-source: tui/src/history_cell.rs
-assertion_line: 1891
+source: src/harness/tui/src/history_cell.rs
 expression: rendered
 ---
 • Called

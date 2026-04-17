@@ -1,6 +1,5 @@
 ---
-source: tui/src/collab.rs
-assertion_line: 557
+source: src/harness/tui/src/collab.rs
 expression: snapshot
 ---
 • Spawned Robie [explorer] (gpt-5 high)

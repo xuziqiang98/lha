@@ -2,7 +2,6 @@ use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
-use crate::model_provider_info::WireApi;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
@@ -46,7 +45,7 @@ impl ToolRouter {
         Self {
             registry,
             specs,
-            enforce_declared_tool_names: config.wire_api == WireApi::Messages,
+            enforce_declared_tool_names: config.enforce_declared_tool_names,
         }
     }
 

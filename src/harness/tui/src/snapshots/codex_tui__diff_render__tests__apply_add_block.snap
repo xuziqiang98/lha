@@ -1,5 +1,5 @@
 ---
-source: tui/src/diff_render.rs
+source: src/harness/tui/src/diff_render.rs
 expression: terminal.backend()
 ---
 "• Added new_file.txt (+2 -0)                                                    "

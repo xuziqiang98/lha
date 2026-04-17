@@ -1,5 +1,5 @@
 ---
-source: tui/src/cwd_prompt.rs
+source: src/harness/tui/src/cwd_prompt.rs
 expression: terminal.backend()
 ---
 

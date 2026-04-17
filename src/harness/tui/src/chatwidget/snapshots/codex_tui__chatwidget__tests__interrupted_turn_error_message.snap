@@ -1,5 +1,5 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: src/harness/tui/src/chatwidget/tests.rs
 expression: last
 ---
 ■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.

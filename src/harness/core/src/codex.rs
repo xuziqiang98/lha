@@ -9,7 +9,6 @@ use std::sync::atomic::Ordering;
 use crate::AuthManager;
 use crate::CodexAuth;
 use crate::SandboxState;
-use crate::WireApi;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
@@ -39,6 +38,7 @@ use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
+use codex_llm::RuntimeCapabilities;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::config_types::ModeKind;
@@ -705,9 +705,10 @@ impl Session {
         &self,
         config: &Config,
         model_info: &ModelInfo,
+        supports_dynamic_context_window_probe: bool,
     ) -> Option<Arc<std::sync::Mutex<DynamicContextWindowState>>> {
         if config.model_context_window.is_some()
-            || !supports_dynamic_context_window(config.model_provider.wire_api)
+            || !supports_dynamic_context_window_probe
             || model_info.context_window.is_some()
         {
             return None;
@@ -1360,8 +1361,17 @@ impl Session {
                 &per_turn_config,
             )
             .await;
+        let runtime_capabilities = RuntimeCapabilities::from_wire_and_model(
+            session_configuration.provider.wire_api,
+            &model_info,
+            session_configuration.provider.supports_websockets,
+        );
         let dynamic_context_window = self
-            .dynamic_context_window_for_model(&per_turn_config, &model_info)
+            .dynamic_context_window_for_model(
+                &per_turn_config,
+                &model_info,
+                runtime_capabilities.supports_dynamic_context_window_probe,
+            )
             .await;
         let chat_role_compatibility = self
             .chat_role_compatibility_for_provider(&per_turn_config)
@@ -2551,13 +2561,6 @@ impl Session {
     }
 }
 
-fn supports_dynamic_context_window(wire_api: WireApi) -> bool {
-    match wire_api {
-        WireApi::Chat | WireApi::Messages => true,
-        WireApi::Responses => false,
-    }
-}
-
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
     // Seed with context in case there is an OverrideTurnContext first.
     let mut previous_context: Option<Arc<TurnContext>> = Some(sess.new_default_turn().await);
@@ -3302,6 +3305,11 @@ async fn spawn_review_thread(
         .disable(crate::features::Feature::WebSearchCached);
     let review_web_search_mode = WebSearchMode::Disabled;
     let provider = parent_turn_context.client.get_provider();
+    let runtime_capabilities = RuntimeCapabilities::from_wire_and_model(
+        provider.wire_api,
+        &review_model_info,
+        provider.supports_websockets,
+    );
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &review_model_info,
         wire_api: provider.wire_api,
@@ -3327,7 +3335,11 @@ async fn spawn_review_thread(
         .with_model(model.as_str(), review_model_info.slug.as_str());
 
     let dynamic_context_window = sess
-        .dynamic_context_window_for_model(&per_turn_config, &model_info)
+        .dynamic_context_window_for_model(
+            &per_turn_config,
+            &model_info,
+            runtime_capabilities.supports_dynamic_context_window_probe,
+        )
         .await;
     let chat_role_compatibility = sess
         .chat_role_compatibility_for_provider(&per_turn_config)
@@ -4165,7 +4177,7 @@ async fn run_sampling_request(
         }
 
         // Use the configured provider-specific stream retry budget.
-        let max_retries = turn_context.client.get_provider().stream_max_retries();
+        let max_retries = turn_context.client.runtime_metadata().stream_max_retries;
         if retries >= max_retries && client_session.try_switch_fallback_transport() {
             sess.send_event(
                 &turn_context,
@@ -4958,6 +4970,7 @@ pub(crate) use tests::make_session_and_context_with_rx;
 mod tests {
     use super::*;
     use crate::CodexAuth;
+    use crate::WireApi;
     use crate::config::ConfigBuilder;
     use crate::config::test_config;
     use crate::exec::ExecToolCallOutput;

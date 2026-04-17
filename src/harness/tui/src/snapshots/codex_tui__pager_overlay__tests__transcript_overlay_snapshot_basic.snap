@@ -1,5 +1,5 @@
 ---
-source: tui/src/pager_overlay.rs
+source: src/harness/tui/src/pager_overlay.rs
 expression: term.backend()
 ---
 "/ T R A N S C R I P T / / / / / / / / / "

@@ -1,5 +1,5 @@
 ---
-source: tui/src/bottom_pane/unified_exec_footer.rs
+source: src/harness/tui/src/bottom_pane/unified_exec_footer.rs
 expression: "format!(\"{buf:?}\")"
 ---
 Buffer {

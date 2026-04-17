@@ -1,5 +1,5 @@
 ---
-source: tui/src/bottom_pane/list_selection_view.rs
+source: src/harness/tui/src/bottom_pane/list_selection_view.rs
 expression: render_lines(&view)
 ---
                                                 
