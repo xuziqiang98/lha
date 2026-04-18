@@ -1,54 +1,52 @@
 [workspace]
 members = [
-    "src/resources/backend-client",
-    "src/harness/ansi-escape",
-    "src/harness/foundation/async-utils",
-    "src/orchestration/app-server",
-    "src/orchestration/app-server-protocol",
+    "src/integrations/backend-client",
+    "src/shared/ansi-escape",
+    "src/shared/async-utils",
+    "src/integrations/app-server",
+    "src/integrations/app-server-protocol",
     "src/resources/apply-patch",
-    "src/harness/foundation/arg0",
-    "src/harness/feedback",
-    "src/resources/chatgpt",
+    "src/shared/arg0",
+    "src/coding-agent/feedback",
+    "src/coding-agent/chatgpt",
     "src/resources/codex-backend-openapi-models",
-    "src/orchestration/cloud-requirements",
-    "src/orchestration/cloud-tasks",
-    "src/orchestration/cloud-tasks-client",
-    "src/harness/cli",
-    "src/harness/foundation/common",
-    "src/harness/agent",
-    "src/harness/exec",
-    "src/harness/llm",
-    "src/sandbox/execpolicy",
+    "src/integrations/cloud/cloud-requirements",
+    "src/integrations/cloud/cloud-tasks",
+    "src/integrations/cloud/cloud-tasks-client",
+    "src/coding-agent/cli",
+    "src/shared/common",
+    "src/coding-agent/runtime",
+    "src/platform/exec",
+    "src/llm/runtime",
+    "src/platform/sandbox/execpolicy",
     "src/resources/keyring-store",
     "src/resources/file-search",
-    "src/sandbox/linux",
-    "src/resources/lmstudio",
-    "src/harness/login",
-    "src/resources/mcp-server",
-    "src/resources/mcp-types",
-    "src/resources/ollama",
-    "src/sandbox/process-hardening",
-    "src/harness/foundation/protocol",
-    "src/resources/rmcp-client",
-    "src/resources/responses-api-proxy",
-    "src/orchestration/stdio-to-uds",
-    "src/harness/foundation/otel",
-    "src/harness/tui",
-    "src/harness/foundation/utils/absolute-path",
-    "src/harness/foundation/utils/cargo-bin",
-    "src/harness/foundation/utils/git",
-    "src/harness/foundation/utils/cache",
-    "src/harness/foundation/utils/image",
-    "src/harness/foundation/utils/json-to-toml",
-    "src/harness/foundation/utils/home-dir",
-    "src/harness/foundation/utils/pty",
-    "src/harness/foundation/utils/readiness",
-    "src/harness/foundation/utils/sleep-inhibitor",
-    "src/harness/foundation/utils/string",
-    "src/resources/codex-client",
-    "src/resources/codex-api",
-    "src/session/state",
-    "src/sandbox/windows",
+    "src/platform/sandbox/linux",
+    "src/coding-agent/login",
+    "src/integrations/mcp-server",
+    "src/integrations/mcp-types",
+    "src/platform/sandbox/process-hardening",
+    "src/core/protocol",
+    "src/integrations/rmcp-client",
+    "src/integrations/responses-api-proxy",
+    "src/platform/ipc/stdio-to-uds",
+    "src/shared/otel",
+    "src/tui/app",
+    "src/shared/utils/absolute-path",
+    "src/shared/utils/cargo-bin",
+    "src/shared/utils/git",
+    "src/shared/utils/cache",
+    "src/shared/utils/image",
+    "src/shared/utils/json-to-toml",
+    "src/shared/utils/home-dir",
+    "src/shared/utils/pty",
+    "src/shared/utils/readiness",
+    "src/shared/utils/sleep-inhibitor",
+    "src/shared/utils/string",
+    "src/llm/api/codex-client",
+    "src/llm/api/codex-api",
+    "src/core/state",
+    "src/platform/sandbox/windows",
 ]
 resolver = "2"
 
@@ -59,55 +57,53 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 # Internal
-app_test_support = { path = "src/orchestration/app-server/tests/common" }
-codex-ansi-escape = { path = "src/harness/ansi-escape" }
-codex-api = { path = "src/resources/codex-api" }
-codex-app-server = { path = "src/orchestration/app-server" }
-codex-app-server-protocol = { path = "src/orchestration/app-server-protocol" }
+app_test_support = { path = "src/integrations/app-server/tests/common" }
+codex-ansi-escape = { path = "src/shared/ansi-escape" }
+codex-api = { path = "src/llm/api/codex-api" }
+codex-app-server = { path = "src/integrations/app-server" }
+codex-app-server-protocol = { path = "src/integrations/app-server-protocol" }
 codex-apply-patch = { path = "src/resources/apply-patch" }
-codex-arg0 = { path = "src/harness/foundation/arg0" }
-codex-async-utils = { path = "src/harness/foundation/async-utils" }
-codex-backend-client = { path = "src/resources/backend-client" }
-codex-cloud-requirements = { path = "src/orchestration/cloud-requirements" }
-codex-chatgpt = { path = "src/resources/chatgpt" }
-codex-cli = { path = "src/harness/cli" }
-codex-client = { path = "src/resources/codex-client" }
-codex-common = { path = "src/harness/foundation/common" }
-codex-agent = { path = "src/harness/agent" }
-codex-exec = { path = "src/harness/exec" }
-codex-execpolicy = { path = "src/sandbox/execpolicy" }
-codex-feedback = { path = "src/harness/feedback" }
+codex-arg0 = { path = "src/shared/arg0" }
+codex-async-utils = { path = "src/shared/async-utils" }
+codex-backend-client = { path = "src/integrations/backend-client" }
+codex-cloud-requirements = { path = "src/integrations/cloud/cloud-requirements" }
+codex-chatgpt = { path = "src/coding-agent/chatgpt" }
+codex-cli = { path = "src/coding-agent/cli" }
+codex-client = { path = "src/llm/api/codex-client" }
+codex-common = { path = "src/shared/common" }
+codex-agent = { package = "codex-coding-agent", path = "src/coding-agent/runtime" }
+codex-exec = { path = "src/platform/exec" }
+codex-execpolicy = { path = "src/platform/sandbox/execpolicy" }
+codex-feedback = { path = "src/coding-agent/feedback" }
 codex-file-search = { path = "src/resources/file-search" }
-codex-git = { path = "src/harness/foundation/utils/git" }
+codex-git = { path = "src/shared/utils/git" }
 codex-keyring-store = { path = "src/resources/keyring-store" }
-codex-llm = { path = "src/harness/llm" }
-codex-linux-sandbox = { path = "src/sandbox/linux" }
-codex-lmstudio = { path = "src/resources/lmstudio" }
-codex-login = { path = "src/harness/login" }
-codex-mcp-server = { path = "src/resources/mcp-server" }
-codex-ollama = { path = "src/resources/ollama" }
-codex-otel = { path = "src/harness/foundation/otel" }
-codex-process-hardening = { path = "src/sandbox/process-hardening" }
-codex-protocol = { path = "src/harness/foundation/protocol" }
-codex-responses-api-proxy = { path = "src/resources/responses-api-proxy" }
-codex-rmcp-client = { path = "src/resources/rmcp-client" }
-codex-state = { path = "src/session/state" }
-codex-stdio-to-uds = { path = "src/orchestration/stdio-to-uds" }
-codex-tui = { path = "src/harness/tui" }
-codex-utils-absolute-path = { path = "src/harness/foundation/utils/absolute-path" }
-codex-utils-cache = { path = "src/harness/foundation/utils/cache" }
-codex-utils-cargo-bin = { path = "src/harness/foundation/utils/cargo-bin" }
-codex-utils-image = { path = "src/harness/foundation/utils/image" }
-codex-utils-json-to-toml = { path = "src/harness/foundation/utils/json-to-toml" }
-codex-utils-home-dir = { path = "src/harness/foundation/utils/home-dir" }
-codex-utils-pty = { path = "src/harness/foundation/utils/pty" }
-codex-utils-readiness = { path = "src/harness/foundation/utils/readiness" }
-codex-utils-sleep-inhibitor = { path = "src/harness/foundation/utils/sleep-inhibitor" }
-codex-utils-string = { path = "src/harness/foundation/utils/string" }
-codex-windows-sandbox = { path = "src/sandbox/windows" }
-core_test_support = { path = "src/harness/agent/tests/common" }
-mcp-types = { path = "src/resources/mcp-types" }
-mcp_test_support = { path = "src/resources/mcp-server/tests/common" }
+codex-llm = { path = "src/llm/runtime" }
+codex-linux-sandbox = { path = "src/platform/sandbox/linux" }
+codex-login = { path = "src/coding-agent/login" }
+codex-mcp-server = { path = "src/integrations/mcp-server" }
+codex-otel = { path = "src/shared/otel" }
+codex-process-hardening = { path = "src/platform/sandbox/process-hardening" }
+codex-protocol = { path = "src/core/protocol" }
+codex-responses-api-proxy = { path = "src/integrations/responses-api-proxy" }
+codex-rmcp-client = { path = "src/integrations/rmcp-client" }
+codex-state = { path = "src/core/state" }
+codex-stdio-to-uds = { path = "src/platform/ipc/stdio-to-uds" }
+codex-tui = { path = "src/tui/app" }
+codex-utils-absolute-path = { path = "src/shared/utils/absolute-path" }
+codex-utils-cache = { path = "src/shared/utils/cache" }
+codex-utils-cargo-bin = { path = "src/shared/utils/cargo-bin" }
+codex-utils-image = { path = "src/shared/utils/image" }
+codex-utils-json-to-toml = { path = "src/shared/utils/json-to-toml" }
+codex-utils-home-dir = { path = "src/shared/utils/home-dir" }
+codex-utils-pty = { path = "src/shared/utils/pty" }
+codex-utils-readiness = { path = "src/shared/utils/readiness" }
+codex-utils-sleep-inhibitor = { path = "src/shared/utils/sleep-inhibitor" }
+codex-utils-string = { path = "src/shared/utils/string" }
+codex-windows-sandbox = { path = "src/platform/sandbox/windows" }
+core_test_support = { path = "src/coding-agent/runtime/tests/common" }
+mcp-types = { path = "src/integrations/mcp-types" }
+mcp_test_support = { path = "src/integrations/mcp-server/tests/common" }
 
 # External
 allocative = "0.3.3"

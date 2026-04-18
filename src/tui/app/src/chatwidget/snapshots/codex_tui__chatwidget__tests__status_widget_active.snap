@@ -1,0 +1,10 @@
+---
+source: src/tui/app/src/chatwidget/tests.rs
+expression: terminal.backend()
+---
+"• Analyzing (0s • esc to interrupt)                                             "
+"                                                                                "
+"                                                                                "
+"› Ask Codex to do anything                                                      "
+"                                                                                "
+"  gpt-5.3-codex · 100% left · ~/Workspace/codey/src/tui/app                     "

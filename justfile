@@ -40,7 +40,7 @@ test:
 
 # Regenerate the json schema for config.toml from the current config types.
 write-config-schema:
-    cargo run -p codex-agent --bin codex-write-config-schema
+    cargo run -p codex-coding-agent --bin codex-write-config-schema
 
 # Regenerate vendored app-server protocol schema artifacts.
 write-app-server-schema:

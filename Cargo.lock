@@ -183,8 +183,8 @@ dependencies = [
  "anyhow",
  "base64",
  "chrono",
- "codex-agent",
  "codex-app-server-protocol",
+ "codex-coding-agent",
  "codex-protocol",
  "codex-utils-cargo-bin",
  "core_test_support",
@@ -402,28 +402,6 @@ dependencies = [
  "signal-hook-registry",
  "slab",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "async-stream"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
-dependencies = [
- "async-stream-impl",
- "futures-core",
- "pin-project-lite",
-]
-
-[[package]]
-name = "async-stream-impl"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.104",
 ]
 
 [[package]]
@@ -814,7 +792,316 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
 
 [[package]]
-name = "codex-agent"
+name = "codex-ansi-escape"
+version = "0.94.4"
+dependencies = [
+ "ansi-to-tui",
+ "ratatui",
+ "tracing",
+]
+
+[[package]]
+name = "codex-api"
+version = "0.94.4"
+dependencies = [
+ "anyhow",
+ "assert_matches",
+ "async-trait",
+ "bytes",
+ "codex-client",
+ "codex-protocol",
+ "eventsource-stream",
+ "futures",
+ "http",
+ "pretty_assertions",
+ "regex-lite",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-test",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "url",
+ "wiremock",
+]
+
+[[package]]
+name = "codex-app-server"
+version = "0.94.4"
+dependencies = [
+ "anyhow",
+ "app_test_support",
+ "async-trait",
+ "axum",
+ "base64",
+ "chrono",
+ "codex-app-server-protocol",
+ "codex-arg0",
+ "codex-backend-client",
+ "codex-chatgpt",
+ "codex-cloud-requirements",
+ "codex-coding-agent",
+ "codex-common",
+ "codex-execpolicy",
+ "codex-feedback",
+ "codex-file-search",
+ "codex-llm",
+ "codex-login",
+ "codex-protocol",
+ "codex-rmcp-client",
+ "codex-utils-absolute-path",
+ "codex-utils-json-to-toml",
+ "core_test_support",
+ "mcp-types",
+ "os_info",
+ "pretty_assertions",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "shlex",
+ "tempfile",
+ "time",
+ "tokio",
+ "toml 0.9.5",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
+name = "codex-app-server-protocol"
+version = "0.94.4"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "codex-utils-cargo-bin",
+ "mcp-types",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "similar",
+ "strum_macros 0.27.2",
+ "tempfile",
+ "thiserror 2.0.17",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
+name = "codex-apply-patch"
+version = "0.94.4"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "assert_matches",
+ "codex-utils-cargo-bin",
+ "pretty_assertions",
+ "similar",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tree-sitter",
+ "tree-sitter-bash",
+]
+
+[[package]]
+name = "codex-arg0"
+version = "0.94.4"
+dependencies = [
+ "anyhow",
+ "codex-apply-patch",
+ "codex-coding-agent",
+ "codex-linux-sandbox",
+ "dotenvy",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "codex-async-utils"
+version = "0.94.4"
+dependencies = [
+ "async-trait",
+ "pretty_assertions",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "codex-backend-client"
+version = "0.94.4"
+dependencies = [
+ "anyhow",
+ "codex-backend-openapi-models",
+ "codex-coding-agent",
+ "codex-protocol",
+ "pretty_assertions",
+ "reqwest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "codex-backend-openapi-models"
+version = "0.94.4"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_with",
+]
+
+[[package]]
+name = "codex-chatgpt"
+version = "0.94.4"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-coding-agent",
+ "codex-common",
+ "codex-git",
+ "codex-utils-cargo-bin",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "urlencoding",
+]
+
+[[package]]
+name = "codex-cli"
+version = "0.94.4"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "assert_matches",
+ "clap",
+ "clap_complete",
+ "codex-app-server",
+ "codex-app-server-protocol",
+ "codex-arg0",
+ "codex-chatgpt",
+ "codex-cloud-tasks",
+ "codex-coding-agent",
+ "codex-common",
+ "codex-exec",
+ "codex-execpolicy",
+ "codex-login",
+ "codex-mcp-server",
+ "codex-protocol",
+ "codex-responses-api-proxy",
+ "codex-rmcp-client",
+ "codex-stdio-to-uds",
+ "codex-tui",
+ "codex-utils-cargo-bin",
+ "codex-windows-sandbox",
+ "libc",
+ "owo-colors",
+ "predicates",
+ "pretty_assertions",
+ "regex-lite",
+ "serde_json",
+ "supports-color 3.0.2",
+ "tempfile",
+ "tokio",
+ "toml 0.9.5",
+ "tracing",
+]
+
+[[package]]
+name = "codex-client"
+version = "0.94.4"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "eventsource-stream",
+ "futures",
+ "http",
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "rand 0.9.2",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "zstd",
+]
+
+[[package]]
+name = "codex-cloud-requirements"
+version = "0.94.4"
+dependencies = [
+ "async-trait",
+ "base64",
+ "codex-backend-client",
+ "codex-coding-agent",
+ "codex-otel",
+ "codex-protocol",
+ "pretty_assertions",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml 0.9.5",
+ "tracing",
+]
+
+[[package]]
+name = "codex-cloud-tasks"
+version = "0.94.4"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64",
+ "chrono",
+ "clap",
+ "codex-cloud-tasks-client",
+ "codex-coding-agent",
+ "codex-common",
+ "codex-login",
+ "codex-tui",
+ "crossterm",
+ "owo-colors",
+ "pretty_assertions",
+ "ratatui",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "supports-color 3.0.2",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
+ "unicode-width 0.2.1",
+]
+
+[[package]]
+name = "codex-cloud-tasks-client"
+version = "0.94.4"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "codex-backend-client",
+ "codex-git",
+ "diffy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+]
+
+[[package]]
+name = "codex-coding-agent"
 version = "0.94.4"
 dependencies = [
  "anyhow",
@@ -827,13 +1114,13 @@ dependencies = [
  "chardetng",
  "chrono",
  "clap",
- "codex-agent",
  "codex-api",
  "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-arg0",
  "codex-async-utils",
  "codex-client",
+ "codex-coding-agent",
  "codex-execpolicy",
  "codex-file-search",
  "codex-git",
@@ -916,323 +1203,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-ansi-escape"
-version = "0.94.4"
-dependencies = [
- "ansi-to-tui",
- "ratatui",
- "tracing",
-]
-
-[[package]]
-name = "codex-api"
-version = "0.94.4"
-dependencies = [
- "anyhow",
- "assert_matches",
- "async-trait",
- "bytes",
- "codex-client",
- "codex-protocol",
- "eventsource-stream",
- "futures",
- "http",
- "pretty_assertions",
- "regex-lite",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
- "tokio",
- "tokio-test",
- "tokio-tungstenite",
- "tokio-util",
- "tracing",
- "url",
- "wiremock",
-]
-
-[[package]]
-name = "codex-app-server"
-version = "0.94.4"
-dependencies = [
- "anyhow",
- "app_test_support",
- "async-trait",
- "axum",
- "base64",
- "chrono",
- "codex-agent",
- "codex-app-server-protocol",
- "codex-arg0",
- "codex-backend-client",
- "codex-chatgpt",
- "codex-cloud-requirements",
- "codex-common",
- "codex-execpolicy",
- "codex-feedback",
- "codex-file-search",
- "codex-llm",
- "codex-login",
- "codex-protocol",
- "codex-rmcp-client",
- "codex-utils-absolute-path",
- "codex-utils-json-to-toml",
- "core_test_support",
- "mcp-types",
- "os_info",
- "pretty_assertions",
- "rmcp",
- "serde",
- "serde_json",
- "serial_test",
- "shlex",
- "tempfile",
- "time",
- "tokio",
- "toml 0.9.5",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "wiremock",
-]
-
-[[package]]
-name = "codex-app-server-protocol"
-version = "0.94.4"
-dependencies = [
- "anyhow",
- "clap",
- "codex-protocol",
- "codex-utils-absolute-path",
- "codex-utils-cargo-bin",
- "mcp-types",
- "pretty_assertions",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "similar",
- "strum_macros 0.27.2",
- "tempfile",
- "thiserror 2.0.17",
- "ts-rs",
- "uuid",
-]
-
-[[package]]
-name = "codex-apply-patch"
-version = "0.94.4"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "assert_matches",
- "codex-utils-cargo-bin",
- "pretty_assertions",
- "similar",
- "tempfile",
- "thiserror 2.0.17",
- "tree-sitter",
- "tree-sitter-bash",
-]
-
-[[package]]
-name = "codex-arg0"
-version = "0.94.4"
-dependencies = [
- "anyhow",
- "codex-agent",
- "codex-apply-patch",
- "codex-linux-sandbox",
- "dotenvy",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "codex-async-utils"
-version = "0.94.4"
-dependencies = [
- "async-trait",
- "pretty_assertions",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
-name = "codex-backend-client"
-version = "0.94.4"
-dependencies = [
- "anyhow",
- "codex-agent",
- "codex-backend-openapi-models",
- "codex-protocol",
- "pretty_assertions",
- "reqwest",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "codex-backend-openapi-models"
-version = "0.94.4"
-dependencies = [
- "serde",
- "serde_json",
- "serde_with",
-]
-
-[[package]]
-name = "codex-chatgpt"
-version = "0.94.4"
-dependencies = [
- "anyhow",
- "clap",
- "codex-agent",
- "codex-common",
- "codex-git",
- "codex-utils-cargo-bin",
- "pretty_assertions",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "urlencoding",
-]
-
-[[package]]
-name = "codex-cli"
-version = "0.94.4"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "assert_matches",
- "clap",
- "clap_complete",
- "codex-agent",
- "codex-app-server",
- "codex-app-server-protocol",
- "codex-arg0",
- "codex-chatgpt",
- "codex-cloud-tasks",
- "codex-common",
- "codex-exec",
- "codex-execpolicy",
- "codex-login",
- "codex-mcp-server",
- "codex-protocol",
- "codex-responses-api-proxy",
- "codex-rmcp-client",
- "codex-stdio-to-uds",
- "codex-tui",
- "codex-utils-cargo-bin",
- "codex-windows-sandbox",
- "libc",
- "owo-colors",
- "predicates",
- "pretty_assertions",
- "regex-lite",
- "serde_json",
- "supports-color 3.0.2",
- "tempfile",
- "tokio",
- "toml 0.9.5",
- "tracing",
-]
-
-[[package]]
-name = "codex-client"
-version = "0.94.4"
-dependencies = [
- "async-trait",
- "bytes",
- "eventsource-stream",
- "futures",
- "http",
- "opentelemetry",
- "opentelemetry_sdk",
- "rand 0.9.2",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "zstd",
-]
-
-[[package]]
-name = "codex-cloud-requirements"
-version = "0.94.4"
-dependencies = [
- "async-trait",
- "base64",
- "codex-agent",
- "codex-backend-client",
- "codex-otel",
- "codex-protocol",
- "pretty_assertions",
- "serde_json",
- "tempfile",
- "tokio",
- "toml 0.9.5",
- "tracing",
-]
-
-[[package]]
-name = "codex-cloud-tasks"
-version = "0.94.4"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64",
- "chrono",
- "clap",
- "codex-agent",
- "codex-cloud-tasks-client",
- "codex-common",
- "codex-login",
- "codex-tui",
- "crossterm",
- "owo-colors",
- "pretty_assertions",
- "ratatui",
- "reqwest",
- "serde",
- "serde_json",
- "supports-color 3.0.2",
- "tokio",
- "tokio-stream",
- "tracing",
- "tracing-subscriber",
- "unicode-width 0.2.1",
-]
-
-[[package]]
-name = "codex-cloud-tasks-client"
-version = "0.94.4"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "codex-backend-client",
- "codex-git",
- "diffy",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
-]
-
-[[package]]
 name = "codex-common"
 version = "0.94.4"
 dependencies = [
  "clap",
- "codex-agent",
+ "codex-coding-agent",
  "codex-llm",
- "codex-lmstudio",
- "codex-ollama",
  "codex-protocol",
  "codex-utils-absolute-path",
  "pretty_assertions",
@@ -1247,9 +1223,9 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
- "codex-agent",
  "codex-arg0",
  "codex-cloud-requirements",
+ "codex-coding-agent",
  "codex-common",
  "codex-llm",
  "codex-protocol",
@@ -1351,7 +1327,7 @@ name = "codex-linux-sandbox"
 version = "0.94.4"
 dependencies = [
  "clap",
- "codex-agent",
+ "codex-coding-agent",
  "codex-utils-absolute-path",
  "landlock",
  "libc",
@@ -1385,28 +1361,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-lmstudio"
-version = "0.94.4"
-dependencies = [
- "codex-agent",
- "codex-llm",
- "reqwest",
- "serde_json",
- "tokio",
- "tracing",
- "which",
- "wiremock",
-]
-
-[[package]]
 name = "codex-login"
 version = "0.94.4"
 dependencies = [
  "anyhow",
  "base64",
  "chrono",
- "codex-agent",
  "codex-app-server-protocol",
+ "codex-coding-agent",
  "core_test_support",
  "rand 0.9.2",
  "reqwest",
@@ -1427,8 +1389,8 @@ name = "codex-mcp-server"
 version = "0.94.4"
 dependencies = [
  "anyhow",
- "codex-agent",
  "codex-arg0",
+ "codex-coding-agent",
  "codex-common",
  "codex-protocol",
  "codex-utils-json-to-toml",
@@ -1445,25 +1407,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "wiremock",
-]
-
-[[package]]
-name = "codex-ollama"
-version = "0.94.4"
-dependencies = [
- "assert_matches",
- "async-stream",
- "bytes",
- "codex-agent",
- "codex-llm",
- "futures",
- "pretty_assertions",
- "reqwest",
- "semver",
- "serde_json",
- "tokio",
- "tracing",
  "wiremock",
 ]
 
@@ -1622,7 +1565,6 @@ dependencies = [
  "base64",
  "chrono",
  "clap",
- "codex-agent",
  "codex-ansi-escape",
  "codex-api",
  "codex-app-server-protocol",
@@ -1631,6 +1573,7 @@ dependencies = [
  "codex-chatgpt",
  "codex-cli",
  "codex-cloud-requirements",
+ "codex-coding-agent",
  "codex-common",
  "codex-feedback",
  "codex-file-search",
@@ -1969,7 +1912,7 @@ dependencies = [
  "assert_cmd",
  "async-trait",
  "base64",
- "codex-agent",
+ "codex-coding-agent",
  "codex-llm",
  "codex-otel",
  "codex-protocol",
@@ -4086,7 +4029,7 @@ name = "mcp_test_support"
 version = "0.94.4"
 dependencies = [
  "anyhow",
- "codex-agent",
+ "codex-coding-agent",
  "codex-mcp-server",
  "codex-utils-cargo-bin",
  "core_test_support",

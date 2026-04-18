@@ -13,12 +13,14 @@ The resulting binary is written to `target/release/codey`.
 
 ## Structure
 
-The workspace is organized under [`src/`](./src) with five top-level domains:
+The workspace is organized under [`src/`](./src) with seven top-level domains:
 
-- `harness`: agent shell and execution framework
-- `session`: durable task/session state
-- `sandbox`: isolated execution environment
-- `resources`: tools, skills, MCP, and external capabilities
-- `orchestration`: multi-step flow control and component wiring
+- `llm`: model runtime SDK, provider adapters, and wire-level API clients
+- `core`: shared protocol and session state types
+- `coding-agent`: Codex-specific runtime, CLI, login, and product logic
+- `tui`: terminal user interface application
+- `integrations`: app-server, MCP, backend, and cloud-facing adapters
+- `platform`: sandboxing, execution, and IPC primitives
+- `shared`: reusable support crates and utilities
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).

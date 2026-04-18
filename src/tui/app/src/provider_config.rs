@@ -1,0 +1,1553 @@
+use std::path::Path;
+use std::time::Duration;
+
+use codex_agent::config::CONFIG_TOML_FILE;
+use codex_agent::config::ConfigToml;
+use codex_agent::config::ConfiguredProviderDialect;
+use codex_agent::config::MODEL_PROVIDER_VARIANTS_KEY;
+use codex_agent::config::dialect_config_value;
+use codex_agent::config::edit::ConfigEdit;
+use codex_agent::config::edit::ConfigEditsBuilder;
+use codex_agent::config::generated_provider_profile_name;
+use codex_agent::config::model_provider_variant_ref;
+use codex_agent::config::profile::ConfigProfile;
+use codex_agent::default_client::build_reqwest_client;
+use codex_api::ApiError;
+use codex_api::AuthProvider;
+use codex_api::ModelsClient;
+use codex_api::Provider;
+use codex_api::ReqwestTransport;
+use codex_api::TransportError;
+use codex_api::WireApi as ApiConversationDialect;
+use codex_api::provider::RetryConfig;
+use codex_llm::RuntimeEndpoint;
+use reqwest::StatusCode;
+use reqwest::header::HeaderMap;
+use toml_edit::DocumentMut;
+use toml_edit::Item as TomlItem;
+use toml_edit::Table as TomlTable;
+use toml_edit::value;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ApiProviderWizardStep {
+    #[default]
+    ProviderId,
+    ConversationDialect,
+    BaseUrl,
+    ApiKey,
+    Model,
+    ContextWindow,
+}
+
+impl ApiProviderWizardStep {
+    pub(crate) const fn index(self) -> usize {
+        match self {
+            Self::ProviderId => 1,
+            Self::ConversationDialect => 2,
+            Self::BaseUrl => 3,
+            Self::ApiKey => 4,
+            Self::Model => 5,
+            Self::ContextWindow => 6,
+        }
+    }
+
+    pub(crate) const fn title(self) -> &'static str {
+        match self {
+            Self::ProviderId => "Provider ID",
+            Self::ConversationDialect => "Dialect",
+            Self::BaseUrl => "Base URL",
+            Self::ApiKey => "API Key",
+            Self::Model => "Model",
+            Self::ContextWindow => "Context Window",
+        }
+    }
+
+    pub(crate) const fn placeholder(self) -> &'static str {
+        match self {
+            Self::ProviderId => "my-provider",
+            Self::ConversationDialect => "",
+            Self::BaseUrl => "https://example.com/v1",
+            Self::ApiKey => "Paste or type your API key",
+            Self::Model => "gpt-4.1",
+            Self::ContextWindow => "Optional, e.g. 128000",
+        }
+    }
+
+    pub(crate) const fn previous(self) -> Option<Self> {
+        match self {
+            Self::ProviderId => None,
+            Self::ConversationDialect => Some(Self::ProviderId),
+            Self::BaseUrl => Some(Self::ConversationDialect),
+            Self::ApiKey => Some(Self::BaseUrl),
+            Self::Model => Some(Self::ApiKey),
+            Self::ContextWindow => Some(Self::Model),
+        }
+    }
+
+    pub(crate) const fn next(self) -> Option<Self> {
+        match self {
+            Self::ProviderId => Some(Self::ConversationDialect),
+            Self::ConversationDialect => Some(Self::BaseUrl),
+            Self::BaseUrl => Some(Self::ApiKey),
+            Self::ApiKey => Some(Self::Model),
+            Self::Model => Some(Self::ContextWindow),
+            Self::ContextWindow => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ApiProviderDialect {
+    #[default]
+    Chat,
+    Responses,
+    Messages,
+}
+
+impl ApiProviderDialect {
+    pub(crate) const fn all() -> [Self; 3] {
+        [Self::Chat, Self::Responses, Self::Messages]
+    }
+
+    pub(crate) const fn next(self) -> Self {
+        match self {
+            Self::Chat => Self::Responses,
+            Self::Responses => Self::Messages,
+            Self::Messages => Self::Chat,
+        }
+    }
+
+    pub(crate) const fn previous(self) -> Self {
+        match self {
+            Self::Chat => Self::Messages,
+            Self::Responses => Self::Chat,
+            Self::Messages => Self::Responses,
+        }
+    }
+
+    pub(crate) fn toggle(&mut self) {
+        *self = self.next();
+    }
+
+    pub(crate) const fn from_shortcut_digit(c: char) -> Option<Self> {
+        match c {
+            '1' => Some(Self::Chat),
+            '2' => Some(Self::Responses),
+            '3' => Some(Self::Messages),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn from_shortcut_letter(c: char) -> Option<Self> {
+        match c {
+            'c' | 'C' => Some(Self::Chat),
+            'r' | 'R' => Some(Self::Responses),
+            'm' | 'M' => Some(Self::Messages),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_config_value(self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::Responses => "responses",
+            Self::Messages => "messages",
+        }
+    }
+
+    pub(crate) fn as_api_dialect(self) -> ApiConversationDialect {
+        match self {
+            Self::Chat => ApiConversationDialect::Chat,
+            Self::Responses => ApiConversationDialect::Responses,
+            Self::Messages => ApiConversationDialect::Messages,
+        }
+    }
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::Responses => "responses",
+            Self::Messages => "messages",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub(crate) struct ApiKeyInputState {
+    pub(crate) provider_id: String,
+    pub(crate) dialect: ApiProviderDialect,
+    pub(crate) base_url: String,
+    pub(crate) api_key: String,
+    pub(crate) model: String,
+    pub(crate) model_context_window: String,
+    pub(crate) step: ApiProviderWizardStep,
+    pub(crate) validating: bool,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CustomProviderConfig {
+    pub(crate) provider_id: String,
+    pub(crate) dialect: ApiProviderDialect,
+    pub(crate) base_url: String,
+    pub(crate) api_key: String,
+    pub(crate) model: String,
+    pub(crate) model_context_window: Option<i64>,
+}
+
+#[derive(Clone)]
+struct StaticBearerAuth {
+    api_key: String,
+}
+
+impl AuthProvider for StaticBearerAuth {
+    fn bearer_token(&self) -> Option<String> {
+        Some(self.api_key.clone())
+    }
+}
+
+pub(crate) fn generated_profile_name(provider_id: &str, model: &str) -> String {
+    generated_provider_profile_name(provider_id, model)
+}
+
+fn as_runtime_dialect(dialect: ApiProviderDialect) -> ConfiguredProviderDialect {
+    match dialect {
+        ApiProviderDialect::Chat => ConfiguredProviderDialect::Chat,
+        ApiProviderDialect::Responses => ConfiguredProviderDialect::Responses,
+        ApiProviderDialect::Messages => ConfiguredProviderDialect::Messages,
+    }
+}
+
+pub(crate) fn custom_provider_ref(config: &CustomProviderConfig) -> String {
+    model_provider_variant_ref(&config.provider_id, as_runtime_dialect(config.dialect))
+}
+
+pub(crate) fn current_step_value_mut(state: &mut ApiKeyInputState) -> Option<&mut String> {
+    match state.step {
+        ApiProviderWizardStep::ProviderId => Some(&mut state.provider_id),
+        ApiProviderWizardStep::ConversationDialect => None,
+        ApiProviderWizardStep::BaseUrl => Some(&mut state.base_url),
+        ApiProviderWizardStep::ApiKey => Some(&mut state.api_key),
+        ApiProviderWizardStep::Model => Some(&mut state.model),
+        ApiProviderWizardStep::ContextWindow => Some(&mut state.model_context_window),
+    }
+}
+
+pub(crate) fn validate_current_step(state: &ApiKeyInputState) -> Result<(), String> {
+    match state.step {
+        ApiProviderWizardStep::ProviderId => validate_provider_id(state.provider_id.trim()),
+        ApiProviderWizardStep::ConversationDialect => Ok(()),
+        ApiProviderWizardStep::BaseUrl => validate_base_url(state.base_url.trim()),
+        ApiProviderWizardStep::ApiKey => validate_non_empty(state.api_key.trim(), "API key"),
+        ApiProviderWizardStep::Model => validate_non_empty(state.model.trim(), "Model"),
+        ApiProviderWizardStep::ContextWindow => {
+            validate_context_window(state.model_context_window.trim())
+        }
+    }
+}
+
+fn validate_non_empty(value: &str, field_name: &str) -> Result<(), String> {
+    if value.is_empty() {
+        Err(format!("{field_name} cannot be empty"))
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn validate_provider_id(provider_id: &str) -> Result<(), String> {
+    validate_non_empty(provider_id, "Provider ID")?;
+    if provider_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+    {
+        Ok(())
+    } else {
+        Err("Provider ID can only contain letters, numbers, '_' or '-'".to_string())
+    }
+}
+
+fn validate_base_url(base_url: &str) -> Result<(), String> {
+    validate_non_empty(base_url, "Base URL")?;
+    let url = url::Url::parse(base_url).map_err(|err| format!("Invalid base URL: {err}"))?;
+    match url.scheme() {
+        "http" | "https" => Ok(()),
+        scheme => Err(format!("Base URL must use http or https, got {scheme}")),
+    }
+}
+
+fn validate_context_window(value: &str) -> Result<(), String> {
+    let _ = parse_context_window(value)?;
+    Ok(())
+}
+
+fn parse_context_window(value: &str) -> Result<Option<i64>, String> {
+    if value.is_empty() {
+        return Ok(None);
+    }
+
+    let normalized = value.replace('_', "");
+    let parsed = normalized
+        .parse::<i64>()
+        .map_err(|_| "Context Window must be a positive integer".to_string())?;
+    if parsed <= 0 {
+        return Err("Context Window must be a positive integer".to_string());
+    }
+
+    Ok(Some(parsed))
+}
+
+pub(crate) fn snapshot_custom_provider_config(
+    state: &ApiKeyInputState,
+) -> Result<CustomProviderConfig, String> {
+    let provider_id = state.provider_id.trim().to_string();
+    let base_url = state.base_url.trim().to_string();
+    let api_key = state.api_key.trim().to_string();
+    let model = state.model.trim().to_string();
+    let model_context_window = parse_context_window(state.model_context_window.trim())?;
+
+    validate_provider_id(&provider_id)?;
+    validate_base_url(&base_url)?;
+    validate_non_empty(&api_key, "API key")?;
+    validate_non_empty(&model, "Model")?;
+
+    Ok(CustomProviderConfig {
+        provider_id,
+        dialect: state.dialect,
+        base_url,
+        api_key,
+        model,
+        model_context_window,
+    })
+}
+
+pub(crate) async fn persist_custom_provider_config(
+    codex_home: &Path,
+    config: &CustomProviderConfig,
+) -> Result<(), String> {
+    validate_custom_provider_config(config).await?;
+
+    let existing_config = load_existing_config_toml(codex_home)?;
+
+    ConfigEditsBuilder::new(codex_home)
+        .with_edits(build_custom_provider_edits_with_existing(
+            config,
+            existing_config.as_ref(),
+        ))
+        .apply()
+        .await
+        .map_err(|err| format!("Failed to write config.toml: {err}"))
+}
+
+fn load_existing_config_toml(codex_home: &Path) -> Result<Option<ConfigToml>, String> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    match std::fs::read_to_string(&config_path) {
+        Ok(raw) => toml::from_str(&raw)
+            .map(Some)
+            .map_err(|err| format!("Failed to parse config.toml: {err}")),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(format!("Failed to read config.toml: {err}")),
+    }
+}
+
+async fn validate_custom_provider_config(config: &CustomProviderConfig) -> Result<(), String> {
+    let provider = Provider {
+        name: config.provider_id.clone(),
+        base_url: config.base_url.clone(),
+        query_params: None,
+        wire: config.dialect.as_api_dialect(),
+        headers: HeaderMap::new(),
+        retry: RetryConfig {
+            max_attempts: 1,
+            base_delay: Duration::from_millis(200),
+            retry_429: false,
+            retry_5xx: false,
+            retry_transport: false,
+        },
+        stream_idle_timeout: Duration::from_secs(5),
+    };
+    let client = ModelsClient::new(
+        ReqwestTransport::new(build_reqwest_client()),
+        provider,
+        StaticBearerAuth {
+            api_key: config.api_key.clone(),
+        },
+    );
+
+    match client
+        .list_models(env!("CARGO_PKG_VERSION"), HeaderMap::new())
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(ApiError::Transport(TransportError::Http {
+            status:
+                StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED | StatusCode::NOT_IMPLEMENTED,
+            ..
+        })) => Ok(()),
+        Err(ApiError::Transport(TransportError::Http {
+            status: StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN,
+            ..
+        })) => Err(
+            "Authentication failed while checking the provider. Verify the API key.".to_string(),
+        ),
+        Err(ApiError::Transport(TransportError::Timeout)) => {
+            Err("Timed out while connecting to the provider.".to_string())
+        }
+        Err(ApiError::Transport(TransportError::RetryLimit)) => {
+            Err("Could not connect to the provider after retrying.".to_string())
+        }
+        Err(ApiError::Transport(TransportError::Build(err)))
+        | Err(ApiError::Transport(TransportError::Network(err))) => {
+            Err(format!("Could not connect to the provider: {err}"))
+        }
+        Err(ApiError::Transport(TransportError::Http { .. })) | Err(ApiError::Stream(_)) => Ok(()),
+        Err(ApiError::Api { status, message }) => {
+            if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+                Err(format!(
+                    "Authentication failed while checking the provider: {message}"
+                ))
+            } else {
+                Ok(())
+            }
+        }
+        Err(
+            ApiError::ContextWindowExceeded
+            | ApiError::QuotaExceeded
+            | ApiError::UsageNotIncluded
+            | ApiError::Retryable { .. }
+            | ApiError::RateLimit(_)
+            | ApiError::InvalidRequest { .. },
+        ) => Ok(()),
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn build_custom_provider_edits(config: &CustomProviderConfig) -> Vec<ConfigEdit> {
+    build_custom_provider_edits_with_existing(config, None)
+}
+
+fn provider_variant_segments(provider_id: &str, dialect: ApiProviderDialect) -> Vec<String> {
+    vec![
+        "model_providers".to_string(),
+        provider_id.to_string(),
+        MODEL_PROVIDER_VARIANTS_KEY.to_string(),
+        dialect.as_config_value().to_string(),
+    ]
+}
+
+fn clear_legacy_provider_paths(provider_id: &str) -> Vec<ConfigEdit> {
+    [
+        "name",
+        "base_url",
+        "env_key",
+        "env_key_instructions",
+        "experimental_bearer_token",
+        "dialect",
+        "query_params",
+        "http_headers",
+        "env_http_headers",
+        "request_max_retries",
+        "stream_max_retries",
+        "stream_idle_timeout_ms",
+        "requires_openai_auth",
+        "supports_realtime_streaming",
+    ]
+    .into_iter()
+    .map(|field| ConfigEdit::ClearPath {
+        segments: vec![
+            "model_providers".to_string(),
+            provider_id.to_string(),
+            field.to_string(),
+        ],
+    })
+    .collect()
+}
+
+fn set_variant_provider_field(
+    edits: &mut Vec<ConfigEdit>,
+    provider_id: &str,
+    dialect: ApiProviderDialect,
+    field: &str,
+    field_value: toml_edit::Item,
+) {
+    let mut segments = provider_variant_segments(provider_id, dialect);
+    segments.push(field.to_string());
+    edits.push(ConfigEdit::SetPath {
+        segments,
+        value: field_value,
+    });
+}
+
+fn migrate_legacy_provider_to_variant_edits(
+    provider_id: &str,
+    legacy_provider: &RuntimeEndpoint,
+) -> Vec<ConfigEdit> {
+    let legacy_dialect = if legacy_provider.uses_chat_completions_api() {
+        ApiProviderDialect::Chat
+    } else if legacy_provider.uses_messages_api() {
+        ApiProviderDialect::Messages
+    } else {
+        ApiProviderDialect::Responses
+    };
+    let mut edits = clear_legacy_provider_paths(provider_id);
+    let variant_dialect = legacy_dialect;
+
+    set_variant_provider_field(
+        &mut edits,
+        provider_id,
+        variant_dialect,
+        "name",
+        value(legacy_provider.name.clone()),
+    );
+    set_variant_provider_field(
+        &mut edits,
+        provider_id,
+        variant_dialect,
+        "dialect",
+        value(dialect_config_value(as_runtime_dialect(legacy_dialect))),
+    );
+    set_variant_provider_field(
+        &mut edits,
+        provider_id,
+        variant_dialect,
+        "requires_openai_auth",
+        value(legacy_provider.requires_openai_auth),
+    );
+    set_variant_provider_field(
+        &mut edits,
+        provider_id,
+        variant_dialect,
+        "supports_realtime_streaming",
+        value(legacy_provider.realtime_turn_streaming_enabled()),
+    );
+
+    if let Some(base_url) = &legacy_provider.base_url {
+        set_variant_provider_field(
+            &mut edits,
+            provider_id,
+            variant_dialect,
+            "base_url",
+            value(base_url.to_string()),
+        );
+    }
+    if let Some(env_key) = &legacy_provider.env_key {
+        set_variant_provider_field(
+            &mut edits,
+            provider_id,
+            variant_dialect,
+            "env_key",
+            value(env_key.to_string()),
+        );
+    }
+    if let Some(env_key_instructions) = &legacy_provider.env_key_instructions {
+        set_variant_provider_field(
+            &mut edits,
+            provider_id,
+            variant_dialect,
+            "env_key_instructions",
+            value(env_key_instructions.to_string()),
+        );
+    }
+    if let Some(bearer_token) = &legacy_provider.experimental_bearer_token {
+        set_variant_provider_field(
+            &mut edits,
+            provider_id,
+            variant_dialect,
+            "experimental_bearer_token",
+            value(bearer_token.to_string()),
+        );
+    }
+    if let Some(query_params) = &legacy_provider.query_params {
+        for (key, value_str) in query_params {
+            let mut segments = provider_variant_segments(provider_id, variant_dialect);
+            segments.extend(["query_params".to_string(), key.to_string()]);
+            edits.push(ConfigEdit::SetPath {
+                segments,
+                value: value(value_str.to_string()),
+            });
+        }
+    }
+    if let Some(http_headers) = &legacy_provider.http_headers {
+        for (key, value_str) in http_headers {
+            let mut segments = provider_variant_segments(provider_id, variant_dialect);
+            segments.extend(["http_headers".to_string(), key.to_string()]);
+            edits.push(ConfigEdit::SetPath {
+                segments,
+                value: value(value_str.to_string()),
+            });
+        }
+    }
+    if let Some(env_http_headers) = &legacy_provider.env_http_headers {
+        for (key, value_str) in env_http_headers {
+            let mut segments = provider_variant_segments(provider_id, variant_dialect);
+            segments.extend(["env_http_headers".to_string(), key.to_string()]);
+            edits.push(ConfigEdit::SetPath {
+                segments,
+                value: value(value_str.to_string()),
+            });
+        }
+    }
+    if let Some(request_max_retries) = legacy_provider.request_max_retries {
+        set_variant_provider_field(
+            &mut edits,
+            provider_id,
+            variant_dialect,
+            "request_max_retries",
+            value(request_max_retries as i64),
+        );
+    }
+    if let Some(stream_max_retries) = legacy_provider.stream_max_retries {
+        set_variant_provider_field(
+            &mut edits,
+            provider_id,
+            variant_dialect,
+            "stream_max_retries",
+            value(stream_max_retries as i64),
+        );
+    }
+    if let Some(stream_idle_timeout_ms) = legacy_provider.stream_idle_timeout_ms {
+        set_variant_provider_field(
+            &mut edits,
+            provider_id,
+            variant_dialect,
+            "stream_idle_timeout_ms",
+            value(stream_idle_timeout_ms as i64),
+        );
+    }
+
+    edits
+}
+
+fn legacy_provider_migration_ref(provider_id: &str, legacy_provider: &RuntimeEndpoint) -> String {
+    model_provider_variant_ref(
+        provider_id,
+        if legacy_provider.uses_chat_completions_api() {
+            ConfiguredProviderDialect::Chat
+        } else if legacy_provider.uses_messages_api() {
+            ConfiguredProviderDialect::Messages
+        } else {
+            ConfiguredProviderDialect::Responses
+        },
+    )
+}
+
+fn profile_field_segments(profile_name: &str, field: &str) -> Vec<String> {
+    vec![
+        "profiles".to_string(),
+        profile_name.to_string(),
+        field.to_string(),
+    ]
+}
+
+fn profile_table_segments(profile_name: &str) -> Vec<String> {
+    vec!["profiles".to_string(), profile_name.to_string()]
+}
+
+fn config_profile_table(profile: &ConfigProfile) -> Option<TomlTable> {
+    let Ok(serialized) = toml::to_string(profile) else {
+        return None;
+    };
+    let mut table = if serialized.is_empty() {
+        TomlTable::new()
+    } else {
+        let Ok(doc) = serialized.parse::<DocumentMut>() else {
+            return None;
+        };
+        doc.as_table().clone()
+    };
+    table.set_implicit(false);
+    Some(table)
+}
+
+fn merge_profile_missing_fields(
+    source: &ConfigProfile,
+    destination: &ConfigProfile,
+    migrated_provider_ref: &str,
+) -> ConfigProfile {
+    let mut merged = destination.clone();
+
+    if merged.model.is_none() {
+        merged.model = source.model.clone();
+    }
+    if merged.model_context_window.is_none() {
+        merged.model_context_window = source.model_context_window;
+    }
+    if merged.approval_policy.is_none() {
+        merged.approval_policy = source.approval_policy;
+    }
+    if merged.sandbox_mode.is_none() {
+        merged.sandbox_mode = source.sandbox_mode;
+    }
+    if merged.model_reasoning_effort.is_none() {
+        merged.model_reasoning_effort = source.model_reasoning_effort;
+    }
+    if merged.model_reasoning_summary.is_none() {
+        merged.model_reasoning_summary = source.model_reasoning_summary;
+    }
+    if merged.model_verbosity.is_none() {
+        merged.model_verbosity = source.model_verbosity;
+    }
+    if merged.personality.is_none() {
+        merged.personality = source.personality;
+    }
+    if merged.chatgpt_base_url.is_none() {
+        merged.chatgpt_base_url = source.chatgpt_base_url.clone();
+    }
+    if merged.model_instructions_file.is_none() {
+        merged.model_instructions_file = source.model_instructions_file.clone();
+    }
+    if merged.experimental_instructions_file.is_none() {
+        merged.experimental_instructions_file = source.experimental_instructions_file.clone();
+    }
+    if merged.experimental_compact_prompt_file.is_none() {
+        merged.experimental_compact_prompt_file = source.experimental_compact_prompt_file.clone();
+    }
+    if merged.include_apply_patch_tool.is_none() {
+        merged.include_apply_patch_tool = source.include_apply_patch_tool;
+    }
+    if merged.experimental_use_unified_exec_tool.is_none() {
+        merged.experimental_use_unified_exec_tool = source.experimental_use_unified_exec_tool;
+    }
+    if merged.experimental_use_freeform_apply_patch.is_none() {
+        merged.experimental_use_freeform_apply_patch = source.experimental_use_freeform_apply_patch;
+    }
+    if merged.tools_web_search.is_none() {
+        merged.tools_web_search = source.tools_web_search;
+    }
+    if merged.tools_view_image.is_none() {
+        merged.tools_view_image = source.tools_view_image;
+    }
+    if merged.web_search.is_none() {
+        merged.web_search = source.web_search;
+    }
+    if merged.analytics.is_none() {
+        merged.analytics = source.analytics.clone();
+    }
+    if merged.features.is_none() {
+        merged.features = source.features.clone();
+    }
+    merged.model_provider = Some(migrated_provider_ref.to_string());
+
+    merged
+}
+
+fn legacy_profile_migration_edits(
+    existing_config: &ConfigToml,
+    provider_id: &str,
+    migrated_provider_ref: &str,
+) -> Vec<ConfigEdit> {
+    let mut edits = Vec::new();
+    let mut renamed_active_profile = None;
+
+    for (profile_name, profile) in &existing_config.profiles {
+        if profile.model_provider.as_deref() != Some(provider_id) {
+            continue;
+        }
+
+        let Some(model) = profile.model.as_deref() else {
+            edits.push(ConfigEdit::SetPath {
+                segments: profile_field_segments(profile_name, "model_provider"),
+                value: value(migrated_provider_ref.to_string()),
+            });
+            continue;
+        };
+
+        let legacy_generated_profile_name = generated_profile_name(provider_id, model);
+        if profile_name != &legacy_generated_profile_name {
+            edits.push(ConfigEdit::SetPath {
+                segments: profile_field_segments(profile_name, "model_provider"),
+                value: value(migrated_provider_ref.to_string()),
+            });
+            continue;
+        }
+
+        let migrated_profile_name = generated_profile_name(migrated_provider_ref, model);
+        let migrated_profile = existing_config
+            .profiles
+            .get(&migrated_profile_name)
+            .map(|destination| {
+                merge_profile_missing_fields(profile, destination, migrated_provider_ref)
+            })
+            .unwrap_or_else(|| {
+                let mut migrated = profile.clone();
+                migrated.model_provider = Some(migrated_provider_ref.to_string());
+                migrated
+            });
+
+        if let Some(profile_table) = config_profile_table(&migrated_profile) {
+            edits.push(ConfigEdit::SetPath {
+                segments: profile_table_segments(&migrated_profile_name),
+                value: TomlItem::Table(profile_table),
+            });
+        }
+        edits.push(ConfigEdit::ClearPath {
+            segments: profile_table_segments(profile_name),
+        });
+
+        if existing_config.profile.as_deref() == Some(profile_name.as_str()) {
+            renamed_active_profile = Some(migrated_profile_name);
+        }
+    }
+
+    if let Some(renamed_active_profile) = renamed_active_profile {
+        edits.push(ConfigEdit::SetPath {
+            segments: vec!["profile".to_string()],
+            value: value(renamed_active_profile),
+        });
+    }
+
+    edits
+}
+
+pub(crate) fn build_custom_provider_edits_with_existing(
+    config: &CustomProviderConfig,
+    existing_config: Option<&ConfigToml>,
+) -> Vec<ConfigEdit> {
+    let provider_ref = custom_provider_ref(config);
+    let profile_name = generated_profile_name(&provider_ref, &config.model);
+    let mut edits = Vec::new();
+
+    if let Some(existing_config) = existing_config
+        && let Some(legacy_provider) = existing_config.model_providers.get(&config.provider_id)
+    {
+        edits.extend(migrate_legacy_provider_to_variant_edits(
+            &config.provider_id,
+            legacy_provider,
+        ));
+        edits.extend(legacy_profile_migration_edits(
+            existing_config,
+            &config.provider_id,
+            &legacy_provider_migration_ref(&config.provider_id, legacy_provider),
+        ));
+    }
+
+    edits.extend([
+        ConfigEdit::SetPath {
+            segments: vec!["model_provider".to_string()],
+            value: value(provider_ref.clone()),
+        },
+        ConfigEdit::SetPath {
+            segments: vec!["model".to_string()],
+            value: value(config.model.clone()),
+        },
+    ]);
+
+    set_variant_provider_field(
+        &mut edits,
+        &config.provider_id,
+        config.dialect,
+        "name",
+        value(config.provider_id.clone()),
+    );
+    set_variant_provider_field(
+        &mut edits,
+        &config.provider_id,
+        config.dialect,
+        "base_url",
+        value(config.base_url.clone()),
+    );
+    set_variant_provider_field(
+        &mut edits,
+        &config.provider_id,
+        config.dialect,
+        "dialect",
+        value(config.dialect.as_config_value()),
+    );
+    set_variant_provider_field(
+        &mut edits,
+        &config.provider_id,
+        config.dialect,
+        "experimental_bearer_token",
+        value(config.api_key.clone()),
+    );
+    set_variant_provider_field(
+        &mut edits,
+        &config.provider_id,
+        config.dialect,
+        "requires_openai_auth",
+        value(false),
+    );
+
+    let mut profile_edits = vec![
+        ConfigEdit::SetPath {
+            segments: vec![
+                "profiles".to_string(),
+                profile_name.clone(),
+                "model_provider".to_string(),
+            ],
+            value: value(provider_ref.clone()),
+        },
+        ConfigEdit::SetPath {
+            segments: vec!["profiles".to_string(), profile_name, "model".to_string()],
+            value: value(config.model.clone()),
+        },
+    ];
+
+    edits.append(&mut profile_edits);
+
+    match config.model_context_window {
+        Some(model_context_window) => {
+            edits.push(ConfigEdit::SetPath {
+                segments: vec!["model_context_window".to_string()],
+                value: value(model_context_window),
+            });
+            edits.push(ConfigEdit::SetPath {
+                segments: vec![
+                    "profiles".to_string(),
+                    generated_profile_name(&provider_ref, &config.model),
+                    "model_context_window".to_string(),
+                ],
+                value: value(model_context_window),
+            });
+        }
+        None => {
+            edits.push(ConfigEdit::ClearPath {
+                segments: vec!["model_context_window".to_string()],
+            });
+        }
+    }
+
+    edits
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
+    use toml_edit::DocumentMut;
+
+    #[test]
+    fn custom_provider_edits_write_expected_config() {
+        let codex_home = tempdir().expect("temp dir");
+        let config = CustomProviderConfig {
+            provider_id: "custom_1".to_string(),
+            dialect: ApiProviderDialect::Responses,
+            base_url: "https://example.com/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "gpt-test".to_string(),
+            model_context_window: None,
+        };
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits(&config))
+            .apply_blocking()
+            .expect("write config");
+
+        let raw = std::fs::read_to_string(codex_home.path().join("config.toml")).unwrap();
+        assert_eq!(
+            raw,
+            r#"model_provider = "custom_1#responses"
+model = "gpt-test"
+
+[model_providers.custom_1.variants.responses]
+name = "custom_1"
+base_url = "https://example.com/v1"
+dialect = "responses"
+experimental_bearer_token = "sk-test"
+requires_openai_auth = false
+
+[profiles."_provider.custom_1#responses.gpt-test"]
+model_provider = "custom_1#responses"
+model = "gpt-test"
+"#
+        );
+    }
+
+    #[test]
+    fn api_provider_dialect_messages_helpers_are_consistent() {
+        assert_eq!(ApiProviderDialect::default(), ApiProviderDialect::Chat);
+        assert_eq!(
+            ApiProviderDialect::all(),
+            [
+                ApiProviderDialect::Chat,
+                ApiProviderDialect::Responses,
+                ApiProviderDialect::Messages,
+            ]
+        );
+        assert_eq!(
+            ApiProviderDialect::Chat.next(),
+            ApiProviderDialect::Responses
+        );
+        assert_eq!(
+            ApiProviderDialect::Responses.next(),
+            ApiProviderDialect::Messages
+        );
+        assert_eq!(
+            ApiProviderDialect::Messages.next(),
+            ApiProviderDialect::Chat
+        );
+        assert_eq!(
+            ApiProviderDialect::Chat.previous(),
+            ApiProviderDialect::Messages
+        );
+        assert_eq!(
+            ApiProviderDialect::Messages.previous(),
+            ApiProviderDialect::Responses
+        );
+        assert_eq!(
+            ApiProviderDialect::from_shortcut_digit('3'),
+            Some(ApiProviderDialect::Messages)
+        );
+        assert_eq!(
+            ApiProviderDialect::from_shortcut_letter('m'),
+            Some(ApiProviderDialect::Messages)
+        );
+        assert_eq!(ApiProviderDialect::Messages.as_config_value(), "messages");
+        assert_eq!(
+            ApiProviderDialect::Messages.as_api_dialect(),
+            ApiConversationDialect::Messages
+        );
+        assert_eq!(ApiProviderDialect::Messages.label(), "messages");
+    }
+
+    #[test]
+    fn custom_provider_edits_write_messages_dialect() {
+        let codex_home = tempdir().expect("temp dir");
+        let config = CustomProviderConfig {
+            provider_id: "anthropic".to_string(),
+            dialect: ApiProviderDialect::Messages,
+            base_url: "https://api.anthropic.com/v1".to_string(),
+            api_key: "sk-ant-test".to_string(),
+            model: "claude-sonnet-4-20250514".to_string(),
+            model_context_window: None,
+        };
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits(&config))
+            .apply_blocking()
+            .expect("write config");
+
+        let raw = std::fs::read_to_string(codex_home.path().join("config.toml")).unwrap();
+        let doc = raw.parse::<DocumentMut>().expect("parse config");
+
+        assert_eq!(
+            doc["model_providers"]["anthropic"]["variants"]["messages"]["dialect"].as_str(),
+            Some("messages")
+        );
+        assert_eq!(doc["model_provider"].as_str(), Some("anthropic#messages"));
+        assert_eq!(
+            doc["profiles"]["_provider.anthropic#messages.claude-sonnet-4-20250514"]["model"]
+                .as_str(),
+            Some("claude-sonnet-4-20250514")
+        );
+    }
+
+    #[test]
+    fn saving_second_dialect_for_same_provider_keeps_distinct_variants() {
+        let codex_home = tempdir().expect("temp dir");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits(&CustomProviderConfig {
+                provider_id: "custom_1".to_string(),
+                dialect: ApiProviderDialect::Responses,
+                base_url: "https://example.com/v1".to_string(),
+                api_key: "sk-old".to_string(),
+                model: "gpt-test".to_string(),
+                model_context_window: None,
+            }))
+            .apply_blocking()
+            .expect("write initial config");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits_with_existing(
+                &CustomProviderConfig {
+                    provider_id: "custom_1".to_string(),
+                    dialect: ApiProviderDialect::Chat,
+                    base_url: "https://example.com/chat".to_string(),
+                    api_key: "sk-new".to_string(),
+                    model: "gpt-other".to_string(),
+                    model_context_window: None,
+                },
+                load_existing_config_toml(codex_home.path())
+                    .expect("read config")
+                    .as_ref(),
+            ))
+            .apply_blocking()
+            .expect("write updated config");
+
+        let raw = std::fs::read_to_string(codex_home.path().join("config.toml")).unwrap();
+        assert_eq!(
+            raw.matches("[model_providers.custom_1.variants.").count(),
+            2
+        );
+
+        let doc = raw.parse::<DocumentMut>().expect("parse config");
+        assert_eq!(doc["model_provider"].as_str(), Some("custom_1#chat"));
+        assert_eq!(doc["model"].as_str(), Some("gpt-other"));
+        assert_eq!(
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["dialect"].as_str(),
+            Some("chat")
+        );
+        assert_eq!(
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["base_url"].as_str(),
+            Some("https://example.com/chat")
+        );
+        assert_eq!(
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["experimental_bearer_token"]
+                .as_str(),
+            Some("sk-new")
+        );
+        assert_eq!(
+            doc["profiles"]["_provider.custom_1#responses.gpt-test"]["model"].as_str(),
+            Some("gpt-test")
+        );
+        assert_eq!(
+            doc["profiles"]["_provider.custom_1#chat.gpt-other"]["model"].as_str(),
+            Some("gpt-other")
+        );
+        assert_eq!(
+            doc["profiles"].as_table().map(toml_edit::Table::len),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn resaving_same_provider_model_pair_updates_generated_profile_in_place() {
+        let codex_home = tempdir().expect("temp dir");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits(&CustomProviderConfig {
+                provider_id: "custom_1".to_string(),
+                dialect: ApiProviderDialect::Responses,
+                base_url: "https://example.com/v1".to_string(),
+                api_key: "sk-old".to_string(),
+                model: "gpt-test".to_string(),
+                model_context_window: None,
+            }))
+            .apply_blocking()
+            .expect("write initial config");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits_with_existing(
+                &CustomProviderConfig {
+                    provider_id: "custom_1".to_string(),
+                    dialect: ApiProviderDialect::Chat,
+                    base_url: "https://example.com/chat".to_string(),
+                    api_key: "sk-new".to_string(),
+                    model: "gpt-test".to_string(),
+                    model_context_window: None,
+                },
+                load_existing_config_toml(codex_home.path())
+                    .expect("read config")
+                    .as_ref(),
+            ))
+            .apply_blocking()
+            .expect("rewrite same pair");
+
+        let raw = std::fs::read_to_string(codex_home.path().join("config.toml")).unwrap();
+        assert_eq!(
+            raw.matches("[profiles.\"_provider.custom_1#chat.gpt-test\"]")
+                .count(),
+            1
+        );
+
+        let doc = raw.parse::<DocumentMut>().expect("parse config");
+        assert_eq!(doc["model_provider"].as_str(), Some("custom_1#chat"));
+        assert_eq!(doc["model"].as_str(), Some("gpt-test"));
+        assert_eq!(
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["dialect"].as_str(),
+            Some("chat")
+        );
+        assert_eq!(
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["base_url"].as_str(),
+            Some("https://example.com/chat")
+        );
+        assert_eq!(
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["experimental_bearer_token"]
+                .as_str(),
+            Some("sk-new")
+        );
+        assert_eq!(
+            doc["profiles"]["_provider.custom_1#chat.gpt-test"]["model_provider"].as_str(),
+            Some("custom_1#chat")
+        );
+        assert_eq!(
+            doc["profiles"].as_table().map(toml_edit::Table::len),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn saving_existing_provider_preserves_unmanaged_fields() {
+        let codex_home = tempdir().expect("temp dir");
+        let config_path = codex_home.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"model_provider = "custom_1"
+model = "gpt-test"
+
+[model_providers.custom_1]
+name = "custom_1"
+base_url = "https://example.com/v1"
+dialect = "responses"
+experimental_bearer_token = "sk-old"
+env_key = "CUSTOM_API_KEY"
+
+[model_providers.custom_1.query_params]
+api-version = "2025-04-01-preview"
+
+[model_providers.custom_1.http_headers]
+X-Test = "1"
+"#,
+        )
+        .expect("write initial config");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits_with_existing(
+                &CustomProviderConfig {
+                    provider_id: "custom_1".to_string(),
+                    dialect: ApiProviderDialect::Chat,
+                    base_url: "https://example.com/chat".to_string(),
+                    api_key: "sk-new".to_string(),
+                    model: "gpt-other".to_string(),
+                    model_context_window: None,
+                },
+                load_existing_config_toml(codex_home.path())
+                    .expect("read config")
+                    .as_ref(),
+            ))
+            .apply_blocking()
+            .expect("rewrite provider");
+
+        let raw = std::fs::read_to_string(config_path).expect("read config");
+        let doc = raw.parse::<DocumentMut>().expect("parse config");
+
+        assert_eq!(
+            doc["model_providers"]["custom_1"]["variants"]["responses"]["env_key"].as_str(),
+            Some("CUSTOM_API_KEY")
+        );
+        assert_eq!(
+            doc["model_providers"]["custom_1"]["variants"]["responses"]["query_params"]
+                ["api-version"]
+                .as_str(),
+            Some("2025-04-01-preview")
+        );
+        assert_eq!(
+            doc["model_providers"]["custom_1"]["variants"]["responses"]["http_headers"]["X-Test"]
+                .as_str(),
+            Some("1")
+        );
+        assert_eq!(
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["dialect"].as_str(),
+            Some("chat")
+        );
+        assert_eq!(
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["base_url"].as_str(),
+            Some("https://example.com/chat")
+        );
+        assert_eq!(
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["experimental_bearer_token"]
+                .as_str(),
+            Some("sk-new")
+        );
+        assert_eq!(
+            doc["profiles"]["_provider.custom_1#chat.gpt-other"]["model"].as_str(),
+            Some("gpt-other")
+        );
+    }
+
+    #[test]
+    fn saving_existing_provider_rewrites_named_profile_provider_refs() {
+        let codex_home = tempdir().expect("temp dir");
+        let config_path = codex_home.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"model_provider = "custom_1"
+model = "gpt-test"
+
+[model_providers.custom_1]
+name = "custom_1"
+base_url = "https://example.com/v1"
+dialect = "responses"
+experimental_bearer_token = "sk-old"
+
+[profiles.saved]
+model = "gpt-test"
+model_provider = "custom_1"
+"#,
+        )
+        .expect("write initial config");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits_with_existing(
+                &CustomProviderConfig {
+                    provider_id: "custom_1".to_string(),
+                    dialect: ApiProviderDialect::Chat,
+                    base_url: "https://example.com/chat".to_string(),
+                    api_key: "sk-new".to_string(),
+                    model: "gpt-other".to_string(),
+                    model_context_window: None,
+                },
+                load_existing_config_toml(codex_home.path())
+                    .expect("read config")
+                    .as_ref(),
+            ))
+            .apply_blocking()
+            .expect("rewrite provider");
+
+        let raw = std::fs::read_to_string(config_path).expect("read config");
+        let doc = raw.parse::<DocumentMut>().expect("parse config");
+
+        assert_eq!(
+            doc["profiles"]["saved"]["model_provider"].as_str(),
+            Some("custom_1#responses")
+        );
+    }
+
+    #[test]
+    fn saving_existing_provider_renames_generated_profile_and_active_profile() {
+        let codex_home = tempdir().expect("temp dir");
+        let config_path = codex_home.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"profile = "_provider.custom_1.gpt-test"
+model_provider = "custom_1"
+model = "gpt-test"
+
+[model_providers.custom_1]
+name = "custom_1"
+base_url = "https://example.com/v1"
+dialect = "responses"
+experimental_bearer_token = "sk-old"
+
+[profiles."_provider.custom_1.gpt-test"]
+model = "gpt-test"
+model_provider = "custom_1"
+model_context_window = 64000
+"#,
+        )
+        .expect("write initial config");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits_with_existing(
+                &CustomProviderConfig {
+                    provider_id: "custom_1".to_string(),
+                    dialect: ApiProviderDialect::Chat,
+                    base_url: "https://example.com/chat".to_string(),
+                    api_key: "sk-new".to_string(),
+                    model: "gpt-other".to_string(),
+                    model_context_window: None,
+                },
+                load_existing_config_toml(codex_home.path())
+                    .expect("read config")
+                    .as_ref(),
+            ))
+            .apply_blocking()
+            .expect("rewrite provider");
+
+        let raw = std::fs::read_to_string(config_path).expect("read config");
+        let doc = raw.parse::<DocumentMut>().expect("parse config");
+
+        assert_eq!(
+            doc["profile"].as_str(),
+            Some("_provider.custom_1#responses.gpt-test")
+        );
+        assert!(
+            doc["profiles"]
+                .as_table()
+                .and_then(|profiles| profiles.get("_provider.custom_1.gpt-test"))
+                .is_none()
+        );
+        assert_eq!(
+            doc["profiles"]["_provider.custom_1#responses.gpt-test"]["model_provider"].as_str(),
+            Some("custom_1#responses")
+        );
+        assert_eq!(
+            doc["profiles"]["_provider.custom_1#responses.gpt-test"]["model_context_window"]
+                .as_integer(),
+            Some(64_000)
+        );
+    }
+
+    #[test]
+    fn saving_existing_provider_merges_legacy_generated_profile_into_existing_variant_profile() {
+        let codex_home = tempdir().expect("temp dir");
+        let config_path = codex_home.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"model_provider = "custom_1"
+model = "gpt-test"
+
+[model_providers.custom_1]
+name = "custom_1"
+base_url = "https://example.com/v1"
+dialect = "responses"
+experimental_bearer_token = "sk-old"
+
+[profiles."_provider.custom_1.gpt-test"]
+model = "gpt-test"
+model_provider = "custom_1"
+model_context_window = 64000
+
+[profiles."_provider.custom_1#responses.gpt-test"]
+model = "gpt-test"
+model_provider = "custom_1#responses"
+include_apply_patch_tool = true
+"#,
+        )
+        .expect("write initial config");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits_with_existing(
+                &CustomProviderConfig {
+                    provider_id: "custom_1".to_string(),
+                    dialect: ApiProviderDialect::Chat,
+                    base_url: "https://example.com/chat".to_string(),
+                    api_key: "sk-new".to_string(),
+                    model: "gpt-other".to_string(),
+                    model_context_window: None,
+                },
+                load_existing_config_toml(codex_home.path())
+                    .expect("read config")
+                    .as_ref(),
+            ))
+            .apply_blocking()
+            .expect("rewrite provider");
+
+        let raw = std::fs::read_to_string(config_path).expect("read config");
+        let doc = raw.parse::<DocumentMut>().expect("parse config");
+
+        assert!(
+            doc["profiles"]
+                .as_table()
+                .and_then(|profiles| profiles.get("_provider.custom_1.gpt-test"))
+                .is_none()
+        );
+        assert_eq!(
+            doc["profiles"]["_provider.custom_1#responses.gpt-test"]["model_context_window"]
+                .as_integer(),
+            Some(64_000)
+        );
+        assert_eq!(
+            doc["profiles"]["_provider.custom_1#responses.gpt-test"]["include_apply_patch_tool"]
+                .as_bool(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn custom_provider_edits_write_context_window_when_set() {
+        let codex_home = tempdir().expect("temp dir");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits(&CustomProviderConfig {
+                provider_id: "custom_1".to_string(),
+                dialect: ApiProviderDialect::Responses,
+                base_url: "https://example.com/v1".to_string(),
+                api_key: "sk-test".to_string(),
+                model: "gpt-test".to_string(),
+                model_context_window: Some(128_000),
+            }))
+            .apply_blocking()
+            .expect("write config");
+
+        let raw = std::fs::read_to_string(codex_home.path().join("config.toml")).unwrap();
+        let doc = raw.parse::<DocumentMut>().expect("parse config");
+        assert_eq!(doc["model_context_window"].as_integer(), Some(128_000));
+        assert_eq!(
+            doc["profiles"]["_provider.custom_1#responses.gpt-test"]["model_context_window"]
+                .as_integer(),
+            Some(128_000)
+        );
+    }
+
+    #[test]
+    fn resaving_same_provider_model_with_blank_context_window_clears_top_level_and_preserves_profile()
+     {
+        let codex_home = tempdir().expect("temp dir");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits(&CustomProviderConfig {
+                provider_id: "custom_1".to_string(),
+                dialect: ApiProviderDialect::Responses,
+                base_url: "https://example.com/v1".to_string(),
+                api_key: "sk-old".to_string(),
+                model: "gpt-test".to_string(),
+                model_context_window: Some(64_000),
+            }))
+            .apply_blocking()
+            .expect("write initial config");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits(&CustomProviderConfig {
+                provider_id: "custom_1".to_string(),
+                dialect: ApiProviderDialect::Chat,
+                base_url: "https://example.com/chat".to_string(),
+                api_key: "sk-new".to_string(),
+                model: "gpt-test".to_string(),
+                model_context_window: None,
+            }))
+            .apply_blocking()
+            .expect("rewrite same pair");
+
+        let raw = std::fs::read_to_string(codex_home.path().join("config.toml")).unwrap();
+        let doc = raw.parse::<DocumentMut>().expect("parse config");
+        assert!(doc.get("model_context_window").is_none());
+        assert_eq!(
+            doc["profiles"]["_provider.custom_1#responses.gpt-test"]["model_context_window"]
+                .as_integer(),
+            Some(64_000)
+        );
+    }
+
+    #[test]
+    fn saving_different_model_with_blank_context_window_clears_stale_top_level_value() {
+        let codex_home = tempdir().expect("temp dir");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits(&CustomProviderConfig {
+                provider_id: "custom_1".to_string(),
+                dialect: ApiProviderDialect::Responses,
+                base_url: "https://example.com/v1".to_string(),
+                api_key: "sk-old".to_string(),
+                model: "gpt-test".to_string(),
+                model_context_window: Some(64_000),
+            }))
+            .apply_blocking()
+            .expect("write initial config");
+
+        ConfigEditsBuilder::new(codex_home.path())
+            .with_edits(build_custom_provider_edits(&CustomProviderConfig {
+                provider_id: "custom_2".to_string(),
+                dialect: ApiProviderDialect::Chat,
+                base_url: "https://example.com/chat".to_string(),
+                api_key: "sk-new".to_string(),
+                model: "gpt-other".to_string(),
+                model_context_window: None,
+            }))
+            .apply_blocking()
+            .expect("rewrite different pair");
+
+        let raw = std::fs::read_to_string(codex_home.path().join("config.toml")).unwrap();
+        let doc = raw.parse::<DocumentMut>().expect("parse config");
+        assert!(doc.get("model_context_window").is_none());
+        assert_eq!(
+            doc["profiles"]["_provider.custom_1#responses.gpt-test"]["model_context_window"]
+                .as_integer(),
+            Some(64_000)
+        );
+        assert!(
+            doc["profiles"]["_provider.custom_2#chat.gpt-other"]
+                .get("model_context_window")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn context_window_validation_accepts_blank_and_rejects_invalid_values() {
+        assert_eq!(parse_context_window("").unwrap(), None);
+        assert_eq!(parse_context_window("128_000").unwrap(), Some(128_000));
+        assert_eq!(
+            parse_context_window("abc").unwrap_err(),
+            "Context Window must be a positive integer"
+        );
+        assert_eq!(
+            parse_context_window("0").unwrap_err(),
+            "Context Window must be a positive integer"
+        );
+        assert_eq!(
+            parse_context_window("-1").unwrap_err(),
+            "Context Window must be a positive integer"
+        );
+    }
+}
