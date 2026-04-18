@@ -25,7 +25,8 @@ codex-common = { workspace = true, features = [
     "elapsed",
     "sandbox_summary",
 ] }
-codex-core = { workspace = true }
+codex-agent = { workspace = true }
+codex-llm = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 mcp-types = { workspace = true }

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
+use codex_agent::auth::AuthCredentialsStoreMode;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::JSONRPCError;
@@ -8,7 +9,6 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginChatGptResponse;
 use codex_app_server_protocol::LogoutChatGptResponse;
 use codex_app_server_protocol::RequestId;
-use codex_core::auth::AuthCredentialsStoreMode;
 use codex_login::login_with_api_key;
 use serial_test::serial;
 use std::path::Path;
@@ -32,7 +32,7 @@ model_provider = "mock_provider"
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "http://127.0.0.1:0/v1"
-wire_api = "responses"
+dialect = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#,

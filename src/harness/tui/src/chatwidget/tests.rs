@@ -1,6 +1,6 @@
 //! Exercises `ChatWidget` event handling and rendering invariants.
 //!
-//! These tests treat the widget as the adapter between `codex_core::protocol::EventMsg` inputs and
+//! These tests treat the widget as the adapter between `codex_agent::protocol::EventMsg` inputs and
 //! the TUI output. Many assertions are snapshot-based so that layout regressions and status/header
 //! changes show up as stable, reviewable diffs.
 
@@ -15,56 +15,56 @@ use crate::test_backend::VT100Backend;
 use crate::transcript_view::TranscriptView;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
+use codex_agent::AuthManager;
+use codex_agent::CodexAuth;
+use codex_agent::auth::AuthCredentialsStoreMode;
+use codex_agent::config::Config;
+use codex_agent::config::ConfigBuilder;
+use codex_agent::config::Constrained;
+use codex_agent::config::ConstraintError;
+use codex_agent::config::edit::ConfigEditsBuilder;
+use codex_agent::config_loader::RequirementSource;
+use codex_agent::features::Feature;
+use codex_agent::models_manager::manager::ModelsManager;
+use codex_agent::protocol::AgentMessageDeltaEvent;
+use codex_agent::protocol::AgentMessageEvent;
+use codex_agent::protocol::AgentReasoningDeltaEvent;
+use codex_agent::protocol::AgentReasoningEvent;
+use codex_agent::protocol::ApplyPatchApprovalRequestEvent;
+use codex_agent::protocol::BackgroundEventEvent;
+use codex_agent::protocol::CreditsSnapshot;
+use codex_agent::protocol::Event;
+use codex_agent::protocol::EventMsg;
+use codex_agent::protocol::ExecApprovalRequestEvent;
+use codex_agent::protocol::ExecCommandBeginEvent;
+use codex_agent::protocol::ExecCommandEndEvent;
+use codex_agent::protocol::ExecCommandSource;
+use codex_agent::protocol::ExecPolicyAmendment;
+use codex_agent::protocol::ExitedReviewModeEvent;
+use codex_agent::protocol::FileChange;
+use codex_agent::protocol::ItemCompletedEvent;
+use codex_agent::protocol::McpStartupCompleteEvent;
+use codex_agent::protocol::McpStartupStatus;
+use codex_agent::protocol::McpStartupUpdateEvent;
+use codex_agent::protocol::Op;
+use codex_agent::protocol::PatchApplyBeginEvent;
+use codex_agent::protocol::PatchApplyEndEvent;
+use codex_agent::protocol::RateLimitWindow;
+use codex_agent::protocol::ReviewRequest;
+use codex_agent::protocol::ReviewTarget;
+use codex_agent::protocol::SessionSource;
+use codex_agent::protocol::StreamErrorEvent;
+use codex_agent::protocol::TerminalInteractionEvent;
+use codex_agent::protocol::TokenCountEvent;
+use codex_agent::protocol::TokenUsage;
+use codex_agent::protocol::TokenUsageInfo;
+use codex_agent::protocol::TurnCompleteEvent;
+use codex_agent::protocol::TurnStartedEvent;
+use codex_agent::protocol::UndoCompletedEvent;
+use codex_agent::protocol::UndoStartedEvent;
+use codex_agent::protocol::ViewImageToolCallEvent;
+use codex_agent::protocol::WarningEvent;
 use codex_common::approval_presets::builtin_approval_presets;
-use codex_core::AuthManager;
-use codex_core::CodexAuth;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::config::Config;
-use codex_core::config::ConfigBuilder;
-use codex_core::config::Constrained;
-use codex_core::config::ConstraintError;
-use codex_core::config::edit::ConfigEditsBuilder;
-use codex_core::config_loader::RequirementSource;
-use codex_core::features::Feature;
-use codex_core::models_manager::manager::ModelsManager;
-use codex_core::protocol::AgentMessageDeltaEvent;
-use codex_core::protocol::AgentMessageEvent;
-use codex_core::protocol::AgentReasoningDeltaEvent;
-use codex_core::protocol::AgentReasoningEvent;
-use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-use codex_core::protocol::BackgroundEventEvent;
-use codex_core::protocol::CreditsSnapshot;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::ExecCommandBeginEvent;
-use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::ExecCommandSource;
-use codex_core::protocol::ExecPolicyAmendment;
-use codex_core::protocol::ExitedReviewModeEvent;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::ItemCompletedEvent;
-use codex_core::protocol::McpStartupCompleteEvent;
-use codex_core::protocol::McpStartupStatus;
-use codex_core::protocol::McpStartupUpdateEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::PatchApplyBeginEvent;
-use codex_core::protocol::PatchApplyEndEvent;
-use codex_core::protocol::RateLimitWindow;
-use codex_core::protocol::ReviewRequest;
-use codex_core::protocol::ReviewTarget;
-use codex_core::protocol::SessionSource;
-use codex_core::protocol::StreamErrorEvent;
-use codex_core::protocol::TerminalInteractionEvent;
-use codex_core::protocol::TokenCountEvent;
-use codex_core::protocol::TokenUsage;
-use codex_core::protocol::TokenUsageInfo;
-use codex_core::protocol::TurnCompleteEvent;
-use codex_core::protocol::TurnStartedEvent;
-use codex_core::protocol::UndoCompletedEvent;
-use codex_core::protocol::UndoStartedEvent;
-use codex_core::protocol::ViewImageToolCallEvent;
-use codex_core::protocol::WarningEvent;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
@@ -159,7 +159,7 @@ async fn resumed_initial_messages_render_history() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -233,19 +233,19 @@ async fn session_configured_updates_footer_reasoning_effort_immediately() {
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let init = ChatWidgetInit {
         config: cfg,
+        thread_manager: thread_manager.clone(),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
         initial_user_message: None,
         enhanced_keys_supported: false,
         auth_manager,
-        models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         model: Some(resolved_model.clone()),
         otel_manager,
     };
 
-    let mut chat = ChatWidget::new(init, thread_manager);
+    let mut chat = ChatWidget::new(init);
     let width = 120;
     let height = chat.desired_height(width);
     let mut terminal =
@@ -271,7 +271,7 @@ async fn session_configured_updates_footer_reasoning_effort_immediately() {
     );
 
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_agent::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
         thread_name: None,
@@ -436,7 +436,7 @@ async fn history_insertions_are_thread_scoped_after_session_configuration() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     let thread_id = ThreadId::new();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_agent::protocol::SessionConfiguredEvent {
         session_id: thread_id,
         forked_from_id: None,
         thread_name: None,
@@ -482,7 +482,7 @@ async fn session_configured_suppression_updates_footer_without_requesting_redraw
     chat.suppress_session_configured_redraw = true;
     drain_draw_requests(&mut draw_rx).await;
 
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_agent::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
         thread_name: None,
@@ -548,7 +548,7 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -601,7 +601,7 @@ async fn status_hides_zero_context_compact_count() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -636,7 +636,7 @@ async fn status_shows_live_context_compact_count() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -683,7 +683,7 @@ async fn status_counts_multiple_live_context_compactions_in_same_turn() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -738,7 +738,7 @@ async fn status_resume_restores_context_compact_count_from_replay() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -786,7 +786,7 @@ async fn status_resume_restores_multiple_same_turn_context_compactions_from_repl
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -835,7 +835,7 @@ async fn status_fork_resume_counts_only_child_thread_compactions() {
     let conversation_id = ThreadId::new();
     let parent_thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: Some(parent_thread_id),
         thread_name: None,
@@ -853,19 +853,19 @@ async fn status_fork_resume_counts_only_child_thread_compactions() {
                 turn_id: "turn-parent-1".to_string(),
                 item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
             }),
-            EventMsg::ContextCompacted(codex_core::protocol::ContextCompactedEvent {}),
+            EventMsg::ContextCompacted(codex_agent::protocol::ContextCompactedEvent {}),
             EventMsg::ItemCompleted(ItemCompletedEvent {
                 thread_id: parent_thread_id,
                 turn_id: "turn-parent-2".to_string(),
                 item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
             }),
-            EventMsg::ContextCompacted(codex_core::protocol::ContextCompactedEvent {}),
+            EventMsg::ContextCompacted(codex_agent::protocol::ContextCompactedEvent {}),
             EventMsg::ItemCompleted(ItemCompletedEvent {
                 thread_id: conversation_id,
                 turn_id: "turn-child-1".to_string(),
                 item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
             }),
-            EventMsg::ContextCompacted(codex_core::protocol::ContextCompactedEvent {}),
+            EventMsg::ContextCompacted(codex_agent::protocol::ContextCompactedEvent {}),
         ]),
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -891,7 +891,7 @@ async fn legacy_context_compacted_event_increments_count() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -915,7 +915,7 @@ async fn legacy_context_compacted_event_increments_count() {
 
     chat.handle_codex_event(Event {
         id: "compact-1".into(),
-        msg: EventMsg::ContextCompacted(codex_core::protocol::ContextCompactedEvent {}),
+        msg: EventMsg::ContextCompacted(codex_agent::protocol::ContextCompactedEvent {}),
     });
 
     let cells = drain_insert_history(&mut rx);
@@ -940,7 +940,7 @@ async fn legacy_context_compacted_event_does_not_double_count_after_structured_e
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -972,7 +972,7 @@ async fn legacy_context_compacted_event_does_not_double_count_after_structured_e
     });
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::ContextCompacted(codex_core::protocol::ContextCompactedEvent {}),
+        msg: EventMsg::ContextCompacted(codex_agent::protocol::ContextCompactedEvent {}),
     });
     drain_insert_history(&mut rx);
 
@@ -991,7 +991,7 @@ async fn legacy_context_compacted_event_does_not_double_count_multiple_same_turn
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -1024,7 +1024,7 @@ async fn legacy_context_compacted_event_does_not_double_count_multiple_same_turn
         });
         chat.handle_codex_event(Event {
             id: "turn-1".into(),
-            msg: EventMsg::ContextCompacted(codex_core::protocol::ContextCompactedEvent {}),
+            msg: EventMsg::ContextCompacted(codex_agent::protocol::ContextCompactedEvent {}),
         });
     }
     drain_insert_history(&mut rx);
@@ -1044,7 +1044,7 @@ async fn status_resume_does_not_double_count_structured_and_legacy_compactions()
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -1062,7 +1062,7 @@ async fn status_resume_does_not_double_count_structured_and_legacy_compactions()
                 turn_id: "turn-1".to_string(),
                 item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
             }),
-            EventMsg::ContextCompacted(codex_core::protocol::ContextCompactedEvent {}),
+            EventMsg::ContextCompacted(codex_agent::protocol::ContextCompactedEvent {}),
         ]),
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -1088,7 +1088,7 @@ async fn status_resume_restores_legacy_only_context_compactions() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -1101,8 +1101,8 @@ async fn status_resume_restores_legacy_only_context_compactions() {
         history_log_id: 0,
         history_entry_count: 0,
         initial_messages: Some(vec![
-            EventMsg::ContextCompacted(codex_core::protocol::ContextCompactedEvent {}),
-            EventMsg::ContextCompacted(codex_core::protocol::ContextCompactedEvent {}),
+            EventMsg::ContextCompacted(codex_agent::protocol::ContextCompactedEvent {}),
+            EventMsg::ContextCompacted(codex_agent::protocol::ContextCompactedEvent {}),
         ]),
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -1128,7 +1128,7 @@ async fn submission_preserves_text_elements_and_local_images() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -1256,7 +1256,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
     // must be renumbered to match the combined local image list.
     chat.handle_codex_event(Event {
         id: "interrupt".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -1604,18 +1604,18 @@ async fn helpers_are_available_and_do_not_panic() {
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let init = ChatWidgetInit {
         config: cfg,
+        thread_manager: thread_manager.clone(),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: tx,
         initial_user_message: None,
         enhanced_keys_supported: false,
         auth_manager,
-        models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         model: Some(resolved_model),
         otel_manager,
     };
-    let mut w = ChatWidget::new(init, thread_manager);
+    let mut w = ChatWidget::new(init);
     // Basic construction sanity.
     let _ = &mut w;
 }
@@ -1688,11 +1688,12 @@ async fn make_chatwidget_manual_with_scrollback_mode(
     bottom.set_collaboration_modes_enabled(cfg.features.enabled(Feature::CollaborationModes));
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let codex_home = cfg.codex_home.clone();
-    let models_manager = Arc::new(ModelsManager::new(
+    let thread_manager = Arc::new(ThreadManager::new(
         codex_home,
         auth_manager.clone(),
         cfg.model_provider_id.as_str(),
         cfg.model_provider.clone(),
+        SessionSource::Cli,
     ));
     let reasoning_effort = None;
     let base_mode = CollaborationMode {
@@ -1718,7 +1719,7 @@ async fn make_chatwidget_manual_with_scrollback_mode(
         active_collaboration_mask: None,
         reasoning_effort_overrides: HashMap::new(),
         auth_manager,
-        models_manager,
+        thread_manager,
         otel_manager,
         session_header: SessionHeader::new(resolved_model.clone()),
         initial_user_message: None,
@@ -1814,11 +1815,12 @@ async fn make_chatwidget_manual_with_frame_requester(
     bottom.set_collaboration_modes_enabled(cfg.features.enabled(Feature::CollaborationModes));
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let codex_home = cfg.codex_home.clone();
-    let models_manager = Arc::new(ModelsManager::new(
+    let thread_manager = Arc::new(ThreadManager::new(
         codex_home,
         auth_manager.clone(),
         cfg.model_provider_id.as_str(),
         cfg.model_provider.clone(),
+        SessionSource::Cli,
     ));
     let current_collaboration_mode = CollaborationMode {
         mode: ModeKind::Custom,
@@ -1842,7 +1844,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         active_collaboration_mask: None,
         reasoning_effort_overrides: HashMap::new(),
         auth_manager,
-        models_manager,
+        thread_manager,
         otel_manager,
         session_header: SessionHeader::new(resolved_model.clone()),
         initial_user_message: None,
@@ -1927,22 +1929,24 @@ fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
 fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    chat.models_manager = Arc::new(ModelsManager::new(
+    chat.thread_manager = Arc::new(ThreadManager::new(
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
+        SessionSource::Cli,
     ));
 }
 
 fn set_openai_provider(chat: &mut ChatWidget) {
     chat.config.model_provider_id = "openai".to_string();
-    chat.config.model_provider = codex_core::ModelProviderInfo::create_openai_provider();
-    chat.models_manager = Arc::new(ModelsManager::new(
+    chat.config.model_provider = codex_llm::RuntimeEndpoint::openai();
+    chat.thread_manager = Arc::new(ThreadManager::new(
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
+        SessionSource::Cli,
     ));
 }
 
@@ -1999,11 +2003,12 @@ async fn reload_chat_config_with_saved_providers(
         .build()
         .await
         .expect("reload config");
-    chat.models_manager = Arc::new(ModelsManager::new(
+    chat.thread_manager = Arc::new(ThreadManager::new(
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
+        SessionSource::Cli,
     ));
 }
 
@@ -2424,7 +2429,7 @@ async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
-    let code_mode = collaboration_modes::code_mask(chat.models_manager.as_ref())
+    let code_mode = collaboration_modes::code_mask(chat.thread_manager.as_ref())
         .expect("expected code collaboration mode");
     chat.submit_user_message_with_mode("Implement the plan.".to_string(), code_mode);
 
@@ -2448,7 +2453,7 @@ async fn plan_implementation_popup_skips_replayed_turn_complete() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
     let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
@@ -2468,7 +2473,7 @@ async fn plan_implementation_popup_skips_when_messages_queued() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
     let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
     chat.bottom_pane.set_task_running(true);
@@ -2488,7 +2493,7 @@ async fn plan_implementation_popup_skips_without_proposed_plan() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
     let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
@@ -2514,7 +2519,7 @@ async fn plan_implementation_popup_shows_after_proposed_plan_output() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
     let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
@@ -2537,7 +2542,7 @@ async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     chat.set_feature_enabled(Feature::CollaborationModes, true);
     let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
@@ -2766,7 +2771,7 @@ fn begin_exec_with_source(
     // Build the full command vec and parse it using core's parser,
     // then convert to protocol variants for the event payload.
     let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
-    let parsed_cmd: Vec<ParsedCommand> = codex_core::parse_command::parse_command(&command);
+    let parsed_cmd: Vec<ParsedCommand> = codex_agent::parse_command::parse_command(&command);
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let interaction_input = None;
     let event = ExecCommandBeginEvent {
@@ -2880,7 +2885,7 @@ fn active_blob(chat: &ChatWidget) -> String {
 
 fn get_available_model(chat: &ChatWidget, model: &str) -> ModelPreset {
     let models = chat
-        .models_manager
+        .thread_manager
         .try_list_models(&chat.config)
         .expect("models lock available");
     models
@@ -3116,7 +3121,7 @@ async fn exec_end_without_begin_uses_event_command() {
         "-lc".to_string(),
         "echo orphaned".to_string(),
     ];
-    let parsed_cmd = codex_core::parse_command::parse_command(&command);
+    let parsed_cmd = codex_agent::parse_command::parse_command(&command);
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     chat.handle_codex_event(Event {
         id: "call-orphan".to_string(),
@@ -3251,7 +3256,12 @@ async fn unified_exec_wait_after_final_agent_message_snapshot() {
         }),
     });
 
-    begin_unified_exec_startup(&mut chat, "call-wait", "proc-1", "cargo test -p codex-core");
+    begin_unified_exec_startup(
+        &mut chat,
+        "call-wait",
+        "proc-1",
+        "cargo test -p codex-agent",
+    );
     terminal_interaction(&mut chat, "call-wait-stdin", "proc-1", "");
 
     chat.handle_codex_event(Event {
@@ -3290,7 +3300,7 @@ async fn unified_exec_wait_before_streamed_agent_message_snapshot() {
         &mut chat,
         "call-wait-stream",
         "proc-1",
-        "cargo test -p codex-core",
+        "cargo test -p codex-agent",
     );
     terminal_interaction(&mut chat, "call-wait-stream-stdin", "proc-1", "");
 
@@ -3381,7 +3391,7 @@ async fn unified_exec_wait_status_renders_command_in_single_details_row() {
         &mut chat,
         "call-wait-ui",
         "proc-ui",
-        "cargo test -p codex-core -- --exact",
+        "cargo test -p codex-agent -- --exact",
     );
 
     terminal_interaction(&mut chat, "call-wait-ui-stdin", "proc-ui", "");
@@ -3632,19 +3642,19 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let init = ChatWidgetInit {
         config: cfg,
+        thread_manager: thread_manager.clone(),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
         initial_user_message: None,
         enhanced_keys_supported: false,
         auth_manager,
-        models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         model: Some(resolved_model.clone()),
         otel_manager,
     };
 
-    let chat = ChatWidget::new(init, thread_manager);
+    let chat = ChatWidget::new(init);
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Code);
     assert_eq!(chat.current_model(), resolved_model);
 }
@@ -3676,19 +3686,19 @@ async fn experimental_mode_plan_applies_on_startup() {
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let init = ChatWidgetInit {
         config: cfg,
+        thread_manager: thread_manager.clone(),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
         initial_user_message: None,
         enhanced_keys_supported: false,
         auth_manager,
-        models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         model: Some(resolved_model.clone()),
         otel_manager,
     };
 
-    let chat = ChatWidget::new(init, thread_manager);
+    let chat = ChatWidget::new(init);
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert_eq!(chat.current_model(), resolved_model);
 }
@@ -3724,19 +3734,19 @@ async fn experimental_mode_plan_preserves_configured_effort_on_startup() {
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let init = ChatWidgetInit {
         config: cfg,
+        thread_manager: thread_manager.clone(),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
         initial_user_message: None,
         enhanced_keys_supported: false,
         auth_manager,
-        models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         model: Some(resolved_model.clone()),
         otel_manager,
     };
 
-    let chat = ChatWidget::new(init, thread_manager);
+    let chat = ChatWidget::new(init);
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert_eq!(chat.current_model(), resolved_model);
     assert_eq!(
@@ -3750,7 +3760,7 @@ async fn set_model_updates_active_collaboration_mask() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
     let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
@@ -3765,7 +3775,7 @@ async fn set_reasoning_effort_updates_active_collaboration_mask() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
     let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
@@ -3781,13 +3791,13 @@ async fn code_effort_is_inherited_when_switching_to_plan() {
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
     let code_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Code)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Code)
             .expect("expected code collaboration mask");
     chat.set_collaboration_mask(code_mask);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::Low));
 
     let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
@@ -3804,18 +3814,18 @@ async fn plan_effort_override_survives_mode_switch() {
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
     let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
     let code_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Code)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Code)
             .expect("expected code collaboration mask");
     chat.set_collaboration_mask(code_mask);
 
     let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
@@ -3832,19 +3842,19 @@ async fn plan_effort_override_is_restored_for_supported_model() {
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
     let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
     chat.set_model("gpt-5.2-codex");
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::Low));
 
     let code_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Code)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Code)
             .expect("expected code collaboration mask");
     chat.set_collaboration_mask(code_mask);
 
     let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
@@ -3862,13 +3872,13 @@ async fn plan_inherited_code_effort_is_preserved_for_unknown_model() {
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
     let code_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Code)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Code)
             .expect("expected code collaboration mask");
     chat.set_collaboration_mask(code_mask);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
     let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
@@ -3886,18 +3896,18 @@ async fn plan_effort_override_is_restored_for_unknown_model() {
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
     let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
     let code_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Code)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Code)
             .expect("expected code collaboration mask");
     chat.set_collaboration_mask(code_mask);
 
     let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
@@ -3915,18 +3925,18 @@ async fn plan_explicit_default_effort_survives_mode_switch() {
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
     let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
     chat.set_reasoning_effort(None);
 
     let code_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Code)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Code)
             .expect("expected code collaboration mask");
     chat.set_collaboration_mask(code_mask);
 
     let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
@@ -3940,7 +3950,7 @@ async fn plan_without_user_override_keeps_current_effort() {
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
     let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
@@ -4186,12 +4196,12 @@ async fn review_commit_picker_shows_subjects_without_timestamps() {
 
     // Show commit picker with synthetic entries.
     let entries = vec![
-        codex_core::git_info::CommitLogEntry {
+        codex_agent::git_info::CommitLogEntry {
             sha: "1111111deadbeef".to_string(),
             timestamp: 0,
             subject: "Add new feature X".to_string(),
         },
-        codex_core::git_info::CommitLogEntry {
+        codex_agent::git_info::CommitLogEntry {
             sha: "2222222cafebabe".to_string(),
             timestamp: 0,
             subject: "Fix bug Y".to_string(),
@@ -4310,7 +4320,7 @@ async fn interrupt_exec_marks_failed_snapshot() {
     // cause the active exec cell to be finalized as failed and flushed.
     chat.handle_codex_event(Event {
         id: "call-int".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -4344,7 +4354,7 @@ async fn interrupted_turn_error_message_snapshot() {
     // Abort the turn (like pressing Esc) and drain inserted history.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -4684,17 +4694,18 @@ async fn model_picker_without_auth_shows_only_configured_custom_model() {
         false,
         AuthCredentialsStoreMode::File,
     ));
-    chat.models_manager = Arc::new(ModelsManager::new(
+    chat.thread_manager = Arc::new(ThreadManager::new(
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
+        SessionSource::Cli,
     ));
     reload_chat_config_with_saved_providers(
         &mut chat,
         vec![CustomProviderConfig {
             provider_id: "mock_provider".to_string(),
-            wire_api: crate::provider_config::ApiProviderWireApi::Responses,
+            dialect: crate::provider_config::ApiProviderDialect::Responses,
             base_url: "https://example.test/v1".to_string(),
             api_key: "sk-test".to_string(),
             model: "mock-model".to_string(),
@@ -4725,18 +4736,19 @@ async fn model_picker_without_auth_shows_all_models_saved_in_config_toml() {
         false,
         AuthCredentialsStoreMode::File,
     ));
-    chat.models_manager = Arc::new(ModelsManager::new(
+    chat.thread_manager = Arc::new(ThreadManager::new(
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
+        SessionSource::Cli,
     ));
     reload_chat_config_with_saved_providers(
         &mut chat,
         vec![
             CustomProviderConfig {
                 provider_id: "mock_provider".to_string(),
-                wire_api: crate::provider_config::ApiProviderWireApi::Responses,
+                dialect: crate::provider_config::ApiProviderDialect::Responses,
                 base_url: "https://example.test/v1".to_string(),
                 api_key: "sk-test".to_string(),
                 model: "mock-model".to_string(),
@@ -4744,7 +4756,7 @@ async fn model_picker_without_auth_shows_all_models_saved_in_config_toml() {
             },
             CustomProviderConfig {
                 provider_id: "mock_provider".to_string(),
-                wire_api: crate::provider_config::ApiProviderWireApi::Responses,
+                dialect: crate::provider_config::ApiProviderDialect::Responses,
                 base_url: "https://example.test/v1".to_string(),
                 api_key: "sk-test".to_string(),
                 model: "deepseek-r1".to_string(),
@@ -4752,7 +4764,7 @@ async fn model_picker_without_auth_shows_all_models_saved_in_config_toml() {
             },
             CustomProviderConfig {
                 provider_id: "other_provider".to_string(),
-                wire_api: crate::provider_config::ApiProviderWireApi::Responses,
+                dialect: crate::provider_config::ApiProviderDialect::Responses,
                 base_url: "https://example.test/v1".to_string(),
                 api_key: "sk-test".to_string(),
                 model: "claude-sonnet".to_string(),
@@ -4793,18 +4805,19 @@ async fn model_picker_without_auth_shows_same_model_for_different_custom_provide
         false,
         AuthCredentialsStoreMode::File,
     ));
-    chat.models_manager = Arc::new(ModelsManager::new(
+    chat.thread_manager = Arc::new(ThreadManager::new(
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
+        SessionSource::Cli,
     ));
     reload_chat_config_with_saved_providers(
         &mut chat,
         vec![
             CustomProviderConfig {
                 provider_id: "provider_a".to_string(),
-                wire_api: crate::provider_config::ApiProviderWireApi::Responses,
+                dialect: crate::provider_config::ApiProviderDialect::Responses,
                 base_url: "https://example.test/a".to_string(),
                 api_key: "sk-test-a".to_string(),
                 model: "glm-5".to_string(),
@@ -4812,7 +4825,7 @@ async fn model_picker_without_auth_shows_same_model_for_different_custom_provide
             },
             CustomProviderConfig {
                 provider_id: "provider_b".to_string(),
-                wire_api: crate::provider_config::ApiProviderWireApi::Responses,
+                dialect: crate::provider_config::ApiProviderDialect::Responses,
                 base_url: "https://example.test/b".to_string(),
                 api_key: "sk-test-b".to_string(),
                 model: "glm-5".to_string(),
@@ -4860,7 +4873,7 @@ async fn model_picker_with_chatgpt_auth_shows_full_list_and_config_models() {
         vec![
             CustomProviderConfig {
                 provider_id: "mock_provider".to_string(),
-                wire_api: crate::provider_config::ApiProviderWireApi::Responses,
+                dialect: crate::provider_config::ApiProviderDialect::Responses,
                 base_url: "https://example.test/v1".to_string(),
                 api_key: "sk-test".to_string(),
                 model: "mock-model".to_string(),
@@ -4868,7 +4881,7 @@ async fn model_picker_with_chatgpt_auth_shows_full_list_and_config_models() {
             },
             CustomProviderConfig {
                 provider_id: "mock_provider".to_string(),
-                wire_api: crate::provider_config::ApiProviderWireApi::Responses,
+                dialect: crate::provider_config::ApiProviderDialect::Responses,
                 base_url: "https://example.test/v1".to_string(),
                 api_key: "sk-test".to_string(),
                 model: "deepseek-r1".to_string(),
@@ -4901,17 +4914,18 @@ async fn model_picker_reloads_chatgpt_auth_for_custom_provider_sessions() {
         false,
         AuthCredentialsStoreMode::File,
     ));
-    chat.models_manager = Arc::new(ModelsManager::new(
+    chat.thread_manager = Arc::new(ThreadManager::new(
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
+        SessionSource::Cli,
     ));
     reload_chat_config_with_saved_providers(
         &mut chat,
         vec![CustomProviderConfig {
             provider_id: "glm_provider".to_string(),
-            wire_api: crate::provider_config::ApiProviderWireApi::Responses,
+            dialect: crate::provider_config::ApiProviderDialect::Responses,
             base_url: "https://example.test/v1".to_string(),
             api_key: "sk-test".to_string(),
             model: "glm-5".to_string(),
@@ -4943,17 +4957,18 @@ async fn model_picker_reloads_chatgpt_auth_for_custom_messages_provider_sessions
         false,
         AuthCredentialsStoreMode::File,
     ));
-    chat.models_manager = Arc::new(ModelsManager::new(
+    chat.thread_manager = Arc::new(ThreadManager::new(
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
+        SessionSource::Cli,
     ));
     reload_chat_config_with_saved_providers(
         &mut chat,
         vec![CustomProviderConfig {
             provider_id: "glm_provider".to_string(),
-            wire_api: crate::provider_config::ApiProviderWireApi::Messages,
+            dialect: crate::provider_config::ApiProviderDialect::Messages,
             base_url: "https://example.test/v1".to_string(),
             api_key: "sk-test".to_string(),
             model: "glm-5.1".to_string(),
@@ -4985,7 +5000,7 @@ async fn model_picker_with_chatgpt_auth_keeps_builtin_and_custom_same_slug_visib
         &mut chat,
         vec![CustomProviderConfig {
             provider_id: "provider_a".to_string(),
-            wire_api: crate::provider_config::ApiProviderWireApi::Responses,
+            dialect: crate::provider_config::ApiProviderDialect::Responses,
             base_url: "https://example.test/a".to_string(),
             api_key: "sk-test-a".to_string(),
             model: "gpt-5.4".to_string(),
@@ -5003,11 +5018,12 @@ async fn model_picker_with_chatgpt_auth_keeps_builtin_and_custom_same_slug_visib
         .build()
         .await
         .expect("reload config");
-    chat.models_manager = Arc::new(ModelsManager::new(
+    chat.thread_manager = Arc::new(ThreadManager::new(
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
+        SessionSource::Cli,
     ));
     chat.set_model("gpt-5.4");
 
@@ -5057,7 +5073,7 @@ async fn model_switcher_with_chatgpt_auth_keeps_builtin_and_custom_same_slug_vis
         &mut chat,
         vec![CustomProviderConfig {
             provider_id: "provider_a".to_string(),
-            wire_api: crate::provider_config::ApiProviderWireApi::Responses,
+            dialect: crate::provider_config::ApiProviderDialect::Responses,
             base_url: "https://example.test/a".to_string(),
             api_key: "sk-test-a".to_string(),
             model: "gpt-5.2".to_string(),
@@ -5068,7 +5084,7 @@ async fn model_switcher_with_chatgpt_auth_keeps_builtin_and_custom_same_slug_vis
     chat.set_model("gpt-5.2");
 
     let presets = chat
-        .models_manager
+        .thread_manager
         .try_list_model_switcher_models(&chat.config)
         .expect("model switcher presets");
     chat.open_all_models_popup(presets);
@@ -6005,7 +6021,7 @@ async fn interrupt_restores_queued_messages_into_composer() {
     // Deliver a TurnAborted event with Interrupted reason (as if Esc was pressed).
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -6043,7 +6059,7 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -6071,7 +6087,7 @@ async fn interrupt_preserves_unified_exec_processes() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -6098,7 +6114,7 @@ async fn interrupt_preserves_unified_exec_wait_streak_snapshot() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -6187,7 +6203,7 @@ async fn ui_snapshots_small_heights_task_running() {
 // task (status indicator active) while an approval request is shown.
 #[tokio::test]
 async fn status_widget_and_approval_modal_snapshot() {
-    use codex_core::protocol::ExecApprovalRequestEvent;
+    use codex_agent::protocol::ExecApprovalRequestEvent;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     // Begin a running task so the status indicator would be active.
@@ -6566,7 +6582,7 @@ async fn apply_patch_approval_sends_op_with_submission_id() {
     while let Ok(app_ev) = rx.try_recv() {
         if let AppEvent::CodexOp(Op::PatchApproval { id, decision }) = app_ev {
             assert_eq!(id, "sub-123");
-            assert_matches!(decision, codex_core::protocol::ReviewDecision::Approved);
+            assert_matches!(decision, codex_agent::protocol::ReviewDecision::Approved);
             found = true;
             break;
         }
@@ -6614,7 +6630,7 @@ async fn apply_patch_full_flow_integration_like() {
     match forwarded {
         Op::PatchApproval { id, decision } => {
             assert_eq!(id, "sub-xyz");
-            assert_matches!(decision, codex_core::protocol::ReviewDecision::Approved);
+            assert_matches!(decision, codex_agent::protocol::ReviewDecision::Approved);
         }
         other => panic!("unexpected op forwarded: {other:?}"),
     }

@@ -1,8 +1,8 @@
 //! Configuration object accepted by the `codex` MCP tool-call.
 
-use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
-use codex_core::protocol::AskForApproval;
+use codex_agent::config::Config;
+use codex_agent::config::ConfigOverrides;
+use codex_agent::protocol::AskForApproval;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::SandboxMode;
 use codex_utils_json_to_toml::json_to_toml;
@@ -167,7 +167,7 @@ impl CodexToolCallParam {
             compact_prompt,
         } = self;
 
-        // Build the `ConfigOverrides` recognized by codex-core.
+        // Build the `ConfigOverrides` recognized by codex-agent.
         let overrides = ConfigOverrides {
             model,
             config_profile: profile,

@@ -28,7 +28,7 @@ use ratatui::widgets::Wrap;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::provider_config::ApiKeyInputState;
-use crate::provider_config::ApiProviderWireApi;
+use crate::provider_config::ApiProviderDialect;
 use crate::provider_config::ApiProviderWizardStep;
 use crate::provider_config::CustomProviderConfig;
 use crate::provider_config::current_step_value_mut;
@@ -77,7 +77,7 @@ impl ProviderConfigView {
         let state = read_state(&self.state);
         let text = match state.step {
             ApiProviderWizardStep::ProviderId => state.provider_id.clone(),
-            ApiProviderWizardStep::WireApi => String::new(),
+            ApiProviderWizardStep::ConversationDialect => String::new(),
             ApiProviderWizardStep::BaseUrl => state.base_url.clone(),
             ApiProviderWizardStep::ApiKey => state.api_key.clone(),
             ApiProviderWizardStep::Model => state.model.clone(),
@@ -123,7 +123,7 @@ impl ProviderConfigView {
     fn input_height(&self, area: Rect, state: &ApiKeyInputState) -> u16 {
         let inner_width = area.width.saturating_sub(2).max(1);
         match state.step {
-            ApiProviderWizardStep::WireApi => 5,
+            ApiProviderWizardStep::ConversationDialect => 5,
             _ => self
                 .textarea
                 .desired_height(inner_width)
@@ -187,34 +187,36 @@ impl BottomPaneView for ProviderConfigView {
                     }
                 }
                 KeyCode::Up | KeyCode::Char('k')
-                    if state.step == ApiProviderWizardStep::WireApi =>
+                    if state.step == ApiProviderWizardStep::ConversationDialect =>
                 {
-                    state.wire_api = state.wire_api.previous();
+                    state.dialect = state.dialect.previous();
                     state.error = None;
                     should_request_frame = true;
                 }
                 KeyCode::Down | KeyCode::Char('j')
-                    if state.step == ApiProviderWizardStep::WireApi =>
+                    if state.step == ApiProviderWizardStep::ConversationDialect =>
                 {
-                    state.wire_api = state.wire_api.next();
+                    state.dialect = state.dialect.next();
                     state.error = None;
                     should_request_frame = true;
                 }
-                KeyCode::Left | KeyCode::Right if state.step == ApiProviderWizardStep::WireApi => {
-                    state.wire_api.toggle();
+                KeyCode::Left | KeyCode::Right
+                    if state.step == ApiProviderWizardStep::ConversationDialect =>
+                {
+                    state.dialect.toggle();
                     state.error = None;
                     should_request_frame = true;
                 }
-                KeyCode::Char(c) if state.step == ApiProviderWizardStep::WireApi => {
-                    if let Some(wire_api) = ApiProviderWireApi::from_shortcut_digit(c)
-                        .or_else(|| ApiProviderWireApi::from_shortcut_letter(c))
+                KeyCode::Char(c) if state.step == ApiProviderWizardStep::ConversationDialect => {
+                    if let Some(dialect) = ApiProviderDialect::from_shortcut_digit(c)
+                        .or_else(|| ApiProviderDialect::from_shortcut_letter(c))
                     {
-                        state.wire_api = wire_api;
+                        state.dialect = dialect;
                         state.error = None;
                         should_request_frame = true;
                     }
                 }
-                _ if state.step != ApiProviderWizardStep::WireApi => {
+                _ if state.step != ApiProviderWizardStep::ConversationDialect => {
                     if key_event
                         .modifiers
                         .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL | KeyModifiers::SUPER)
@@ -260,7 +262,7 @@ impl BottomPaneView for ProviderConfigView {
         }
 
         let mut state = write_state(&self.state);
-        if state.validating || state.step == ApiProviderWizardStep::WireApi {
+        if state.validating || state.step == ApiProviderWizardStep::ConversationDialect {
             return true;
         }
 
@@ -317,7 +319,7 @@ impl Renderable for ProviderConfigView {
                 display_optional_value(&state.provider_id, "<not set>")
             )
             .into(),
-            format!("  Wire API: {}", state.wire_api.label()).into(),
+            format!("  Dialect: {}", state.dialect.label()).into(),
             format!(
                 "  Base URL: {}",
                 display_optional_value(&state.base_url, "<not set>")
@@ -348,12 +350,12 @@ impl Renderable for ProviderConfigView {
             .render(intro_area, buf);
 
         match state.step {
-            ApiProviderWizardStep::WireApi => {
-                let lines = ApiProviderWireApi::all()
+            ApiProviderWizardStep::ConversationDialect => {
+                let lines = ApiProviderDialect::all()
                     .into_iter()
                     .enumerate()
                     .map(|(idx, option)| {
-                        let selected = option == state.wire_api;
+                        let selected = option == state.dialect;
                         let prefix = if selected { ">" } else { " " };
                         if selected {
                             vec![
@@ -412,7 +414,7 @@ impl Renderable for ProviderConfigView {
             } else {
                 "  Press Enter to continue".dim().into()
             },
-            if state.step == ApiProviderWizardStep::WireApi {
+            if state.step == ApiProviderWizardStep::ConversationDialect {
                 "  Press 1/2/3 or Up/Down to choose".dim().into()
             } else {
                 "  Type or paste to edit".dim().into()
@@ -430,7 +432,7 @@ impl Renderable for ProviderConfigView {
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let state = read_state(&self.state);
-        if state.step == ApiProviderWizardStep::WireApi || state.validating {
+        if state.step == ApiProviderWizardStep::ConversationDialect || state.validating {
             return None;
         }
 
@@ -509,13 +511,19 @@ mod tests {
         assert!(view.handle_paste("custom_1".to_string()));
 
         view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(state_snapshot(&view).step, ApiProviderWizardStep::WireApi);
+        assert_eq!(
+            state_snapshot(&view).step,
+            ApiProviderWizardStep::ConversationDialect
+        );
 
         view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(state_snapshot(&view).step, ApiProviderWizardStep::BaseUrl);
 
         view.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        assert_eq!(state_snapshot(&view).step, ApiProviderWizardStep::WireApi);
+        assert_eq!(
+            state_snapshot(&view).step,
+            ApiProviderWizardStep::ConversationDialect
+        );
     }
 
     #[test]
@@ -539,43 +547,40 @@ mod tests {
     }
 
     #[test]
-    fn paste_and_wire_api_shortcuts_update_state() {
+    fn paste_and_dialect_shortcuts_update_state() {
         let mut view = test_view();
 
         assert!(view.handle_paste(" custom_1 ".to_string()));
         assert_eq!(state_snapshot(&view).provider_id, "custom_1");
 
         view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(state_snapshot(&view).wire_api, ApiProviderWireApi::Chat);
+        assert_eq!(state_snapshot(&view).dialect, ApiProviderDialect::Chat);
 
         view.handle_key_event(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
-        assert_eq!(state_snapshot(&view).wire_api, ApiProviderWireApi::Chat);
+        assert_eq!(state_snapshot(&view).dialect, ApiProviderDialect::Chat);
 
         view.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
-        assert_eq!(
-            state_snapshot(&view).wire_api,
-            ApiProviderWireApi::Responses
-        );
+        assert_eq!(state_snapshot(&view).dialect, ApiProviderDialect::Responses);
 
         view.handle_key_event(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
-        assert_eq!(state_snapshot(&view).wire_api, ApiProviderWireApi::Messages);
+        assert_eq!(state_snapshot(&view).dialect, ApiProviderDialect::Messages);
 
         view.handle_key_event(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
-        assert_eq!(state_snapshot(&view).wire_api, ApiProviderWireApi::Messages);
+        assert_eq!(state_snapshot(&view).dialect, ApiProviderDialect::Messages);
 
         view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        assert_eq!(state_snapshot(&view).wire_api, ApiProviderWireApi::Chat);
+        assert_eq!(state_snapshot(&view).dialect, ApiProviderDialect::Chat);
 
         view.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        assert_eq!(state_snapshot(&view).wire_api, ApiProviderWireApi::Messages);
+        assert_eq!(state_snapshot(&view).dialect, ApiProviderDialect::Messages);
     }
 
     #[test]
-    fn wire_api_step_uses_three_single_line_options() {
+    fn dialect_step_uses_three_single_line_options() {
         let view = test_view();
         {
             let mut state = write_state(&view.state);
-            state.step = ApiProviderWizardStep::WireApi;
+            state.step = ApiProviderWizardStep::ConversationDialect;
         }
 
         let area = Rect::new(0, 0, 120, view.desired_height(120));
@@ -585,14 +590,14 @@ mod tests {
         let lines = (0..area.height)
             .map(|row| row_text(&buf, row, area.width))
             .collect::<Vec<_>>();
-        let wire_api_row = lines
+        let dialect_row = lines
             .iter()
-            .position(|line| line.starts_with("╭Wire API"))
-            .expect("wire api border row");
+            .position(|line| line.starts_with("╭Dialect"))
+            .expect("dialect border row");
 
-        assert_eq!(lines[wire_api_row + 1].contains("chat"), true);
-        assert_eq!(lines[wire_api_row + 2].contains("responses"), true);
-        assert_eq!(lines[wire_api_row + 3].contains("messages"), true);
+        assert_eq!(lines[dialect_row + 1].contains("chat"), true);
+        assert_eq!(lines[dialect_row + 2].contains("responses"), true);
+        assert_eq!(lines[dialect_row + 3].contains("messages"), true);
         assert_eq!(
             lines
                 .iter()

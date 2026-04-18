@@ -6,7 +6,7 @@ use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
 use codex_client::StreamResponse;
 use codex_client::TransportError;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ConversationItem;
 use codex_protocol::protocol::TokenUsage;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
@@ -184,10 +184,10 @@ pub fn process_responses_event(
     match event.kind.as_str() {
         "response.output_item.done" => {
             if let Some(item_val) = event.item {
-                if let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) {
+                if let Ok(item) = serde_json::from_value::<ConversationItem>(item_val) {
                     return Ok(Some(ResponseEvent::OutputItemDone(item)));
                 }
-                debug!("failed to parse ResponseItem from output_item.done");
+                debug!("failed to parse ConversationItem from output_item.done");
             }
         }
         "response.output_text.delta" => {
@@ -288,10 +288,10 @@ pub fn process_responses_event(
         }
         "response.output_item.added" => {
             if let Some(item_val) = event.item {
-                if let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) {
+                if let Ok(item) = serde_json::from_value::<ConversationItem>(item_val) {
                     return Ok(Some(ResponseEvent::OutputItemAdded(item)));
                 }
-                debug!("failed to parse ResponseItem from output_item.added");
+                debug!("failed to parse ConversationItem from output_item.added");
             }
         }
         "response.reasoning_summary_part.added" => {
@@ -429,7 +429,7 @@ mod tests {
     use super::*;
     use assert_matches::assert_matches;
     use bytes::Bytes;
-    use codex_protocol::models::ResponseItem;
+    use codex_protocol::models::ConversationItem;
     use futures::stream;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -523,13 +523,13 @@ mod tests {
 
         assert_matches!(
             &events[0],
-            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message { role, .. }))
+            Ok(ResponseEvent::OutputItemDone(ConversationItem::Message { role, .. }))
                 if role == "assistant"
         );
 
         assert_matches!(
             &events[1],
-            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message { role, .. }))
+            Ok(ResponseEvent::OutputItemDone(ConversationItem::Message { role, .. }))
                 if role == "assistant"
         );
 

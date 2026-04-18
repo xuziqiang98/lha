@@ -1,5 +1,5 @@
+use codex_agent::INTERACTIVE_SESSION_SOURCES;
 use codex_app_server_protocol::ThreadSourceKind;
-use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 

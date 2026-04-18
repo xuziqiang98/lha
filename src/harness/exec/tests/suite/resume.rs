@@ -21,7 +21,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 /// Utility: scan the sessions dir for a rollout file that contains `marker`
-/// in any response_item.message.content entry. Returns the absolute path.
+/// in any conversation_item.message.content entry. Returns the absolute path.
 fn find_session_file_containing_marker(
     sessions_dir: &std::path::Path,
     marker: &str,
@@ -53,7 +53,7 @@ fn find_session_file_containing_marker(
             let Ok(item): Result<Value, _> = serde_json::from_str(line) else {
                 continue;
             };
-            if item.get("type").and_then(|t| t.as_str()) == Some("response_item")
+            if item.get("type").and_then(|t| t.as_str()) == Some("conversation_item")
                 && let Some(payload) = item.get("payload")
                 && payload.get("type").and_then(|t| t.as_str()) == Some("message")
                 && payload
@@ -92,7 +92,7 @@ fn last_user_image_count(path: &std::path::Path) -> usize {
         let Ok(item): Result<Value, _> = serde_json::from_str(line) else {
             continue;
         };
-        if item.get("type").and_then(|t| t.as_str()) != Some("response_item") {
+        if item.get("type").and_then(|t| t.as_str()) != Some("conversation_item") {
             continue;
         }
         let Some(payload) = item.get("payload") else {
@@ -138,6 +138,7 @@ fn write_fake_rollout(
         cwd: cwd.to_path_buf(),
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
+        rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V2,
         source: SessionSource::Cli,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
@@ -151,7 +152,7 @@ fn write_fake_rollout(
         }),
         json!({
             "timestamp": meta_rfc3339,
-            "type":"response_item",
+            "type":"conversation_item",
             "payload": {
                 "type":"message",
                 "role":"user",

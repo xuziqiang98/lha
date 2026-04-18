@@ -41,38 +41,38 @@ use crate::resume_picker::SessionSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
+use codex_agent::AuthManager;
+use codex_agent::CodexAuth;
+use codex_agent::ThreadManager;
+use codex_agent::config::Config;
+use codex_agent::config::ConfigBuilder;
+use codex_agent::config::ConfigOverrides;
+use codex_agent::config::ConfigToml;
+use codex_agent::config::display_model_provider_ref;
+use codex_agent::config::edit::ConfigEdit;
+use codex_agent::config::edit::ConfigEditsBuilder;
+use codex_agent::config_loader::ConfigLayerStackOrdering;
+use codex_agent::features::Feature;
+use codex_agent::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
+use codex_agent::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
+use codex_agent::protocol::AskForApproval;
+use codex_agent::protocol::Event;
+use codex_agent::protocol::EventMsg;
+use codex_agent::protocol::FinalOutput;
+use codex_agent::protocol::ListSkillsResponseEvent;
+use codex_agent::protocol::Op;
+use codex_agent::protocol::ReviewRequest;
+use codex_agent::protocol::SandboxPolicy;
+use codex_agent::protocol::SessionSource;
+use codex_agent::protocol::SkillErrorInfo;
+use codex_agent::protocol::SubAgentSource;
+use codex_agent::protocol::TokenUsage;
+#[cfg(target_os = "windows")]
+use codex_agent::windows_sandbox::WindowsSandboxLevelExt;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_protocol::ConfigLayerSource;
-use codex_core::AuthManager;
-use codex_core::CodexAuth;
-use codex_core::ModelProviderInfo;
-use codex_core::ThreadManager;
-use codex_core::config::Config;
-use codex_core::config::ConfigBuilder;
-use codex_core::config::ConfigOverrides;
-use codex_core::config::ConfigToml;
-use codex_core::config::display_model_provider_ref;
-use codex_core::config::edit::ConfigEdit;
-use codex_core::config::edit::ConfigEditsBuilder;
-use codex_core::config_loader::ConfigLayerStackOrdering;
-use codex_core::features::Feature;
-use codex_core::models_manager::manager::RefreshStrategy;
-use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
-use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::FinalOutput;
-use codex_core::protocol::ListSkillsResponseEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewRequest;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::SessionSource;
-use codex_core::protocol::SkillErrorInfo;
-use codex_core::protocol::SubAgentSource;
-use codex_core::protocol::TokenUsage;
-#[cfg(target_os = "windows")]
-use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_llm::CatalogRefreshStrategy;
+use codex_llm::RuntimeEndpoint;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
@@ -162,7 +162,7 @@ fn session_summary(
     }
 
     let usage_line = FinalOutput::from(token_usage).to_string();
-    let resume_command = codex_core::util::resume_command(thread_name.as_deref(), thread_id);
+    let resume_command = codex_agent::util::resume_command(thread_name.as_deref(), thread_id);
     Some(SessionSummary {
         usage_line,
         resume_command,
@@ -862,17 +862,17 @@ impl App {
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
         tui: &mut tui::Tui,
-        cfg: codex_core::config::Config,
+        cfg: codex_agent::config::Config,
     ) -> crate::chatwidget::ChatWidgetInit {
         crate::chatwidget::ChatWidgetInit {
             config: cfg,
+            thread_manager: self.server.clone(),
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
             // Fork/resume bootstraps here don't carry any prefilled message content.
             initial_user_message: None,
             enhanced_keys_supported: self.enhanced_keys_supported,
             auth_manager: self.auth_manager.clone(),
-            models_manager: self.server.get_models_manager(),
             feedback: self.feedback.clone(),
             is_first_run: false,
             model: Some(self.chat_widget.current_model().to_string()),
@@ -967,7 +967,7 @@ impl App {
     fn runtime_provider_for_id(
         &self,
         provider_id: &str,
-    ) -> std::result::Result<ModelProviderInfo, String> {
+    ) -> std::result::Result<RuntimeEndpoint, String> {
         if provider_id == self.config.model_provider_id {
             return Ok(self.config.model_provider.clone());
         }
@@ -982,7 +982,7 @@ impl App {
     async fn activate_runtime_provider(
         &mut self,
         provider_id: &str,
-        provider: ModelProviderInfo,
+        provider: RuntimeEndpoint,
         model: &str,
         refresh_context_limits: bool,
     ) {
@@ -1001,15 +1001,13 @@ impl App {
                 }
                 Err(_) => {
                     self.server
-                        .get_models_manager()
-                        .switch_provider(provider_id, provider.clone())
+                        .switch_model_provider(provider_id, provider.clone())
                         .await;
                 }
             }
         } else {
             self.server
-                .get_models_manager()
-                .switch_provider(provider_id, provider.clone())
+                .switch_model_provider(provider_id, provider.clone())
                 .await;
         }
 
@@ -1599,12 +1597,10 @@ impl App {
             SessionSource::Cli,
         ));
         let mut model = thread_manager
-            .get_models_manager()
-            .get_default_model(&config.model, &config, RefreshStrategy::Offline)
+            .get_default_model(&config.model, &config, CatalogRefreshStrategy::Offline)
             .await?;
         let available_models = thread_manager
-            .get_models_manager()
-            .list_models(&config, RefreshStrategy::Offline)
+            .list_models(&config, CatalogRefreshStrategy::Offline)
             .await;
         let exit_info = handle_model_migration_prompt_if_needed(
             tui,
@@ -1631,7 +1627,7 @@ impl App {
             auth_ref.and_then(CodexAuth::get_account_email),
             auth_ref.map(CodexAuth::api_auth_mode),
             config.otel.log_user_prompt,
-            codex_core::terminal::user_agent(),
+            codex_agent::terminal::user_agent(),
             SessionSource::Cli,
         );
 
@@ -1640,6 +1636,7 @@ impl App {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
+                    thread_manager: thread_manager.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
@@ -1650,13 +1647,12 @@ impl App {
                     ),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
-                    models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
                     model: Some(model.clone()),
                     otel_manager: otel_manager.clone(),
                 };
-                ChatWidget::new(init, thread_manager.clone())
+                ChatWidget::new(init)
             }
             SessionSelection::Resume(path) => {
                 let resumed = thread_manager
@@ -1668,6 +1664,7 @@ impl App {
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
+                    thread_manager: thread_manager.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
@@ -1678,7 +1675,6 @@ impl App {
                     ),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
-                    models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
                     model: config.model.clone(),
@@ -1696,6 +1692,7 @@ impl App {
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
+                    thread_manager: thread_manager.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
@@ -1706,7 +1703,6 @@ impl App {
                     ),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
-                    models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
                     model: config.model.clone(),
@@ -1776,8 +1772,8 @@ impl App {
                 != WindowsSandboxLevel::Disabled
                 && matches!(
                     app.config.sandbox_policy.get(),
-                    codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly
+                    codex_agent::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                        | codex_agent::protocol::SandboxPolicy::ReadOnly
                 )
                 && !app
                     .config
@@ -1946,19 +1942,19 @@ impl App {
                 }
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
+                    thread_manager: self.server.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: self.app_event_tx.clone(),
                     // New sessions start without prefilled message content.
                     initial_user_message: None,
                     enhanced_keys_supported: self.enhanced_keys_supported,
                     auth_manager: self.auth_manager.clone(),
-                    models_manager: self.server.get_models_manager(),
                     feedback: self.feedback.clone(),
                     is_first_run: false,
                     model: Some(model),
                     otel_manager: self.otel_manager.clone(),
                 };
-                self.chat_widget = ChatWidget::new(init, self.server.clone());
+                self.chat_widget = ChatWidget::new(init);
                 self.reset_thread_event_state();
                 if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
@@ -2337,7 +2333,7 @@ impl App {
 
                     // If the elevated setup already ran on this machine, don't prompt for
                     // elevation again - just flip the config to use the elevated path.
-                    if codex_core::windows_sandbox::sandbox_setup_is_complete(codex_home.as_path())
+                    if codex_agent::windows_sandbox::sandbox_setup_is_complete(codex_home.as_path())
                     {
                         tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
                             preset,
@@ -2350,7 +2346,7 @@ impl App {
                     self.windows_sandbox.setup_started_at = Some(Instant::now());
                     let otel_manager = self.otel_manager.clone();
                     tokio::task::spawn_blocking(move || {
-                        let result = codex_core::windows_sandbox::run_elevated_setup(
+                        let result = codex_agent::windows_sandbox::run_elevated_setup(
                             &policy,
                             policy_cwd.as_path(),
                             command_cwd.as_path(),
@@ -2373,7 +2369,7 @@ impl App {
                                 let mut code_tag: Option<String> = None;
                                 let mut message_tag: Option<String> = None;
                                 if let Some((code, message)) =
-                                    codex_core::windows_sandbox::elevated_setup_failure_details(
+                                    codex_agent::windows_sandbox::elevated_setup_failure_details(
                                         &err,
                                     )
                                 {
@@ -2606,8 +2602,8 @@ impl App {
                 #[cfg(target_os = "windows")]
                 let policy_is_workspace_write_or_ro = matches!(
                     &policy,
-                    codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly
+                    codex_agent::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                        | codex_agent::protocol::SandboxPolicy::ReadOnly
                 );
 
                 if let Err(err) = self.config.sandbox_policy.set(policy.clone()) {
@@ -2617,7 +2613,7 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 #[cfg(target_os = "windows")]
-                if !matches!(&policy, codex_core::protocol::SandboxPolicy::ReadOnly)
+                if !matches!(&policy, codex_agent::protocol::SandboxPolicy::ReadOnly)
                     || WindowsSandboxLevel::from_config(&self.config)
                         != WindowsSandboxLevel::Disabled
                 {
@@ -3009,7 +3005,7 @@ impl App {
         (!model.starts_with("codex-auto-")).then(|| Self::reasoning_label(reasoning_effort))
     }
 
-    pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
+    pub(crate) fn token_usage(&self) -> codex_agent::protocol::TokenUsage {
         self.chat_widget.token_usage()
     }
 
@@ -3176,7 +3172,7 @@ impl App {
         cwd: PathBuf,
         env_map: std::collections::HashMap<String, String>,
         logs_base_dir: PathBuf,
-        sandbox_policy: codex_core::protocol::SandboxPolicy,
+        sandbox_policy: codex_agent::protocol::SandboxPolicy,
         tx: AppEventSender,
     ) {
         tokio::task::spawn_blocking(move || {
@@ -3225,32 +3221,32 @@ mod tests {
     use crate::history_cell::ReasoningSummaryCell;
     use crate::history_cell::UserHistoryCell;
     use crate::history_cell::new_session_info;
-    use crate::provider_config::ApiProviderWireApi;
+    use crate::provider_config::ApiProviderDialect;
     use crate::provider_config::CustomProviderConfig;
     use crate::provider_config::build_custom_provider_edits;
     use crate::provider_config::build_custom_provider_edits_with_existing;
     use crate::provider_config::generated_profile_name;
-    use codex_core::AuthManager;
-    use codex_core::CodexAuth;
-    use codex_core::ThreadManager;
-    use codex_core::config::ConfigBuilder;
-    use codex_core::config::ConfigOverrides;
-    use codex_core::config::ConfigToml;
-    use codex_core::config::edit::ConfigEditsBuilder;
-    use codex_core::features::Feature;
-    use codex_core::models_manager::manager::ModelsManager;
-    use codex_core::protocol::AskForApproval;
-    use codex_core::protocol::Event;
-    use codex_core::protocol::EventMsg;
-    use codex_core::protocol::ExecCommandSource;
-    use codex_core::protocol::ReviewRequest;
-    use codex_core::protocol::ReviewTarget;
-    use codex_core::protocol::SandboxPolicy;
-    use codex_core::protocol::SessionConfiguredEvent;
-    use codex_core::protocol::SessionSource;
-    use codex_core::protocol::ThreadRolledBackEvent;
-    use codex_core::protocol::TurnCompleteEvent;
-    use codex_core::protocol::TurnStartedEvent;
+    use codex_agent::AuthManager;
+    use codex_agent::CodexAuth;
+    use codex_agent::ThreadManager;
+    use codex_agent::config::ConfigBuilder;
+    use codex_agent::config::ConfigOverrides;
+    use codex_agent::config::ConfigToml;
+    use codex_agent::config::edit::ConfigEditsBuilder;
+    use codex_agent::features::Feature;
+    use codex_agent::models_manager::manager::ModelsManager;
+    use codex_agent::protocol::AskForApproval;
+    use codex_agent::protocol::Event;
+    use codex_agent::protocol::EventMsg;
+    use codex_agent::protocol::ExecCommandSource;
+    use codex_agent::protocol::ReviewRequest;
+    use codex_agent::protocol::ReviewTarget;
+    use codex_agent::protocol::SandboxPolicy;
+    use codex_agent::protocol::SessionConfiguredEvent;
+    use codex_agent::protocol::SessionSource;
+    use codex_agent::protocol::ThreadRolledBackEvent;
+    use codex_agent::protocol::TurnCompleteEvent;
+    use codex_agent::protocol::TurnStartedEvent;
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::ModeKind;
@@ -4058,7 +4054,7 @@ mod tests {
     }
 
     fn all_model_presets() -> Vec<ModelPreset> {
-        codex_core::models_manager::model_presets::all_model_presets().clone()
+        codex_agent::models_manager::model_presets::all_model_presets().clone()
     }
 
     fn model_migration_copy_to_plain_text(
@@ -4440,7 +4436,7 @@ mod tests {
         let config_path = app.config.codex_home.join("config.toml");
         let saved = CustomProviderConfig {
             provider_id: "custom_1".to_string(),
-            wire_api: ApiProviderWireApi::Chat,
+            dialect: ApiProviderDialect::Chat,
             base_url: "https://example.com/chat".to_string(),
             api_key: "sk-new".to_string(),
             model: "gpt-other".to_string(),
@@ -4454,7 +4450,7 @@ model = "gpt-test"
 [model_providers.custom_1]
 name = "custom_1"
 base_url = "https://example.com/v1"
-wire_api = "responses"
+dialect = "responses"
 experimental_bearer_token = "sk-old"
 env_key = "CUSTOM_API_KEY"
 
@@ -4534,7 +4530,7 @@ X-Test = "1"
         let mut app = make_test_app().await;
         let saved = CustomProviderConfig {
             provider_id: "custom_1".to_string(),
-            wire_api: ApiProviderWireApi::Responses,
+            dialect: ApiProviderDialect::Responses,
             base_url: "https://example.com/v1".to_string(),
             api_key: "sk-test".to_string(),
             model: "gpt-test".to_string(),
@@ -4580,7 +4576,7 @@ X-Test = "1"
         let mut app = make_test_app().await;
         let saved = CustomProviderConfig {
             provider_id: "custom_1".to_string(),
-            wire_api: ApiProviderWireApi::Responses,
+            dialect: ApiProviderDialect::Responses,
             base_url: "https://example.com/v1".to_string(),
             api_key: "sk-test".to_string(),
             model: "gpt-test".to_string(),
@@ -4624,7 +4620,7 @@ X-Test = "1"
         let mut app = make_test_app().await;
         let initial = CustomProviderConfig {
             provider_id: "custom_1".to_string(),
-            wire_api: ApiProviderWireApi::Responses,
+            dialect: ApiProviderDialect::Responses,
             base_url: "https://example.com/v1".to_string(),
             api_key: "sk-old".to_string(),
             model: "gpt-test".to_string(),
@@ -4632,7 +4628,7 @@ X-Test = "1"
         };
         let saved = CustomProviderConfig {
             provider_id: "custom_1".to_string(),
-            wire_api: ApiProviderWireApi::Chat,
+            dialect: ApiProviderDialect::Chat,
             base_url: "https://example.com/chat".to_string(),
             api_key: "sk-new".to_string(),
             model: "gpt-test".to_string(),
@@ -4684,7 +4680,7 @@ X-Test = "1"
         let mut app = make_test_app().await;
         let initial = CustomProviderConfig {
             provider_id: "custom_1".to_string(),
-            wire_api: ApiProviderWireApi::Responses,
+            dialect: ApiProviderDialect::Responses,
             base_url: "https://example.com/v1".to_string(),
             api_key: "sk-old".to_string(),
             model: "gpt-test".to_string(),
@@ -4692,7 +4688,7 @@ X-Test = "1"
         };
         let saved = CustomProviderConfig {
             provider_id: "custom_2".to_string(),
-            wire_api: ApiProviderWireApi::Chat,
+            dialect: ApiProviderDialect::Chat,
             base_url: "https://example.com/chat".to_string(),
             api_key: "sk-new".to_string(),
             model: "gpt-other".to_string(),
@@ -4754,7 +4750,7 @@ X-Test = "1"
 
         let saved = CustomProviderConfig {
             provider_id: "custom_1".to_string(),
-            wire_api: ApiProviderWireApi::Responses,
+            dialect: ApiProviderDialect::Responses,
             base_url: "https://example.com/v1".to_string(),
             api_key: "sk-test".to_string(),
             model: "gpt-test".to_string(),
@@ -4790,13 +4786,13 @@ model_provider = "provider_a"
 [model_providers.provider_a]
 name = "provider_a"
 base_url = "https://example.com/a"
-wire_api = "chat"
+dialect = "chat"
 experimental_bearer_token = "sk-a"
 
 [model_providers.provider_b]
 name = "provider_b"
 base_url = "https://example.com/b"
-wire_api = "chat"
+dialect = "chat"
 experimental_bearer_token = "sk-b"
 
 [profiles.saved]
@@ -4885,13 +4881,13 @@ model_provider = "provider_a"
 [model_providers.provider_a]
 name = "provider_a"
 base_url = "https://example.com/a"
-wire_api = "chat"
+dialect = "chat"
 experimental_bearer_token = "sk-a"
 
 [model_providers.provider_b]
 name = "provider_b"
 base_url = "https://example.com/b"
-wire_api = "chat"
+dialect = "chat"
 experimental_bearer_token = "sk-b"
 
 [profiles.saved]
@@ -4989,13 +4985,13 @@ model_provider = "provider_a"
 [model_providers.provider_a]
 name = "provider_a"
 base_url = "https://example.com/a"
-wire_api = "chat"
+dialect = "chat"
 experimental_bearer_token = "sk-a"
 
 [model_providers.provider_b]
 name = "provider_b"
 base_url = "https://example.com/b"
-wire_api = "chat"
+dialect = "chat"
 experimental_bearer_token = "sk-b"
 
 [profiles.saved]
@@ -5075,13 +5071,13 @@ model_provider = "provider_a"
 [model_providers.provider_a]
 name = "provider_a"
 base_url = "https://example.com/a"
-wire_api = "chat"
+dialect = "chat"
 experimental_bearer_token = "sk-a"
 
 [model_providers.provider_b]
 name = "provider_b"
 base_url = "https://example.com/b"
-wire_api = "chat"
+dialect = "chat"
 experimental_bearer_token = "sk-b"
 
 [profiles.first]
@@ -5129,13 +5125,13 @@ model_provider = "provider_a"
 [model_providers.provider_a]
 name = "provider_a"
 base_url = "https://example.com/a"
-wire_api = "chat"
+dialect = "chat"
 experimental_bearer_token = "sk-a"
 
 [model_providers.provider_b]
 name = "provider_b"
 base_url = "https://example.com/b"
-wire_api = "chat"
+dialect = "chat"
 experimental_bearer_token = "sk-b"
 
 [profiles.first]
@@ -5193,7 +5189,7 @@ model_provider = "provider_a"
 [model_providers.provider_a]
 name = "provider_a"
 base_url = "https://example.com/a"
-wire_api = "chat"
+dialect = "chat"
 experimental_bearer_token = "sk-a"
 "#,
         )
@@ -5239,13 +5235,13 @@ model_provider = "provider_a"
 [model_providers.provider_a]
 name = "provider_a"
 base_url = "https://example.com/a"
-wire_api = "chat"
+dialect = "chat"
 experimental_bearer_token = "sk-a"
 
 [model_providers.provider_b]
 name = "provider_b"
 base_url = "https://example.com/b"
-wire_api = "chat"
+dialect = "chat"
 experimental_bearer_token = "sk-b"
 
 [profiles.saved]

@@ -3,6 +3,8 @@ use anyhow::anyhow;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::to_response;
+use codex_agent::features::FEATURES;
+use codex_agent::features::Feature;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -17,8 +19,6 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_core::features::FEATURES;
-use codex_core::features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -248,7 +248,7 @@ model_provider = "mock_provider"
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"
-wire_api = "responses"
+dialect = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#

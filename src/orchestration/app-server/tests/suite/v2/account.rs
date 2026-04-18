@@ -8,6 +8,7 @@ use app_test_support::ChatGptIdTokenClaims;
 use app_test_support::encode_id_token;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_models_cache;
+use codex_agent::auth::AuthCredentialsStoreMode;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::CancelLoginAccountParams;
@@ -28,7 +29,6 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStatus;
-use codex_core::auth::AuthCredentialsStoreMode;
 use codex_login::login_with_api_key;
 use codex_protocol::account::PlanType as AccountPlanType;
 use core_test_support::responses;
@@ -86,7 +86,7 @@ model_provider = "mock_provider"
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{base_url}"
-wire_api = "responses"
+dialect = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 {requires_line}

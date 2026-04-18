@@ -3,7 +3,7 @@ source: src/harness/tui/src/chatwidget/tests.rs
 expression: rendered
 ---
 • Waiting for background terminal (0s • esc to …
-  └ cargo test -p codex-core -- --exact
+  └ cargo test -p codex-agent -- --exact
 
 
 › Ask Codex to do anything

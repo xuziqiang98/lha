@@ -2,6 +2,7 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
 use app_test_support::to_response;
+use codex_agent::protocol::EventMsg;
 use codex_app_server_protocol::ForkConversationParams;
 use codex_app_server_protocol::ForkConversationResponse;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -10,7 +11,6 @@ use codex_app_server_protocol::NewConversationParams; // reused for overrides sh
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionConfiguredNotification;
-use codex_core::protocol::EventMsg;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;

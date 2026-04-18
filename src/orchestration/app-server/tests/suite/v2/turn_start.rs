@@ -8,6 +8,9 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
+use codex_agent::features::FEATURES;
+use codex_agent::features::Feature;
+use codex_agent::protocol_config_types::ReasoningSummary;
 use codex_app_server_protocol::ByteRange;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
@@ -34,9 +37,6 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_core::features::FEATURES;
-use codex_core::features::Feature;
-use codex_core::protocol_config_types::ReasoningSummary;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
@@ -743,7 +743,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     // Approve and wait for task completion
     mcp.send_response(
         request_id,
-        serde_json::json!({ "decision": codex_core::protocol::ReviewDecision::Approved }),
+        serde_json::json!({ "decision": codex_agent::protocol::ReviewDecision::Approved }),
     )
     .await?;
     timeout(
@@ -1786,7 +1786,7 @@ model_provider = "mock_provider"
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"
-wire_api = "responses"
+dialect = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#

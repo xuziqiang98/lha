@@ -30,7 +30,7 @@ async fn get_user_agent_returns_current_codex_user_agent() -> Result<()> {
     let os_type = os_info.os_type();
     let os_version = os_info.version();
     let architecture = os_info.architecture().unwrap_or("unknown");
-    let terminal_ua = codex_core::terminal::user_agent();
+    let terminal_ua = codex_agent::terminal::user_agent();
     let user_agent = format!(
         "{originator}/{} ({os_type} {os_version}; {architecture}) {terminal_ua} ({DEFAULT_CLIENT_NAME}; 0.1.0)",
         env!("CARGO_PKG_VERSION")

@@ -7,7 +7,7 @@ use crate::provider::WireApi;
 use crate::telemetry::run_with_request_telemetry;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ConversationItem;
 use http::HeaderMap;
 use http::Method;
 use serde::Deserialize;
@@ -49,7 +49,7 @@ impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
         &self,
         body: serde_json::Value,
         extra_headers: HeaderMap,
-    ) -> Result<Vec<ResponseItem>, ApiError> {
+    ) -> Result<Vec<ConversationItem>, ApiError> {
         let path = self.path()?;
         let builder = || {
             let mut req = self.provider.build_request(Method::POST, path);
@@ -74,7 +74,7 @@ impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
         &self,
         input: &CompactionInput<'_>,
         extra_headers: HeaderMap,
-    ) -> Result<Vec<ResponseItem>, ApiError> {
+    ) -> Result<Vec<ConversationItem>, ApiError> {
         let body = to_value(input)
             .map_err(|e| ApiError::Stream(format!("failed to encode compaction input: {e}")))?;
         self.compact(body, extra_headers).await
@@ -83,7 +83,7 @@ impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
 
 #[derive(Debug, Deserialize)]
 struct CompactHistoryResponse {
-    output: Vec<ResponseItem>,
+    output: Vec<ConversationItem>,
 }
 
 #[cfg(test)]

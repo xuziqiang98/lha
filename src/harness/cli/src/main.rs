@@ -37,13 +37,13 @@ mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
 
-use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
-use codex_core::config::edit::ConfigEditsBuilder;
-use codex_core::config::find_codex_home;
-use codex_core::features::Stage;
-use codex_core::features::is_known_feature_key;
-use codex_core::terminal::TerminalName;
+use codex_agent::config::Config;
+use codex_agent::config::ConfigOverrides;
+use codex_agent::config::edit::ConfigEditsBuilder;
+use codex_agent::config::find_codex_home;
+use codex_agent::features::Stage;
+use codex_agent::features::is_known_feature_key;
+use codex_agent::terminal::TerminalName;
 
 /// Codex CLI
 ///
@@ -333,11 +333,11 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
 
     let mut lines = vec![format!(
         "{}",
-        codex_core::protocol::FinalOutput::from(token_usage)
+        codex_agent::protocol::FinalOutput::from(token_usage)
     )];
 
     if let Some(resume_cmd) =
-        codex_core::util::resume_command(thread_name.as_deref(), conversation_id)
+        codex_agent::util::resume_command(thread_name.as_deref(), conversation_id)
     {
         let command = if color_enabled {
             resume_cmd.cyan().to_string()
@@ -465,8 +465,8 @@ struct FeatureSetArgs {
     feature: String,
 }
 
-fn stage_str(stage: codex_core::features::Stage) -> &'static str {
-    use codex_core::features::Stage;
+fn stage_str(stage: codex_agent::features::Stage) -> &'static str {
+    use codex_agent::features::Stage;
     match stage {
         Stage::UnderDevelopment => "under development",
         Stage::Experimental { .. } => "experimental",
@@ -533,7 +533,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 codex_app_server::run_main(
                     codex_linux_sandbox_exe,
                     root_config_overrides,
-                    codex_core::config_loader::LoaderOverrides::default(),
+                    codex_agent::config_loader::LoaderOverrides::default(),
                     app_server_cli.analytics_default_enabled,
                 )
                 .await?;
@@ -710,10 +710,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     overrides,
                 )
                 .await?;
-                let mut rows = Vec::with_capacity(codex_core::features::FEATURES.len());
+                let mut rows = Vec::with_capacity(codex_agent::features::FEATURES.len());
                 let mut name_width = 0;
                 let mut stage_width = 0;
-                for def in codex_core::features::FEATURES.iter() {
+                for def in codex_agent::features::FEATURES.iter() {
                     let name = def.key;
                     let stage = stage_str(def.stage);
                     let enabled = config.features.enabled(def.id);
@@ -772,7 +772,7 @@ fn maybe_print_under_development_feature_warning(
         return;
     }
 
-    let Some(spec) = codex_core::features::FEATURES
+    let Some(spec) = codex_agent::features::FEATURES
         .iter()
         .find(|spec| spec.key == feature)
     else {
@@ -782,7 +782,7 @@ fn maybe_print_under_development_feature_warning(
         return;
     }
 
-    let config_path = codex_home.join(codex_core::config::CONFIG_TOML_FILE);
+    let config_path = codex_home.join(codex_agent::config::CONFIG_TOML_FILE);
     eprintln!(
         "Under-development features enabled: {feature}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {}.",
         config_path.display()
@@ -809,7 +809,7 @@ async fn run_interactive_tui(
         interactive.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));
     }
 
-    let terminal_info = codex_core::terminal::terminal_info();
+    let terminal_info = codex_agent::terminal::terminal_info();
     if terminal_info.name == TerminalName::Dumb {
         if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
             return Ok(AppExitInfo::fatal(
@@ -949,7 +949,7 @@ fn print_completion(cmd: CompletionCommand) {
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
-    use codex_core::protocol::TokenUsage;
+    use codex_agent::protocol::TokenUsage;
     use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
 

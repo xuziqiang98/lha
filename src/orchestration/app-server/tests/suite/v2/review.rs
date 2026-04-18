@@ -313,7 +313,7 @@ model_provider = "mock_provider"
 [model_providers.mock_provider]
 name = "Mock provider"
 base_url = "{server_uri}/v1"
-wire_api = "responses"
+dialect = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#

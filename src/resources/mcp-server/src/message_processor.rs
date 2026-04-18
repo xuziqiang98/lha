@@ -10,12 +10,12 @@ use crate::outgoing_message::OutgoingMessageSender;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 
-use codex_core::AuthManager;
-use codex_core::ThreadManager;
-use codex_core::config::Config;
-use codex_core::default_client::USER_AGENT_SUFFIX;
-use codex_core::default_client::get_codex_user_agent;
-use codex_core::protocol::Submission;
+use codex_agent::AuthManager;
+use codex_agent::ThreadManager;
+use codex_agent::config::Config;
+use codex_agent::default_client::USER_AGENT_SUFFIX;
+use codex_agent::default_client::get_codex_user_agent;
+use codex_agent::protocol::Submission;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
 use mcp_types::ClientRequest as McpClientRequest;
@@ -585,7 +585,7 @@ impl MessageProcessor {
         let err = codex_arc
             .submit_with_id(Submission {
                 id: request_id_string,
-                op: codex_core::protocol::Op::Interrupt,
+                op: codex_agent::protocol::Op::Interrupt,
             })
             .await;
         if let Err(e) = err {

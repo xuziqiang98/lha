@@ -25,7 +25,7 @@ codex-arg0 = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-cloud-tasks = { path = "../../orchestration/cloud-tasks" }
 codex-common = { workspace = true, features = ["cli"] }
-codex-core = { workspace = true }
+codex-agent = { workspace = true }
 codex-exec = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-login = { workspace = true }

@@ -6,7 +6,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ConversationItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::AskForApproval;
@@ -156,7 +156,7 @@ pub struct ListConversationsResponse {
 pub struct ResumeConversationParams {
     pub path: Option<PathBuf>,
     pub conversation_id: Option<ThreadId>,
-    pub history: Option<Vec<ResponseItem>>,
+    pub history: Option<Vec<ConversationItem>>,
     pub overrides: Option<NewConversationParams>,
 }
 
@@ -219,8 +219,8 @@ pub struct GitDiffToRemoteResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ApplyPatchApprovalParams {
     pub conversation_id: ThreadId,
-    /// Use to correlate this with [codex_core::protocol::PatchApplyBeginEvent]
-    /// and [codex_core::protocol::PatchApplyEndEvent].
+    /// Use to correlate this with [codex_agent::protocol::PatchApplyBeginEvent]
+    /// and [codex_agent::protocol::PatchApplyEndEvent].
     pub call_id: String,
     pub file_changes: HashMap<PathBuf, FileChange>,
     /// Optional explanatory reason (e.g. request for extra write access).
@@ -240,8 +240,8 @@ pub struct ApplyPatchApprovalResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ExecCommandApprovalParams {
     pub conversation_id: ThreadId,
-    /// Use to correlate this with [codex_core::protocol::ExecCommandBeginEvent]
-    /// and [codex_core::protocol::ExecCommandEndEvent].
+    /// Use to correlate this with [codex_agent::protocol::ExecCommandBeginEvent]
+    /// and [codex_agent::protocol::ExecCommandEndEvent].
     pub call_id: String,
     pub command: Vec<String>,
     pub cwd: PathBuf,

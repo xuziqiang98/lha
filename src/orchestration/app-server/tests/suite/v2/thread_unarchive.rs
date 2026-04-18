@@ -1,6 +1,8 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
+use codex_agent::find_archived_thread_path_by_id_str;
+use codex_agent::find_thread_path_by_id_str;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadArchiveParams;
@@ -9,8 +11,6 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
-use codex_core::find_archived_thread_path_by_id_str;
-use codex_core::find_thread_path_by_id_str;
 use std::fs::FileTimes;
 use std::fs::OpenOptions;
 use std::path::Path;

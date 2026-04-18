@@ -8,7 +8,7 @@ use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
 use codex_client::StreamResponse;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ConversationItem;
 use codex_protocol::protocol::TokenUsage;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
@@ -143,7 +143,7 @@ pub async fn process_messages_sse(
     telemetry: Option<Arc<dyn SseTelemetry>>,
 ) {
     let mut stream = stream.eventsource();
-    let mut assistant_item: Option<ResponseItem> = None;
+    let mut assistant_item: Option<ConversationItem> = None;
     let mut assistant_item_id: Option<String> = None;
     let mut tool_uses: HashMap<usize, ToolUseState> = HashMap::new();
     let mut usage_state = UsageState::default();
@@ -301,7 +301,7 @@ pub async fn process_messages_sse(
 
                 let _ = tx_event
                     .send(Ok(ResponseEvent::OutputItemDone(
-                        ResponseItem::FunctionCall {
+                        ConversationItem::FunctionCall {
                             id: None,
                             name,
                             arguments: input_json,
@@ -377,13 +377,13 @@ pub async fn process_messages_sse(
 
 async fn append_assistant_text(
     tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
-    assistant_item: &mut Option<ResponseItem>,
+    assistant_item: &mut Option<ConversationItem>,
     assistant_plan_parser: &mut Option<ProposedPlanParser>,
     assistant_item_id: String,
     text: String,
 ) {
     if assistant_item.is_none() {
-        let item = ResponseItem::Message {
+        let item = ConversationItem::Message {
             id: Some(assistant_item_id),
             role: "assistant".to_string(),
             content: vec![],
@@ -398,7 +398,7 @@ async fn append_assistant_text(
     let parser = assistant_plan_parser.get_or_insert_with(ProposedPlanParser::new);
     emit_plan_deltas(tx_event, parser.parse(&text)).await;
 
-    if let Some(ResponseItem::Message { content, .. }) = assistant_item {
+    if let Some(ConversationItem::Message { content, .. }) = assistant_item {
         if let Some(ContentItem::OutputText {
             text: aggregated_text,
         }) = content.last_mut()
@@ -429,14 +429,14 @@ async fn emit_plan_deltas(
 async fn emit_buffered_plan_events(
     tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
     assistant_plan_parser: &mut Option<ProposedPlanParser>,
-    assistant: &ResponseItem,
+    assistant: &ConversationItem,
 ) {
     if let Some(parser) = assistant_plan_parser.as_mut() {
         emit_plan_deltas(tx_event, parser.finish()).await;
     }
     *assistant_plan_parser = None;
 
-    if let ResponseItem::Message { content, .. } = assistant {
+    if let ConversationItem::Message { content, .. } = assistant {
         let mut text = String::new();
         for entry in content {
             if let ContentItem::OutputText { text: chunk } = entry {
@@ -504,11 +504,11 @@ mod tests {
         assert!(matches!(events[2], ResponseEvent::OutputTextDelta(_)));
         assert!(matches!(
             events[3],
-            ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { .. })
+            ResponseEvent::OutputItemDone(ConversationItem::FunctionCall { .. })
         ));
         assert!(matches!(
             events[4],
-            ResponseEvent::OutputItemDone(ResponseItem::Message { .. })
+            ResponseEvent::OutputItemDone(ConversationItem::Message { .. })
         ));
         assert!(matches!(events[5], ResponseEvent::Completed { .. }));
     }
@@ -555,14 +555,14 @@ mod tests {
         assert!(matches!(events[2], ResponseEvent::OutputTextDelta(ref delta) if delta == "Hello"));
         assert!(matches!(events[4], ResponseEvent::Completed { .. }));
 
-        let ResponseEvent::OutputItemAdded(ResponseItem::Message {
+        let ResponseEvent::OutputItemAdded(ConversationItem::Message {
             id: Some(added_id), ..
         }) = &events[1]
         else {
             panic!("unexpected added event: {:?}", events[1]);
         };
 
-        let ResponseEvent::OutputItemDone(ResponseItem::Message {
+        let ResponseEvent::OutputItemDone(ConversationItem::Message {
             id: Some(completed_id),
             ..
         }) = &events[3]
@@ -573,7 +573,7 @@ mod tests {
         assert_eq!(added_id, "msg_1");
         assert_eq!(completed_id, "msg_1");
 
-        let ResponseEvent::OutputItemDone(ResponseItem::Message { content, .. }) = &events[3]
+        let ResponseEvent::OutputItemDone(ConversationItem::Message { content, .. }) = &events[3]
         else {
             panic!("unexpected completed event: {:?}", events[3]);
         };
@@ -613,7 +613,7 @@ mod tests {
         assert!(matches!(events[0], ResponseEvent::Created));
         assert!(matches!(
             &events[1],
-            ResponseEvent::OutputItemAdded(ResponseItem::Message {
+            ResponseEvent::OutputItemAdded(ConversationItem::Message {
                 id: Some(id),
                 role,
                 content,
@@ -633,7 +633,7 @@ mod tests {
             ResponseEvent::OutputTextDelta(delta) if delta == "I help you today?"
         ));
 
-        let ResponseEvent::OutputItemDone(ResponseItem::Message {
+        let ResponseEvent::OutputItemDone(ConversationItem::Message {
             id: Some(id),
             role,
             content,
@@ -679,14 +679,14 @@ mod tests {
             events.push(event.expect("event should succeed"));
         }
 
-        let ResponseEvent::OutputItemAdded(ResponseItem::Message {
+        let ResponseEvent::OutputItemAdded(ConversationItem::Message {
             id: Some(added_id), ..
         }) = &events[1]
         else {
             panic!("unexpected added event: {:?}", events[1]);
         };
 
-        let ResponseEvent::OutputItemDone(ResponseItem::Message {
+        let ResponseEvent::OutputItemDone(ConversationItem::Message {
             id: Some(completed_id),
             ..
         }) = &events[3]

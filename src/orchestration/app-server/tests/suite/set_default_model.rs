@@ -1,6 +1,7 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
+use codex_agent::config::ConfigToml;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -11,7 +12,6 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_core::config::ConfigToml;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use std::path::Path;
@@ -101,7 +101,7 @@ model_provider = "iie"
 [model_providers.iie]
 name = "iie"
 base_url = "https://example.com/iie"
-wire_api = "responses"
+dialect = "responses"
 experimental_bearer_token = "sk-test"
 "#,
     )?;
@@ -446,13 +446,13 @@ model_provider = "provider_a"
 [model_providers.provider_a]
 name = "provider_a"
 base_url = "https://example.com/a"
-wire_api = "chat"
+dialect = "chat"
 experimental_bearer_token = "sk-a"
 
 [model_providers.provider_b]
 name = "provider_b"
 base_url = "https://example.com/b"
-wire_api = "chat"
+dialect = "chat"
 experimental_bearer_token = "sk-b"
 
 [profiles.deepseek]
@@ -473,7 +473,7 @@ model_reasoning_effort = "medium"
 [model_providers.iie]
 name = "iie"
 base_url = "https://example.com/iie"
-wire_api = "responses"
+dialect = "responses"
 experimental_bearer_token = "sk-test"
 "#,
     )
@@ -496,7 +496,7 @@ sandbox_mode = "read-only"
 [model_providers.i9vc.variants.responses]
 name = "i9vc"
 base_url = "{server_uri}/v1"
-wire_api = "responses"
+dialect = "responses"
 experimental_bearer_token = "sk-responses"
 request_max_retries = 0
 stream_max_retries = 0
@@ -504,7 +504,7 @@ stream_max_retries = 0
 [model_providers.i9vc.variants.messages]
 name = "i9vc"
 base_url = "{server_uri}/v1"
-wire_api = "messages"
+dialect = "messages"
 experimental_bearer_token = "sk-messages"
 request_max_retries = 0
 stream_max_retries = 0
@@ -512,7 +512,7 @@ stream_max_retries = 0
 [model_providers.other_provider]
 name = "other_provider"
 base_url = "{server_uri}/v1"
-wire_api = "responses"
+dialect = "responses"
 experimental_bearer_token = "sk-other"
 request_max_retries = 0
 stream_max_retries = 0
@@ -541,7 +541,7 @@ sandbox_mode = "read-only"
 [model_providers.i9vc.variants.responses]
 name = "i9vc"
 base_url = "{server_uri}/v1"
-wire_api = "responses"
+dialect = "responses"
 experimental_bearer_token = "sk-responses"
 request_max_retries = 0
 stream_max_retries = 0
@@ -549,7 +549,7 @@ stream_max_retries = 0
 [model_providers.i9vc.variants.messages]
 name = "i9vc"
 base_url = "{server_uri}/v1"
-wire_api = "messages"
+dialect = "messages"
 experimental_bearer_token = "sk-messages"
 request_max_retries = 0
 stream_max_retries = 0

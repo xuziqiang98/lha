@@ -5,6 +5,10 @@ use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell;
 use app_test_support::to_response;
+use codex_agent::protocol::AskForApproval;
+use codex_agent::protocol::SandboxPolicy;
+use codex_agent::protocol_config_types::ReasoningSummary;
+use codex_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
 use codex_app_server_protocol::ExecCommandApprovalParams;
@@ -21,10 +25,6 @@ use codex_app_server_protocol::SendUserMessageResponse;
 use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::SendUserTurnResponse;
 use codex_app_server_protocol::ServerRequest;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol_config_types::ReasoningSummary;
-use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::parse_command::ParsedCommand;
@@ -310,7 +310,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     // Approve so the first turn can complete
     mcp.send_response(
         request_id,
-        serde_json::json!({ "decision": codex_core::protocol::ReviewDecision::Approved }),
+        serde_json::json!({ "decision": codex_agent::protocol::ReviewDecision::Approved }),
     )
     .await?;
 
@@ -534,7 +534,7 @@ model_provider = "mock_provider"
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"
-wire_api = "responses"
+dialect = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#

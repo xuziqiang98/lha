@@ -1,41 +1,41 @@
+use codex_agent::config::Config;
+use codex_agent::protocol::AgentMessageEvent;
+use codex_agent::protocol::AgentReasoningRawContentEvent;
+use codex_agent::protocol::AgentStatus;
+use codex_agent::protocol::BackgroundEventEvent;
+use codex_agent::protocol::CollabAgentInteractionBeginEvent;
+use codex_agent::protocol::CollabAgentInteractionEndEvent;
+use codex_agent::protocol::CollabAgentSpawnBeginEvent;
+use codex_agent::protocol::CollabAgentSpawnEndEvent;
+use codex_agent::protocol::CollabCloseBeginEvent;
+use codex_agent::protocol::CollabCloseEndEvent;
+use codex_agent::protocol::CollabResumeBeginEvent;
+use codex_agent::protocol::CollabResumeEndEvent;
+use codex_agent::protocol::CollabWaitingBeginEvent;
+use codex_agent::protocol::CollabWaitingEndEvent;
+use codex_agent::protocol::DeprecationNoticeEvent;
+use codex_agent::protocol::ErrorEvent;
+use codex_agent::protocol::Event;
+use codex_agent::protocol::EventMsg;
+use codex_agent::protocol::ExecCommandBeginEvent;
+use codex_agent::protocol::ExecCommandEndEvent;
+use codex_agent::protocol::FileChange;
+use codex_agent::protocol::ItemCompletedEvent;
+use codex_agent::protocol::McpInvocation;
+use codex_agent::protocol::McpToolCallBeginEvent;
+use codex_agent::protocol::McpToolCallEndEvent;
+use codex_agent::protocol::PatchApplyBeginEvent;
+use codex_agent::protocol::PatchApplyEndEvent;
+use codex_agent::protocol::SessionConfiguredEvent;
+use codex_agent::protocol::StreamErrorEvent;
+use codex_agent::protocol::TurnAbortReason;
+use codex_agent::protocol::TurnCompleteEvent;
+use codex_agent::protocol::TurnDiffEvent;
+use codex_agent::protocol::WarningEvent;
+use codex_agent::protocol::WebSearchEndEvent;
+use codex_agent::web_search::web_search_detail;
 use codex_common::elapsed::format_duration;
 use codex_common::elapsed::format_elapsed;
-use codex_core::config::Config;
-use codex_core::protocol::AgentMessageEvent;
-use codex_core::protocol::AgentReasoningRawContentEvent;
-use codex_core::protocol::AgentStatus;
-use codex_core::protocol::BackgroundEventEvent;
-use codex_core::protocol::CollabAgentInteractionBeginEvent;
-use codex_core::protocol::CollabAgentInteractionEndEvent;
-use codex_core::protocol::CollabAgentSpawnBeginEvent;
-use codex_core::protocol::CollabAgentSpawnEndEvent;
-use codex_core::protocol::CollabCloseBeginEvent;
-use codex_core::protocol::CollabCloseEndEvent;
-use codex_core::protocol::CollabResumeBeginEvent;
-use codex_core::protocol::CollabResumeEndEvent;
-use codex_core::protocol::CollabWaitingBeginEvent;
-use codex_core::protocol::CollabWaitingEndEvent;
-use codex_core::protocol::DeprecationNoticeEvent;
-use codex_core::protocol::ErrorEvent;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecCommandBeginEvent;
-use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::ItemCompletedEvent;
-use codex_core::protocol::McpInvocation;
-use codex_core::protocol::McpToolCallBeginEvent;
-use codex_core::protocol::McpToolCallEndEvent;
-use codex_core::protocol::PatchApplyBeginEvent;
-use codex_core::protocol::PatchApplyEndEvent;
-use codex_core::protocol::SessionConfiguredEvent;
-use codex_core::protocol::StreamErrorEvent;
-use codex_core::protocol::TurnAbortReason;
-use codex_core::protocol::TurnCompleteEvent;
-use codex_core::protocol::TurnDiffEvent;
-use codex_core::protocol::WarningEvent;
-use codex_core::protocol::WebSearchEndEvent;
-use codex_core::web_search::web_search_detail;
 use codex_protocol::items::TurnItem;
 use codex_protocol::num_format::format_with_separators;
 use owo_colors::OwoColorize;
@@ -75,7 +75,7 @@ pub(crate) struct EventProcessorWithHumanOutput {
     show_agent_reasoning: bool,
     show_raw_agent_reasoning: bool,
     last_message_path: Option<PathBuf>,
-    last_total_token_usage: Option<codex_core::protocol::TokenUsageInfo>,
+    last_total_token_usage: Option<codex_agent::protocol::TokenUsageInfo>,
     final_message: Option<String>,
     last_proposed_plan: Option<String>,
 }
@@ -202,10 +202,10 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             EventMsg::McpStartupUpdate(update) => {
                 let status_text = match update.status {
-                    codex_core::protocol::McpStartupStatus::Starting => "starting".to_string(),
-                    codex_core::protocol::McpStartupStatus::Ready => "ready".to_string(),
-                    codex_core::protocol::McpStartupStatus::Cancelled => "cancelled".to_string(),
-                    codex_core::protocol::McpStartupStatus::Failed { ref error } => {
+                    codex_agent::protocol::McpStartupStatus::Starting => "starting".to_string(),
+                    codex_agent::protocol::McpStartupStatus::Ready => "ready".to_string(),
+                    codex_agent::protocol::McpStartupStatus::Cancelled => "cancelled".to_string(),
+                    codex_agent::protocol::McpStartupStatus::Failed { ref error } => {
                         format!("failed: {error}")
                     }
                 };
@@ -817,7 +817,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::McpListToolsResponse(_)
             | EventMsg::ListCustomPromptsResponse(_)
             | EventMsg::ListSkillsResponse(_)
-            | EventMsg::RawResponseItem(_)
+            | EventMsg::RawConversationItem(_)
             | EventMsg::UserMessage(_)
             | EventMsg::EnteredReviewMode(_)
             | EventMsg::ExitedReviewMode(_)

@@ -34,7 +34,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ConversationItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
@@ -66,12 +66,11 @@ use crate::config::LlmRuntimeConfig;
 use crate::prompt::Prompt;
 use crate::prompt::ResponseEvent;
 use crate::prompt::ResponseStream;
-use crate::provider::ModelProviderInfo;
-use crate::provider::WireApi;
+use crate::provider::RuntimeEndpoint;
 use crate::tool_json::create_tools_json_for_chat_completions_api;
 use crate::tool_json::create_tools_json_for_messages_api;
 use crate::tool_json::create_tools_json_for_responses_api;
-use crate::transport::TransportManager;
+use crate::transport::StreamingPreference;
 
 pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
@@ -85,12 +84,12 @@ struct LlmClientState {
     model_info: ModelInfo,
     chat_role_compatibility: Option<ChatRoleCompatibilityHandle>,
     otel_manager: OtelManager,
-    provider: ModelProviderInfo,
+    endpoint: RuntimeEndpoint,
     conversation_id: ThreadId,
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
     session_source: SessionSource,
-    transport_manager: TransportManager,
+    streaming_preference: StreamingPreference,
 }
 
 #[derive(Clone)]
@@ -101,8 +100,8 @@ pub struct LlmClient {
 pub struct LlmClientSession {
     state: Arc<LlmClientState>,
     connection: Option<ApiWebSocketConnection>,
-    websocket_last_items: Vec<ResponseItem>,
-    transport_manager: TransportManager,
+    websocket_last_items: Vec<ConversationItem>,
+    streaming_preference: StreamingPreference,
     turn_state: Arc<OnceLock<String>>,
 }
 
@@ -115,12 +114,12 @@ impl LlmClient {
         model_info: ModelInfo,
         chat_role_compatibility: Option<ChatRoleCompatibilityHandle>,
         otel_manager: OtelManager,
-        provider: ModelProviderInfo,
+        endpoint: RuntimeEndpoint,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         conversation_id: ThreadId,
         session_source: SessionSource,
-        transport_manager: TransportManager,
+        streaming_preference: StreamingPreference,
     ) -> Self {
         Self {
             state: Arc::new(LlmClientState {
@@ -130,12 +129,12 @@ impl LlmClient {
                 model_info,
                 chat_role_compatibility,
                 otel_manager,
-                provider,
+                endpoint,
                 conversation_id,
                 effort,
                 summary,
                 session_source,
-                transport_manager,
+                streaming_preference,
             }),
         }
     }
@@ -145,20 +144,20 @@ impl LlmClient {
             state: Arc::clone(&self.state),
             connection: None,
             websocket_last_items: Vec::new(),
-            transport_manager: self.state.transport_manager.clone(),
+            streaming_preference: self.state.streaming_preference.clone(),
             turn_state: Arc::new(OnceLock::new()),
         }
     }
 
     pub fn estimated_input_tokens_for_prompt(&self, prompt: &Prompt) -> Option<i64> {
-        if self.state.provider.wire_api != WireApi::Chat {
+        if !self.state.endpoint.uses_chat_completions_api() {
             return None;
         }
 
         let instructions = prompt.base_instructions.text.clone();
         let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools).ok()?;
         let api_prompt = build_api_prompt(prompt, instructions, tools_json);
-        let api_provider = self.state.provider.to_api_provider(false).ok()?;
+        let api_provider = self.state.endpoint.to_api_provider(false).ok()?;
         let handling = self.developer_role_handling();
         let request = ApiChatRequestBuilder::new(
             &self.state.model_info.slug,
@@ -175,14 +174,17 @@ impl LlmClient {
         Some(estimate_chat_input_tokens_from_request_body(&request.body))
     }
 
-    pub async fn compact_conversation_history(&self, prompt: &Prompt) -> Result<Vec<ResponseItem>> {
+    pub async fn compact_conversation_history(
+        &self,
+        prompt: &Prompt,
+    ) -> Result<Vec<ConversationItem>> {
         if prompt.input.is_empty() {
             return Ok(Vec::new());
         }
         let auth = self.state.auth_source.current_auth().await?;
         let api_provider = self
             .state
-            .provider
+            .endpoint
             .to_api_provider(auth.as_ref().is_some_and(|auth| auth.use_chatgpt_base_url))?;
         let api_auth = auth_provider_from_context(auth);
         let transport = ReqwestTransport::new(self.state.http_client.clone());
@@ -248,50 +250,49 @@ impl LlmClient {
 
 impl LlmClientSession {
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
-        match self.state.provider.wire_api {
-            WireApi::Responses => {
-                let websocket_enabled = self.responses_websocket_enabled()
-                    && !self.transport_manager.disable_websockets();
+        if self.state.endpoint.uses_responses_api() {
+            let realtime_streaming_enabled = self.responses_websocket_enabled()
+                && !self.streaming_preference.prefers_http_streaming();
 
-                if websocket_enabled {
-                    self.stream_responses_websocket(prompt).await
-                } else {
-                    self.stream_responses_api(prompt).await
-                }
+            if realtime_streaming_enabled {
+                return self.stream_responses_websocket(prompt).await;
             }
-            WireApi::Chat => {
-                let (api_stream, estimated_input_tokens) =
-                    self.stream_chat_completions(prompt).await?;
 
-                if self.state.runtime_config.show_raw_agent_reasoning {
-                    Ok(map_chat_response_stream(
-                        api_stream.streaming_mode(),
-                        self.state.otel_manager.clone(),
-                        estimated_input_tokens,
-                    ))
-                } else {
-                    Ok(map_chat_response_stream(
-                        api_stream.aggregate(),
-                        self.state.otel_manager.clone(),
-                        estimated_input_tokens,
-                    ))
-                }
-            }
-            WireApi::Messages => self.stream_messages_api(prompt).await,
+            return self.stream_responses_api(prompt).await;
         }
+
+        if self.state.endpoint.uses_chat_completions_api() {
+            let (api_stream, estimated_input_tokens) = self.stream_chat_completions(prompt).await?;
+
+            return if self.state.runtime_config.show_raw_agent_reasoning {
+                Ok(map_chat_response_stream(
+                    api_stream.streaming_mode(),
+                    self.state.otel_manager.clone(),
+                    estimated_input_tokens,
+                ))
+            } else {
+                Ok(map_chat_response_stream(
+                    api_stream.aggregate(),
+                    self.state.otel_manager.clone(),
+                    estimated_input_tokens,
+                ))
+            };
+        }
+
+        self.stream_messages_api(prompt).await
     }
 
-    pub fn try_switch_fallback_transport(&mut self) -> bool {
-        let websocket_enabled = self.responses_websocket_enabled();
+    pub(crate) fn try_switch_fallback_transport(&mut self) -> bool {
+        let realtime_streaming_enabled = self.responses_websocket_enabled();
         let activated = self
-            .transport_manager
-            .activate_http_fallback(websocket_enabled);
+            .streaming_preference
+            .prefer_http_fallback(realtime_streaming_enabled);
         if activated {
             warn!("falling back to HTTP");
             self.state.otel_manager.counter(
                 "codex.transport.fallback_to_http",
                 1,
-                &[("from_wire_api", "responses_websocket")],
+                &[("from_dialect", "responses_websocket")],
             );
 
             self.connection = None;
@@ -343,8 +344,7 @@ impl LlmClientSession {
     }
 
     fn responses_websocket_enabled(&self) -> bool {
-        self.state.provider.supports_websockets
-            && self.state.runtime_config.responses_websockets_enabled
+        self.state.endpoint.supports_realtime_turn_streaming()
     }
 
     fn build_responses_request(&self, prompt: &Prompt) -> Result<ApiPrompt> {
@@ -420,7 +420,10 @@ impl LlmClientSession {
         }
     }
 
-    fn get_incremental_items(&self, input_items: &[ResponseItem]) -> Option<Vec<ResponseItem>> {
+    fn get_incremental_items(
+        &self,
+        input_items: &[ConversationItem],
+    ) -> Option<Vec<ConversationItem>> {
         let previous_len = self.websocket_last_items.len();
         let can_append = previous_len > 0
             && input_items.starts_with(&self.websocket_last_items)
@@ -502,7 +505,7 @@ impl LlmClientSession {
     }
 
     fn responses_request_compression(&self, auth: Option<&AuthContext>) -> Compression {
-        if auth.is_some_and(|auth| auth.use_chatgpt_base_url) && self.state.provider.is_openai() {
+        if auth.is_some_and(|auth| auth.use_chatgpt_base_url) && self.state.endpoint.is_openai() {
             Compression::Zstd
         } else {
             Compression::None
@@ -528,7 +531,7 @@ impl LlmClientSession {
             let auth = self.state.auth_source.current_auth().await?;
             let api_provider = self
                 .state
-                .provider
+                .endpoint
                 .to_api_provider(auth.as_ref().is_some_and(|auth| auth.use_chatgpt_base_url))?;
             let api_auth = auth_provider_from_context(auth.clone());
             let request_provider = api_provider.clone();
@@ -611,7 +614,7 @@ impl LlmClientSession {
             let auth = self.state.auth_source.current_auth().await?;
             let api_provider = self
                 .state
-                .provider
+                .endpoint
                 .to_api_provider(auth.as_ref().is_some_and(|auth| auth.use_chatgpt_base_url))?;
             let api_auth = auth_provider_from_context(auth);
             let transport = ReqwestTransport::new(self.state.http_client.clone());
@@ -647,7 +650,7 @@ impl LlmClientSession {
         if let Some(path) = &self.state.runtime_config.sse_fixture_path {
             warn!(path, "Streaming from fixture");
             let stream =
-                codex_api::stream_from_fixture(path, self.state.provider.stream_idle_timeout())?;
+                codex_api::stream_from_fixture(path, self.state.endpoint.stream_idle_timeout())?;
             return Ok(map_response_stream(stream, self.state.otel_manager.clone()));
         }
 
@@ -657,7 +660,7 @@ impl LlmClientSession {
             let auth = self.state.auth_source.current_auth().await?;
             let api_provider = self
                 .state
-                .provider
+                .endpoint
                 .to_api_provider(auth.as_ref().is_some_and(|auth| auth.use_chatgpt_base_url))?;
             let api_auth = auth_provider_from_context(auth.clone());
             let transport = ReqwestTransport::new(self.state.http_client.clone());
@@ -694,7 +697,7 @@ impl LlmClientSession {
             let auth = self.state.auth_source.current_auth().await?;
             let api_provider = self
                 .state
-                .provider
+                .endpoint
                 .to_api_provider(auth.as_ref().is_some_and(|auth| auth.use_chatgpt_base_url))?;
             let api_auth = auth_provider_from_context(auth.clone());
             let compression = self.responses_request_compression(auth.as_ref());
@@ -798,11 +801,11 @@ fn build_chat_request(
         .map_err(Into::into)
 }
 
-fn prompt_contains_developer_message(input: &[ResponseItem]) -> bool {
+fn prompt_contains_developer_message(input: &[ConversationItem]) -> bool {
     input.iter().any(|item| {
         matches!(
             item,
-            ResponseItem::Message { role, .. } if role == "developer"
+            ConversationItem::Message { role, .. } if role == "developer"
         )
     })
 }
@@ -1123,9 +1126,9 @@ fn estimate_chat_semantic_value_chars(value: &Value) -> usize {
     }
 }
 
-fn estimate_chat_output_tokens_for_item(item: &ResponseItem) -> i64 {
+fn estimate_chat_output_tokens_for_item(item: &ConversationItem) -> i64 {
     let chars = match item {
-        ResponseItem::Message { role, content, .. } if role == "assistant" => content
+        ConversationItem::Message { role, content, .. } if role == "assistant" => content
             .iter()
             .map(|content_item| match content_item {
                 ContentItem::InputText { text } | ContentItem::OutputText { text } => {
@@ -1134,7 +1137,7 @@ fn estimate_chat_output_tokens_for_item(item: &ResponseItem) -> i64 {
                 ContentItem::InputImage { image_url } => count_chars(image_url),
             })
             .fold(0usize, usize::saturating_add),
-        ResponseItem::FunctionCall {
+        ConversationItem::FunctionCall {
             name, arguments, ..
         } => count_chars(name).saturating_add(count_chars(arguments)),
         _ => 0,
@@ -1305,7 +1308,7 @@ mod tests {
 
     #[test]
     fn estimate_chat_output_tokens_counts_messages_and_tool_calls() {
-        let assistant = ResponseItem::Message {
+        let assistant = ConversationItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -1313,13 +1316,13 @@ mod tests {
             }],
             end_turn: None,
         };
-        let tool_call = ResponseItem::FunctionCall {
+        let tool_call = ConversationItem::FunctionCall {
             id: None,
             name: "read_file".to_string(),
             arguments: "{\"path\":\"src/lib.rs\"}".to_string(),
             call_id: "call_1".to_string(),
         };
-        let reasoning = ResponseItem::Reasoning {
+        let reasoning = ConversationItem::Reasoning {
             id: String::new(),
             summary: Vec::new(),
             content: Some(vec![ReasoningItemContent::ReasoningText {

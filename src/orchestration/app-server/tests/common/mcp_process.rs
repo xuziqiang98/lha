@@ -11,6 +11,7 @@ use tokio::process::ChildStdin;
 use tokio::process::ChildStdout;
 
 use anyhow::Context;
+use codex_agent::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::ArchiveConversationParams;
@@ -59,7 +60,6 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
-use codex_core::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use tokio::process::Command;
 
 pub struct McpProcess {

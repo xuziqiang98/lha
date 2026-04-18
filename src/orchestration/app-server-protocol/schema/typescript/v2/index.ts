@@ -93,7 +93,7 @@ export type { PlanDeltaNotification } from "./PlanDeltaNotification";
 export type { ProfileV2 } from "./ProfileV2";
 export type { RateLimitSnapshot } from "./RateLimitSnapshot";
 export type { RateLimitWindow } from "./RateLimitWindow";
-export type { RawResponseItemCompletedNotification } from "./RawResponseItemCompletedNotification";
+export type { RawConversationItemCompletedNotification } from "./RawConversationItemCompletedNotification";
 export type { ReasoningEffortOption } from "./ReasoningEffortOption";
 export type { ReasoningSummaryPartAddedNotification } from "./ReasoningSummaryPartAddedNotification";
 export type { ReasoningSummaryTextDeltaNotification } from "./ReasoningSummaryTextDeltaNotification";

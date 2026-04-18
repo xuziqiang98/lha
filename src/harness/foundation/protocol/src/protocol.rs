@@ -26,7 +26,7 @@ use crate::items::TurnItem;
 use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
-use crate::models::ResponseItem;
+use crate::models::ConversationItem;
 use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -279,7 +279,7 @@ pub enum Op {
     Compact,
 
     /// Set a user-facing thread name in the persisted rollout metadata.
-    /// This is a local-only operation handled by codex-core; it does not
+    /// This is a local-only operation handled by codex-agent; it does not
     /// involve the model.
     SetThreadName { name: String },
 
@@ -837,7 +837,7 @@ pub enum EventMsg {
     /// Exited review mode with an optional final result to apply.
     ExitedReviewMode(ExitedReviewModeEvent),
 
-    RawResponseItem(RawResponseItemEvent),
+    RawConversationItem(RawConversationItemEvent),
 
     ItemStarted(ItemStartedEvent),
     ItemCompleted(ItemCompletedEvent),
@@ -986,8 +986,8 @@ pub enum CodexErrorInfo {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
-pub struct RawResponseItemEvent {
-    pub item: ResponseItem,
+pub struct RawConversationItemEvent {
+    pub item: ConversationItem,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -1669,6 +1669,8 @@ pub struct SessionMeta {
     pub cwd: PathBuf,
     pub originator: String,
     pub cli_version: String,
+    #[serde(default = "default_rollout_schema_version")]
+    pub rollout_schema_version: u32,
     #[serde(default)]
     pub source: SessionSource,
     pub model_provider: Option<String>,
@@ -1689,6 +1691,7 @@ impl Default for SessionMeta {
             cwd: PathBuf::new(),
             originator: String::new(),
             cli_version: String::new(),
+            rollout_schema_version: default_rollout_schema_version(),
             source: SessionSource::default(),
             model_provider: None,
             base_instructions: None,
@@ -1709,7 +1712,7 @@ pub struct SessionMetaLine {
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
-    ResponseItem(ResponseItem),
+    ConversationItem(ConversationItem),
     Compacted(CompactedItem),
     TurnContext(TurnContextItem),
     EventMsg(EventMsg),
@@ -1719,14 +1722,14 @@ pub enum RolloutItem {
 pub struct CompactedItem {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub replacement_history: Option<Vec<ResponseItem>>,
+    pub replacement_history: Option<Vec<ConversationItem>>,
     #[serde(default)]
     pub replacement_history_omits_initial_context: bool,
 }
 
-impl From<CompactedItem> for ResponseItem {
+impl From<CompactedItem> for ConversationItem {
     fn from(value: CompactedItem) -> Self {
-        ResponseItem::Message {
+        ConversationItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -1735,6 +1738,12 @@ impl From<CompactedItem> for ResponseItem {
             end_turn: None,
         }
     }
+}
+
+pub const ROLLOUT_SCHEMA_VERSION_V2: u32 = 2;
+
+fn default_rollout_schema_version() -> u32 {
+    ROLLOUT_SCHEMA_VERSION_V2
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]

@@ -1,5 +1,5 @@
-use codex_core::features::FEATURES;
-use codex_core::features::Feature;
+use codex_agent::features::FEATURES;
+use codex_agent::features::Feature;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -42,7 +42,7 @@ pub fn write_mock_responses_config_toml(
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"
-wire_api = "responses"
+dialect = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 {requires_line}

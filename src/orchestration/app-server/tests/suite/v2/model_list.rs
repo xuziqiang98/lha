@@ -8,6 +8,8 @@ use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_mock_responses_config_toml;
 use app_test_support::write_models_cache;
+use codex_agent::auth::AuthCredentialsStoreMode;
+use codex_agent::features::Feature;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::Model;
@@ -15,8 +17,6 @@ use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_app_server_protocol::RequestId;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::features::Feature;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -51,7 +51,7 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
 
 fn expected_visible_models() -> Vec<Model> {
     let response: ModelsResponse =
-        serde_json::from_str(include_str!("../../../../../harness/core/models.json"))
+        serde_json::from_str(include_str!("../../../../../harness/agent/models.json"))
             .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     let mut presets: Vec<ModelPreset> = response.models.into_iter().map(Into::into).collect();
 
@@ -304,7 +304,7 @@ remote_models = false
 [model_providers.provider_a]
 name = "provider_a"
 base_url = "https://example.test/a"
-wire_api = "chat"
+dialect = "chat"
 experimental_bearer_token = "sk-a"
 requires_openai_auth = false
 "#,

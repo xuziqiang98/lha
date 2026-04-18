@@ -9,11 +9,11 @@
 //! requirements before Codex will run.
 
 use async_trait::async_trait;
+use codex_agent::AuthManager;
+use codex_agent::auth::CodexAuth;
+use codex_agent::config_loader::CloudRequirementsLoader;
+use codex_agent::config_loader::ConfigRequirementsToml;
 use codex_backend_client::Client as BackendClient;
-use codex_core::AuthManager;
-use codex_core::auth::CodexAuth;
-use codex_core::config_loader::CloudRequirementsLoader;
-use codex_core::config_loader::ConfigRequirementsToml;
 use codex_protocol::account::PlanType;
 use std::sync::Arc;
 use std::time::Duration;
@@ -175,7 +175,7 @@ mod tests {
     use super::*;
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use codex_core::auth::AuthCredentialsStoreMode;
+    use codex_agent::auth::AuthCredentialsStoreMode;
     use codex_protocol::protocol::AskForApproval;
     use pretty_assertions::assert_eq;
     use serde_json::json;

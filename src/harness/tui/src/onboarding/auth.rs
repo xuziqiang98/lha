@@ -1,9 +1,9 @@
 #![allow(clippy::unwrap_used)]
 
+use codex_agent::AuthManager;
+use codex_agent::auth::AuthCredentialsStoreMode;
+use codex_agent::auth::CLIENT_ID;
 use codex_app_server_protocol::AuthMode;
-use codex_core::AuthManager;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::auth::CLIENT_ID;
 use codex_login::DeviceCode;
 use codex_login::ServerOptions;
 use codex_login::ShutdownHandle;
@@ -37,7 +37,7 @@ use textwrap::wrap;
 use crate::LoginStatus;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
-use crate::provider_config::ApiProviderWireApi;
+use crate::provider_config::ApiProviderDialect;
 use crate::provider_config::ApiProviderWizardStep;
 use crate::provider_config::CustomProviderConfig;
 use crate::provider_config::current_step_value_mut;
@@ -183,7 +183,7 @@ impl AuthModeWidget {
     fn api_key_entry_input_height(&self, width: u16, state: &ApiKeyInputState) -> u16 {
         let inner_width = width.saturating_sub(2).max(1);
         match state.step {
-            ApiProviderWizardStep::WireApi => 5,
+            ApiProviderWizardStep::ConversationDialect => 5,
             _ => {
                 let value = self.current_step_value_for_display(state);
                 let content = if value.is_empty() {
@@ -473,7 +473,7 @@ impl AuthModeWidget {
                 display_optional_value(&state.provider_id, "<not set>")
             )
             .into(),
-            format!("  Wire API: {}", state.wire_api.label()).into(),
+            format!("  Dialect: {}", state.dialect.label()).into(),
             format!(
                 "  Base URL: {}",
                 display_optional_value(&state.base_url, "<not set>")
@@ -504,12 +504,12 @@ impl AuthModeWidget {
             .render(intro_area, buf);
 
         match state.step {
-            ApiProviderWizardStep::WireApi => {
-                let lines = ApiProviderWireApi::all()
+            ApiProviderWizardStep::ConversationDialect => {
+                let lines = ApiProviderDialect::all()
                     .into_iter()
                     .enumerate()
                     .map(|(idx, option)| {
-                        let selected = option == state.wire_api;
+                        let selected = option == state.dialect;
                         let prefix = if selected { ">" } else { " " };
                         if selected {
                             vec![
@@ -562,7 +562,7 @@ impl AuthModeWidget {
             } else {
                 "  Press Enter to continue".dim().into()
             },
-            if state.step == ApiProviderWizardStep::WireApi {
+            if state.step == ApiProviderWizardStep::ConversationDialect {
                 "  Press 1/2/3 or Up/Down to choose".dim().into()
             } else {
                 "  Type or paste to edit".dim().into()
@@ -630,29 +630,31 @@ impl AuthModeWidget {
                         }
                     }
                     KeyCode::Up | KeyCode::Char('k')
-                        if state.step == ApiProviderWizardStep::WireApi =>
+                        if state.step == ApiProviderWizardStep::ConversationDialect =>
                     {
-                        state.wire_api = state.wire_api.previous();
+                        state.dialect = state.dialect.previous();
                         state.error = None;
                         should_request_frame = true;
                     }
                     KeyCode::Down | KeyCode::Char('j')
-                        if state.step == ApiProviderWizardStep::WireApi =>
+                        if state.step == ApiProviderWizardStep::ConversationDialect =>
                     {
-                        state.wire_api = state.wire_api.next();
+                        state.dialect = state.dialect.next();
                         state.error = None;
                         should_request_frame = true;
                     }
                     KeyCode::Left | KeyCode::Right
-                        if state.step == ApiProviderWizardStep::WireApi =>
+                        if state.step == ApiProviderWizardStep::ConversationDialect =>
                     {
-                        state.wire_api.toggle();
+                        state.dialect.toggle();
                         state.error = None;
                         should_request_frame = true;
                     }
-                    KeyCode::Char(c) if state.step == ApiProviderWizardStep::WireApi => {
-                        if let Some(wire_api) = ApiProviderWireApi::from_shortcut_digit(c) {
-                            state.wire_api = wire_api;
+                    KeyCode::Char(c)
+                        if state.step == ApiProviderWizardStep::ConversationDialect =>
+                    {
+                        if let Some(dialect) = ApiProviderDialect::from_shortcut_digit(c) {
+                            state.dialect = dialect;
                             state.error = None;
                             should_request_frame = true;
                         }
@@ -663,9 +665,9 @@ impl AuthModeWidget {
                             && !key_event.modifiers.contains(KeyModifiers::CONTROL)
                             && !key_event.modifiers.contains(KeyModifiers::ALT) =>
                     {
-                        if state.step == ApiProviderWizardStep::WireApi {
-                            if let Some(wire_api) = ApiProviderWireApi::from_shortcut_letter(c) {
-                                state.wire_api = wire_api;
+                        if state.step == ApiProviderWizardStep::ConversationDialect {
+                            if let Some(dialect) = ApiProviderDialect::from_shortcut_letter(c) {
+                                state.dialect = dialect;
                                 state.error = None;
                                 should_request_frame = true;
                             }
@@ -756,7 +758,7 @@ impl AuthModeWidget {
                     } else {
                         *guard = SignInState::ApiKeyEntry(ApiKeyInputState {
                             provider_id: config.provider_id,
-                            wire_api: config.wire_api,
+                            dialect: config.dialect,
                             base_url: config.base_url,
                             api_key: config.api_key,
                             model: config.model,
@@ -780,7 +782,7 @@ impl AuthModeWidget {
     fn current_step_value_for_display(&self, state: &ApiKeyInputState) -> String {
         match state.step {
             ApiProviderWizardStep::ProviderId => state.provider_id.clone(),
-            ApiProviderWizardStep::WireApi => String::new(),
+            ApiProviderWizardStep::ConversationDialect => String::new(),
             ApiProviderWizardStep::BaseUrl => state.base_url.clone(),
             ApiProviderWizardStep::ApiKey => mask_secret(&state.api_key),
             ApiProviderWizardStep::Model => state.model.clone(),
@@ -943,9 +945,9 @@ mod tests {
 
     use crate::provider_config::build_custom_provider_edits;
     use crate::provider_config::validate_provider_id;
-    use codex_core::auth::AuthCredentialsStoreMode;
-    use codex_core::config::CONFIG_TOML_FILE;
-    use codex_core::config::edit::ConfigEditsBuilder;
+    use codex_agent::auth::AuthCredentialsStoreMode;
+    use codex_agent::config::CONFIG_TOML_FILE;
+    use codex_agent::config::edit::ConfigEditsBuilder;
 
     fn widget_forced_chatgpt() -> (AuthModeWidget, TempDir) {
         let codex_home = TempDir::new().unwrap();
@@ -1030,7 +1032,7 @@ mod tests {
 
         widget.begin_custom_provider_save(CustomProviderConfig {
             provider_id: "test".to_string(),
-            wire_api: ApiProviderWireApi::Responses,
+            dialect: ApiProviderDialect::Responses,
             base_url: "https://example.com/v1".to_string(),
             api_key: "sk-test".to_string(),
             model: "gpt-test".to_string(),
@@ -1058,7 +1060,7 @@ mod tests {
     fn snapshot_custom_provider_config_trims_values() {
         let state = ApiKeyInputState {
             provider_id: " custom_1 ".to_string(),
-            wire_api: ApiProviderWireApi::Chat,
+            dialect: ApiProviderDialect::Chat,
             base_url: " https://example.com/v1/ ".to_string(),
             api_key: " secret ".to_string(),
             model: " model-x ".to_string(),
@@ -1074,7 +1076,7 @@ mod tests {
             config,
             CustomProviderConfig {
                 provider_id: "custom_1".to_string(),
-                wire_api: ApiProviderWireApi::Chat,
+                dialect: ApiProviderDialect::Chat,
                 base_url: "https://example.com/v1/".to_string(),
                 api_key: "secret".to_string(),
                 model: "model-x".to_string(),
@@ -1109,10 +1111,10 @@ mod tests {
     }
 
     #[test]
-    fn wire_api_entry_uses_three_line_input_height() {
+    fn dialect_entry_uses_three_line_input_height() {
         let (widget, _tmp) = widget_custom_provider_entry();
         let state = ApiKeyInputState {
-            step: ApiProviderWizardStep::WireApi,
+            step: ApiProviderWizardStep::ConversationDialect,
             ..ApiKeyInputState::default()
         };
 
@@ -1122,44 +1124,44 @@ mod tests {
     }
 
     #[test]
-    fn api_key_entry_wire_api_shortcuts_support_messages() {
+    fn api_key_entry_dialect_shortcuts_support_messages() {
         let (mut widget, _tmp) = widget_custom_provider_entry();
 
         widget.handle_paste("custom_1".to_string());
         widget.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert_eq!(
-            current_api_key_input_state(&widget).wire_api,
-            ApiProviderWireApi::Chat
+            current_api_key_input_state(&widget).dialect,
+            ApiProviderDialect::Chat
         );
 
         widget.handle_key_event(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
         assert_eq!(
-            current_api_key_input_state(&widget).wire_api,
-            ApiProviderWireApi::Messages
+            current_api_key_input_state(&widget).dialect,
+            ApiProviderDialect::Messages
         );
 
         widget.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(
-            current_api_key_input_state(&widget).wire_api,
-            ApiProviderWireApi::Chat
+            current_api_key_input_state(&widget).dialect,
+            ApiProviderDialect::Chat
         );
 
         widget.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert_eq!(
-            current_api_key_input_state(&widget).wire_api,
-            ApiProviderWireApi::Messages
+            current_api_key_input_state(&widget).dialect,
+            ApiProviderDialect::Messages
         );
 
         widget.handle_key_event(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
         assert_eq!(
-            current_api_key_input_state(&widget).wire_api,
-            ApiProviderWireApi::Messages
+            current_api_key_input_state(&widget).dialect,
+            ApiProviderDialect::Messages
         );
     }
 
     #[test]
-    fn wire_api_entry_renders_three_options_without_descriptions() {
+    fn dialect_entry_renders_three_options_without_descriptions() {
         let (mut widget, _tmp) = widget_custom_provider_entry();
         let area = Rect::new(0, 0, 120, 30);
         let mut buf = Buffer::empty(area);
@@ -1171,14 +1173,14 @@ mod tests {
         let lines = (0..area.height)
             .map(|row| row_text(&buf, row, area.width))
             .collect::<Vec<_>>();
-        let wire_api_row = lines
+        let dialect_row = lines
             .iter()
-            .position(|line| line.starts_with("╭Wire API"))
-            .expect("wire api border row");
+            .position(|line| line.starts_with("╭Dialect"))
+            .expect("dialect border row");
 
-        assert_eq!(lines[wire_api_row + 1].contains("chat"), true);
-        assert_eq!(lines[wire_api_row + 2].contains("responses"), true);
-        assert_eq!(lines[wire_api_row + 3].contains("messages"), true);
+        assert_eq!(lines[dialect_row + 1].contains("chat"), true);
+        assert_eq!(lines[dialect_row + 2].contains("responses"), true);
+        assert_eq!(lines[dialect_row + 3].contains("messages"), true);
         assert_eq!(
             lines
                 .iter()
@@ -1204,7 +1206,7 @@ mod tests {
         let codex_home = TempDir::new().unwrap();
         let config = CustomProviderConfig {
             provider_id: "custom_1".to_string(),
-            wire_api: ApiProviderWireApi::Responses,
+            dialect: ApiProviderDialect::Responses,
             base_url: "https://example.com/v1".to_string(),
             api_key: "sk-test".to_string(),
             model: "gpt-test".to_string(),
@@ -1225,7 +1227,7 @@ model = "gpt-test"
 [model_providers.custom_1.variants.responses]
 name = "custom_1"
 base_url = "https://example.com/v1"
-wire_api = "responses"
+dialect = "responses"
 experimental_bearer_token = "sk-test"
 requires_openai_auth = false
 

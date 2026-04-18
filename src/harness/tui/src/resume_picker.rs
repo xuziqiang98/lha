@@ -5,12 +5,12 @@ use std::sync::Arc;
 
 use chrono::DateTime;
 use chrono::Utc;
-use codex_core::Cursor;
-use codex_core::INTERACTIVE_SESSION_SOURCES;
-use codex_core::RolloutRecorder;
-use codex_core::ThreadItem;
-use codex_core::ThreadSortKey;
-use codex_core::ThreadsPage;
+use codex_agent::Cursor;
+use codex_agent::INTERACTIVE_SESSION_SOURCES;
+use codex_agent::RolloutRecorder;
+use codex_agent::ThreadItem;
+use codex_agent::ThreadSortKey;
+use codex_agent::ThreadsPage;
 use codex_protocol::items::TurnItem;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
@@ -33,7 +33,7 @@ use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ConversationItem;
 use codex_protocol::protocol::SessionMetaLine;
 
 const PAGE_SIZE: usize = 25;
@@ -749,8 +749,8 @@ fn extract_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
 
 fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
     head.iter()
-        .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
-        .find_map(|item| match codex_core::parse_turn_item(&item) {
+        .filter_map(|value| serde_json::from_value::<ConversationItem>(value.clone()).ok())
+        .find_map(|item| match codex_agent::parse_turn_item(&item) {
             Some(TurnItem::UserMessage(user)) => Some(user.message()),
             _ => None,
         })
@@ -1106,7 +1106,7 @@ mod tests {
     use super::*;
     use chrono::Duration;
     use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ResponseItem;
+    use codex_protocol::models::ConversationItem;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::GitInfo;
     use codex_protocol::protocol::RolloutItem;
@@ -1184,6 +1184,7 @@ mod tests {
                         cwd: PathBuf::from(cwd),
                         originator: "user".to_string(),
                         cli_version: "0.0.0".to_string(),
+                        rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V2,
                         source: SessionSource::Cli,
                         model_provider: Some(provider.to_string()),
                         base_instructions: None,
@@ -1198,7 +1199,7 @@ mod tests {
             },
             RolloutLine {
                 timestamp: ts.to_rfc3339(),
-                item: RolloutItem::ResponseItem(ResponseItem::Message {
+                item: RolloutItem::ConversationItem(ConversationItem::Message {
                     id: None,
                     role: "user".to_string(),
                     content: vec![ContentItem::InputText {

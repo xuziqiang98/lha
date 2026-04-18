@@ -152,9 +152,9 @@ use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
 use crate::ui_consts::LIVE_PREFIX_COLS;
+use codex_agent::skills::model::SkillMetadata;
 use codex_chatgpt::connectors;
 use codex_chatgpt::connectors::AppInfo;
-use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -2722,7 +2722,7 @@ impl ChatComposer {
                 }
                 let display_name = connectors::connector_display_label(connector);
                 let description = Some(Self::connector_brief_description(connector));
-                let slug = codex_core::connectors::connector_mention_slug(connector);
+                let slug = codex_agent::connectors::connector_mention_slug(connector);
                 let search_terms = vec![display_name.clone(), connector.id.clone(), slug.clone()];
                 let connector_id = connector.id.as_str();
                 mentions.push(MentionItem {

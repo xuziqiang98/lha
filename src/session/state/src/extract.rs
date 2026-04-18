@@ -1,6 +1,6 @@
 use crate::model::ThreadMetadata;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ConversationItem;
 use codex_protocol::models::is_local_image_close_tag_text;
 use codex_protocol::models::is_local_image_open_tag_text;
 use codex_protocol::protocol::EventMsg;
@@ -21,7 +21,7 @@ pub fn apply_rollout_item(
         RolloutItem::SessionMeta(meta_line) => apply_session_meta_from_item(metadata, meta_line),
         RolloutItem::TurnContext(turn_ctx) => apply_turn_context(metadata, turn_ctx),
         RolloutItem::EventMsg(event) => apply_event_msg(metadata, event),
-        RolloutItem::ResponseItem(item) => apply_response_item(metadata, item),
+        RolloutItem::ConversationItem(item) => apply_response_item(metadata, item),
         RolloutItem::Compacted(_) => {}
     }
     if metadata.model_provider.is_empty() {
@@ -73,7 +73,7 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
     }
 }
 
-fn apply_response_item(metadata: &mut ThreadMetadata, item: &ResponseItem) {
+fn apply_response_item(metadata: &mut ThreadMetadata, item: &ConversationItem) {
     if let Some(text) = extract_user_message_text(item) {
         metadata.has_user_event = true;
         if metadata.title.is_empty() {
@@ -82,8 +82,8 @@ fn apply_response_item(metadata: &mut ThreadMetadata, item: &ResponseItem) {
     }
 }
 
-fn extract_user_message_text(item: &ResponseItem) -> Option<String> {
-    let ResponseItem::Message { role, content, .. } = item else {
+fn extract_user_message_text(item: &ConversationItem) -> Option<String> {
+    let ConversationItem::Message { role, content, .. } = item else {
         return None;
     };
     if role != "user" {
@@ -131,7 +131,7 @@ mod tests {
     use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ResponseItem;
+    use codex_protocol::models::ConversationItem;
     use codex_protocol::protocol::USER_MESSAGE_BEGIN;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
@@ -139,7 +139,7 @@ mod tests {
 
     #[test]
     fn extracts_user_message_text() {
-        let item = ResponseItem::Message {
+        let item = ConversationItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![

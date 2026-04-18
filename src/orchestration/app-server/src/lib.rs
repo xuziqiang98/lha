@@ -1,13 +1,13 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+use codex_agent::AuthManager;
+use codex_agent::config::Config;
+use codex_agent::config::ConfigBuilder;
+use codex_agent::config_loader::CloudRequirementsLoader;
+use codex_agent::config_loader::ConfigLayerStackOrdering;
+use codex_agent::config_loader::LoaderOverrides;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_common::CliConfigOverrides;
-use codex_core::AuthManager;
-use codex_core::config::Config;
-use codex_core::config::ConfigBuilder;
-use codex_core::config_loader::CloudRequirementsLoader;
-use codex_core::config_loader::ConfigLayerStackOrdering;
-use codex_core::config_loader::LoaderOverrides;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
@@ -16,15 +16,15 @@ use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
+use codex_agent::ExecPolicyError;
+use codex_agent::check_execpolicy_for_warnings;
+use codex_agent::config_loader::ConfigLoadError;
+use codex_agent::config_loader::TextRange as CoreTextRange;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::TextPosition as AppTextPosition;
 use codex_app_server_protocol::TextRange as AppTextRange;
-use codex_core::ExecPolicyError;
-use codex_core::check_execpolicy_for_warnings;
-use codex_core::config_loader::ConfigLoadError;
-use codex_core::config_loader::TextRange as CoreTextRange;
 use codex_feedback::CodexFeedback;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
@@ -218,7 +218,7 @@ pub async fn run_main(
             let effective_toml = config.config_layer_stack.effective_config();
             match effective_toml.try_into() {
                 Ok(config_toml) => {
-                    if let Err(err) = codex_core::personality_migration::maybe_migrate_personality(
+                    if let Err(err) = codex_agent::personality_migration::maybe_migrate_personality(
                         &config.codex_home,
                         &config_toml,
                     )
@@ -286,7 +286,7 @@ pub async fn run_main(
 
     let feedback = CodexFeedback::new();
 
-    let otel = codex_core::otel_init::build_provider(
+    let otel = codex_agent::otel_init::build_provider(
         &config,
         env!("CARGO_PKG_VERSION"),
         Some("codex_app_server"),

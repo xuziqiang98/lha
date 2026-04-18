@@ -2,7 +2,7 @@
 
 In this repo, the Rust code lives under `src/`:
 
-- Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`
+- Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-agent`
 - When using format! and you can inline variables into {}, always do that.
 - Install any commands the repo relies on (for example `just`, `rg`, or `cargo-insta`) if they aren't already available before running instructions here.
 - Never add or modify any code related to `CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR` or `CODEX_SANDBOX_ENV_VAR`.
@@ -14,7 +14,7 @@ In this repo, the Rust code lives under `src/`:
 - When possible, make `match` statements exhaustive and avoid wildcard arms.
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
 - When making a change that adds or changes an API, ensure that the documentation in the `docs/` folder is up to date if applicable.
-- If you change `ConfigToml` or nested config types, run `just write-config-schema` to update `src/harness/core/config.schema.json`.
+- If you change `ConfigToml` or nested config types, run `just write-config-schema` to update `src/harness/agent/config.schema.json`.
 
 Run `just fmt` from the repository root automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
 

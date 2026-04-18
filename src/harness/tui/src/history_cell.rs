@@ -40,14 +40,14 @@ use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use base64::Engine;
+use codex_agent::config::Config;
+use codex_agent::config::types::McpServerTransportConfig;
+use codex_agent::protocol::FileChange;
+use codex_agent::protocol::McpAuthStatus;
+use codex_agent::protocol::McpInvocation;
+use codex_agent::protocol::SessionConfiguredEvent;
+use codex_agent::web_search::web_search_detail;
 use codex_common::format_env_display::format_env_display;
-use codex_core::config::Config;
-use codex_core::config::types::McpServerTransportConfig;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::McpAuthStatus;
-use codex_core::protocol::McpInvocation;
-use codex_core::protocol::SessionConfiguredEvent;
-use codex_core::web_search::web_search_detail;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -712,9 +712,9 @@ fn exec_snippet(command: &[String]) -> String {
 
 pub fn new_approval_decision_cell(
     command: Vec<String>,
-    decision: codex_core::protocol::ReviewDecision,
+    decision: codex_agent::protocol::ReviewDecision,
 ) -> Box<dyn HistoryCell> {
-    use codex_core::protocol::ReviewDecision::*;
+    use codex_agent::protocol::ReviewDecision::*;
 
     let (symbol, summary): (Span<'static>, Vec<Span<'static>>) = match decision {
         Approved => {
@@ -2137,11 +2137,11 @@ mod tests {
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
-    use codex_core::config::Config;
-    use codex_core::config::ConfigBuilder;
-    use codex_core::config::types::McpServerConfig;
-    use codex_core::config::types::McpServerTransportConfig;
-    use codex_core::protocol::McpAuthStatus;
+    use codex_agent::config::Config;
+    use codex_agent::config::ConfigBuilder;
+    use codex_agent::config::types::McpServerConfig;
+    use codex_agent::config::types::McpServerTransportConfig;
+    use codex_agent::protocol::McpAuthStatus;
     use codex_otel::RuntimeMetricTotals;
     use codex_otel::RuntimeMetricsSummary;
     use codex_protocol::models::WebSearchAction;
@@ -2151,7 +2151,7 @@ mod tests {
     use serde_json::json;
     use std::collections::HashMap;
 
-    use codex_core::protocol::ExecCommandSource;
+    use codex_agent::protocol::ExecCommandSource;
     use mcp_types::CallToolResult;
     use mcp_types::ContentBlock;
     use mcp_types::ImageContent;

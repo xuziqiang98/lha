@@ -1,6 +1,6 @@
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::BaseInstructions;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ConversationItem;
 use futures::Stream;
 use serde::Deserialize;
 use serde::Serialize;
@@ -18,7 +18,7 @@ pub use codex_api::common::ResponseEvent;
 
 #[derive(Default, Debug, Clone)]
 pub struct Prompt {
-    pub input: Vec<ResponseItem>,
+    pub input: Vec<ConversationItem>,
     pub tools: Vec<ToolSpec>,
     pub parallel_tool_calls: bool,
     pub base_instructions: BaseInstructions,
@@ -27,7 +27,7 @@ pub struct Prompt {
 }
 
 impl Prompt {
-    pub fn get_formatted_input(&self) -> Vec<ResponseItem> {
+    pub fn get_formatted_input(&self) -> Vec<ConversationItem> {
         let mut input = self.input.clone();
 
         let is_freeform_apply_patch_tool_present = self.tools.iter().any(|tool| match tool {
@@ -42,16 +42,16 @@ impl Prompt {
     }
 }
 
-fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
+fn reserialize_shell_outputs(items: &mut [ConversationItem]) {
     let mut shell_call_ids: HashSet<String> = HashSet::new();
 
     items.iter_mut().for_each(|item| match item {
-        ResponseItem::LocalShellCall { call_id, id, .. } => {
+        ConversationItem::LocalShellCall { call_id, id, .. } => {
             if let Some(identifier) = call_id.clone().or_else(|| id.clone()) {
                 shell_call_ids.insert(identifier);
             }
         }
-        ResponseItem::CustomToolCall {
+        ConversationItem::CustomToolCall {
             id: _,
             status: _,
             call_id,
@@ -62,19 +62,19 @@ fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
                 shell_call_ids.insert(call_id.clone());
             }
         }
-        ResponseItem::CustomToolCallOutput { call_id, output } => {
+        ConversationItem::CustomToolCallOutput { call_id, output } => {
             if shell_call_ids.remove(call_id)
                 && let Some(structured) = parse_structured_shell_output(output)
             {
                 *output = structured;
             }
         }
-        ResponseItem::FunctionCall { name, call_id, .. }
+        ConversationItem::FunctionCall { name, call_id, .. }
             if is_shell_tool_name(name) || name == "apply_patch" =>
         {
             shell_call_ids.insert(call_id.clone());
         }
-        ResponseItem::FunctionCallOutput { call_id, output } => {
+        ConversationItem::FunctionCallOutput { call_id, output } => {
             if shell_call_ids.remove(call_id)
                 && let Some(structured) = parse_structured_shell_output(&output.content)
             {

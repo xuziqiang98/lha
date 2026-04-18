@@ -1,26 +1,26 @@
 use std::path::Path;
 use std::time::Duration;
 
+use codex_agent::config::CONFIG_TOML_FILE;
+use codex_agent::config::ConfigToml;
+use codex_agent::config::ConfiguredProviderDialect;
+use codex_agent::config::MODEL_PROVIDER_VARIANTS_KEY;
+use codex_agent::config::dialect_config_value;
+use codex_agent::config::edit::ConfigEdit;
+use codex_agent::config::edit::ConfigEditsBuilder;
+use codex_agent::config::generated_provider_profile_name;
+use codex_agent::config::model_provider_variant_ref;
+use codex_agent::config::profile::ConfigProfile;
+use codex_agent::default_client::build_reqwest_client;
 use codex_api::ApiError;
 use codex_api::AuthProvider;
 use codex_api::ModelsClient;
 use codex_api::Provider;
 use codex_api::ReqwestTransport;
 use codex_api::TransportError;
-use codex_api::WireApi as ApiWireApi;
+use codex_api::WireApi as ApiConversationDialect;
 use codex_api::provider::RetryConfig;
-use codex_core::ModelProviderInfo;
-use codex_core::WireApi;
-use codex_core::config::CONFIG_TOML_FILE;
-use codex_core::config::ConfigToml;
-use codex_core::config::MODEL_PROVIDER_VARIANTS_KEY;
-use codex_core::config::edit::ConfigEdit;
-use codex_core::config::edit::ConfigEditsBuilder;
-use codex_core::config::generated_provider_profile_name;
-use codex_core::config::model_provider_variant_ref;
-use codex_core::config::profile::ConfigProfile;
-use codex_core::config::wire_api_config_value;
-use codex_core::default_client::build_reqwest_client;
+use codex_llm::RuntimeEndpoint;
 use reqwest::StatusCode;
 use reqwest::header::HeaderMap;
 use toml_edit::DocumentMut;
@@ -32,7 +32,7 @@ use toml_edit::value;
 pub(crate) enum ApiProviderWizardStep {
     #[default]
     ProviderId,
-    WireApi,
+    ConversationDialect,
     BaseUrl,
     ApiKey,
     Model,
@@ -43,7 +43,7 @@ impl ApiProviderWizardStep {
     pub(crate) const fn index(self) -> usize {
         match self {
             Self::ProviderId => 1,
-            Self::WireApi => 2,
+            Self::ConversationDialect => 2,
             Self::BaseUrl => 3,
             Self::ApiKey => 4,
             Self::Model => 5,
@@ -54,7 +54,7 @@ impl ApiProviderWizardStep {
     pub(crate) const fn title(self) -> &'static str {
         match self {
             Self::ProviderId => "Provider ID",
-            Self::WireApi => "Wire API",
+            Self::ConversationDialect => "Dialect",
             Self::BaseUrl => "Base URL",
             Self::ApiKey => "API Key",
             Self::Model => "Model",
@@ -65,7 +65,7 @@ impl ApiProviderWizardStep {
     pub(crate) const fn placeholder(self) -> &'static str {
         match self {
             Self::ProviderId => "my-provider",
-            Self::WireApi => "",
+            Self::ConversationDialect => "",
             Self::BaseUrl => "https://example.com/v1",
             Self::ApiKey => "Paste or type your API key",
             Self::Model => "gpt-4.1",
@@ -76,8 +76,8 @@ impl ApiProviderWizardStep {
     pub(crate) const fn previous(self) -> Option<Self> {
         match self {
             Self::ProviderId => None,
-            Self::WireApi => Some(Self::ProviderId),
-            Self::BaseUrl => Some(Self::WireApi),
+            Self::ConversationDialect => Some(Self::ProviderId),
+            Self::BaseUrl => Some(Self::ConversationDialect),
             Self::ApiKey => Some(Self::BaseUrl),
             Self::Model => Some(Self::ApiKey),
             Self::ContextWindow => Some(Self::Model),
@@ -86,8 +86,8 @@ impl ApiProviderWizardStep {
 
     pub(crate) const fn next(self) -> Option<Self> {
         match self {
-            Self::ProviderId => Some(Self::WireApi),
-            Self::WireApi => Some(Self::BaseUrl),
+            Self::ProviderId => Some(Self::ConversationDialect),
+            Self::ConversationDialect => Some(Self::BaseUrl),
             Self::BaseUrl => Some(Self::ApiKey),
             Self::ApiKey => Some(Self::Model),
             Self::Model => Some(Self::ContextWindow),
@@ -97,14 +97,14 @@ impl ApiProviderWizardStep {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum ApiProviderWireApi {
+pub(crate) enum ApiProviderDialect {
     #[default]
     Chat,
     Responses,
     Messages,
 }
 
-impl ApiProviderWireApi {
+impl ApiProviderDialect {
     pub(crate) const fn all() -> [Self; 3] {
         [Self::Chat, Self::Responses, Self::Messages]
     }
@@ -155,11 +155,11 @@ impl ApiProviderWireApi {
         }
     }
 
-    pub(crate) fn as_api_wire(self) -> ApiWireApi {
+    pub(crate) fn as_api_dialect(self) -> ApiConversationDialect {
         match self {
-            Self::Chat => ApiWireApi::Chat,
-            Self::Responses => ApiWireApi::Responses,
-            Self::Messages => ApiWireApi::Messages,
+            Self::Chat => ApiConversationDialect::Chat,
+            Self::Responses => ApiConversationDialect::Responses,
+            Self::Messages => ApiConversationDialect::Messages,
         }
     }
 
@@ -175,7 +175,7 @@ impl ApiProviderWireApi {
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub(crate) struct ApiKeyInputState {
     pub(crate) provider_id: String,
-    pub(crate) wire_api: ApiProviderWireApi,
+    pub(crate) dialect: ApiProviderDialect,
     pub(crate) base_url: String,
     pub(crate) api_key: String,
     pub(crate) model: String,
@@ -188,7 +188,7 @@ pub(crate) struct ApiKeyInputState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CustomProviderConfig {
     pub(crate) provider_id: String,
-    pub(crate) wire_api: ApiProviderWireApi,
+    pub(crate) dialect: ApiProviderDialect,
     pub(crate) base_url: String,
     pub(crate) api_key: String,
     pub(crate) model: String,
@@ -210,22 +210,22 @@ pub(crate) fn generated_profile_name(provider_id: &str, model: &str) -> String {
     generated_provider_profile_name(provider_id, model)
 }
 
-fn as_core_wire_api(wire_api: ApiProviderWireApi) -> WireApi {
-    match wire_api {
-        ApiProviderWireApi::Chat => WireApi::Chat,
-        ApiProviderWireApi::Responses => WireApi::Responses,
-        ApiProviderWireApi::Messages => WireApi::Messages,
+fn as_runtime_dialect(dialect: ApiProviderDialect) -> ConfiguredProviderDialect {
+    match dialect {
+        ApiProviderDialect::Chat => ConfiguredProviderDialect::Chat,
+        ApiProviderDialect::Responses => ConfiguredProviderDialect::Responses,
+        ApiProviderDialect::Messages => ConfiguredProviderDialect::Messages,
     }
 }
 
 pub(crate) fn custom_provider_ref(config: &CustomProviderConfig) -> String {
-    model_provider_variant_ref(&config.provider_id, as_core_wire_api(config.wire_api))
+    model_provider_variant_ref(&config.provider_id, as_runtime_dialect(config.dialect))
 }
 
 pub(crate) fn current_step_value_mut(state: &mut ApiKeyInputState) -> Option<&mut String> {
     match state.step {
         ApiProviderWizardStep::ProviderId => Some(&mut state.provider_id),
-        ApiProviderWizardStep::WireApi => None,
+        ApiProviderWizardStep::ConversationDialect => None,
         ApiProviderWizardStep::BaseUrl => Some(&mut state.base_url),
         ApiProviderWizardStep::ApiKey => Some(&mut state.api_key),
         ApiProviderWizardStep::Model => Some(&mut state.model),
@@ -236,7 +236,7 @@ pub(crate) fn current_step_value_mut(state: &mut ApiKeyInputState) -> Option<&mu
 pub(crate) fn validate_current_step(state: &ApiKeyInputState) -> Result<(), String> {
     match state.step {
         ApiProviderWizardStep::ProviderId => validate_provider_id(state.provider_id.trim()),
-        ApiProviderWizardStep::WireApi => Ok(()),
+        ApiProviderWizardStep::ConversationDialect => Ok(()),
         ApiProviderWizardStep::BaseUrl => validate_base_url(state.base_url.trim()),
         ApiProviderWizardStep::ApiKey => validate_non_empty(state.api_key.trim(), "API key"),
         ApiProviderWizardStep::Model => validate_non_empty(state.model.trim(), "Model"),
@@ -312,7 +312,7 @@ pub(crate) fn snapshot_custom_provider_config(
 
     Ok(CustomProviderConfig {
         provider_id,
-        wire_api: state.wire_api,
+        dialect: state.dialect,
         base_url,
         api_key,
         model,
@@ -354,7 +354,7 @@ async fn validate_custom_provider_config(config: &CustomProviderConfig) -> Resul
         name: config.provider_id.clone(),
         base_url: config.base_url.clone(),
         query_params: None,
-        wire: config.wire_api.as_api_wire(),
+        wire: config.dialect.as_api_dialect(),
         headers: HeaderMap::new(),
         retry: RetryConfig {
             max_attempts: 1,
@@ -425,12 +425,12 @@ pub(crate) fn build_custom_provider_edits(config: &CustomProviderConfig) -> Vec<
     build_custom_provider_edits_with_existing(config, None)
 }
 
-fn provider_variant_segments(provider_id: &str, wire_api: ApiProviderWireApi) -> Vec<String> {
+fn provider_variant_segments(provider_id: &str, dialect: ApiProviderDialect) -> Vec<String> {
     vec![
         "model_providers".to_string(),
         provider_id.to_string(),
         MODEL_PROVIDER_VARIANTS_KEY.to_string(),
-        wire_api.as_config_value().to_string(),
+        dialect.as_config_value().to_string(),
     ]
 }
 
@@ -441,7 +441,7 @@ fn clear_legacy_provider_paths(provider_id: &str) -> Vec<ConfigEdit> {
         "env_key",
         "env_key_instructions",
         "experimental_bearer_token",
-        "wire_api",
+        "dialect",
         "query_params",
         "http_headers",
         "env_http_headers",
@@ -449,7 +449,7 @@ fn clear_legacy_provider_paths(provider_id: &str) -> Vec<ConfigEdit> {
         "stream_max_retries",
         "stream_idle_timeout_ms",
         "requires_openai_auth",
-        "supports_websockets",
+        "supports_realtime_streaming",
     ]
     .into_iter()
     .map(|field| ConfigEdit::ClearPath {
@@ -465,11 +465,11 @@ fn clear_legacy_provider_paths(provider_id: &str) -> Vec<ConfigEdit> {
 fn set_variant_provider_field(
     edits: &mut Vec<ConfigEdit>,
     provider_id: &str,
-    wire_api: ApiProviderWireApi,
+    dialect: ApiProviderDialect,
     field: &str,
     field_value: toml_edit::Item,
 ) {
-    let mut segments = provider_variant_segments(provider_id, wire_api);
+    let mut segments = provider_variant_segments(provider_id, dialect);
     segments.push(field.to_string());
     edits.push(ConfigEdit::SetPath {
         segments,
@@ -479,50 +479,52 @@ fn set_variant_provider_field(
 
 fn migrate_legacy_provider_to_variant_edits(
     provider_id: &str,
-    legacy_provider: &ModelProviderInfo,
+    legacy_provider: &RuntimeEndpoint,
 ) -> Vec<ConfigEdit> {
-    let legacy_wire_api = legacy_provider.wire_api;
-    let mut edits = clear_legacy_provider_paths(provider_id);
-    let variant_wire_api = match legacy_wire_api {
-        WireApi::Chat => ApiProviderWireApi::Chat,
-        WireApi::Responses => ApiProviderWireApi::Responses,
-        WireApi::Messages => ApiProviderWireApi::Messages,
+    let legacy_dialect = if legacy_provider.uses_chat_completions_api() {
+        ApiProviderDialect::Chat
+    } else if legacy_provider.uses_messages_api() {
+        ApiProviderDialect::Messages
+    } else {
+        ApiProviderDialect::Responses
     };
+    let mut edits = clear_legacy_provider_paths(provider_id);
+    let variant_dialect = legacy_dialect;
 
     set_variant_provider_field(
         &mut edits,
         provider_id,
-        variant_wire_api,
+        variant_dialect,
         "name",
         value(legacy_provider.name.clone()),
     );
     set_variant_provider_field(
         &mut edits,
         provider_id,
-        variant_wire_api,
-        "wire_api",
-        value(wire_api_config_value(legacy_wire_api)),
+        variant_dialect,
+        "dialect",
+        value(dialect_config_value(as_runtime_dialect(legacy_dialect))),
     );
     set_variant_provider_field(
         &mut edits,
         provider_id,
-        variant_wire_api,
+        variant_dialect,
         "requires_openai_auth",
         value(legacy_provider.requires_openai_auth),
     );
     set_variant_provider_field(
         &mut edits,
         provider_id,
-        variant_wire_api,
-        "supports_websockets",
-        value(legacy_provider.supports_websockets),
+        variant_dialect,
+        "supports_realtime_streaming",
+        value(legacy_provider.realtime_turn_streaming_enabled()),
     );
 
     if let Some(base_url) = &legacy_provider.base_url {
         set_variant_provider_field(
             &mut edits,
             provider_id,
-            variant_wire_api,
+            variant_dialect,
             "base_url",
             value(base_url.to_string()),
         );
@@ -531,7 +533,7 @@ fn migrate_legacy_provider_to_variant_edits(
         set_variant_provider_field(
             &mut edits,
             provider_id,
-            variant_wire_api,
+            variant_dialect,
             "env_key",
             value(env_key.to_string()),
         );
@@ -540,7 +542,7 @@ fn migrate_legacy_provider_to_variant_edits(
         set_variant_provider_field(
             &mut edits,
             provider_id,
-            variant_wire_api,
+            variant_dialect,
             "env_key_instructions",
             value(env_key_instructions.to_string()),
         );
@@ -549,14 +551,14 @@ fn migrate_legacy_provider_to_variant_edits(
         set_variant_provider_field(
             &mut edits,
             provider_id,
-            variant_wire_api,
+            variant_dialect,
             "experimental_bearer_token",
             value(bearer_token.to_string()),
         );
     }
     if let Some(query_params) = &legacy_provider.query_params {
         for (key, value_str) in query_params {
-            let mut segments = provider_variant_segments(provider_id, variant_wire_api);
+            let mut segments = provider_variant_segments(provider_id, variant_dialect);
             segments.extend(["query_params".to_string(), key.to_string()]);
             edits.push(ConfigEdit::SetPath {
                 segments,
@@ -566,7 +568,7 @@ fn migrate_legacy_provider_to_variant_edits(
     }
     if let Some(http_headers) = &legacy_provider.http_headers {
         for (key, value_str) in http_headers {
-            let mut segments = provider_variant_segments(provider_id, variant_wire_api);
+            let mut segments = provider_variant_segments(provider_id, variant_dialect);
             segments.extend(["http_headers".to_string(), key.to_string()]);
             edits.push(ConfigEdit::SetPath {
                 segments,
@@ -576,7 +578,7 @@ fn migrate_legacy_provider_to_variant_edits(
     }
     if let Some(env_http_headers) = &legacy_provider.env_http_headers {
         for (key, value_str) in env_http_headers {
-            let mut segments = provider_variant_segments(provider_id, variant_wire_api);
+            let mut segments = provider_variant_segments(provider_id, variant_dialect);
             segments.extend(["env_http_headers".to_string(), key.to_string()]);
             edits.push(ConfigEdit::SetPath {
                 segments,
@@ -588,7 +590,7 @@ fn migrate_legacy_provider_to_variant_edits(
         set_variant_provider_field(
             &mut edits,
             provider_id,
-            variant_wire_api,
+            variant_dialect,
             "request_max_retries",
             value(request_max_retries as i64),
         );
@@ -597,7 +599,7 @@ fn migrate_legacy_provider_to_variant_edits(
         set_variant_provider_field(
             &mut edits,
             provider_id,
-            variant_wire_api,
+            variant_dialect,
             "stream_max_retries",
             value(stream_max_retries as i64),
         );
@@ -606,7 +608,7 @@ fn migrate_legacy_provider_to_variant_edits(
         set_variant_provider_field(
             &mut edits,
             provider_id,
-            variant_wire_api,
+            variant_dialect,
             "stream_idle_timeout_ms",
             value(stream_idle_timeout_ms as i64),
         );
@@ -615,8 +617,17 @@ fn migrate_legacy_provider_to_variant_edits(
     edits
 }
 
-fn legacy_provider_migration_ref(provider_id: &str, legacy_provider: &ModelProviderInfo) -> String {
-    model_provider_variant_ref(provider_id, legacy_provider.wire_api)
+fn legacy_provider_migration_ref(provider_id: &str, legacy_provider: &RuntimeEndpoint) -> String {
+    model_provider_variant_ref(
+        provider_id,
+        if legacy_provider.uses_chat_completions_api() {
+            ConfiguredProviderDialect::Chat
+        } else if legacy_provider.uses_messages_api() {
+            ConfiguredProviderDialect::Messages
+        } else {
+            ConfiguredProviderDialect::Responses
+        },
+    )
 }
 
 fn profile_field_segments(profile_name: &str, field: &str) -> Vec<String> {
@@ -827,35 +838,35 @@ pub(crate) fn build_custom_provider_edits_with_existing(
     set_variant_provider_field(
         &mut edits,
         &config.provider_id,
-        config.wire_api,
+        config.dialect,
         "name",
         value(config.provider_id.clone()),
     );
     set_variant_provider_field(
         &mut edits,
         &config.provider_id,
-        config.wire_api,
+        config.dialect,
         "base_url",
         value(config.base_url.clone()),
     );
     set_variant_provider_field(
         &mut edits,
         &config.provider_id,
-        config.wire_api,
-        "wire_api",
-        value(config.wire_api.as_config_value()),
+        config.dialect,
+        "dialect",
+        value(config.dialect.as_config_value()),
     );
     set_variant_provider_field(
         &mut edits,
         &config.provider_id,
-        config.wire_api,
+        config.dialect,
         "experimental_bearer_token",
         value(config.api_key.clone()),
     );
     set_variant_provider_field(
         &mut edits,
         &config.provider_id,
-        config.wire_api,
+        config.dialect,
         "requires_openai_auth",
         value(false),
     );
@@ -914,7 +925,7 @@ mod tests {
         let codex_home = tempdir().expect("temp dir");
         let config = CustomProviderConfig {
             provider_id: "custom_1".to_string(),
-            wire_api: ApiProviderWireApi::Responses,
+            dialect: ApiProviderDialect::Responses,
             base_url: "https://example.com/v1".to_string(),
             api_key: "sk-test".to_string(),
             model: "gpt-test".to_string(),
@@ -935,7 +946,7 @@ model = "gpt-test"
 [model_providers.custom_1.variants.responses]
 name = "custom_1"
 base_url = "https://example.com/v1"
-wire_api = "responses"
+dialect = "responses"
 experimental_bearer_token = "sk-test"
 requires_openai_auth = false
 
@@ -947,58 +958,58 @@ model = "gpt-test"
     }
 
     #[test]
-    fn api_provider_wire_api_messages_helpers_are_consistent() {
-        assert_eq!(ApiProviderWireApi::default(), ApiProviderWireApi::Chat);
+    fn api_provider_dialect_messages_helpers_are_consistent() {
+        assert_eq!(ApiProviderDialect::default(), ApiProviderDialect::Chat);
         assert_eq!(
-            ApiProviderWireApi::all(),
+            ApiProviderDialect::all(),
             [
-                ApiProviderWireApi::Chat,
-                ApiProviderWireApi::Responses,
-                ApiProviderWireApi::Messages,
+                ApiProviderDialect::Chat,
+                ApiProviderDialect::Responses,
+                ApiProviderDialect::Messages,
             ]
         );
         assert_eq!(
-            ApiProviderWireApi::Chat.next(),
-            ApiProviderWireApi::Responses
+            ApiProviderDialect::Chat.next(),
+            ApiProviderDialect::Responses
         );
         assert_eq!(
-            ApiProviderWireApi::Responses.next(),
-            ApiProviderWireApi::Messages
+            ApiProviderDialect::Responses.next(),
+            ApiProviderDialect::Messages
         );
         assert_eq!(
-            ApiProviderWireApi::Messages.next(),
-            ApiProviderWireApi::Chat
+            ApiProviderDialect::Messages.next(),
+            ApiProviderDialect::Chat
         );
         assert_eq!(
-            ApiProviderWireApi::Chat.previous(),
-            ApiProviderWireApi::Messages
+            ApiProviderDialect::Chat.previous(),
+            ApiProviderDialect::Messages
         );
         assert_eq!(
-            ApiProviderWireApi::Messages.previous(),
-            ApiProviderWireApi::Responses
+            ApiProviderDialect::Messages.previous(),
+            ApiProviderDialect::Responses
         );
         assert_eq!(
-            ApiProviderWireApi::from_shortcut_digit('3'),
-            Some(ApiProviderWireApi::Messages)
+            ApiProviderDialect::from_shortcut_digit('3'),
+            Some(ApiProviderDialect::Messages)
         );
         assert_eq!(
-            ApiProviderWireApi::from_shortcut_letter('m'),
-            Some(ApiProviderWireApi::Messages)
+            ApiProviderDialect::from_shortcut_letter('m'),
+            Some(ApiProviderDialect::Messages)
         );
-        assert_eq!(ApiProviderWireApi::Messages.as_config_value(), "messages");
+        assert_eq!(ApiProviderDialect::Messages.as_config_value(), "messages");
         assert_eq!(
-            ApiProviderWireApi::Messages.as_api_wire(),
-            ApiWireApi::Messages
+            ApiProviderDialect::Messages.as_api_dialect(),
+            ApiConversationDialect::Messages
         );
-        assert_eq!(ApiProviderWireApi::Messages.label(), "messages");
+        assert_eq!(ApiProviderDialect::Messages.label(), "messages");
     }
 
     #[test]
-    fn custom_provider_edits_write_messages_wire_api() {
+    fn custom_provider_edits_write_messages_dialect() {
         let codex_home = tempdir().expect("temp dir");
         let config = CustomProviderConfig {
             provider_id: "anthropic".to_string(),
-            wire_api: ApiProviderWireApi::Messages,
+            dialect: ApiProviderDialect::Messages,
             base_url: "https://api.anthropic.com/v1".to_string(),
             api_key: "sk-ant-test".to_string(),
             model: "claude-sonnet-4-20250514".to_string(),
@@ -1014,7 +1025,7 @@ model = "gpt-test"
         let doc = raw.parse::<DocumentMut>().expect("parse config");
 
         assert_eq!(
-            doc["model_providers"]["anthropic"]["variants"]["messages"]["wire_api"].as_str(),
+            doc["model_providers"]["anthropic"]["variants"]["messages"]["dialect"].as_str(),
             Some("messages")
         );
         assert_eq!(doc["model_provider"].as_str(), Some("anthropic#messages"));
@@ -1026,13 +1037,13 @@ model = "gpt-test"
     }
 
     #[test]
-    fn saving_second_wire_api_for_same_provider_keeps_distinct_variants() {
+    fn saving_second_dialect_for_same_provider_keeps_distinct_variants() {
         let codex_home = tempdir().expect("temp dir");
 
         ConfigEditsBuilder::new(codex_home.path())
             .with_edits(build_custom_provider_edits(&CustomProviderConfig {
                 provider_id: "custom_1".to_string(),
-                wire_api: ApiProviderWireApi::Responses,
+                dialect: ApiProviderDialect::Responses,
                 base_url: "https://example.com/v1".to_string(),
                 api_key: "sk-old".to_string(),
                 model: "gpt-test".to_string(),
@@ -1045,7 +1056,7 @@ model = "gpt-test"
             .with_edits(build_custom_provider_edits_with_existing(
                 &CustomProviderConfig {
                     provider_id: "custom_1".to_string(),
-                    wire_api: ApiProviderWireApi::Chat,
+                    dialect: ApiProviderDialect::Chat,
                     base_url: "https://example.com/chat".to_string(),
                     api_key: "sk-new".to_string(),
                     model: "gpt-other".to_string(),
@@ -1068,7 +1079,7 @@ model = "gpt-test"
         assert_eq!(doc["model_provider"].as_str(), Some("custom_1#chat"));
         assert_eq!(doc["model"].as_str(), Some("gpt-other"));
         assert_eq!(
-            doc["model_providers"]["custom_1"]["variants"]["chat"]["wire_api"].as_str(),
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["dialect"].as_str(),
             Some("chat")
         );
         assert_eq!(
@@ -1101,7 +1112,7 @@ model = "gpt-test"
         ConfigEditsBuilder::new(codex_home.path())
             .with_edits(build_custom_provider_edits(&CustomProviderConfig {
                 provider_id: "custom_1".to_string(),
-                wire_api: ApiProviderWireApi::Responses,
+                dialect: ApiProviderDialect::Responses,
                 base_url: "https://example.com/v1".to_string(),
                 api_key: "sk-old".to_string(),
                 model: "gpt-test".to_string(),
@@ -1114,7 +1125,7 @@ model = "gpt-test"
             .with_edits(build_custom_provider_edits_with_existing(
                 &CustomProviderConfig {
                     provider_id: "custom_1".to_string(),
-                    wire_api: ApiProviderWireApi::Chat,
+                    dialect: ApiProviderDialect::Chat,
                     base_url: "https://example.com/chat".to_string(),
                     api_key: "sk-new".to_string(),
                     model: "gpt-test".to_string(),
@@ -1138,7 +1149,7 @@ model = "gpt-test"
         assert_eq!(doc["model_provider"].as_str(), Some("custom_1#chat"));
         assert_eq!(doc["model"].as_str(), Some("gpt-test"));
         assert_eq!(
-            doc["model_providers"]["custom_1"]["variants"]["chat"]["wire_api"].as_str(),
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["dialect"].as_str(),
             Some("chat")
         );
         assert_eq!(
@@ -1172,7 +1183,7 @@ model = "gpt-test"
 [model_providers.custom_1]
 name = "custom_1"
 base_url = "https://example.com/v1"
-wire_api = "responses"
+dialect = "responses"
 experimental_bearer_token = "sk-old"
 env_key = "CUSTOM_API_KEY"
 
@@ -1189,7 +1200,7 @@ X-Test = "1"
             .with_edits(build_custom_provider_edits_with_existing(
                 &CustomProviderConfig {
                     provider_id: "custom_1".to_string(),
-                    wire_api: ApiProviderWireApi::Chat,
+                    dialect: ApiProviderDialect::Chat,
                     base_url: "https://example.com/chat".to_string(),
                     api_key: "sk-new".to_string(),
                     model: "gpt-other".to_string(),
@@ -1221,7 +1232,7 @@ X-Test = "1"
             Some("1")
         );
         assert_eq!(
-            doc["model_providers"]["custom_1"]["variants"]["chat"]["wire_api"].as_str(),
+            doc["model_providers"]["custom_1"]["variants"]["chat"]["dialect"].as_str(),
             Some("chat")
         );
         assert_eq!(
@@ -1251,7 +1262,7 @@ model = "gpt-test"
 [model_providers.custom_1]
 name = "custom_1"
 base_url = "https://example.com/v1"
-wire_api = "responses"
+dialect = "responses"
 experimental_bearer_token = "sk-old"
 
 [profiles.saved]
@@ -1265,7 +1276,7 @@ model_provider = "custom_1"
             .with_edits(build_custom_provider_edits_with_existing(
                 &CustomProviderConfig {
                     provider_id: "custom_1".to_string(),
-                    wire_api: ApiProviderWireApi::Chat,
+                    dialect: ApiProviderDialect::Chat,
                     base_url: "https://example.com/chat".to_string(),
                     api_key: "sk-new".to_string(),
                     model: "gpt-other".to_string(),
@@ -1300,7 +1311,7 @@ model = "gpt-test"
 [model_providers.custom_1]
 name = "custom_1"
 base_url = "https://example.com/v1"
-wire_api = "responses"
+dialect = "responses"
 experimental_bearer_token = "sk-old"
 
 [profiles."_provider.custom_1.gpt-test"]
@@ -1315,7 +1326,7 @@ model_context_window = 64000
             .with_edits(build_custom_provider_edits_with_existing(
                 &CustomProviderConfig {
                     provider_id: "custom_1".to_string(),
-                    wire_api: ApiProviderWireApi::Chat,
+                    dialect: ApiProviderDialect::Chat,
                     base_url: "https://example.com/chat".to_string(),
                     api_key: "sk-new".to_string(),
                     model: "gpt-other".to_string(),
@@ -1364,7 +1375,7 @@ model = "gpt-test"
 [model_providers.custom_1]
 name = "custom_1"
 base_url = "https://example.com/v1"
-wire_api = "responses"
+dialect = "responses"
 experimental_bearer_token = "sk-old"
 
 [profiles."_provider.custom_1.gpt-test"]
@@ -1384,7 +1395,7 @@ include_apply_patch_tool = true
             .with_edits(build_custom_provider_edits_with_existing(
                 &CustomProviderConfig {
                     provider_id: "custom_1".to_string(),
-                    wire_api: ApiProviderWireApi::Chat,
+                    dialect: ApiProviderDialect::Chat,
                     base_url: "https://example.com/chat".to_string(),
                     api_key: "sk-new".to_string(),
                     model: "gpt-other".to_string(),
@@ -1425,7 +1436,7 @@ include_apply_patch_tool = true
         ConfigEditsBuilder::new(codex_home.path())
             .with_edits(build_custom_provider_edits(&CustomProviderConfig {
                 provider_id: "custom_1".to_string(),
-                wire_api: ApiProviderWireApi::Responses,
+                dialect: ApiProviderDialect::Responses,
                 base_url: "https://example.com/v1".to_string(),
                 api_key: "sk-test".to_string(),
                 model: "gpt-test".to_string(),
@@ -1452,7 +1463,7 @@ include_apply_patch_tool = true
         ConfigEditsBuilder::new(codex_home.path())
             .with_edits(build_custom_provider_edits(&CustomProviderConfig {
                 provider_id: "custom_1".to_string(),
-                wire_api: ApiProviderWireApi::Responses,
+                dialect: ApiProviderDialect::Responses,
                 base_url: "https://example.com/v1".to_string(),
                 api_key: "sk-old".to_string(),
                 model: "gpt-test".to_string(),
@@ -1464,7 +1475,7 @@ include_apply_patch_tool = true
         ConfigEditsBuilder::new(codex_home.path())
             .with_edits(build_custom_provider_edits(&CustomProviderConfig {
                 provider_id: "custom_1".to_string(),
-                wire_api: ApiProviderWireApi::Chat,
+                dialect: ApiProviderDialect::Chat,
                 base_url: "https://example.com/chat".to_string(),
                 api_key: "sk-new".to_string(),
                 model: "gpt-test".to_string(),
@@ -1490,7 +1501,7 @@ include_apply_patch_tool = true
         ConfigEditsBuilder::new(codex_home.path())
             .with_edits(build_custom_provider_edits(&CustomProviderConfig {
                 provider_id: "custom_1".to_string(),
-                wire_api: ApiProviderWireApi::Responses,
+                dialect: ApiProviderDialect::Responses,
                 base_url: "https://example.com/v1".to_string(),
                 api_key: "sk-old".to_string(),
                 model: "gpt-test".to_string(),
@@ -1502,7 +1513,7 @@ include_apply_patch_tool = true
         ConfigEditsBuilder::new(codex_home.path())
             .with_edits(build_custom_provider_edits(&CustomProviderConfig {
                 provider_id: "custom_2".to_string(),
-                wire_api: ApiProviderWireApi::Chat,
+                dialect: ApiProviderDialect::Chat,
                 base_url: "https://example.com/chat".to_string(),
                 api_key: "sk-new".to_string(),
                 model: "gpt-other".to_string(),

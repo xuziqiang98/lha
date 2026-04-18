@@ -1,6 +1,8 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
+use codex_agent::protocol::AskForApproval;
+use codex_agent::protocol::SandboxPolicy;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::InputItem;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -9,8 +11,6 @@ use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::SendUserTurnResponse;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ReasoningEffort;
 use core_test_support::responses;
@@ -276,7 +276,7 @@ model_provider = "mock_provider"
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"
-wire_api = "responses"
+dialect = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#

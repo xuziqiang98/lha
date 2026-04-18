@@ -5,8 +5,8 @@ use crate::update_action::UpdateAction;
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
-use codex_core::config::Config;
-use codex_core::default_client::create_client;
+use codex_agent::config::Config;
+use codex_agent::default_client::create_client;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::Path;
@@ -197,7 +197,7 @@ fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_core::config::ConfigBuilder;
+    use codex_agent::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 

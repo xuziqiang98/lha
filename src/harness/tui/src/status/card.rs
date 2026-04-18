@@ -5,15 +5,14 @@ use crate::history_cell::with_border_with_inner_width;
 use crate::version::CODEX_CLI_VERSION;
 use chrono::DateTime;
 use chrono::Local;
+use codex_agent::config::Config;
+use codex_agent::config::display_model_provider_ref;
+use codex_agent::models_manager::manager::ModelsManager;
+use codex_agent::protocol::NetworkAccess;
+use codex_agent::protocol::SandboxPolicy;
+use codex_agent::protocol::TokenUsage;
+use codex_agent::protocol::TokenUsageInfo;
 use codex_common::summarize_sandbox_policy;
-use codex_core::WireApi;
-use codex_core::config::Config;
-use codex_core::config::display_model_provider_ref;
-use codex_core::models_manager::manager::ModelsManager;
-use codex_core::protocol::NetworkAccess;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::TokenUsage;
-use codex_core::protocol::TokenUsageInfo;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -42,7 +41,7 @@ use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
-use codex_core::AuthManager;
+use codex_agent::AuthManager;
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
@@ -184,7 +183,7 @@ impl StatusHistoryCell {
                 summarize_sandbox_policy(config.sandbox_policy.get()),
             ),
         ];
-        if config.model_provider.wire_api == WireApi::Responses {
+        if config.model_provider.uses_responses_api() {
             let effort_value = reasoning_effort_override
                 .unwrap_or(None)
                 .map(|effort| effort.to_string())

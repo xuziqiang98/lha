@@ -2,7 +2,7 @@
 
 use anyhow::Context;
 use assert_cmd::prelude::*;
-use codex_core::CODEX_APPLY_PATCH_ARG1;
+use codex_agent::CODEX_APPLY_PATCH_ARG1;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_completed;

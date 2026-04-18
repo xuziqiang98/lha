@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use codex_core::error::CodexErr;
-use codex_core::error::Result;
-use codex_core::error::SandboxErr;
-use codex_core::protocol::SandboxPolicy;
+use codex_agent::error::CodexErr;
+use codex_agent::error::Result;
+use codex_agent::error::SandboxErr;
+use codex_agent::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use landlock::ABI;

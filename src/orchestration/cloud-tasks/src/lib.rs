@@ -54,7 +54,7 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
         });
     }
 
-    let ua = codex_core::default_client::get_codex_user_agent();
+    let ua = codex_agent::default_client::get_codex_user_agent();
     let mut http = codex_cloud_tasks_client::HttpClient::new(base_url.clone())?.with_user_agent(ua);
     let style = if base_url.contains("/backend-api") {
         "wham"
@@ -119,11 +119,11 @@ struct RealGitInfo;
 #[async_trait::async_trait]
 impl GitInfoProvider for RealGitInfo {
     async fn default_branch_name(&self, path: &std::path::Path) -> Option<String> {
-        codex_core::git_info::default_branch_name(path).await
+        codex_agent::git_info::default_branch_name(path).await
     }
 
     async fn current_branch_name(&self, path: &std::path::Path) -> Option<String> {
-        codex_core::git_info::current_branch_name(path).await
+        codex_agent::git_info::current_branch_name(path).await
     }
 }
 
@@ -800,7 +800,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
     append_error_log(format!(
         "startup: wham_force_internal={} ua={}",
         force_internal,
-        codex_core::default_client::get_codex_user_agent()
+        codex_agent::default_client::get_codex_user_agent()
     ));
     // Non-blocking initial load so the in-box spinner can animate
     app.status = "Loading tasks…".to_string();

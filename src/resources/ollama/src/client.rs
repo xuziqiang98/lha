@@ -11,10 +11,9 @@ use crate::pull::PullEvent;
 use crate::pull::PullProgressReporter;
 use crate::url::base_url_to_host_root;
 use crate::url::is_openai_compatible_base_url;
-use codex_core::ModelProviderInfo;
-use codex_core::OLLAMA_OSS_PROVIDER_ID;
-use codex_core::WireApi;
-use codex_core::config::Config;
+use codex_agent::config::Config;
+use codex_llm::OLLAMA_OSS_PROVIDER_ID;
+use codex_llm::RuntimeEndpoint;
 
 const OLLAMA_CONNECTION_ERROR: &str = "No running Ollama server detected. Start it with: `ollama serve` (after installing). Install instructions: https://github.com/ollama/ollama?tab=readme-ov-file#ollama";
 
@@ -48,21 +47,19 @@ impl OllamaClient {
 
     #[cfg(test)]
     async fn try_from_provider_with_base_url(base_url: &str) -> io::Result<Self> {
-        let provider =
-            codex_core::create_oss_provider_with_base_url(base_url, codex_core::WireApi::Chat);
+        let provider = RuntimeEndpoint::openai_compatible_chat("gpt-oss", base_url);
         Self::try_from_provider(&provider).await
     }
 
     /// Build a client from a provider definition and verify the server is reachable.
-    pub(crate) async fn try_from_provider(provider: &ModelProviderInfo) -> io::Result<Self> {
+    pub(crate) async fn try_from_provider(provider: &RuntimeEndpoint) -> io::Result<Self> {
         #![expect(clippy::expect_used)]
         let base_url = provider
             .base_url
             .as_ref()
             .expect("oss provider must have a base_url");
-        let uses_openai_compat = is_openai_compatible_base_url(base_url)
-            || matches!(provider.wire_api, WireApi::Chat)
-                && is_openai_compatible_base_url(base_url);
+        let uses_openai_compat =
+            provider.uses_chat_completions_api() && is_openai_compatible_base_url(base_url);
         let host_root = base_url_to_host_root(base_url);
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(5))
@@ -268,10 +265,10 @@ mod tests {
     // Happy-path tests using a mock HTTP server; skip if sandbox network is disabled.
     #[tokio::test]
     async fn test_fetch_models_happy_path() {
-        if std::env::var(codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        if std::env::var(codex_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
             tracing::info!(
                 "{} is set; skipping test_fetch_models_happy_path",
-                codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
+                codex_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
             );
             return;
         }
@@ -299,10 +296,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch_version() {
-        if std::env::var(codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        if std::env::var(codex_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
             tracing::info!(
                 "{} is set; skipping test_fetch_version",
-                codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
+                codex_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
             );
             return;
         }
@@ -335,10 +332,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_probe_server_happy_path_openai_compat_and_native() {
-        if std::env::var(codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        if std::env::var(codex_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
             tracing::info!(
                 "{} set; skipping test_probe_server_happy_path_openai_compat_and_native",
-                codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
+                codex_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
             );
             return;
         }
@@ -372,10 +369,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_try_from_oss_provider_ok_when_server_running() {
-        if std::env::var(codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        if std::env::var(codex_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
             tracing::info!(
                 "{} set; skipping test_try_from_oss_provider_ok_when_server_running",
-                codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
+                codex_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
             );
             return;
         }
@@ -396,10 +393,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_try_from_oss_provider_err_when_server_missing() {
-        if std::env::var(codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        if std::env::var(codex_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
             tracing::info!(
                 "{} set; skipping test_try_from_oss_provider_err_when_server_missing",
-                codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
+                codex_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
             );
             return;
         }

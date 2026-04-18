@@ -7,33 +7,33 @@ use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
 pub use app::ExitReason;
+use codex_agent::AuthManager;
+use codex_agent::CodexAuth;
+use codex_agent::INTERACTIVE_SESSION_SOURCES;
+use codex_agent::RolloutRecorder;
+use codex_agent::ThreadSortKey;
+use codex_agent::auth::enforce_login_restrictions;
+use codex_agent::config::Config;
+use codex_agent::config::ConfigBuilder;
+use codex_agent::config::ConfigOverrides;
+use codex_agent::config::find_codex_home;
+use codex_agent::config::load_config_as_toml_with_cli_overrides;
+use codex_agent::config::resolve_oss_provider;
+use codex_agent::config_loader::CloudRequirementsLoader;
+use codex_agent::config_loader::ConfigLoadError;
+use codex_agent::config_loader::format_config_error_with_source;
+use codex_agent::default_client::set_default_client_residency_requirement;
+use codex_agent::find_thread_path_by_id_str;
+use codex_agent::find_thread_path_by_name_str;
+use codex_agent::path_utils;
+use codex_agent::protocol::AskForApproval;
+use codex_agent::read_effective_thread_cwd;
+use codex_agent::terminal::Multiplexer;
+use codex_agent::windows_sandbox::WindowsSandboxLevelExt;
 use codex_app_server_protocol::AuthMode;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
-use codex_core::AuthManager;
-use codex_core::CodexAuth;
-use codex_core::INTERACTIVE_SESSION_SOURCES;
-use codex_core::RolloutRecorder;
-use codex_core::ThreadSortKey;
-use codex_core::auth::enforce_login_restrictions;
-use codex_core::config::Config;
-use codex_core::config::ConfigBuilder;
-use codex_core::config::ConfigOverrides;
-use codex_core::config::find_codex_home;
-use codex_core::config::load_config_as_toml_with_cli_overrides;
-use codex_core::config::resolve_oss_provider;
-use codex_core::config_loader::CloudRequirementsLoader;
-use codex_core::config_loader::ConfigLoadError;
-use codex_core::config_loader::format_config_error_with_source;
-use codex_core::default_client::set_default_client_residency_requirement;
-use codex_core::find_thread_path_by_id_str;
-use codex_core::find_thread_path_by_name_str;
-use codex_core::path_utils;
-use codex_core::protocol::AskForApproval;
-use codex_core::read_effective_thread_cwd;
-use codex_core::terminal::Multiplexer;
-use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -210,7 +210,7 @@ pub async fn run_main(
     };
 
     if let Err(err) =
-        codex_core::personality_migration::maybe_migrate_personality(&codex_home, &config_toml)
+        codex_agent::personality_migration::maybe_migrate_personality(&codex_home, &config_toml)
             .await
     {
         tracing::warn!(error = %err, "failed to run personality migration");
@@ -300,7 +300,7 @@ pub async fn run_main(
         std::process::exit(1);
     }
 
-    let log_dir = codex_core::config::log_dir(&config)?;
+    let log_dir = codex_agent::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
     let mut log_file_opts = OpenOptions::new();
@@ -324,7 +324,7 @@ pub async fn run_main(
     // use RUST_LOG env var, default to info for codex crates.
     let env_filter = || {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new("codex_core=info,codex_tui=info,codex_rmcp_client=info")
+            EnvFilter::new("codex_agent=info,codex_tui=info,codex_rmcp_client=info")
         })
     };
 
@@ -361,7 +361,7 @@ pub async fn run_main(
     }
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, true)
+        codex_agent::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, true)
     })) {
         Ok(Ok(otel)) => otel,
         Ok(Err(e)) => {
@@ -384,7 +384,7 @@ pub async fn run_main(
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let log_db_layer = codex_core::state_db::get_state_db(&config, None)
+    let log_db_layer = codex_agent::state_db::get_state_db(&config, None)
         .await
         .map(|db| log_db::start(db).with_filter(env_filter()));
 
@@ -446,7 +446,7 @@ async fn run_ratatui_app(
                 UpdatePromptOutcome::RunUpdate(action) => {
                     crate::tui::restore()?;
                     return Ok(AppExitInfo {
-                        token_usage: codex_core::protocol::TokenUsage::default(),
+                        token_usage: codex_agent::protocol::TokenUsage::default(),
                         thread_id: None,
                         thread_name: None,
                         update_action: Some(action),
@@ -487,7 +487,7 @@ async fn run_ratatui_app(
             session_log::log_session_end();
             let _ = tui.terminal.clear();
             return Ok(AppExitInfo {
-                token_usage: codex_core::protocol::TokenUsage::default(),
+                token_usage: codex_agent::protocol::TokenUsage::default(),
                 thread_id: None,
                 thread_name: None,
                 update_action: None,
@@ -521,7 +521,7 @@ async fn run_ratatui_app(
         session_log::log_session_end();
         let _ = tui.terminal.clear();
         Ok(AppExitInfo {
-            token_usage: codex_core::protocol::TokenUsage::default(),
+            token_usage: codex_agent::protocol::TokenUsage::default(),
             thread_id: None,
             thread_name: None,
             update_action: None,
@@ -579,7 +579,7 @@ async fn run_ratatui_app(
                     restore();
                     session_log::log_session_end();
                     return Ok(AppExitInfo {
-                        token_usage: codex_core::protocol::TokenUsage::default(),
+                        token_usage: codex_agent::protocol::TokenUsage::default(),
                         thread_id: None,
                         thread_name: None,
                         update_action: None,
@@ -637,7 +637,7 @@ async fn run_ratatui_app(
                 restore();
                 session_log::log_session_end();
                 return Ok(AppExitInfo {
-                    token_usage: codex_core::protocol::TokenUsage::default(),
+                    token_usage: codex_agent::protocol::TokenUsage::default(),
                     thread_id: None,
                     thread_name: None,
                     update_action: None,
@@ -795,7 +795,7 @@ fn determine_alt_screen_mode(no_alt_screen: bool, tui_alternate_screen: AltScree
             AltScreenMode::Always => true,
             AltScreenMode::Never => false,
             AltScreenMode::Auto => {
-                let terminal_info = codex_core::terminal::terminal_info();
+                let terminal_info = codex_agent::terminal::terminal_info();
                 !matches!(terminal_info.multiplexer, Some(Multiplexer::Zellij { .. }))
             }
         }
@@ -902,13 +902,13 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
 mod tests {
     use super::*;
     use chrono::Utc;
-    use codex_core::INTERACTIVE_SESSION_SOURCES;
-    use codex_core::RolloutRecorder;
-    use codex_core::ThreadSortKey;
-    use codex_core::config::ConfigBuilder;
-    use codex_core::config::ConfigOverrides;
-    use codex_core::config::ProjectConfig;
-    use codex_core::protocol::AskForApproval;
+    use codex_agent::INTERACTIVE_SESSION_SOURCES;
+    use codex_agent::RolloutRecorder;
+    use codex_agent::ThreadSortKey;
+    use codex_agent::config::ConfigBuilder;
+    use codex_agent::config::ConfigOverrides;
+    use codex_agent::config::ProjectConfig;
+    use codex_agent::protocol::AskForApproval;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
     use codex_protocol::protocol::SessionMeta;
@@ -1042,6 +1042,7 @@ mod tests {
                     cwd: cwd.to_path_buf(),
                     originator: "test".to_string(),
                     cli_version: "0.0.0".to_string(),
+                    rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V2,
                     source: codex_protocol::protocol::SessionSource::Cli,
                     model_provider: Some(provider.to_string()),
                     base_instructions: None,

@@ -16,7 +16,7 @@ use codex_client::Response;
 use codex_client::StreamResponse;
 use codex_client::TransportError;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ConversationItem;
 use futures::StreamExt;
 use http::HeaderMap;
 use http::StatusCode;
@@ -146,14 +146,14 @@ async fn responses_stream_parses_items_and_completed_end_to_end() -> Result<()> 
     assert_eq!(events.len(), 3);
 
     match &events[0] {
-        ResponseEvent::OutputItemDone(ResponseItem::Message { role, .. }) => {
+        ResponseEvent::OutputItemDone(ConversationItem::Message { role, .. }) => {
             assert_eq!(role, "assistant");
         }
         other => panic!("unexpected first event: {other:?}"),
     }
 
     match &events[1] {
-        ResponseEvent::OutputItemDone(ResponseItem::Message { role, .. }) => {
+        ResponseEvent::OutputItemDone(ConversationItem::Message { role, .. }) => {
             assert_eq!(role, "assistant");
         }
         other => panic!("unexpected second event: {other:?}"),
@@ -217,7 +217,7 @@ async fn responses_stream_aggregates_output_text_deltas() -> Result<()> {
     assert_eq!(events.len(), 2);
 
     match &events[0] {
-        ResponseEvent::OutputItemDone(ResponseItem::Message { content, .. }) => {
+        ResponseEvent::OutputItemDone(ConversationItem::Message { content, .. }) => {
             let mut aggregated = String::new();
             for item in content {
                 if let ContentItem::OutputText { text } = item {

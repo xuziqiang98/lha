@@ -16,7 +16,7 @@ use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ConversationItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
@@ -86,13 +86,13 @@ impl OtelManager {
         match event {
             ResponseEvent::OutputItemDone(item) => {
                 handle_responses_span.record("from", "output_item_done");
-                if let ResponseItem::FunctionCall { name, .. } = &item {
+                if let ConversationItem::FunctionCall { name, .. } = &item {
                     handle_responses_span.record("tool_name", name.as_str());
                 }
             }
             ResponseEvent::OutputItemAdded(item) => {
                 handle_responses_span.record("from", "output_item_added");
-                if let ResponseItem::FunctionCall { name, .. } = &item {
+                if let ConversationItem::FunctionCall { name, .. } = &item {
                     handle_responses_span.record("tool_name", name.as_str());
                 }
             }
@@ -341,7 +341,7 @@ impl OtelManager {
                             self.sse_event_failed(Some(&sse.event), duration, &error);
                         }
                         Ok(content) if sse.event == "response.output_item.done" => {
-                            match serde_json::from_value::<ResponseItem>(content) {
+                            match serde_json::from_value::<ConversationItem>(content) {
                                 Ok(_) => self.sse_event(&sse.event, duration),
                                 Err(_) => {
                                     self.sse_event_failed(
@@ -671,19 +671,19 @@ impl OtelManager {
         }
     }
 
-    fn responses_item_type(item: &ResponseItem) -> String {
+    fn responses_item_type(item: &ConversationItem) -> String {
         match item {
-            ResponseItem::Message { role, .. } => format!("message_from_{role}"),
-            ResponseItem::Reasoning { .. } => "reasoning".into(),
-            ResponseItem::LocalShellCall { .. } => "local_shell_call".into(),
-            ResponseItem::FunctionCall { .. } => "function_call".into(),
-            ResponseItem::FunctionCallOutput { .. } => "function_call_output".into(),
-            ResponseItem::CustomToolCall { .. } => "custom_tool_call".into(),
-            ResponseItem::CustomToolCallOutput { .. } => "custom_tool_call_output".into(),
-            ResponseItem::WebSearchCall { .. } => "web_search_call".into(),
-            ResponseItem::GhostSnapshot { .. } => "ghost_snapshot".into(),
-            ResponseItem::Compaction { .. } => "compaction".into(),
-            ResponseItem::Other => "other".into(),
+            ConversationItem::Message { role, .. } => format!("message_from_{role}"),
+            ConversationItem::Reasoning { .. } => "reasoning".into(),
+            ConversationItem::LocalShellCall { .. } => "local_shell_call".into(),
+            ConversationItem::FunctionCall { .. } => "function_call".into(),
+            ConversationItem::FunctionCallOutput { .. } => "function_call_output".into(),
+            ConversationItem::CustomToolCall { .. } => "custom_tool_call".into(),
+            ConversationItem::CustomToolCallOutput { .. } => "custom_tool_call_output".into(),
+            ConversationItem::WebSearchCall { .. } => "web_search_call".into(),
+            ConversationItem::GhostSnapshot { .. } => "ghost_snapshot".into(),
+            ConversationItem::Compaction { .. } => "compaction".into(),
+            ConversationItem::Other => "other".into(),
         }
     }
 }

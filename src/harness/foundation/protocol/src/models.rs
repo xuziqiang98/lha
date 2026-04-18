@@ -74,7 +74,7 @@ pub enum ContentItem {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum ResponseItem {
+pub enum ConversationItem {
     Message {
         #[serde(default, skip_serializing)]
         #[ts(skip)]
@@ -430,9 +430,9 @@ fn render_command_prefix(prefix: &[String]) -> String {
     format!("[{tokens}]")
 }
 
-impl From<DeveloperInstructions> for ResponseItem {
+impl From<DeveloperInstructions> for ConversationItem {
     fn from(di: DeveloperInstructions) -> Self {
-        ResponseItem::Message {
+        ConversationItem::Message {
             id: None,
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {
@@ -588,7 +588,7 @@ pub fn local_image_content_items_with_label_number(
     }
 }
 
-impl From<ResponseInputItem> for ResponseItem {
+impl From<ResponseInputItem> for ConversationItem {
     fn from(item: ResponseInputItem) -> Self {
         match item {
             ResponseInputItem::Message { role, content } => Self::Message {
@@ -712,7 +712,7 @@ impl From<Vec<UserInput>> for ResponseInputItem {
     }
 }
 
-/// If the `name` of a `ResponseItem::FunctionCall` is either `container.exec`
+/// If the `name` of a `ConversationItem::FunctionCall` is either `container.exec`
 /// or `shell`, the `arguments` field should deserialize to this struct.
 #[derive(Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 pub struct ShellToolCallParams {
@@ -733,7 +733,7 @@ pub struct ShellToolCallParams {
     pub justification: Option<String>,
 }
 
-/// If the `name` of a `ResponseItem::FunctionCall` is `shell_command`, the
+/// If the `name` of a `ConversationItem::FunctionCall` is `shell_command`, the
 /// `arguments` field should deserialize to this struct.
 #[derive(Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 pub struct ShellCommandToolCallParams {
@@ -927,7 +927,7 @@ impl std::ops::Deref for FunctionCallOutputPayload {
     }
 }
 
-// (Moved event mapping logic into codex-core to avoid coupling protocol to UI-facing events.)
+// (Moved event mapping logic into codex-agent to avoid coupling protocol to UI-facing events.)
 
 #[cfg(test)]
 mod tests {
@@ -1199,11 +1199,11 @@ mod tests {
     fn deserializes_compaction_alias() -> Result<()> {
         let json = r#"{"type":"compaction_summary","encrypted_content":"abc"}"#;
 
-        let item: ResponseItem = serde_json::from_str(json)?;
+        let item: ConversationItem = serde_json::from_str(json)?;
 
         assert_eq!(
             item,
-            ResponseItem::Compaction {
+            ConversationItem::Compaction {
                 encrypted_content: "abc".into(),
             }
         );
@@ -1280,8 +1280,8 @@ mod tests {
 
         for (json_literal, expected_id, expected_action, expected_status, expect_roundtrip) in cases
         {
-            let parsed: ResponseItem = serde_json::from_str(json_literal)?;
-            let expected = ResponseItem::WebSearchCall {
+            let parsed: ConversationItem = serde_json::from_str(json_literal)?;
+            let expected = ConversationItem::WebSearchCall {
                 id: expected_id.clone(),
                 status: expected_status.clone(),
                 action: expected_action.clone(),

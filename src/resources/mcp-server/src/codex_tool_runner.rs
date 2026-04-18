@@ -9,18 +9,18 @@ use crate::exec_approval::handle_exec_approval_request;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotificationMeta;
 use crate::patch_approval::handle_patch_approval_request;
-use codex_core::CodexThread;
-use codex_core::NewThread;
-use codex_core::ThreadManager;
-use codex_core::config::Config as CodexConfig;
-use codex_core::protocol::AgentMessageEvent;
-use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::Submission;
-use codex_core::protocol::TurnCompleteEvent;
+use codex_agent::CodexThread;
+use codex_agent::NewThread;
+use codex_agent::ThreadManager;
+use codex_agent::config::Config as CodexConfig;
+use codex_agent::protocol::AgentMessageEvent;
+use codex_agent::protocol::ApplyPatchApprovalRequestEvent;
+use codex_agent::protocol::Event;
+use codex_agent::protocol::EventMsg;
+use codex_agent::protocol::ExecApprovalRequestEvent;
+use codex_agent::protocol::Op;
+use codex_agent::protocol::Submission;
+use codex_agent::protocol::TurnCompleteEvent;
 use codex_protocol::ThreadId;
 use codex_protocol::user_input::UserInput;
 use mcp_types::CallToolResult;
@@ -354,7 +354,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::UserMessage(_)
                     | EventMsg::ShutdownComplete
                     | EventMsg::ViewImageToolCall(_)
-                    | EventMsg::RawResponseItem(_)
+                    | EventMsg::RawConversationItem(_)
                     | EventMsg::EnteredReviewMode(_)
                     | EventMsg::ItemStarted(_)
                     | EventMsg::ItemCompleted(_)

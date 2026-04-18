@@ -10,9 +10,20 @@ use reqwest::Client;
 use std::time::Duration;
 use tokio::time::timeout;
 
+/// Strategy for refreshing the runtime model catalog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatalogRefreshStrategy {
+    /// Always fetch from the network, ignoring cache.
+    Online,
+    /// Only use cached data, never fetch from the network.
+    Offline,
+    /// Use cache if available and fresh, otherwise fetch from the network.
+    OnlineIfUncached,
+}
+
 pub async fn fetch_remote_models(
     http_client: Client,
-    provider: &crate::provider::ModelProviderInfo,
+    provider: &crate::provider::RuntimeEndpoint,
     auth: Option<AuthContext>,
     client_version: &str,
     extra_headers: HeaderMap,

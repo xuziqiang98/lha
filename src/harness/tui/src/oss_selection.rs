@@ -1,12 +1,12 @@
 use std::io;
 use std::sync::LazyLock;
 
-use codex_core::DEFAULT_LMSTUDIO_PORT;
-use codex_core::DEFAULT_OLLAMA_PORT;
-use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
-use codex_core::OLLAMA_CHAT_PROVIDER_ID;
-use codex_core::OLLAMA_OSS_PROVIDER_ID;
-use codex_core::config::set_default_oss_provider;
+use codex_agent::config::set_default_oss_provider;
+use codex_llm::DEFAULT_LMSTUDIO_PORT;
+use codex_llm::DEFAULT_OLLAMA_PORT;
+use codex_llm::LMSTUDIO_OSS_PROVIDER_ID;
+use codex_llm::OLLAMA_CHAT_PROVIDER_ID;
+use codex_llm::OLLAMA_OSS_PROVIDER_ID;
 use crossterm::event::Event;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;

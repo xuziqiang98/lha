@@ -1,6 +1,6 @@
-use codex_core::AuthManager;
-use codex_core::config::Config;
-use codex_core::git_info::get_git_repo_root;
+use codex_agent::AuthManager;
+use codex_agent::config::Config;
+use codex_agent::git_info::get_git_repo_root;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -491,7 +491,7 @@ mod tests {
     use crate::onboarding::auth::AuthModeWidget;
     use crate::onboarding::auth::SignInOption;
     use crate::onboarding::auth::SignInState;
-    use codex_core::auth::AuthCredentialsStoreMode;
+    use codex_agent::auth::AuthCredentialsStoreMode;
     use pretty_assertions::assert_eq;
     use ratatui::layout::Rect;
     use std::sync::Arc;

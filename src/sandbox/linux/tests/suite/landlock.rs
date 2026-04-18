@@ -1,14 +1,14 @@
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used)]
-use codex_core::config::types::ShellEnvironmentPolicy;
-use codex_core::error::CodexErr;
-use codex_core::error::SandboxErr;
-use codex_core::exec::ExecParams;
-use codex_core::exec::process_exec_tool_call;
-use codex_core::exec_env::create_env;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol_config_types::WindowsSandboxLevel;
-use codex_core::sandboxing::SandboxPermissions;
+use codex_agent::config::types::ShellEnvironmentPolicy;
+use codex_agent::error::CodexErr;
+use codex_agent::error::SandboxErr;
+use codex_agent::exec::ExecParams;
+use codex_agent::exec::process_exec_tool_call;
+use codex_agent::exec_env::create_env;
+use codex_agent::protocol::SandboxPolicy;
+use codex_agent::protocol_config_types::WindowsSandboxLevel;
+use codex_agent::sandboxing::SandboxPermissions;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -52,7 +52,7 @@ async fn run_cmd_output(
     cmd: &[&str],
     writable_roots: &[PathBuf],
     timeout_ms: u64,
-) -> codex_core::exec::ExecToolCallOutput {
+) -> codex_agent::exec::ExecToolCallOutput {
     let cwd = std::env::current_dir().expect("cwd should exist");
     let sandbox_cwd = cwd.clone();
     let params = ExecParams {

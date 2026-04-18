@@ -1,28 +1,15 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ChatRoleCompatibilityKey {
-    pub model_provider_id: String,
-}
-
-impl ChatRoleCompatibilityKey {
-    pub fn new(model_provider_id: impl Into<String>) -> Self {
-        Self {
-            model_provider_id: model_provider_id.into(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChatRoleCompatibility {
+pub(crate) enum ChatRoleCompatibility {
     Unknown,
     SupportsDeveloper,
     RequiresSystemForDeveloper,
 }
 
 #[derive(Debug)]
-pub struct ChatRoleCompatibilityState {
+pub(crate) struct ChatRoleCompatibilityState {
     compatibility: ChatRoleCompatibility,
 }
 
@@ -52,4 +39,4 @@ impl Default for ChatRoleCompatibilityState {
     }
 }
 
-pub type ChatRoleCompatibilityHandle = Arc<Mutex<ChatRoleCompatibilityState>>;
+pub(crate) type ChatRoleCompatibilityHandle = Arc<Mutex<ChatRoleCompatibilityState>>;

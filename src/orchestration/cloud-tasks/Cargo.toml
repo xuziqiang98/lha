@@ -21,7 +21,7 @@ codex-cloud-tasks-client = { path = "../cloud-tasks-client", features = [
     "online",
 ] }
 codex-common = { path = "../../harness/foundation/common", features = ["cli"] }
-codex-core = { path = "../../harness/core" }
+codex-agent = { path = "../../harness/agent" }
 codex-login = { path = "../../harness/login" }
 codex-tui = { path = "../../harness/tui" }
 crossterm = { workspace = true, features = ["event-stream"] }

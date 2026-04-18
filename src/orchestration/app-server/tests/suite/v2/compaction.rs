@@ -13,6 +13,8 @@ use app_test_support::McpProcess;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_mock_responses_config_toml;
+use codex_agent::auth::AuthCredentialsStoreMode;
+use codex_agent::features::Feature;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -25,10 +27,8 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::features::Feature;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ConversationItem;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -119,7 +119,7 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
     let responses_log = responses::mount_sse_sequence(&server, vec![sse1, sse2, sse3]).await;
 
     let compacted_history = vec![
-        ResponseItem::Message {
+        ConversationItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -127,7 +127,7 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
             }],
             end_turn: None,
         },
-        ResponseItem::Compaction {
+        ConversationItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
         },
     ];

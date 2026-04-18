@@ -6,12 +6,12 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::DateTime;
 use chrono::Utc;
+use codex_agent::auth::AuthCredentialsStoreMode;
+use codex_agent::auth::AuthDotJson;
+use codex_agent::auth::save_auth;
+use codex_agent::token_data::TokenData;
+use codex_agent::token_data::parse_id_token;
 use codex_app_server_protocol::AuthMode;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::auth::AuthDotJson;
-use codex_core::auth::save_auth;
-use codex_core::token_data::TokenData;
-use codex_core::token_data::parse_id_token;
 use serde_json::json;
 
 /// Builder for writing a fake ChatGPT auth.json in tests.

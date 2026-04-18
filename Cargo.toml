@@ -15,7 +15,7 @@ members = [
     "src/orchestration/cloud-tasks-client",
     "src/harness/cli",
     "src/harness/foundation/common",
-    "src/harness/core",
+    "src/harness/agent",
     "src/harness/exec",
     "src/harness/llm",
     "src/sandbox/execpolicy",
@@ -73,7 +73,7 @@ codex-chatgpt = { path = "src/resources/chatgpt" }
 codex-cli = { path = "src/harness/cli" }
 codex-client = { path = "src/resources/codex-client" }
 codex-common = { path = "src/harness/foundation/common" }
-codex-core = { path = "src/harness/core" }
+codex-agent = { path = "src/harness/agent" }
 codex-exec = { path = "src/harness/exec" }
 codex-execpolicy = { path = "src/sandbox/execpolicy" }
 codex-feedback = { path = "src/harness/feedback" }
@@ -105,7 +105,7 @@ codex-utils-readiness = { path = "src/harness/foundation/utils/readiness" }
 codex-utils-sleep-inhibitor = { path = "src/harness/foundation/utils/sleep-inhibitor" }
 codex-utils-string = { path = "src/harness/foundation/utils/string" }
 codex-windows-sandbox = { path = "src/sandbox/windows" }
-core_test_support = { path = "src/harness/core/tests/common" }
+core_test_support = { path = "src/harness/agent/tests/common" }
 mcp-types = { path = "src/resources/mcp-types" }
 mcp_test_support = { path = "src/resources/mcp-server/tests/common" }
 

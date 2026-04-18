@@ -4,10 +4,10 @@ use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-use codex_core::error::CodexErr;
-use codex_core::error::Result;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::WritableRoot;
+use codex_agent::error::CodexErr;
+use codex_agent::error::Result;
+use codex_agent::protocol::SandboxPolicy;
+use codex_agent::protocol::WritableRoot;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 /// Apply read-only bind mounts for protected subpaths before Landlock.

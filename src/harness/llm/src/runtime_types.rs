@@ -1,11 +1,4 @@
-use crate::prompt::Prompt;
-use crate::prompt::ResponseEvent;
-use crate::prompt::ResponseStream;
-use crate::provider::WireApi;
-
-pub type AgentTurnInput = Prompt;
-pub type AgentEvent = ResponseEvent;
-pub type AgentEventStream = ResponseStream;
+use crate::provider::RuntimeEndpoint;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeCapabilities {
@@ -14,33 +7,27 @@ pub struct RuntimeCapabilities {
     pub supports_dynamic_context_window_probe: bool,
     pub supports_reasoning_summaries: bool,
     pub supports_output_schema: bool,
-    pub supports_websocket_transport: bool,
+    pub supports_remote_compaction: bool,
 }
 
 impl RuntimeCapabilities {
-    pub fn from_wire_and_model(
-        wire_api: WireApi,
+    pub(crate) fn from_endpoint_and_model(
+        endpoint: &RuntimeEndpoint,
         model_info: &codex_protocol::openai_models::ModelInfo,
-        supports_websockets: bool,
     ) -> Self {
         Self {
             supports_parallel_tool_calls: model_info.supports_parallel_tool_calls,
-            enforce_declared_tool_names: wire_api == WireApi::Messages,
-            supports_dynamic_context_window_probe: matches!(
-                wire_api,
-                WireApi::Chat | WireApi::Messages
-            ),
+            enforce_declared_tool_names: endpoint.enforce_declared_tool_names(),
+            supports_dynamic_context_window_probe: endpoint.supports_dynamic_context_window_probe(),
             supports_reasoning_summaries: model_info.supports_reasoning_summaries,
-            supports_output_schema: wire_api == WireApi::Responses,
-            supports_websocket_transport: supports_websockets && wire_api == WireApi::Responses,
+            supports_output_schema: endpoint.supports_output_schema(),
+            supports_remote_compaction: endpoint.supports_remote_compaction(),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeMetadata {
-    pub provider_name: String,
+    pub endpoint_name: String,
     pub model: String,
-    pub wire_api: WireApi,
-    pub stream_max_retries: u64,
 }

@@ -9,6 +9,23 @@ use crate::codex_message_processor::summary_to_thread;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
+use codex_agent::CodexThread;
+use codex_agent::parse_command::shlex_join;
+use codex_agent::protocol::ApplyPatchApprovalRequestEvent;
+use codex_agent::protocol::CodexErrorInfo as CoreCodexErrorInfo;
+use codex_agent::protocol::Event;
+use codex_agent::protocol::EventMsg;
+use codex_agent::protocol::ExecApprovalRequestEvent;
+use codex_agent::protocol::ExecCommandEndEvent;
+use codex_agent::protocol::FileChange as CoreFileChange;
+use codex_agent::protocol::McpToolCallBeginEvent;
+use codex_agent::protocol::McpToolCallEndEvent;
+use codex_agent::protocol::Op;
+use codex_agent::protocol::ReviewDecision;
+use codex_agent::protocol::TokenCountEvent;
+use codex_agent::protocol::TurnDiffEvent;
+use codex_agent::review_format::format_review_findings_block;
+use codex_agent::review_prompts;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
@@ -45,7 +62,7 @@ use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind as V2PatchChangeKind;
 use codex_app_server_protocol::PlanDeltaNotification;
-use codex_app_server_protocol::RawResponseItemCompletedNotification;
+use codex_app_server_protocol::RawConversationItemCompletedNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
@@ -70,23 +87,6 @@ use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::build_turns_from_event_msgs;
-use codex_core::CodexThread;
-use codex_core::parse_command::shlex_join;
-use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-use codex_core::protocol::CodexErrorInfo as CoreCodexErrorInfo;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::FileChange as CoreFileChange;
-use codex_core::protocol::McpToolCallBeginEvent;
-use codex_core::protocol::McpToolCallEndEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewDecision;
-use codex_core::protocol::TokenCountEvent;
-use codex_core::protocol::TurnDiffEvent;
-use codex_core::review_format::format_review_findings_block;
-use codex_core::review_prompts;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -877,12 +877,12 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::ItemCompleted(completed))
                 .await;
         }
-        EventMsg::RawResponseItem(raw_response_item_event) => {
-            maybe_emit_raw_response_item_completed(
+        EventMsg::RawConversationItem(raw_conversation_item_event) => {
+            maybe_emit_raw_conversation_item_completed(
                 api_version,
                 conversation_id,
                 &event_turn_id,
-                raw_response_item_event.item,
+                raw_conversation_item_event.item,
                 outgoing.as_ref(),
             )
             .await;
@@ -1328,24 +1328,26 @@ async fn complete_command_execution_item(
         .await;
 }
 
-async fn maybe_emit_raw_response_item_completed(
+async fn maybe_emit_raw_conversation_item_completed(
     api_version: ApiVersion,
     conversation_id: ThreadId,
     turn_id: &str,
-    item: codex_protocol::models::ResponseItem,
+    item: codex_protocol::models::ConversationItem,
     outgoing: &OutgoingMessageSender,
 ) {
     let ApiVersion::V2 = api_version else {
         return;
     };
 
-    let notification = RawResponseItemCompletedNotification {
+    let notification = RawConversationItemCompletedNotification {
         thread_id: conversation_id.to_string(),
         turn_id: turn_id.to_string(),
         item,
     };
     outgoing
-        .send_server_notification(ServerNotification::RawResponseItemCompleted(notification))
+        .send_server_notification(ServerNotification::RawConversationItemCompleted(
+            notification,
+        ))
         .await;
 }
 
@@ -1884,13 +1886,13 @@ mod tests {
     use anyhow::Result;
     use anyhow::anyhow;
     use anyhow::bail;
+    use codex_agent::protocol::CreditsSnapshot;
+    use codex_agent::protocol::McpInvocation;
+    use codex_agent::protocol::RateLimitSnapshot;
+    use codex_agent::protocol::RateLimitWindow;
+    use codex_agent::protocol::TokenUsage;
+    use codex_agent::protocol::TokenUsageInfo;
     use codex_app_server_protocol::TurnPlanStepStatus;
-    use codex_core::protocol::CreditsSnapshot;
-    use codex_core::protocol::McpInvocation;
-    use codex_core::protocol::RateLimitSnapshot;
-    use codex_core::protocol::RateLimitWindow;
-    use codex_core::protocol::TokenUsage;
-    use codex_core::protocol::TokenUsageInfo;
     use codex_protocol::plan_tool::PlanItemArg;
     use codex_protocol::plan_tool::StepStatus;
     use mcp_types::CallToolResult;

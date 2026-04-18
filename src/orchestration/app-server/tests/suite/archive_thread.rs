@@ -1,13 +1,13 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
+use codex_agent::ARCHIVED_SESSIONS_SUBDIR;
 use codex_app_server_protocol::ArchiveConversationParams;
 use codex_app_server_protocol::ArchiveConversationResponse;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RequestId;
-use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;

@@ -18,7 +18,7 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ConversationItem;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use core_test_support::responses;
@@ -331,7 +331,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
     let history_text = "Hello from history";
-    let history = vec![ResponseItem::Message {
+    let history = vec![ConversationItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -472,7 +472,7 @@ personality = true
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"
-wire_api = "responses"
+dialect = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#

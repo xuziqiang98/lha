@@ -38,19 +38,19 @@ use crate::exec_events::TurnFailedEvent;
 use crate::exec_events::TurnStartedEvent;
 use crate::exec_events::Usage;
 use crate::exec_events::WebSearchItem;
-use codex_core::config::Config;
-use codex_core::protocol;
-use codex_core::protocol::AgentStatus as CoreAgentStatus;
-use codex_core::protocol::CollabAgentInteractionBeginEvent;
-use codex_core::protocol::CollabAgentInteractionEndEvent;
-use codex_core::protocol::CollabAgentSpawnBeginEvent;
-use codex_core::protocol::CollabAgentSpawnEndEvent;
-use codex_core::protocol::CollabCloseBeginEvent;
-use codex_core::protocol::CollabCloseEndEvent;
-use codex_core::protocol::CollabResumeBeginEvent;
-use codex_core::protocol::CollabResumeEndEvent;
-use codex_core::protocol::CollabWaitingBeginEvent;
-use codex_core::protocol::CollabWaitingEndEvent;
+use codex_agent::config::Config;
+use codex_agent::protocol;
+use codex_agent::protocol::AgentStatus as CoreAgentStatus;
+use codex_agent::protocol::CollabAgentInteractionBeginEvent;
+use codex_agent::protocol::CollabAgentInteractionEndEvent;
+use codex_agent::protocol::CollabAgentSpawnBeginEvent;
+use codex_agent::protocol::CollabAgentSpawnEndEvent;
+use codex_agent::protocol::CollabCloseBeginEvent;
+use codex_agent::protocol::CollabCloseEndEvent;
+use codex_agent::protocol::CollabResumeBeginEvent;
+use codex_agent::protocol::CollabResumeEndEvent;
+use codex_agent::protocol::CollabWaitingBeginEvent;
+use codex_agent::protocol::CollabWaitingEndEvent;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -67,7 +67,7 @@ pub struct EventProcessorWithJsonOutput {
     running_patch_applies: HashMap<String, protocol::PatchApplyBeginEvent>,
     // Tracks the todo list for the current turn (at most one per turn).
     running_todo_list: Option<RunningTodoList>,
-    last_total_token_usage: Option<codex_core::protocol::TokenUsage>,
+    last_total_token_usage: Option<codex_agent::protocol::TokenUsage>,
     running_mcp_tool_calls: HashMap<String, RunningMcpToolCall>,
     running_collab_tool_calls: HashMap<String, RunningCollabToolCall>,
     running_web_search_calls: HashMap<String, String>,

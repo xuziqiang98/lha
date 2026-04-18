@@ -10,10 +10,10 @@
 
 use std::path::PathBuf;
 
+use codex_agent::protocol::Event;
+use codex_agent::protocol::RateLimitSnapshot;
 use codex_chatgpt::connectors::AppInfo;
 use codex_common::approval_presets::ApprovalPreset;
-use codex_core::protocol::Event;
-use codex_core::protocol::RateLimitSnapshot;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
@@ -23,10 +23,10 @@ use crate::changelog::ChangelogOutput;
 use crate::history_cell::HistoryCell;
 use crate::provider_config::CustomProviderConfig;
 
-use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::ReviewRequest;
-use codex_core::protocol::SandboxPolicy;
+use codex_agent::features::Feature;
+use codex_agent::protocol::AskForApproval;
+use codex_agent::protocol::ReviewRequest;
+use codex_agent::protocol::SandboxPolicy;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -85,7 +85,7 @@ pub(crate) enum AppEvent {
 
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
-    CodexOp(codex_core::protocol::Op),
+    CodexOp(codex_agent::protocol::Op),
 
     /// Start a review using the current slash/TUI behavior.
     StartReview {

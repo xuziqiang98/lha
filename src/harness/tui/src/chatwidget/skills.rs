@@ -12,15 +12,15 @@ use crate::bottom_pane::SkillsToggleView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::skills_helpers::skill_description;
 use crate::skills_helpers::skill_display_name;
+use codex_agent::connectors::connector_mention_slug;
+use codex_agent::protocol::ListSkillsResponseEvent;
+use codex_agent::protocol::SkillMetadata as ProtocolSkillMetadata;
+use codex_agent::protocol::SkillsListEntry;
+use codex_agent::skills::model::SkillDependencies;
+use codex_agent::skills::model::SkillInterface;
+use codex_agent::skills::model::SkillMetadata;
+use codex_agent::skills::model::SkillToolDependency;
 use codex_chatgpt::connectors::AppInfo;
-use codex_core::connectors::connector_mention_slug;
-use codex_core::protocol::ListSkillsResponseEvent;
-use codex_core::protocol::SkillMetadata as ProtocolSkillMetadata;
-use codex_core::protocol::SkillsListEntry;
-use codex_core::skills::model::SkillDependencies;
-use codex_core::skills::model::SkillInterface;
-use codex_core::skills::model::SkillMetadata;
-use codex_core::skills::model::SkillToolDependency;
 
 impl ChatWidget {
     pub(crate) fn open_skills_list(&mut self) {

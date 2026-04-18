@@ -84,6 +84,7 @@ pub fn create_fake_rollout_with_cwds(
         cwd: session_cwd,
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
+        rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V2,
         source: SessionSource::Cli,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
@@ -103,7 +104,7 @@ pub fn create_fake_rollout_with_cwds(
         .to_string(),
         json!({
             "timestamp": meta_rfc3339,
-            "type":"response_item",
+            "type":"conversation_item",
             "payload": {
                 "type":"message",
                 "role":"user",
@@ -181,6 +182,7 @@ pub fn create_fake_rollout_with_source(
         cwd: PathBuf::from("/"),
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
+        rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V2,
         source,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
@@ -200,7 +202,7 @@ pub fn create_fake_rollout_with_source(
         .to_string(),
         json!({
             "timestamp": meta_rfc3339,
-            "type":"response_item",
+            "type":"conversation_item",
             "payload": {
                 "type":"message",
                 "role":"user",
@@ -260,6 +262,7 @@ pub fn create_fake_rollout_with_text_elements(
         cwd: PathBuf::from("/"),
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
+        rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V2,
         source: SessionSource::Cli,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
@@ -279,7 +282,7 @@ pub fn create_fake_rollout_with_text_elements(
         .to_string(),
         json!( {
             "timestamp": meta_rfc3339,
-            "type":"response_item",
+            "type":"conversation_item",
             "payload": {
                 "type":"message",
                 "role":"user",

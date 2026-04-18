@@ -2,6 +2,7 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
 use app_test_support::to_response;
+use codex_agent::protocol::EventMsg;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ListConversationsParams;
@@ -12,9 +13,8 @@ use codex_app_server_protocol::ResumeConversationParams;
 use codex_app_server_protocol::ResumeConversationResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionConfiguredNotification;
-use codex_core::protocol::EventMsg;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ConversationItem;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -301,7 +301,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
 
     // Resuming with explicit history should succeed even without a stored rollout.
     let fork_history_text = "Hello from history";
-    let history = vec![ResponseItem::Message {
+    let history = vec![ConversationItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {

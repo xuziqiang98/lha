@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use codex_agent::protocol::TurnAbortReason;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::InterruptConversationResponse;
@@ -12,7 +13,6 @@ use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
-use codex_core::protocol::TurnAbortReason;
 use core_test_support::skip_if_no_network;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -154,7 +154,7 @@ model_provider = "mock_provider"
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"
-wire_api = "responses"
+dialect = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#

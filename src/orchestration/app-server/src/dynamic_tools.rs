@@ -1,5 +1,5 @@
+use codex_agent::CodexThread;
 use codex_app_server_protocol::DynamicToolCallResponse;
-use codex_core::CodexThread;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
 use codex_protocol::protocol::Op;
 use std::sync::Arc;

@@ -3,10 +3,10 @@ use std::env;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_core::parse_command;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::ReviewDecision;
-use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_agent::parse_command;
+use codex_agent::protocol::FileChange;
+use codex_agent::protocol::ReviewDecision;
+use codex_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_mcp_server::CodexToolCallParam;
 use codex_mcp_server::ExecApprovalElicitRequestParams;
 use codex_mcp_server::ExecApprovalResponse;
@@ -515,7 +515,7 @@ model_provider = "mock_provider"
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"
-wire_api = "chat"
+dialect = "chat"
 request_max_retries = 0
 stream_max_retries = 0
 "#

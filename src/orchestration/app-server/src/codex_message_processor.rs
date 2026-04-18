@@ -8,6 +8,52 @@ use crate::outgoing_message::OutgoingNotification;
 use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
+use codex_agent::AuthManager;
+use codex_agent::CodexAuth;
+use codex_agent::CodexThread;
+use codex_agent::Cursor as RolloutCursor;
+use codex_agent::InitialHistory;
+use codex_agent::NewThread;
+use codex_agent::RolloutRecorder;
+use codex_agent::SessionMeta;
+use codex_agent::ThreadConfigSnapshot;
+use codex_agent::ThreadManager;
+use codex_agent::ThreadSortKey as CoreThreadSortKey;
+use codex_agent::auth::CLIENT_ID;
+use codex_agent::auth::login_with_api_key;
+use codex_agent::auth::login_with_chatgpt_auth_tokens;
+use codex_agent::config::Config;
+use codex_agent::config::ConfigOverrides;
+use codex_agent::config::ConfigService;
+use codex_agent::config::ConfigToml;
+use codex_agent::config::edit::ConfigEdit;
+use codex_agent::config::edit::ConfigEditsBuilder;
+use codex_agent::config::types::McpServerTransportConfig;
+use codex_agent::config_loader::CloudRequirementsLoader;
+use codex_agent::default_client::get_codex_user_agent;
+use codex_agent::error::CodexErr;
+use codex_agent::exec::ExecParams;
+use codex_agent::exec_env::create_env;
+use codex_agent::features::Feature;
+use codex_agent::find_archived_thread_path_by_id_str;
+use codex_agent::find_thread_path_by_id_str;
+use codex_agent::git_info::git_diff_to_remote;
+use codex_agent::mcp::collect_mcp_snapshot;
+use codex_agent::mcp::group_tools_by_server;
+use codex_agent::parse_cursor;
+use codex_agent::protocol::EventMsg;
+use codex_agent::protocol::Op;
+use codex_agent::protocol::ReviewDelivery as CoreReviewDelivery;
+use codex_agent::protocol::ReviewRequest;
+use codex_agent::protocol::ReviewTarget as CoreReviewTarget;
+use codex_agent::protocol::SessionConfiguredEvent;
+use codex_agent::read_head_for_summary;
+use codex_agent::read_session_meta_line;
+use codex_agent::rollout_date_parts;
+use codex_agent::sandboxing::SandboxPermissions;
+use codex_agent::state_db::get_state_db;
+use codex_agent::token_data::parse_id_token;
+use codex_agent::windows_sandbox::WindowsSandboxLevelExt;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
@@ -134,55 +180,9 @@ use codex_app_server_protocol::UserSavedConfig;
 use codex_app_server_protocol::build_turns_from_event_msgs;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
-use codex_core::AuthManager;
-use codex_core::CodexAuth;
-use codex_core::CodexThread;
-use codex_core::Cursor as RolloutCursor;
-use codex_core::InitialHistory;
-use codex_core::ModelProviderInfo;
-use codex_core::NewThread;
-use codex_core::RolloutRecorder;
-use codex_core::SessionMeta;
-use codex_core::ThreadConfigSnapshot;
-use codex_core::ThreadManager;
-use codex_core::ThreadSortKey as CoreThreadSortKey;
-use codex_core::auth::CLIENT_ID;
-use codex_core::auth::login_with_api_key;
-use codex_core::auth::login_with_chatgpt_auth_tokens;
-use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
-use codex_core::config::ConfigService;
-use codex_core::config::ConfigToml;
-use codex_core::config::edit::ConfigEdit;
-use codex_core::config::edit::ConfigEditsBuilder;
-use codex_core::config::types::McpServerTransportConfig;
-use codex_core::config_loader::CloudRequirementsLoader;
-use codex_core::default_client::get_codex_user_agent;
-use codex_core::error::CodexErr;
-use codex_core::exec::ExecParams;
-use codex_core::exec_env::create_env;
-use codex_core::features::Feature;
-use codex_core::find_archived_thread_path_by_id_str;
-use codex_core::find_thread_path_by_id_str;
-use codex_core::git_info::git_diff_to_remote;
-use codex_core::mcp::collect_mcp_snapshot;
-use codex_core::mcp::group_tools_by_server;
-use codex_core::models_manager::manager::RefreshStrategy;
-use codex_core::parse_cursor;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewDelivery as CoreReviewDelivery;
-use codex_core::protocol::ReviewRequest;
-use codex_core::protocol::ReviewTarget as CoreReviewTarget;
-use codex_core::protocol::SessionConfiguredEvent;
-use codex_core::read_head_for_summary;
-use codex_core::read_session_meta_line;
-use codex_core::rollout_date_parts;
-use codex_core::sandboxing::SandboxPermissions;
-use codex_core::state_db::get_state_db;
-use codex_core::token_data::parse_id_token;
-use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_feedback::CodexFeedback;
+use codex_llm::CatalogRefreshStrategy;
+use codex_llm::RuntimeEndpoint;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
@@ -192,7 +192,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
 use codex_protocol::items::TurnItem;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ConversationItem;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
@@ -257,7 +257,7 @@ struct ActiveLogin {
 struct EffectiveModelSelection {
     model: String,
     provider_id: String,
-    provider: ModelProviderInfo,
+    provider: RuntimeEndpoint,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -364,7 +364,7 @@ impl CodexMessageProcessor {
     }
 
     async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
-        codex_core::config::ConfigBuilder::default()
+        codex_agent::config::ConfigBuilder::default()
             .cli_overrides(self.cli_overrides.clone())
             .cloud_requirements(self.cloud_requirements.clone())
             .build()
@@ -425,8 +425,11 @@ impl CodexMessageProcessor {
             model.clone()
         } else {
             self.thread_manager
-                .get_models_manager()
-                .get_default_model(&config.model, config, RefreshStrategy::OnlineIfUncached)
+                .get_default_model(
+                    &config.model,
+                    config,
+                    CatalogRefreshStrategy::OnlineIfUncached,
+                )
                 .await
                 .map_err(|err| JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
@@ -492,7 +495,7 @@ impl CodexMessageProcessor {
             ApiReviewTarget::Custom { instructions } => CoreReviewTarget::Custom { instructions },
         };
 
-        let hint = codex_core::review_prompts::user_facing_hint(&core_target);
+        let hint = codex_agent::review_prompts::user_facing_hint(&core_target);
         let review_request = ReviewRequest {
             target: core_target,
             user_facing_hint: Some(hint.clone()),
@@ -1582,8 +1585,7 @@ impl CodexMessageProcessor {
                                         != previous_config.model_provider_id;
                             if should_switch_provider_before_resolution {
                                 self.thread_manager
-                                    .get_models_manager()
-                                    .switch_provider(
+                                    .switch_model_provider(
                                         next_config.model_provider_id.as_str(),
                                         next_provider.clone(),
                                     )
@@ -1597,8 +1599,7 @@ impl CodexMessageProcessor {
                                         && let Some(previous_provider) = previous_provider
                                     {
                                         self.thread_manager
-                                            .get_models_manager()
-                                            .switch_provider(
+                                            .switch_model_provider(
                                                 previous_config.model_provider_id.as_str(),
                                                 previous_provider,
                                             )
@@ -1620,8 +1621,7 @@ impl CodexMessageProcessor {
                     };
 
                     self.thread_manager
-                        .get_models_manager()
-                        .switch_provider(
+                        .switch_model_provider(
                             next_effective_selection.provider_id.as_str(),
                             next_effective_selection.provider.clone(),
                         )
@@ -1711,7 +1711,7 @@ impl CodexMessageProcessor {
         let sandbox_cwd = self.config.cwd.clone();
 
         tokio::spawn(async move {
-            match codex_core::exec::process_exec_tool_call(
+            match codex_agent::exec::process_exec_tool_call(
                 exec_params,
                 &effective_policy,
                 sandbox_cwd.as_path(),
@@ -2077,7 +2077,7 @@ impl CodexMessageProcessor {
 
     async fn thread_set_name(&self, request_id: RequestId, params: ThreadSetNameParams) {
         let ThreadSetNameParams { thread_id, name } = params;
-        let Some(name) = codex_core::util::normalize_thread_name(&name) else {
+        let Some(name) = codex_agent::util::normalize_thread_name(&name) else {
             self.send_invalid_request_error(
                 request_id,
                 "thread name must not be empty".to_string(),
@@ -2153,7 +2153,7 @@ impl CodexMessageProcessor {
         let archived_folder = self
             .config
             .codex_home
-            .join(codex_core::ARCHIVED_SESSIONS_SUBDIR);
+            .join(codex_agent::ARCHIVED_SESSIONS_SUBDIR);
 
         let result: Result<Thread, JSONRPCErrorError> = async {
             let canonical_archived_dir = tokio::fs::canonicalize(&archived_folder).await.map_err(
@@ -2211,7 +2211,7 @@ impl CodexMessageProcessor {
                 });
             };
 
-            let sessions_folder = self.config.codex_home.join(codex_core::SESSIONS_SUBDIR);
+            let sessions_folder = self.config.codex_home.join(codex_agent::SESSIONS_SUBDIR);
             let dest_dir = sessions_folder.join(year).join(month).join(day);
             let restored_path = dest_dir.join(&file_name);
             tokio::fs::create_dir_all(&dest_dir)
@@ -2568,7 +2568,12 @@ impl CodexMessageProcessor {
                 .await;
                 return;
             }
-            InitialHistory::Forked(history.into_iter().map(RolloutItem::ResponseItem).collect())
+            InitialHistory::Forked(
+                history
+                    .into_iter()
+                    .map(RolloutItem::ConversationItem)
+                    .collect(),
+            )
         } else if let Some(path) = path {
             match RolloutRecorder::get_rollout_history(&path).await {
                 Ok(initial_history) => initial_history,
@@ -2999,7 +3004,7 @@ impl CodexMessageProcessor {
                 }
             }
             GetConversationSummaryParams::ThreadId { conversation_id } => {
-                match codex_core::find_thread_path_by_id_str(
+                match codex_agent::find_thread_path_by_id_str(
                     &self.config.codex_home,
                     &conversation_id.to_string(),
                 )
@@ -3600,7 +3605,10 @@ impl CodexMessageProcessor {
         } else {
             match history {
                 Some(history) if !history.is_empty() => InitialHistory::Forked(
-                    history.into_iter().map(RolloutItem::ResponseItem).collect(),
+                    history
+                        .into_iter()
+                        .map(RolloutItem::ConversationItem)
+                        .collect(),
                 ),
                 Some(_) | None => {
                     self.send_invalid_request_error(
@@ -3993,7 +4001,7 @@ impl CodexMessageProcessor {
         rollout_path: &Path,
     ) -> Result<(), JSONRPCErrorError> {
         // Verify rollout_path is under sessions dir.
-        let rollout_folder = self.config.codex_home.join(codex_core::SESSIONS_SUBDIR);
+        let rollout_folder = self.config.codex_home.join(codex_agent::SESSIONS_SUBDIR);
 
         let canonical_sessions_dir = match tokio::fs::canonicalize(&rollout_folder).await {
             Ok(path) => path,
@@ -4091,7 +4099,7 @@ impl CodexMessageProcessor {
             let archive_folder = self
                 .config
                 .codex_home
-                .join(codex_core::ARCHIVED_SESSIONS_SUBDIR);
+                .join(codex_agent::ARCHIVED_SESSIONS_SUBDIR);
             tokio::fs::create_dir_all(&archive_folder).await?;
             let archived_path = archive_folder.join(&file_name);
             tokio::fs::rename(&canonical_rollout_path, &archived_path).await?;
@@ -4810,7 +4818,7 @@ impl CodexMessageProcessor {
                             }
                         };
 
-                        if let EventMsg::RawResponseItem(_) = &event.msg
+                        if let EventMsg::RawConversationItem(_) = &event.msg
                             && !experimental_raw_events {
                                 continue;
                             }
@@ -5029,7 +5037,7 @@ impl CodexMessageProcessor {
 }
 
 fn skills_to_info(
-    skills: &[codex_core::skills::SkillMetadata],
+    skills: &[codex_agent::skills::SkillMetadata],
     disabled_paths: &std::collections::HashSet<PathBuf>,
 ) -> Vec<codex_app_server_protocol::SkillMetadata> {
     skills
@@ -5075,7 +5083,7 @@ fn skills_to_info(
 }
 
 fn errors_to_info(
-    errors: &[codex_core::skills::SkillError],
+    errors: &[codex_agent::skills::SkillError],
 ) -> Vec<codex_app_server_protocol::SkillErrorInfo> {
     errors
         .iter()
@@ -5112,7 +5120,7 @@ fn validate_dynamic_tools(
             return Err(format!("duplicate dynamic tool name: {name}"));
         }
 
-        if let Err(err) = codex_core::parse_tool_input_schema(&tool.input_schema) {
+        if let Err(err) = codex_agent::parse_tool_input_schema(&tool.input_schema) {
             return Err(format!(
                 "dynamic tool input schema is not supported for {name}: {err}"
             ));
@@ -5148,7 +5156,7 @@ async fn derive_config_from_params(
         )
         .collect::<Vec<_>>();
 
-    codex_core::config::ConfigBuilder::default()
+    codex_agent::config::ConfigBuilder::default()
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .cloud_requirements(cloud_requirements.clone())
@@ -5174,7 +5182,7 @@ async fn derive_config_for_cwd(
         )
         .collect::<Vec<_>>();
 
-    codex_core::config::ConfigBuilder::default()
+    codex_agent::config::ConfigBuilder::default()
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .fallback_cwd(cwd)
@@ -5281,8 +5289,8 @@ fn extract_conversation_summary(
 ) -> Option<ConversationSummary> {
     let preview = head
         .iter()
-        .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
-        .find_map(|item| match codex_core::parse_turn_item(&item) {
+        .filter_map(|value| serde_json::from_value::<ConversationItem>(value.clone()).ok())
+        .find_map(|item| match codex_agent::parse_turn_item(&item) {
             Some(TurnItem::UserMessage(user)) => Some(user.message()),
             _ => None,
         })?;

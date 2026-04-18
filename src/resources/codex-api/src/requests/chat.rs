@@ -4,9 +4,9 @@ use crate::requests::headers::build_conversation_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ConversationItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use http::HeaderMap;
 use serde_json::Value;
@@ -29,7 +29,7 @@ pub enum DeveloperRoleHandling {
 pub struct ChatRequestBuilder<'a> {
     model: &'a str,
     instructions: &'a str,
-    input: &'a [ResponseItem],
+    input: &'a [ConversationItem],
     tools: &'a [Value],
     conversation_id: Option<String>,
     session_source: Option<SessionSource>,
@@ -40,7 +40,7 @@ impl<'a> ChatRequestBuilder<'a> {
     pub fn new(
         model: &'a str,
         instructions: &'a str,
-        input: &'a [ResponseItem],
+        input: &'a [ConversationItem],
         tools: &'a [Value],
     ) -> Self {
         Self {
@@ -78,23 +78,23 @@ impl<'a> ChatRequestBuilder<'a> {
         let mut last_emitted_role: Option<&str> = None;
         for item in input {
             match item {
-                ResponseItem::Message { role, .. } => last_emitted_role = Some(role.as_str()),
-                ResponseItem::FunctionCall { .. } | ResponseItem::LocalShellCall { .. } => {
+                ConversationItem::Message { role, .. } => last_emitted_role = Some(role.as_str()),
+                ConversationItem::FunctionCall { .. } | ConversationItem::LocalShellCall { .. } => {
                     last_emitted_role = Some("assistant")
                 }
-                ResponseItem::FunctionCallOutput { .. } => last_emitted_role = Some("tool"),
-                ResponseItem::Reasoning { .. } | ResponseItem::Other => {}
-                ResponseItem::CustomToolCall { .. } => {}
-                ResponseItem::CustomToolCallOutput { .. } => {}
-                ResponseItem::WebSearchCall { .. } => {}
-                ResponseItem::GhostSnapshot { .. } => {}
-                ResponseItem::Compaction { .. } => {}
+                ConversationItem::FunctionCallOutput { .. } => last_emitted_role = Some("tool"),
+                ConversationItem::Reasoning { .. } | ConversationItem::Other => {}
+                ConversationItem::CustomToolCall { .. } => {}
+                ConversationItem::CustomToolCallOutput { .. } => {}
+                ConversationItem::WebSearchCall { .. } => {}
+                ConversationItem::GhostSnapshot { .. } => {}
+                ConversationItem::Compaction { .. } => {}
             }
         }
 
         let mut last_user_index: Option<usize> = None;
         for (idx, item) in input.iter().enumerate() {
-            if let ResponseItem::Message { role, .. } = item
+            if let ConversationItem::Message { role, .. } = item
                 && role == "user"
             {
                 last_user_index = Some(idx);
@@ -109,7 +109,7 @@ impl<'a> ChatRequestBuilder<'a> {
                     continue;
                 }
 
-                if let ResponseItem::Reasoning {
+                if let ConversationItem::Reasoning {
                     content: Some(items),
                     ..
                 } = item
@@ -129,7 +129,7 @@ impl<'a> ChatRequestBuilder<'a> {
 
                     let mut attached = false;
                     if idx > 0
-                        && let ResponseItem::Message { role, .. } = &input[idx - 1]
+                        && let ConversationItem::Message { role, .. } = &input[idx - 1]
                         && role == "assistant"
                     {
                         reasoning_by_anchor_index
@@ -141,14 +141,14 @@ impl<'a> ChatRequestBuilder<'a> {
 
                     if !attached && idx + 1 < input.len() {
                         match &input[idx + 1] {
-                            ResponseItem::FunctionCall { .. }
-                            | ResponseItem::LocalShellCall { .. } => {
+                            ConversationItem::FunctionCall { .. }
+                            | ConversationItem::LocalShellCall { .. } => {
                                 reasoning_by_anchor_index
                                     .entry(idx + 1)
                                     .and_modify(|v| v.push_str(&text))
                                     .or_insert(text.clone());
                             }
-                            ResponseItem::Message { role, .. } if role == "assistant" => {
+                            ConversationItem::Message { role, .. } if role == "assistant" => {
                                 reasoning_by_anchor_index
                                     .entry(idx + 1)
                                     .and_modify(|v| v.push_str(&text))
@@ -165,7 +165,7 @@ impl<'a> ChatRequestBuilder<'a> {
 
         for (idx, item) in input.iter().enumerate() {
             match item {
-                ResponseItem::Message { role, content, .. } => {
+                ConversationItem::Message { role, content, .. } => {
                     let role = match (role.as_str(), self.developer_role_handling) {
                         ("developer", DeveloperRoleHandling::DowngradeToSystem) => "system",
                         _ => role.as_str(),
@@ -216,7 +216,7 @@ impl<'a> ChatRequestBuilder<'a> {
                     }
                     messages.push(msg);
                 }
-                ResponseItem::FunctionCall {
+                ConversationItem::FunctionCall {
                     name,
                     arguments,
                     call_id,
@@ -233,7 +233,7 @@ impl<'a> ChatRequestBuilder<'a> {
                     });
                     push_tool_call_message(&mut messages, tool_call, reasoning);
                 }
-                ResponseItem::LocalShellCall {
+                ConversationItem::LocalShellCall {
                     id,
                     call_id: _,
                     status,
@@ -248,7 +248,7 @@ impl<'a> ChatRequestBuilder<'a> {
                     });
                     push_tool_call_message(&mut messages, tool_call, reasoning);
                 }
-                ResponseItem::FunctionCallOutput { call_id, output } => {
+                ConversationItem::FunctionCallOutput { call_id, output } => {
                     let content_value = if let Some(items) = &output.content_items {
                         let mapped: Vec<Value> = items
                             .iter()
@@ -272,7 +272,7 @@ impl<'a> ChatRequestBuilder<'a> {
                         "content": content_value,
                     }));
                 }
-                ResponseItem::CustomToolCall {
+                ConversationItem::CustomToolCall {
                     id,
                     call_id: _,
                     name,
@@ -290,20 +290,20 @@ impl<'a> ChatRequestBuilder<'a> {
                     let reasoning = reasoning_by_anchor_index.get(&idx).map(String::as_str);
                     push_tool_call_message(&mut messages, tool_call, reasoning);
                 }
-                ResponseItem::CustomToolCallOutput { call_id, output } => {
+                ConversationItem::CustomToolCallOutput { call_id, output } => {
                     messages.push(json!({
                         "role": "tool",
                         "tool_call_id": call_id,
                         "content": output,
                     }));
                 }
-                ResponseItem::GhostSnapshot { .. } => {
+                ConversationItem::GhostSnapshot { .. } => {
                     continue;
                 }
-                ResponseItem::Reasoning { .. }
-                | ResponseItem::WebSearchCall { .. }
-                | ResponseItem::Other
-                | ResponseItem::Compaction { .. } => {
+                ConversationItem::Reasoning { .. }
+                | ConversationItem::WebSearchCall { .. }
+                | ConversationItem::Other
+                | ConversationItem::Compaction { .. } => {
                     continue;
                 }
             }
@@ -378,8 +378,8 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 
-    fn text_message(role: &str, text: &str) -> ResponseItem {
-        ResponseItem::Message {
+    fn text_message(role: &str, text: &str) -> ConversationItem {
+        ConversationItem::Message {
             id: None,
             role: role.to_string(),
             content: vec![ContentItem::InputText {
@@ -409,7 +409,7 @@ mod tests {
 
     #[test]
     fn attaches_conversation_and_subagent_headers() {
-        let prompt_input = vec![ResponseItem::Message {
+        let prompt_input = vec![ConversationItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -437,39 +437,39 @@ mod tests {
     fn groups_consecutive_tool_calls_into_a_single_assistant_message() {
         let prompt_input = vec![
             text_message("user", "read these"),
-            ResponseItem::FunctionCall {
+            ConversationItem::FunctionCall {
                 id: None,
                 name: "read_file".to_string(),
                 arguments: r#"{"path":"a.txt"}"#.to_string(),
                 call_id: "call-a".to_string(),
             },
-            ResponseItem::FunctionCall {
+            ConversationItem::FunctionCall {
                 id: None,
                 name: "read_file".to_string(),
                 arguments: r#"{"path":"b.txt"}"#.to_string(),
                 call_id: "call-b".to_string(),
             },
-            ResponseItem::FunctionCall {
+            ConversationItem::FunctionCall {
                 id: None,
                 name: "read_file".to_string(),
                 arguments: r#"{"path":"c.txt"}"#.to_string(),
                 call_id: "call-c".to_string(),
             },
-            ResponseItem::FunctionCallOutput {
+            ConversationItem::FunctionCallOutput {
                 call_id: "call-a".to_string(),
                 output: FunctionCallOutputPayload {
                     content: "A".to_string(),
                     ..Default::default()
                 },
             },
-            ResponseItem::FunctionCallOutput {
+            ConversationItem::FunctionCallOutput {
                 call_id: "call-b".to_string(),
                 output: FunctionCallOutputPayload {
                     content: "B".to_string(),
                     ..Default::default()
                 },
             },
-            ResponseItem::FunctionCallOutput {
+            ConversationItem::FunctionCallOutput {
                 call_id: "call-c".to_string(),
                 output: FunctionCallOutputPayload {
                     content: "C".to_string(),

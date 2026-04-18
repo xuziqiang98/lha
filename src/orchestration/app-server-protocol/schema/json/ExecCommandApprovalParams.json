@@ -118,7 +118,7 @@
   },
   "properties": {
     "callId": {
-      "description": "Use to correlate this with [codex_core::protocol::ExecCommandBeginEvent] and [codex_core::protocol::ExecCommandEndEvent].",
+      "description": "Use to correlate this with [codex_agent::protocol::ExecCommandBeginEvent] and [codex_agent::protocol::ExecCommandEndEvent].",
       "type": "string"
     },
     "command": {

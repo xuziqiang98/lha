@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use anyhow::Result;
-use codex_core::config::edit::ConfigEditsBuilder;
-use codex_core::config::load_global_mcp_servers;
-use codex_core::config::types::McpServerTransportConfig;
+use codex_agent::config::edit::ConfigEditsBuilder;
+use codex_agent::config::load_global_mcp_servers;
+use codex_agent::config::types::McpServerTransportConfig;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;

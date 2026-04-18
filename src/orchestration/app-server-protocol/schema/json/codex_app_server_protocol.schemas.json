@@ -162,7 +162,7 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "callId": {
-          "description": "Use to correlate this with [codex_core::protocol::PatchApplyBeginEvent] and [codex_core::protocol::PatchApplyEndEvent].",
+          "description": "Use to correlate this with [codex_agent::protocol::PatchApplyBeginEvent] and [codex_agent::protocol::PatchApplyEndEvent].",
           "type": "string"
         },
         "conversationId": {
@@ -2308,6 +2308,352 @@
       },
       "type": "object"
     },
+    "ConversationItem": {
+      "oneOf": [
+        {
+          "properties": {
+            "content": {
+              "items": {
+                "$ref": "#/definitions/ContentItem"
+              },
+              "type": "array"
+            },
+            "end_turn": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "writeOnly": true
+            },
+            "role": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "message"
+              ],
+              "title": "MessageConversationItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "role",
+            "type"
+          ],
+          "title": "MessageConversationItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "content": {
+              "default": null,
+              "items": {
+                "$ref": "#/definitions/ReasoningItemContent"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "encrypted_content": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "writeOnly": true
+            },
+            "summary": {
+              "items": {
+                "$ref": "#/definitions/ReasoningItemReasoningSummary"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "reasoning"
+              ],
+              "title": "ReasoningConversationItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "summary",
+            "type"
+          ],
+          "title": "ReasoningConversationItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "action": {
+              "$ref": "#/definitions/LocalShellAction"
+            },
+            "call_id": {
+              "description": "Set when using the Responses API.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "description": "Set when using the chat completions API.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "writeOnly": true
+            },
+            "status": {
+              "$ref": "#/definitions/LocalShellStatus"
+            },
+            "type": {
+              "enum": [
+                "local_shell_call"
+              ],
+              "title": "LocalShellCallConversationItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "status",
+            "type"
+          ],
+          "title": "LocalShellCallConversationItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "arguments": {
+              "type": "string"
+            },
+            "call_id": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "writeOnly": true
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "function_call"
+              ],
+              "title": "FunctionCallConversationItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "arguments",
+            "call_id",
+            "name",
+            "type"
+          ],
+          "title": "FunctionCallConversationItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "output": {
+              "$ref": "#/definitions/FunctionCallOutputPayload"
+            },
+            "type": {
+              "enum": [
+                "function_call_output"
+              ],
+              "title": "FunctionCallOutputConversationItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "output",
+            "type"
+          ],
+          "title": "FunctionCallOutputConversationItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "writeOnly": true
+            },
+            "input": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "custom_tool_call"
+              ],
+              "title": "CustomToolCallConversationItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "input",
+            "name",
+            "type"
+          ],
+          "title": "CustomToolCallConversationItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "output": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "custom_tool_call_output"
+              ],
+              "title": "CustomToolCallOutputConversationItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "output",
+            "type"
+          ],
+          "title": "CustomToolCallOutputConversationItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "action": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WebSearchAction"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "writeOnly": true
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "web_search_call"
+              ],
+              "title": "WebSearchCallConversationItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "WebSearchCallConversationItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "ghost_commit": {
+              "$ref": "#/definitions/GhostCommit"
+            },
+            "type": {
+              "enum": [
+                "ghost_snapshot"
+              ],
+              "title": "GhostSnapshotConversationItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "ghost_commit",
+            "type"
+          ],
+          "title": "GhostSnapshotConversationItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "encrypted_content": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "compaction"
+              ],
+              "title": "CompactionConversationItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "encrypted_content",
+            "type"
+          ],
+          "title": "CompactionConversationItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "other"
+              ],
+              "title": "OtherConversationItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "OtherConversationItem",
+          "type": "object"
+        }
+      ]
+    },
     "ConversationSummary": {
       "properties": {
         "cliVersion": {
@@ -4226,13 +4572,13 @@
         {
           "properties": {
             "item": {
-              "$ref": "#/definitions/v2/ResponseItem"
+              "$ref": "#/definitions/v2/ConversationItem"
             },
             "type": {
               "enum": [
-                "raw_response_item"
+                "raw_conversation_item"
               ],
-              "title": "RawResponseItemEventMsgType",
+              "title": "RawConversationItemEventMsgType",
               "type": "string"
             }
           },
@@ -4240,7 +4586,7 @@
             "item",
             "type"
           ],
-          "title": "RawResponseItemEventMsg",
+          "title": "RawConversationItemEventMsg",
           "type": "object"
         },
         {
@@ -5005,7 +5351,7 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "callId": {
-          "description": "Use to correlate this with [codex_core::protocol::ExecCommandBeginEvent] and [codex_core::protocol::ExecCommandEndEvent].",
+          "description": "Use to correlate this with [codex_agent::protocol::ExecCommandBeginEvent] and [codex_agent::protocol::ExecCommandEndEvent].",
           "type": "string"
         },
         "command": {
@@ -7021,352 +7367,6 @@
       ],
       "type": "object"
     },
-    "ResponseItem": {
-      "oneOf": [
-        {
-          "properties": {
-            "content": {
-              "items": {
-                "$ref": "#/definitions/ContentItem"
-              },
-              "type": "array"
-            },
-            "end_turn": {
-              "type": [
-                "boolean",
-                "null"
-              ]
-            },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
-            },
-            "role": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "message"
-              ],
-              "title": "MessageResponseItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "content",
-            "role",
-            "type"
-          ],
-          "title": "MessageResponseItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "content": {
-              "default": null,
-              "items": {
-                "$ref": "#/definitions/ReasoningItemContent"
-              },
-              "type": [
-                "array",
-                "null"
-              ]
-            },
-            "encrypted_content": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "id": {
-              "type": "string",
-              "writeOnly": true
-            },
-            "summary": {
-              "items": {
-                "$ref": "#/definitions/ReasoningItemReasoningSummary"
-              },
-              "type": "array"
-            },
-            "type": {
-              "enum": [
-                "reasoning"
-              ],
-              "title": "ReasoningResponseItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "summary",
-            "type"
-          ],
-          "title": "ReasoningResponseItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "action": {
-              "$ref": "#/definitions/LocalShellAction"
-            },
-            "call_id": {
-              "description": "Set when using the Responses API.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "id": {
-              "description": "Set when using the chat completions API.",
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
-            },
-            "status": {
-              "$ref": "#/definitions/LocalShellStatus"
-            },
-            "type": {
-              "enum": [
-                "local_shell_call"
-              ],
-              "title": "LocalShellCallResponseItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "action",
-            "status",
-            "type"
-          ],
-          "title": "LocalShellCallResponseItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "arguments": {
-              "type": "string"
-            },
-            "call_id": {
-              "type": "string"
-            },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
-            },
-            "name": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "function_call"
-              ],
-              "title": "FunctionCallResponseItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "arguments",
-            "call_id",
-            "name",
-            "type"
-          ],
-          "title": "FunctionCallResponseItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "call_id": {
-              "type": "string"
-            },
-            "output": {
-              "$ref": "#/definitions/FunctionCallOutputPayload"
-            },
-            "type": {
-              "enum": [
-                "function_call_output"
-              ],
-              "title": "FunctionCallOutputResponseItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "output",
-            "type"
-          ],
-          "title": "FunctionCallOutputResponseItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "call_id": {
-              "type": "string"
-            },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
-            },
-            "input": {
-              "type": "string"
-            },
-            "name": {
-              "type": "string"
-            },
-            "status": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "custom_tool_call"
-              ],
-              "title": "CustomToolCallResponseItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "input",
-            "name",
-            "type"
-          ],
-          "title": "CustomToolCallResponseItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "call_id": {
-              "type": "string"
-            },
-            "output": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "custom_tool_call_output"
-              ],
-              "title": "CustomToolCallOutputResponseItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "output",
-            "type"
-          ],
-          "title": "CustomToolCallOutputResponseItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "action": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/WebSearchAction"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
-            },
-            "status": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "web_search_call"
-              ],
-              "title": "WebSearchCallResponseItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "WebSearchCallResponseItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "ghost_commit": {
-              "$ref": "#/definitions/GhostCommit"
-            },
-            "type": {
-              "enum": [
-                "ghost_snapshot"
-              ],
-              "title": "GhostSnapshotResponseItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "ghost_commit",
-            "type"
-          ],
-          "title": "GhostSnapshotResponseItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "encrypted_content": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "compaction"
-              ],
-              "title": "CompactionResponseItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "encrypted_content",
-            "type"
-          ],
-          "title": "CompactionResponseItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "other"
-              ],
-              "title": "OtherResponseItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "OtherResponseItem",
-          "type": "object"
-        }
-      ]
-    },
     "Result_of_CallToolResult_or_String": {
       "oneOf": [
         {
@@ -7410,7 +7410,7 @@
         },
         "history": {
           "items": {
-            "$ref": "#/definitions/ResponseItem"
+            "$ref": "#/definitions/ConversationItem"
           },
           "type": [
             "array",
@@ -8153,20 +8153,20 @@
           "properties": {
             "method": {
               "enum": [
-                "rawResponseItem/completed"
+                "rawConversationItem/completed"
               ],
-              "title": "RawResponseItem/completedNotificationMethod",
+              "title": "RawConversationItem/completedNotificationMethod",
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/v2/RawResponseItemCompletedNotification"
+              "$ref": "#/definitions/v2/RawConversationItemCompletedNotification"
             }
           },
           "required": [
             "method",
             "params"
           ],
-          "title": "RawResponseItem/completedNotification",
+          "title": "RawConversationItem/completedNotification",
           "type": "object"
         },
         {
@@ -11705,6 +11705,352 @@
         "title": "ContextCompactedNotification",
         "type": "object"
       },
+      "ConversationItem": {
+        "oneOf": [
+          {
+            "properties": {
+              "content": {
+                "items": {
+                  "$ref": "#/definitions/v2/ContentItem"
+                },
+                "type": "array"
+              },
+              "end_turn": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "writeOnly": true
+              },
+              "role": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "message"
+                ],
+                "title": "MessageConversationItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "content",
+              "role",
+              "type"
+            ],
+            "title": "MessageConversationItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "content": {
+                "default": null,
+                "items": {
+                  "$ref": "#/definitions/v2/ReasoningItemContent"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "encrypted_content": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "writeOnly": true
+              },
+              "summary": {
+                "items": {
+                  "$ref": "#/definitions/v2/ReasoningItemReasoningSummary"
+                },
+                "type": "array"
+              },
+              "type": {
+                "enum": [
+                  "reasoning"
+                ],
+                "title": "ReasoningConversationItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "summary",
+              "type"
+            ],
+            "title": "ReasoningConversationItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "$ref": "#/definitions/v2/LocalShellAction"
+              },
+              "call_id": {
+                "description": "Set when using the Responses API.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "description": "Set when using the chat completions API.",
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "writeOnly": true
+              },
+              "status": {
+                "$ref": "#/definitions/v2/LocalShellStatus"
+              },
+              "type": {
+                "enum": [
+                  "local_shell_call"
+                ],
+                "title": "LocalShellCallConversationItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "action",
+              "status",
+              "type"
+            ],
+            "title": "LocalShellCallConversationItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "arguments": {
+                "type": "string"
+              },
+              "call_id": {
+                "type": "string"
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "writeOnly": true
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "function_call"
+                ],
+                "title": "FunctionCallConversationItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "arguments",
+              "call_id",
+              "name",
+              "type"
+            ],
+            "title": "FunctionCallConversationItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "call_id": {
+                "type": "string"
+              },
+              "output": {
+                "$ref": "#/definitions/v2/FunctionCallOutputPayload"
+              },
+              "type": {
+                "enum": [
+                  "function_call_output"
+                ],
+                "title": "FunctionCallOutputConversationItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "call_id",
+              "output",
+              "type"
+            ],
+            "title": "FunctionCallOutputConversationItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "call_id": {
+                "type": "string"
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "writeOnly": true
+              },
+              "input": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "custom_tool_call"
+                ],
+                "title": "CustomToolCallConversationItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "call_id",
+              "input",
+              "name",
+              "type"
+            ],
+            "title": "CustomToolCallConversationItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "call_id": {
+                "type": "string"
+              },
+              "output": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "custom_tool_call_output"
+                ],
+                "title": "CustomToolCallOutputConversationItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "call_id",
+              "output",
+              "type"
+            ],
+            "title": "CustomToolCallOutputConversationItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/WebSearchAction"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "writeOnly": true
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "web_search_call"
+                ],
+                "title": "WebSearchCallConversationItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "WebSearchCallConversationItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "ghost_commit": {
+                "$ref": "#/definitions/v2/GhostCommit"
+              },
+              "type": {
+                "enum": [
+                  "ghost_snapshot"
+                ],
+                "title": "GhostSnapshotConversationItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "ghost_commit",
+              "type"
+            ],
+            "title": "GhostSnapshotConversationItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "encrypted_content": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "compaction"
+                ],
+                "title": "CompactionConversationItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "encrypted_content",
+              "type"
+            ],
+            "title": "CompactionConversationItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "other"
+                ],
+                "title": "OtherConversationItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "OtherConversationItem",
+            "type": "object"
+          }
+        ]
+      },
       "CreditsSnapshot": {
         "properties": {
           "balance": {
@@ -12979,11 +13325,11 @@
         ],
         "type": "object"
       },
-      "RawResponseItemCompletedNotification": {
+      "RawConversationItemCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "item": {
-            "$ref": "#/definitions/v2/ResponseItem"
+            "$ref": "#/definitions/v2/ConversationItem"
           },
           "threadId": {
             "type": "string"
@@ -12997,7 +13343,7 @@
           "threadId",
           "turnId"
         ],
-        "title": "RawResponseItemCompletedNotification",
+        "title": "RawConversationItemCompletedNotification",
         "type": "object"
       },
       "ReasoningEffort": {
@@ -13356,352 +13702,6 @@
           "uriTemplate"
         ],
         "type": "object"
-      },
-      "ResponseItem": {
-        "oneOf": [
-          {
-            "properties": {
-              "content": {
-                "items": {
-                  "$ref": "#/definitions/v2/ContentItem"
-                },
-                "type": "array"
-              },
-              "end_turn": {
-                "type": [
-                  "boolean",
-                  "null"
-                ]
-              },
-              "id": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "writeOnly": true
-              },
-              "role": {
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "message"
-                ],
-                "title": "MessageResponseItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "content",
-              "role",
-              "type"
-            ],
-            "title": "MessageResponseItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "content": {
-                "default": null,
-                "items": {
-                  "$ref": "#/definitions/v2/ReasoningItemContent"
-                },
-                "type": [
-                  "array",
-                  "null"
-                ]
-              },
-              "encrypted_content": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "id": {
-                "type": "string",
-                "writeOnly": true
-              },
-              "summary": {
-                "items": {
-                  "$ref": "#/definitions/v2/ReasoningItemReasoningSummary"
-                },
-                "type": "array"
-              },
-              "type": {
-                "enum": [
-                  "reasoning"
-                ],
-                "title": "ReasoningResponseItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "summary",
-              "type"
-            ],
-            "title": "ReasoningResponseItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "action": {
-                "$ref": "#/definitions/v2/LocalShellAction"
-              },
-              "call_id": {
-                "description": "Set when using the Responses API.",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "id": {
-                "description": "Set when using the chat completions API.",
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "writeOnly": true
-              },
-              "status": {
-                "$ref": "#/definitions/v2/LocalShellStatus"
-              },
-              "type": {
-                "enum": [
-                  "local_shell_call"
-                ],
-                "title": "LocalShellCallResponseItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "action",
-              "status",
-              "type"
-            ],
-            "title": "LocalShellCallResponseItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "arguments": {
-                "type": "string"
-              },
-              "call_id": {
-                "type": "string"
-              },
-              "id": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "writeOnly": true
-              },
-              "name": {
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "function_call"
-                ],
-                "title": "FunctionCallResponseItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "arguments",
-              "call_id",
-              "name",
-              "type"
-            ],
-            "title": "FunctionCallResponseItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "call_id": {
-                "type": "string"
-              },
-              "output": {
-                "$ref": "#/definitions/v2/FunctionCallOutputPayload"
-              },
-              "type": {
-                "enum": [
-                  "function_call_output"
-                ],
-                "title": "FunctionCallOutputResponseItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "call_id",
-              "output",
-              "type"
-            ],
-            "title": "FunctionCallOutputResponseItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "call_id": {
-                "type": "string"
-              },
-              "id": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "writeOnly": true
-              },
-              "input": {
-                "type": "string"
-              },
-              "name": {
-                "type": "string"
-              },
-              "status": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "type": {
-                "enum": [
-                  "custom_tool_call"
-                ],
-                "title": "CustomToolCallResponseItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "call_id",
-              "input",
-              "name",
-              "type"
-            ],
-            "title": "CustomToolCallResponseItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "call_id": {
-                "type": "string"
-              },
-              "output": {
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "custom_tool_call_output"
-                ],
-                "title": "CustomToolCallOutputResponseItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "call_id",
-              "output",
-              "type"
-            ],
-            "title": "CustomToolCallOutputResponseItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "action": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/WebSearchAction"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "id": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "writeOnly": true
-              },
-              "status": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "type": {
-                "enum": [
-                  "web_search_call"
-                ],
-                "title": "WebSearchCallResponseItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "title": "WebSearchCallResponseItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "ghost_commit": {
-                "$ref": "#/definitions/v2/GhostCommit"
-              },
-              "type": {
-                "enum": [
-                  "ghost_snapshot"
-                ],
-                "title": "GhostSnapshotResponseItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "ghost_commit",
-              "type"
-            ],
-            "title": "GhostSnapshotResponseItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "encrypted_content": {
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "compaction"
-                ],
-                "title": "CompactionResponseItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "encrypted_content",
-              "type"
-            ],
-            "title": "CompactionResponseItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "type": {
-                "enum": [
-                  "other"
-                ],
-                "title": "OtherResponseItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "title": "OtherResponseItem",
-            "type": "object"
-          }
-        ]
       },
       "ReviewDelivery": {
         "enum": [
@@ -15432,7 +15432,7 @@
           "history": {
             "description": "[UNSTABLE] FOR CODEX CLOUD - DO NOT USE. If specified, the thread will be resumed with the provided history instead of loaded from disk.",
             "items": {
-              "$ref": "#/definitions/v2/ResponseItem"
+              "$ref": "#/definitions/v2/ConversationItem"
             },
             "type": [
               "array",

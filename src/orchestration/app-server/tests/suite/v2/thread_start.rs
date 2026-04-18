@@ -2,13 +2,13 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
+use codex_agent::config::set_project_trust_level;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
-use codex_core::config::set_project_trust_level;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use std::path::Path;
@@ -129,7 +129,7 @@ model_provider = "mock_provider"
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"
-wire_api = "responses"
+dialect = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#

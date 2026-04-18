@@ -5,14 +5,14 @@ mod seatbelt;
 
 use std::path::PathBuf;
 
-use codex_common::CliConfigOverrides;
-use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
-use codex_core::exec_env::create_env;
-use codex_core::landlock::spawn_command_under_linux_sandbox;
+use codex_agent::config::Config;
+use codex_agent::config::ConfigOverrides;
+use codex_agent::exec_env::create_env;
+use codex_agent::landlock::spawn_command_under_linux_sandbox;
 #[cfg(target_os = "macos")]
-use codex_core::seatbelt::spawn_command_under_seatbelt;
-use codex_core::spawn::StdioPolicy;
+use codex_agent::seatbelt::spawn_command_under_seatbelt;
+use codex_agent::spawn::StdioPolicy;
+use codex_common::CliConfigOverrides;
 use codex_protocol::config_types::SandboxMode;
 
 use crate::LandlockCommand;
@@ -136,7 +136,7 @@ async fn run_command_under_sandbox(
     if let SandboxType::Windows = sandbox_type {
         #[cfg(target_os = "windows")]
         {
-            use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+            use codex_agent::windows_sandbox::WindowsSandboxLevelExt;
             use codex_protocol::config_types::WindowsSandboxLevel;
             use codex_windows_sandbox::run_windows_sandbox_capture;
             use codex_windows_sandbox::run_windows_sandbox_capture_elevated;

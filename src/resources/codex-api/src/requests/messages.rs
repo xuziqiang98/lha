@@ -7,9 +7,9 @@ use serde_json::Value;
 use serde_json::json;
 
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ConversationItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseItem;
 
 const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 const DEFAULT_MAX_TOKENS: u32 = 8_192;
@@ -25,7 +25,7 @@ pub struct MessagesRequest {
 pub struct MessagesRequestBuilder<'a> {
     model: &'a str,
     instructions: &'a str,
-    input: &'a [ResponseItem],
+    input: &'a [ConversationItem],
     tools: &'a [Value],
     parallel_tool_calls: bool,
     max_tokens: u32,
@@ -35,7 +35,7 @@ impl<'a> MessagesRequestBuilder<'a> {
     pub fn new(
         model: &'a str,
         instructions: &'a str,
-        input: &'a [ResponseItem],
+        input: &'a [ConversationItem],
         tools: &'a [Value],
     ) -> Self {
         Self {
@@ -94,12 +94,12 @@ impl<'a> MessagesRequestBuilder<'a> {
     }
 }
 
-fn build_messages(input: &[ResponseItem]) -> Result<Vec<Value>, ApiError> {
+fn build_messages(input: &[ConversationItem]) -> Result<Vec<Value>, ApiError> {
     let mut messages = Vec::new();
 
     for item in input {
         match item {
-            ResponseItem::Message { role, content, .. } => {
+            ConversationItem::Message { role, content, .. } => {
                 if is_messages_role(role) {
                     let blocks = map_message_content(content);
                     if !blocks.is_empty() {
@@ -107,7 +107,7 @@ fn build_messages(input: &[ResponseItem]) -> Result<Vec<Value>, ApiError> {
                     }
                 }
             }
-            ResponseItem::FunctionCall {
+            ConversationItem::FunctionCall {
                 name,
                 arguments,
                 call_id,
@@ -123,7 +123,7 @@ fn build_messages(input: &[ResponseItem]) -> Result<Vec<Value>, ApiError> {
                     }),
                 );
             }
-            ResponseItem::CustomToolCall {
+            ConversationItem::CustomToolCall {
                 call_id,
                 name,
                 input,
@@ -139,7 +139,7 @@ fn build_messages(input: &[ResponseItem]) -> Result<Vec<Value>, ApiError> {
                     }),
                 );
             }
-            ResponseItem::LocalShellCall {
+            ConversationItem::LocalShellCall {
                 id,
                 call_id,
                 action,
@@ -158,10 +158,10 @@ fn build_messages(input: &[ResponseItem]) -> Result<Vec<Value>, ApiError> {
                     }),
                 );
             }
-            ResponseItem::FunctionCallOutput { call_id, output } => {
+            ConversationItem::FunctionCallOutput { call_id, output } => {
                 push_user_tool_result(&mut messages, build_tool_result_block(call_id, output));
             }
-            ResponseItem::CustomToolCallOutput { call_id, output } => {
+            ConversationItem::CustomToolCallOutput { call_id, output } => {
                 push_user_tool_result(
                     &mut messages,
                     json!({
@@ -171,11 +171,11 @@ fn build_messages(input: &[ResponseItem]) -> Result<Vec<Value>, ApiError> {
                     }),
                 );
             }
-            ResponseItem::Reasoning { .. }
-            | ResponseItem::WebSearchCall { .. }
-            | ResponseItem::GhostSnapshot { .. }
-            | ResponseItem::Compaction { .. }
-            | ResponseItem::Other => {}
+            ConversationItem::Reasoning { .. }
+            | ConversationItem::WebSearchCall { .. }
+            | ConversationItem::GhostSnapshot { .. }
+            | ConversationItem::Compaction { .. }
+            | ConversationItem::Other => {}
         }
     }
 
@@ -184,7 +184,7 @@ fn build_messages(input: &[ResponseItem]) -> Result<Vec<Value>, ApiError> {
 
 fn build_system_prompt(
     base_instructions: &str,
-    input: &[ResponseItem],
+    input: &[ConversationItem],
 ) -> Result<String, ApiError> {
     let mut parts = Vec::new();
 
@@ -193,7 +193,7 @@ fn build_system_prompt(
     }
 
     for item in input {
-        if let ResponseItem::Message { role, content, .. } = item
+        if let ConversationItem::Message { role, content, .. } = item
             && !is_messages_role(role)
             && let Some(text) = message_text_for_system(content)?
         {
@@ -371,7 +371,7 @@ mod tests {
     #[test]
     fn builds_messages_request_without_tools() {
         let input = vec![
-            ResponseItem::Message {
+            ConversationItem::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -379,13 +379,13 @@ mod tests {
                 }],
                 end_turn: None,
             },
-            ResponseItem::FunctionCall {
+            ConversationItem::FunctionCall {
                 id: None,
                 name: "read_file".to_string(),
                 arguments: r#"{"path":"src/main.rs"}"#.to_string(),
                 call_id: "call-1".to_string(),
             },
-            ResponseItem::FunctionCallOutput {
+            ConversationItem::FunctionCallOutput {
                 call_id: "call-1".to_string(),
                 output: FunctionCallOutputPayload {
                     content: "done".to_string(),
@@ -421,7 +421,7 @@ mod tests {
 
     #[test]
     fn builds_messages_request_with_tools() {
-        let input = vec![ResponseItem::Message {
+        let input = vec![ConversationItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -459,7 +459,7 @@ mod tests {
     #[test]
     fn folds_non_user_assistant_messages_into_system_prompt() {
         let input = vec![
-            ResponseItem::Message {
+            ConversationItem::Message {
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
@@ -467,7 +467,7 @@ mod tests {
                 }],
                 end_turn: None,
             },
-            ResponseItem::Message {
+            ConversationItem::Message {
                 id: None,
                 role: "system".to_string(),
                 content: vec![ContentItem::OutputText {
@@ -475,7 +475,7 @@ mod tests {
                 }],
                 end_turn: None,
             },
-            ResponseItem::Message {
+            ConversationItem::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -483,7 +483,7 @@ mod tests {
                 }],
                 end_turn: None,
             },
-            ResponseItem::Message {
+            ConversationItem::Message {
                 id: None,
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
@@ -516,7 +516,7 @@ mod tests {
 
     #[test]
     fn parallel_tool_calls_omit_disable_parallel_tool_use() {
-        let input = vec![ResponseItem::Message {
+        let input = vec![ConversationItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -553,7 +553,7 @@ mod tests {
 
     #[test]
     fn failed_function_call_outputs_include_is_error() {
-        let input = vec![ResponseItem::FunctionCallOutput {
+        let input = vec![ConversationItem::FunctionCallOutput {
             call_id: "call-1".to_string(),
             output: FunctionCallOutputPayload {
                 content: "denied".to_string(),
@@ -575,7 +575,7 @@ mod tests {
 
     #[test]
     fn successful_function_call_outputs_omit_is_error() {
-        let input = vec![ResponseItem::FunctionCallOutput {
+        let input = vec![ConversationItem::FunctionCallOutput {
             call_id: "call-1".to_string(),
             output: FunctionCallOutputPayload {
                 content: "done".to_string(),
@@ -595,7 +595,7 @@ mod tests {
 
     #[test]
     fn rejects_images_in_folded_system_messages() {
-        let input = vec![ResponseItem::Message {
+        let input = vec![ConversationItem::Message {
             id: None,
             role: "developer".to_string(),
             content: vec![ContentItem::InputImage {
@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn rejects_non_object_tool_input() {
-        let input = vec![ResponseItem::FunctionCall {
+        let input = vec![ConversationItem::FunctionCall {
             id: None,
             name: "oops".to_string(),
             arguments: "[]".to_string(),

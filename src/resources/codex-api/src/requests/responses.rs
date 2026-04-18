@@ -6,7 +6,7 @@ use crate::provider::Provider;
 use crate::requests::headers::build_conversation_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ConversationItem;
 use codex_protocol::protocol::SessionSource;
 use http::HeaderMap;
 use serde_json::Value;
@@ -29,7 +29,7 @@ pub struct ResponsesRequest {
 pub struct ResponsesRequestBuilder<'a> {
     model: Option<&'a str>,
     instructions: Option<&'a str>,
-    input: Option<&'a [ResponseItem]>,
+    input: Option<&'a [ConversationItem]>,
     tools: Option<&'a [Value]>,
     parallel_tool_calls: bool,
     reasoning: Option<Reasoning>,
@@ -44,7 +44,7 @@ pub struct ResponsesRequestBuilder<'a> {
 }
 
 impl<'a> ResponsesRequestBuilder<'a> {
-    pub fn new(model: &'a str, instructions: &'a str, input: &'a [ResponseItem]) -> Self {
+    pub fn new(model: &'a str, instructions: &'a str, input: &'a [ConversationItem]) -> Self {
         Self {
             model: Some(model),
             instructions: Some(instructions),
@@ -160,7 +160,7 @@ impl<'a> ResponsesRequestBuilder<'a> {
     }
 }
 
-fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
+fn attach_item_ids(payload_json: &mut Value, original_items: &[ConversationItem]) {
     let Some(input_value) = payload_json.get_mut("input") else {
         return;
     };
@@ -169,12 +169,12 @@ fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
     };
 
     for (value, item) in items.iter_mut().zip(original_items.iter()) {
-        if let ResponseItem::Reasoning { id, .. }
-        | ResponseItem::Message { id: Some(id), .. }
-        | ResponseItem::WebSearchCall { id: Some(id), .. }
-        | ResponseItem::FunctionCall { id: Some(id), .. }
-        | ResponseItem::LocalShellCall { id: Some(id), .. }
-        | ResponseItem::CustomToolCall { id: Some(id), .. } = item
+        if let ConversationItem::Reasoning { id, .. }
+        | ConversationItem::Message { id: Some(id), .. }
+        | ConversationItem::WebSearchCall { id: Some(id), .. }
+        | ConversationItem::FunctionCall { id: Some(id), .. }
+        | ConversationItem::LocalShellCall { id: Some(id), .. }
+        | ConversationItem::CustomToolCall { id: Some(id), .. } = item
         {
             if id.is_empty() {
                 continue;
@@ -219,13 +219,13 @@ mod tests {
     fn azure_default_store_attaches_ids_and_headers() {
         let provider = provider("azure", "https://example.openai.azure.com/v1");
         let input = vec![
-            ResponseItem::Message {
+            ConversationItem::Message {
                 id: Some("m1".into()),
                 role: "assistant".into(),
                 content: Vec::new(),
                 end_turn: None,
             },
-            ResponseItem::Message {
+            ConversationItem::Message {
                 id: None,
                 role: "assistant".into(),
                 content: Vec::new(),
