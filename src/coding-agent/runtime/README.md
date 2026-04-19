@@ -7,10 +7,11 @@ This crate implements the business logic for Codex. It is designed to be used by
 `codex-coding-agent` sits above `codex-llm` and below user-facing surfaces such as `codex-tui`, `codex-exec`, and `codex app-server`.
 
 - `codex-llm` is the model/runtime SDK boundary.
-- `codex-coding-agent` owns the agent turn loop, tool orchestration, config, prompts, and Codex product behavior.
+- `codex-agent-core` now provides the reusable turn-stream kernel shared by agent products.
+- `codex-coding-agent` owns Codex-specific agent behavior, tool orchestration, config, prompts, and adapters on top of that kernel.
 - UI and protocol surfaces should depend on `codex-coding-agent` rather than reimplementing agent logic.
 
-Today this crate still contains both the generic agent loop and Codex-specific coding-agent policy. If those concerns are split further later, the `codex-llm` SDK boundary should remain intact and surfaces should continue to depend on a single agent-facing runtime layer.
+Today this crate still contains substantial Codex-specific policy and the legacy thread/task adapters that drive the product. The regular turn path now routes through `codex-agent-core::kernel::AgentKernel`, and follow-on extractions should continue moving reusable loop concerns into `codex-agent-core` while keeping the `codex-llm` SDK boundary intact.
 
 ## Dependencies
 

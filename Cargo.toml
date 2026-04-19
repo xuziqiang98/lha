@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "src/core/agent-core",
     "src/integrations/backend-client",
     "src/shared/ansi-escape",
     "src/shared/async-utils",
@@ -72,6 +73,7 @@ codex-cli = { path = "src/coding-agent/cli" }
 codex-client = { path = "src/llm/api/codex-client" }
 codex-common = { path = "src/shared/common" }
 codex-agent = { package = "codex-coding-agent", path = "src/coding-agent/runtime" }
+codex-agent-core = { path = "src/core/agent-core" }
 codex-exec = { path = "src/platform/exec" }
 codex-execpolicy = { path = "src/platform/sandbox/execpolicy" }
 codex-feedback = { path = "src/coding-agent/feedback" }

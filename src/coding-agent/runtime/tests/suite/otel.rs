@@ -594,6 +594,14 @@ async fn record_responses_sets_span_fields_for_response_events() {
     ]);
 
     mount_response_once(&server, sse_response(sse_body)).await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "tool handled"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {

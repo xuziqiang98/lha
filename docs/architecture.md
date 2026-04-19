@@ -7,10 +7,11 @@ The Rust workspace is organized around the current top-level domains under `src/
   - `src/llm/runtime` exposes the semantic runtime interface consumed by the agent layer.
   - `src/llm/providers` is reserved for provider-specific adapters when needed.
 - `src/core`: cross-surface product primitives that should not depend on a specific UI.
+  - `src/core/agent-core` owns the reusable agent-loop kernel that sits above `codex-llm` and below product-specific agent behavior.
   - `src/core/protocol` defines shared protocol types.
   - `src/core/state` owns durable state and storage primitives.
 - `src/coding-agent`: the Codex agent runtime and product logic.
-  - `src/coding-agent/runtime` contains the turn loop, tool orchestration, model management, config, and prompt assembly.
+  - `src/coding-agent/runtime` contains Codex-specific agent policy, tool orchestration, model management, config, and prompt assembly.
   - `src/coding-agent/cli`, `login`, `feedback`, and `chatgpt` provide supporting product surfaces around that runtime.
 - `src/tui`: the terminal UI surface.
   - `src/tui/app` is the interactive TUI built on top of `codex-coding-agent`.
@@ -31,6 +32,7 @@ The main product path is:
 `src/llm` -> `src/core` -> `src/coding-agent` -> surface crates such as `src/tui/app`, `src/platform/exec`, and `src/integrations/app-server`
 
 The important boundary in this stack is that `codex-coding-agent` should talk to `codex-llm` as an SDK, not by reaching into provider-specific internals.
+The reusable turn-stream kernel now lives in `codex-agent-core`, so new agent products should prefer building on that layer instead of reimplementing the loop inside a product crate.
 
 ## Intended Dependency Direction
 
@@ -38,22 +40,22 @@ The intended dependency flow is:
 
 - `src/shared` and `src/resources` stay near the leaves.
 - `src/llm` provides model-facing SDK primitives.
-- `src/core` provides product-neutral protocol and state primitives.
-- `src/coding-agent` owns the agent behavior and orchestration.
+- `src/core` provides product-neutral protocol, state, and agent-loop primitives.
+- `src/coding-agent` owns Codex-specific agent behavior and orchestration on top of those primitives.
 - UI and protocol surfaces such as `src/tui`, `src/platform/exec`, and `src/integrations/app-server` sit above the coding-agent runtime.
 
 This is the target mental model for the workspace. Some older crates still reflect historical layering decisions, but new work should follow this direction.
 
 ## Current Boundary Note
 
-Today, `src/coding-agent/runtime` still contains both the reusable agent loop and Codex-specific coding-agent policy. That is an acceptable intermediate state, but the directory layout should be read as:
+Today, `src/coding-agent/runtime` still contains substantial Codex-specific policy around the reusable loop. The current directory layout should be read as:
 
 - `src/llm`: model SDK boundary
-- `src/core`: shared product primitives
-- `src/coding-agent`: agent orchestration and product behavior
+- `src/core`: shared product primitives, including the extracted agent-loop kernel
+- `src/coding-agent`: Codex orchestration and product behavior
 - `src/tui`: presentation layer
 
-If the agent loop is split further in the future, it should remain between `src/core` and the product-specific parts of `src/coding-agent`, without collapsing the existing `src/llm` SDK boundary.
+Follow-on extractions such as a higher-level `AgentSession` SDK should continue to live between `src/core` and the product-specific parts of `src/coding-agent`, without collapsing the existing `src/llm` SDK boundary.
 
 ## Workspace Root
 

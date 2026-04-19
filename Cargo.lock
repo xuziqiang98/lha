@@ -792,6 +792,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
 
 [[package]]
+name = "codex-agent-core"
+version = "0.94.4"
+dependencies = [
+ "async-trait",
+ "codex-async-utils",
+ "codex-llm",
+ "codex-protocol",
+ "futures",
+ "pretty_assertions",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "codex-ansi-escape"
 version = "0.94.4"
 dependencies = [
@@ -1114,6 +1128,7 @@ dependencies = [
  "chardetng",
  "chrono",
  "clap",
+ "codex-agent-core",
  "codex-api",
  "codex-app-server-protocol",
  "codex-apply-patch",

@@ -29,6 +29,7 @@ use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::handle_tool_call_request;
 use crate::stream_events_utils::last_assistant_message_from_item;
+use crate::stream_events_utils::response_input_to_response_item;
 use crate::subagents::AgentControl;
 use crate::subagents::AgentStatus;
 use crate::subagents::agent_status_from_event;
@@ -38,6 +39,11 @@ use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
+use async_trait::async_trait;
+use codex_agent_core::kernel::AgentKernel;
+use codex_agent_core::kernel::TurnEventProcessor;
+use codex_agent_core::kernel::TurnEventUpdate;
+use codex_agent_core::kernel::TurnStreamOutcome;
 use codex_llm::DefaultRuntimeClientFactory;
 use codex_llm::RuntimeEndpoint;
 use codex_llm::RuntimeSession;
@@ -72,9 +78,6 @@ use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
-use futures::future::BoxFuture;
-use futures::prelude::*;
-use futures::stream::FuturesOrdered;
 use mcp_types::CallToolResult;
 use mcp_types::ListResourceTemplatesRequestParams;
 use mcp_types::ListResourceTemplatesResult;
@@ -93,7 +96,6 @@ use toml_edit::value;
 use tracing::Instrument;
 use tracing::debug;
 use tracing::error;
-use tracing::field;
 use tracing::info;
 use tracing::info_span;
 use tracing::instrument;
@@ -4521,33 +4523,384 @@ async fn handle_assistant_item_done_in_plan_mode(
     false
 }
 
-async fn drain_in_flight(
-    in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
+struct CodexTurnStreamProcessor {
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-) -> CodexResult<i64> {
-    let estimated_before = sess
-        .clone_history()
-        .await
-        .estimate_token_count(turn_context.as_ref())
-        .unwrap_or(0);
-    while let Some(res) = in_flight.next().await {
-        match res {
-            Ok(response_input) => {
-                sess.record_conversation_items(&turn_context, &[response_input.into()])
+    tool_runtime: ToolCallRuntime,
+    turn_diff_tracker: SharedTurnDiffTracker,
+    cancellation_token: CancellationToken,
+    pending_input_epoch: u64,
+    active_item: Option<TurnItem>,
+    plan_mode_state: Option<PlanModeStreamState>,
+    response_total_tokens: Option<i64>,
+    tool_output_tokens: i64,
+    should_emit_turn_diff: bool,
+}
+
+impl CodexTurnStreamProcessor {
+    fn new(
+        sess: Arc<Session>,
+        turn_context: Arc<TurnContext>,
+        tool_runtime: ToolCallRuntime,
+        turn_diff_tracker: SharedTurnDiffTracker,
+        cancellation_token: CancellationToken,
+    ) -> Self {
+        let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
+        let plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
+        Self {
+            sess,
+            turn_context,
+            tool_runtime,
+            turn_diff_tracker,
+            cancellation_token,
+            pending_input_epoch: 0,
+            active_item: None,
+            plan_mode_state,
+            response_total_tokens: None,
+            tool_output_tokens: 0,
+            should_emit_turn_diff: false,
+        }
+    }
+
+    fn plan_mode(&self) -> bool {
+        self.plan_mode_state.is_some()
+    }
+}
+
+#[async_trait]
+impl TurnEventProcessor for CodexTurnStreamProcessor {
+    type Error = CodexErr;
+
+    async fn handle_event(
+        &mut self,
+        event: TurnEvent,
+    ) -> Result<TurnEventUpdate<Self::Error>, Self::Error> {
+        let handle_responses_span = event.to_legacy_response_event().map(|legacy_event| {
+            let span = tracing::trace_span!(
+                "handle_responses",
+                otel.name = tracing::field::Empty,
+                from = tracing::field::Empty,
+                tool_name = tracing::field::Empty
+            );
+            self.sess
+                .services
+                .otel_manager
+                .record_responses(&span, &legacy_event);
+            span
+        });
+        let _handle_responses_guard = handle_responses_span.as_ref().map(tracing::Span::enter);
+
+        match event {
+            TurnEvent::Created => Ok(TurnEventUpdate::default()),
+            TurnEvent::RuntimeNotice(notice) => {
+                self.sess
+                    .send_event(
+                        &self.turn_context,
+                        EventMsg::Warning(WarningEvent {
+                            message: notice.message,
+                        }),
+                    )
                     .await;
+                Ok(TurnEventUpdate::default())
             }
-            Err(err) => {
-                error_or_panic(format!("in-flight tool future failed during drain: {err}"));
+            TurnEvent::ItemCompleted { item, .. } => {
+                let item = item.into_item();
+                let previously_active_item = self.active_item.take();
+                let mut update = TurnEventUpdate::default();
+
+                if let Some(state) = self.plan_mode_state.as_mut() {
+                    if let Some(previous) = previously_active_item.as_ref() {
+                        let item_id = previous.id();
+                        if matches!(previous, TurnItem::AgentMessage(_)) {
+                            flush_proposed_plan_segments_for_item(
+                                &self.sess,
+                                &self.turn_context,
+                                state,
+                                &item_id,
+                            )
+                            .await;
+                        }
+                    }
+                    if handle_assistant_item_done_in_plan_mode(
+                        &self.sess,
+                        &self.turn_context,
+                        &item,
+                        state,
+                        previously_active_item.as_ref(),
+                        &mut update.last_agent_message,
+                    )
+                    .await
+                    {
+                        return Ok(update);
+                    }
+                }
+
+                let mut ctx = HandleOutputCtx {
+                    sess: Arc::clone(&self.sess),
+                    turn_context: Arc::clone(&self.turn_context),
+                    tool_runtime: self.tool_runtime.clone(),
+                    cancellation_token: self.cancellation_token.child_token(),
+                };
+
+                let output_result =
+                    handle_output_item_done(&mut ctx, item, previously_active_item).await?;
+                update.tool_future = output_result.tool_future;
+                update.needs_follow_up = output_result.needs_follow_up;
+                update.last_agent_message = output_result.last_agent_message;
+                Ok(update)
+            }
+            TurnEvent::ToolCall(call) => {
+                let _previously_active_item = self.active_item.take();
+                let mut ctx = HandleOutputCtx {
+                    sess: Arc::clone(&self.sess),
+                    turn_context: Arc::clone(&self.turn_context),
+                    tool_runtime: self.tool_runtime.clone(),
+                    cancellation_token: self.cancellation_token.child_token(),
+                };
+                let output_result = handle_tool_call_request(&mut ctx, call).await?;
+                Ok(TurnEventUpdate {
+                    tool_future: output_result.tool_future,
+                    needs_follow_up: output_result.needs_follow_up,
+                    last_agent_message: output_result.last_agent_message,
+                    ..Default::default()
+                })
+            }
+            TurnEvent::ItemStarted { item, .. } => {
+                let item = item.into_item();
+                if let Some(turn_item) =
+                    handle_non_tool_response_item(&item, self.plan_mode()).await
+                {
+                    if let Some(state) = self.plan_mode_state.as_mut()
+                        && matches!(turn_item, TurnItem::AgentMessage(_))
+                    {
+                        let item_id = turn_item.id();
+                        state
+                            .pending_agent_message_items
+                            .insert(item_id, turn_item.clone());
+                    } else {
+                        self.sess
+                            .emit_turn_item_started(&self.turn_context, &turn_item)
+                            .await;
+                    }
+                    self.active_item = Some(turn_item);
+                }
+                Ok(TurnEventUpdate::default())
+            }
+            TurnEvent::ServerReasoningIncluded(included) => {
+                self.sess.set_server_reasoning_included(included).await;
+                Ok(TurnEventUpdate::default())
+            }
+            TurnEvent::RateLimits(snapshot) => {
+                self.sess
+                    .update_rate_limits(&self.turn_context, snapshot)
+                    .await;
+                Ok(TurnEventUpdate::default())
+            }
+            TurnEvent::ModelsEtag(etag) => {
+                let config = self.sess.get_config().await;
+                self.sess
+                    .services
+                    .models_manager
+                    .refresh_if_new_etag(etag, &config)
+                    .await;
+                Ok(TurnEventUpdate::default())
+            }
+            TurnEvent::Completed {
+                response_id: _,
+                token_usage,
+            } => {
+                if let Some(state) = self.plan_mode_state.as_mut() {
+                    flush_proposed_plan_segments_all(&self.sess, &self.turn_context, state).await;
+                }
+                self.sess
+                    .update_token_usage_info(&self.turn_context, token_usage.as_ref())
+                    .await;
+                self.should_emit_turn_diff = true;
+                self.response_total_tokens = token_usage.as_ref().map(|usage| usage.total_tokens);
+
+                let pending_input_epoch = self.sess.pending_input_epoch.load(Ordering::SeqCst);
+                let mut needs_follow_up = self.sess.has_pending_input().await;
+                if !needs_follow_up {
+                    needs_follow_up |= self.sess.has_late_pending_input(pending_input_epoch).await;
+                }
+
+                Ok(TurnEventUpdate {
+                    needs_follow_up,
+                    ..Default::default()
+                })
+            }
+            TurnEvent::OutputTextDelta { delta, .. } => {
+                if let Some(active) = self.active_item.as_ref() {
+                    let item_id = active.id();
+                    if let Some(state) = self.plan_mode_state.as_mut()
+                        && matches!(active, TurnItem::AgentMessage(_))
+                    {
+                        let segments = state
+                            .plan_parsers
+                            .assistant_parser_mut(&item_id)
+                            .parse(&delta);
+                        handle_plan_segments(
+                            &self.sess,
+                            &self.turn_context,
+                            state,
+                            &item_id,
+                            segments,
+                        )
+                        .await;
+                    } else {
+                        let event = AgentMessageContentDeltaEvent {
+                            thread_id: self.sess.conversation_id.to_string(),
+                            turn_id: self.turn_context.sub_id.clone(),
+                            item_id,
+                            delta,
+                        };
+                        self.sess
+                            .send_event(
+                                &self.turn_context,
+                                EventMsg::AgentMessageContentDelta(event),
+                            )
+                            .await;
+                    }
+                } else {
+                    error_or_panic("OutputTextDelta without active item".to_string());
+                }
+                Ok(TurnEventUpdate::default())
+            }
+            TurnEvent::ReasoningSummaryDelta {
+                delta,
+                summary_index,
+                ..
+            } => {
+                if let Some(active) = self.active_item.as_ref() {
+                    let event = ReasoningContentDeltaEvent {
+                        thread_id: self.sess.conversation_id.to_string(),
+                        turn_id: self.turn_context.sub_id.clone(),
+                        item_id: active.id(),
+                        delta,
+                        summary_index,
+                    };
+                    self.sess
+                        .send_event(&self.turn_context, EventMsg::ReasoningContentDelta(event))
+                        .await;
+                } else {
+                    error_or_panic("ReasoningSummaryDelta without active item".to_string());
+                }
+                Ok(TurnEventUpdate::default())
+            }
+            TurnEvent::ReasoningSummaryPartAdded { summary_index, .. } => {
+                if let Some(active) = self.active_item.as_ref() {
+                    let event =
+                        EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
+                            item_id: active.id(),
+                            summary_index,
+                        });
+                    self.sess.send_event(&self.turn_context, event).await;
+                } else {
+                    error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
+                }
+                Ok(TurnEventUpdate::default())
+            }
+            TurnEvent::ReasoningContentDelta {
+                delta,
+                content_index,
+                ..
+            } => {
+                if let Some(active) = self.active_item.as_ref() {
+                    let event = ReasoningRawContentDeltaEvent {
+                        thread_id: self.sess.conversation_id.to_string(),
+                        turn_id: self.turn_context.sub_id.clone(),
+                        item_id: active.id(),
+                        delta,
+                        content_index,
+                    };
+                    self.sess
+                        .send_event(
+                            &self.turn_context,
+                            EventMsg::ReasoningRawContentDelta(event),
+                        )
+                        .await;
+                } else {
+                    error_or_panic("ReasoningRawContentDelta without active item".to_string());
+                }
+                Ok(TurnEventUpdate::default())
+            }
+            TurnEvent::ProposedPlanDelta { .. } | TurnEvent::ProposedPlanDone { .. } => {
+                Ok(TurnEventUpdate::default())
             }
         }
     }
-    let estimated_after = sess
-        .clone_history()
-        .await
-        .estimate_token_count(turn_context.as_ref())
-        .unwrap_or(estimated_before);
-    Ok(estimated_after.saturating_sub(estimated_before))
+
+    async fn record_tool_result(&mut self, response: ResponseInputItem) -> Result<(), Self::Error> {
+        let estimated_before = self
+            .sess
+            .clone_history()
+            .await
+            .estimate_token_count(self.turn_context.as_ref())
+            .unwrap_or(0);
+        if let Some(item) = response_input_to_response_item(&response) {
+            self.sess
+                .record_conversation_items(&self.turn_context, &[item])
+                .await;
+        }
+        let estimated_after = self
+            .sess
+            .clone_history()
+            .await
+            .estimate_token_count(self.turn_context.as_ref())
+            .unwrap_or(estimated_before);
+        self.tool_output_tokens += estimated_after.saturating_sub(estimated_before);
+        Ok(())
+    }
+
+    async fn on_tool_future_error(&mut self, err: Self::Error) -> Result<(), Self::Error> {
+        error_or_panic(format!("in-flight tool future failed during drain: {err}"));
+        Ok(())
+    }
+
+    async fn finish(
+        self,
+        state: codex_agent_core::kernel::TurnStreamState,
+    ) -> Result<TurnStreamOutcome, Self::Error> {
+        let needs_follow_up = if self.cancellation_token.is_cancelled() {
+            false
+        } else {
+            state.needs_follow_up
+                || self
+                    .sess
+                    .has_late_pending_input(self.pending_input_epoch)
+                    .await
+        };
+
+        if self.should_emit_turn_diff {
+            let unified_diff = {
+                let mut tracker = self.turn_diff_tracker.lock().await;
+                tracker.get_unified_diff()
+            };
+            if let Ok(Some(unified_diff)) = unified_diff {
+                let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
+                self.sess.send_event(&self.turn_context, msg).await;
+            }
+        }
+
+        Ok(TurnStreamOutcome {
+            needs_follow_up,
+            last_agent_message: state.last_agent_message,
+            response_total_tokens: self.response_total_tokens,
+            tool_output_tokens: self.tool_output_tokens,
+        })
+    }
+
+    fn cancelled_error(&self) -> Self::Error {
+        CodexErr::TurnAborted
+    }
+
+    fn llm_error(&self, err: codex_llm::Error) -> Self::Error {
+        err.into()
+    }
+
+    fn stream_closed_error(&self) -> Self::Error {
+        CodexErr::Stream("stream closed before response.completed".into(), None)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4593,7 +4946,7 @@ async fn try_run_sampling_request(
     );
 
     sess.persist_rollout_items(&[rollout_item]).await;
-    let mut stream = client_session
+    let stream = client_session
         .run_turn(prompt)
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
@@ -4605,284 +4958,24 @@ async fn try_run_sampling_request(
         Arc::clone(&turn_context),
         Arc::clone(&turn_diff_tracker),
     );
-    let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
-        FuturesOrdered::new();
-    let mut needs_follow_up = false;
-    let mut last_agent_message: Option<String> = None;
-    let mut active_item: Option<TurnItem> = None;
-    let mut should_emit_turn_diff = false;
-    let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
-    let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
-    let receiving_span = trace_span!("receiving_stream");
-    let outcome: CodexResult<SamplingRequestResult> = loop {
-        let handle_responses = trace_span!(
-            parent: &receiving_span,
-            "handle_responses",
-            otel.name = field::Empty,
-            tool_name = field::Empty,
-            from = field::Empty,
-        );
+    let mut processor = CodexTurnStreamProcessor::new(
+        Arc::clone(&sess),
+        Arc::clone(&turn_context),
+        tool_runtime,
+        Arc::clone(&turn_diff_tracker),
+        cancellation_token.child_token(),
+    );
+    processor.pending_input_epoch = sess.pending_input_epoch.load(Ordering::SeqCst);
+    let outcome = AgentKernel::new()
+        .run_turn(stream, processor, cancellation_token.child_token())
+        .await?;
 
-        let event = match stream
-            .next()
-            .instrument(trace_span!(parent: &handle_responses, "receiving"))
-            .or_cancel(&cancellation_token)
-            .await
-        {
-            Ok(event) => event,
-            Err(codex_async_utils::CancelErr::Cancelled) => break Err(CodexErr::TurnAborted),
-        };
-
-        let event = match event {
-            Some(res) => res?,
-            None => {
-                break Err(CodexErr::Stream(
-                    "stream closed before response.completed".into(),
-                    None,
-                ));
-            }
-        };
-
-        if let Some(legacy_event) = event.to_legacy_response_event() {
-            sess.services
-                .otel_manager
-                .record_responses(&handle_responses, &legacy_event);
-        }
-
-        match event {
-            TurnEvent::Created => {}
-            TurnEvent::RuntimeNotice(notice) => {
-                sess.send_event(
-                    &turn_context,
-                    EventMsg::Warning(WarningEvent {
-                        message: notice.message,
-                    }),
-                )
-                .await;
-            }
-            TurnEvent::ItemCompleted { item, .. } => {
-                let item = item.into_item();
-                let previously_active_item = active_item.take();
-                if let Some(state) = plan_mode_state.as_mut() {
-                    if let Some(previous) = previously_active_item.as_ref() {
-                        let item_id = previous.id();
-                        if matches!(previous, TurnItem::AgentMessage(_)) {
-                            flush_proposed_plan_segments_for_item(
-                                &sess,
-                                &turn_context,
-                                state,
-                                &item_id,
-                            )
-                            .await;
-                        }
-                    }
-                    if handle_assistant_item_done_in_plan_mode(
-                        &sess,
-                        &turn_context,
-                        &item,
-                        state,
-                        previously_active_item.as_ref(),
-                        &mut last_agent_message,
-                    )
-                    .await
-                    {
-                        continue;
-                    }
-                }
-
-                let mut ctx = HandleOutputCtx {
-                    sess: sess.clone(),
-                    turn_context: turn_context.clone(),
-                    tool_runtime: tool_runtime.clone(),
-                    cancellation_token: cancellation_token.child_token(),
-                };
-
-                let output_result = handle_output_item_done(&mut ctx, item, previously_active_item)
-                    .instrument(handle_responses)
-                    .await?;
-                if let Some(tool_future) = output_result.tool_future {
-                    in_flight.push_back(tool_future);
-                }
-                if let Some(agent_message) = output_result.last_agent_message {
-                    last_agent_message = Some(agent_message);
-                }
-                needs_follow_up |= output_result.needs_follow_up;
-            }
-            TurnEvent::ToolCall(call) => {
-                let _previously_active_item = active_item.take();
-                let mut ctx = HandleOutputCtx {
-                    sess: sess.clone(),
-                    turn_context: turn_context.clone(),
-                    tool_runtime: tool_runtime.clone(),
-                    cancellation_token: cancellation_token.child_token(),
-                };
-
-                let output_result = handle_tool_call_request(&mut ctx, call)
-                    .instrument(handle_responses)
-                    .await?;
-                if let Some(tool_future) = output_result.tool_future {
-                    in_flight.push_back(tool_future);
-                }
-                if let Some(agent_message) = output_result.last_agent_message {
-                    last_agent_message = Some(agent_message);
-                }
-                needs_follow_up |= output_result.needs_follow_up;
-            }
-            TurnEvent::ItemStarted { item, .. } => {
-                let item = item.into_item();
-                if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode).await {
-                    if let Some(state) = plan_mode_state.as_mut()
-                        && matches!(turn_item, TurnItem::AgentMessage(_))
-                    {
-                        let item_id = turn_item.id();
-                        state
-                            .pending_agent_message_items
-                            .insert(item_id, turn_item.clone());
-                    } else {
-                        sess.emit_turn_item_started(&turn_context, &turn_item).await;
-                    }
-                    active_item = Some(turn_item);
-                }
-            }
-            TurnEvent::ServerReasoningIncluded(included) => {
-                sess.set_server_reasoning_included(included).await;
-            }
-            TurnEvent::RateLimits(snapshot) => {
-                // Update internal state with latest rate limits, but defer sending until
-                // token usage is available to avoid duplicate TokenCount events.
-                sess.update_rate_limits(&turn_context, snapshot).await;
-            }
-            TurnEvent::ModelsEtag(etag) => {
-                // Update internal state with latest models etag
-                let config = sess.get_config().await;
-                sess.services
-                    .models_manager
-                    .refresh_if_new_etag(etag, &config)
-                    .await;
-            }
-            TurnEvent::Completed {
-                response_id: _,
-                token_usage,
-            } => {
-                if let Some(state) = plan_mode_state.as_mut() {
-                    flush_proposed_plan_segments_all(&sess, &turn_context, state).await;
-                }
-                sess.update_token_usage_info(&turn_context, token_usage.as_ref())
-                    .await;
-                should_emit_turn_diff = true;
-
-                let pending_input_epoch = sess.pending_input_epoch.load(Ordering::SeqCst);
-                needs_follow_up |= sess.has_pending_input().await;
-                if !needs_follow_up {
-                    needs_follow_up |= sess.has_late_pending_input(pending_input_epoch).await;
-                }
-
-                break Ok(SamplingRequestResult {
-                    needs_follow_up,
-                    last_agent_message,
-                    request_input_tokens: None,
-                    response_total_tokens: token_usage.as_ref().map(|usage| usage.total_tokens),
-                    tool_output_tokens: 0,
-                });
-            }
-            TurnEvent::OutputTextDelta { delta, .. } => {
-                // In review child threads, suppress assistant text deltas; the
-                // UI will show a selection popup from the final ReviewOutput.
-                if let Some(active) = active_item.as_ref() {
-                    let item_id = active.id();
-                    if let Some(state) = plan_mode_state.as_mut()
-                        && matches!(active, TurnItem::AgentMessage(_))
-                    {
-                        let segments = state
-                            .plan_parsers
-                            .assistant_parser_mut(&item_id)
-                            .parse(&delta);
-                        handle_plan_segments(&sess, &turn_context, state, &item_id, segments).await;
-                    } else {
-                        let event = AgentMessageContentDeltaEvent {
-                            thread_id: sess.conversation_id.to_string(),
-                            turn_id: turn_context.sub_id.clone(),
-                            item_id,
-                            delta,
-                        };
-                        sess.send_event(&turn_context, EventMsg::AgentMessageContentDelta(event))
-                            .await;
-                    }
-                } else {
-                    error_or_panic("OutputTextDelta without active item".to_string());
-                }
-            }
-            TurnEvent::ReasoningSummaryDelta {
-                delta,
-                summary_index,
-                ..
-            } => {
-                if let Some(active) = active_item.as_ref() {
-                    let event = ReasoningContentDeltaEvent {
-                        thread_id: sess.conversation_id.to_string(),
-                        turn_id: turn_context.sub_id.clone(),
-                        item_id: active.id(),
-                        delta,
-                        summary_index,
-                    };
-                    sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
-                        .await;
-                } else {
-                    error_or_panic("ReasoningSummaryDelta without active item".to_string());
-                }
-            }
-            TurnEvent::ReasoningSummaryPartAdded { summary_index, .. } => {
-                if let Some(active) = active_item.as_ref() {
-                    let event =
-                        EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
-                            item_id: active.id(),
-                            summary_index,
-                        });
-                    sess.send_event(&turn_context, event).await;
-                } else {
-                    error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
-                }
-            }
-            TurnEvent::ReasoningContentDelta {
-                delta,
-                content_index,
-                ..
-            } => {
-                if let Some(active) = active_item.as_ref() {
-                    let event = ReasoningRawContentDeltaEvent {
-                        thread_id: sess.conversation_id.to_string(),
-                        turn_id: turn_context.sub_id.clone(),
-                        item_id: active.id(),
-                        delta,
-                        content_index,
-                    };
-                    sess.send_event(&turn_context, EventMsg::ReasoningRawContentDelta(event))
-                        .await;
-                } else {
-                    error_or_panic("ReasoningRawContentDelta without active item".to_string());
-                }
-            }
-            TurnEvent::ProposedPlanDelta { .. } | TurnEvent::ProposedPlanDone { .. } => {}
-        }
-    };
-
-    let tool_output_tokens =
-        drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
-
-    if should_emit_turn_diff {
-        let unified_diff = {
-            let mut tracker = turn_diff_tracker.lock().await;
-            tracker.get_unified_diff()
-        };
-        if let Ok(Some(unified_diff)) = unified_diff {
-            let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
-            sess.clone().send_event(&turn_context, msg).await;
-        }
-    }
-
-    outcome.map(|mut output| {
-        output.tool_output_tokens = tool_output_tokens;
-        output
+    Ok(SamplingRequestResult {
+        needs_follow_up: outcome.needs_follow_up,
+        last_agent_message: outcome.last_agent_message,
+        request_input_tokens: None,
+        response_total_tokens: outcome.response_total_tokens,
+        tool_output_tokens: outcome.tool_output_tokens,
     })
 }
 

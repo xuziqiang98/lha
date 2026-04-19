@@ -381,6 +381,12 @@ pub struct TurnEventStream {
     pub(crate) rx_event: mpsc::Receiver<Result<TurnEvent>>,
 }
 
+impl TurnEventStream {
+    pub fn from_receiver(rx_event: mpsc::Receiver<Result<TurnEvent>>) -> Self {
+        Self { rx_event }
+    }
+}
+
 impl Stream for TurnEventStream {
     type Item = Result<TurnEvent>;
 
@@ -423,7 +429,7 @@ pub(crate) fn adapt_response_stream(stream: ResponseStream) -> TurnEventStream {
         }
     });
 
-    TurnEventStream { rx_event }
+    TurnEventStream::from_receiver(rx_event)
 }
 
 fn adapt_response_event(
