@@ -4,7 +4,10 @@ use crate::protocol::Event;
 use crate::protocol::Op;
 use crate::protocol::Submission;
 use crate::subagents::AgentStatus;
+use codex_agent_runtime::SessionSnapshot;
+use codex_agent_runtime::SessionStatus;
 use codex_llm::RuntimeEndpoint;
+use codex_llm::RuntimeMetadata;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ConversationItem;
@@ -12,6 +15,9 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::path::PathBuf;
 use tokio::sync::watch;
 
@@ -75,6 +81,34 @@ impl CodexThread {
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.codex.thread_config_snapshot().await
+    }
+
+    pub async fn core_snapshot(&self) -> SessionSnapshot {
+        let config = self.config_snapshot().await;
+        let history = self.codex.session.clone_history().await;
+        let mut hasher = DefaultHasher::new();
+        self.codex.session.conversation_id.hash(&mut hasher);
+        let status = match self.agent_status().await {
+            AgentStatus::PendingInit | AgentStatus::Running => SessionStatus::Running,
+            AgentStatus::Completed(_)
+            | AgentStatus::Interrupted
+            | AgentStatus::Errored(_)
+            | AgentStatus::Shutdown
+            | AgentStatus::NotFound => SessionStatus::Idle,
+        };
+
+        SessionSnapshot {
+            session_id: hasher.finish(),
+            status,
+            conversation: history.raw_items().to_vec(),
+            steering_queue: Vec::new(),
+            follow_up_queue: Vec::new(),
+            runtime: RuntimeMetadata {
+                endpoint_name: config.model_provider_id,
+                model: config.model,
+            },
+            active_turn: None,
+        }
     }
 
     pub async fn flush_rollout(&self) {

@@ -120,6 +120,7 @@ pub mod util;
 
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use client::WEB_SEARCH_ELIGIBLE_HEADER;
+pub use codex_agent_runtime as core_runtime;
 pub use command_safety::is_dangerous_command;
 pub use command_safety::is_safe_command;
 pub use exec_policy::ExecPolicyError;

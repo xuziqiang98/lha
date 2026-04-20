@@ -806,6 +806,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-agent-runtime"
+version = "0.94.4"
+dependencies = [
+ "async-channel",
+ "async-trait",
+ "codex-agent-core",
+ "codex-llm",
+ "codex-protocol",
+ "pretty_assertions",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "codex-ansi-escape"
 version = "0.94.4"
 dependencies = [
@@ -1129,6 +1145,7 @@ dependencies = [
  "chrono",
  "clap",
  "codex-agent-core",
+ "codex-agent-runtime",
  "codex-api",
  "codex-app-server-protocol",
  "codex-apply-patch",

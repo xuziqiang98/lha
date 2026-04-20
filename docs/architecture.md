@@ -8,6 +8,7 @@ The Rust workspace is organized around the current top-level domains under `src/
   - `src/llm/providers` is reserved for provider-specific adapters when needed.
 - `src/core`: cross-surface product primitives that should not depend on a specific UI.
   - `src/core/agent-core` owns the reusable agent-loop kernel that sits above `codex-llm` and below product-specific agent behavior.
+  - `src/core/agent-runtime` owns the reusable stateful agent SDK that builds on `codex-agent-core`.
   - `src/core/protocol` defines shared protocol types.
   - `src/core/state` owns durable state and storage primitives.
 - `src/coding-agent`: the Codex agent runtime and product logic.
@@ -32,7 +33,7 @@ The main product path is:
 `src/llm` -> `src/core` -> `src/coding-agent` -> surface crates such as `src/tui/app`, `src/platform/exec`, and `src/integrations/app-server`
 
 The important boundary in this stack is that `codex-coding-agent` should talk to `codex-llm` as an SDK, not by reaching into provider-specific internals.
-The reusable turn-stream kernel now lives in `codex-agent-core`, so new agent products should prefer building on that layer instead of reimplementing the loop inside a product crate.
+The reusable turn-stream kernel now lives in `codex-agent-core`, and the higher-level reusable session runtime lives in `codex-agent-runtime`, so new agent products should prefer building on those layers instead of reimplementing the loop inside a product crate.
 
 ## Intended Dependency Direction
 
@@ -51,11 +52,11 @@ This is the target mental model for the workspace. Some older crates still refle
 Today, `src/coding-agent/runtime` still contains substantial Codex-specific policy around the reusable loop. The current directory layout should be read as:
 
 - `src/llm`: model SDK boundary
-- `src/core`: shared product primitives, including the extracted agent-loop kernel
+- `src/core`: shared product primitives, including the extracted agent-loop kernel and the reusable in-memory agent runtime
 - `src/coding-agent`: Codex orchestration and product behavior
 - `src/tui`: presentation layer
 
-Follow-on extractions such as a higher-level `AgentSession` SDK should continue to live between `src/core` and the product-specific parts of `src/coding-agent`, without collapsing the existing `src/llm` SDK boundary.
+Follow-on extractions should continue to live between `src/core` and the product-specific parts of `src/coding-agent`, without collapsing the existing `src/llm` SDK boundary. Today that reusable session/runtime layer is `codex-agent-runtime`.
 
 ## Workspace Root
 
