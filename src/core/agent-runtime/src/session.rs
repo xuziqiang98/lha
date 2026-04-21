@@ -15,8 +15,8 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use codex_agent_core::kernel::AgentKernel;
 use codex_llm::SemanticRuntimeSession;
+use codex_llm::TranscriptItem;
 use codex_llm::TurnRequest;
-use codex_protocol::models::ConversationItem;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -43,7 +43,7 @@ pub(crate) struct AgentSessionInner {
 }
 
 struct SessionState {
-    conversation: Vec<ConversationItem>,
+    conversation: Vec<TranscriptItem>,
     steering_queue: VecDeque<SessionInput>,
     follow_up_queue: VecDeque<SessionInput>,
     status: SessionStatus,
@@ -59,7 +59,7 @@ impl AgentSession {
     pub(crate) fn new(
         session_id: SessionId,
         definition: Arc<AgentDefinition>,
-        conversation: Vec<ConversationItem>,
+        conversation: Vec<TranscriptItem>,
     ) -> Self {
         let (tx_event, rx_event) = async_channel::unbounded();
         let inner = Arc::new(AgentSessionInner {
@@ -197,7 +197,7 @@ impl AgentSessionInner {
         let _ = self.tx_event.send(event).await;
     }
 
-    pub(crate) async fn push_conversation_item(&self, item: ConversationItem) {
+    pub(crate) async fn push_conversation_item(&self, item: TranscriptItem) {
         let mut state = self.state.lock().await;
         state.conversation.push(item);
     }
@@ -227,7 +227,7 @@ impl AgentSessionInner {
 
     async fn spawn_turn_loop(
         self: &Arc<Self>,
-        initial_items: Vec<ConversationItem>,
+        initial_items: Vec<TranscriptItem>,
     ) -> Result<SubmissionId> {
         let submission_id = self.next_submission_id.fetch_add(1, Ordering::SeqCst);
         let cancellation_token = CancellationToken::new();
@@ -263,7 +263,7 @@ impl AgentSessionInner {
     async fn drive_turn_loop(
         self: Arc<Self>,
         submission_id: SubmissionId,
-        mut initial_items: Vec<ConversationItem>,
+        mut initial_items: Vec<TranscriptItem>,
         cancellation_token: CancellationToken,
     ) {
         loop {
@@ -404,7 +404,7 @@ impl AgentSessionInner {
         }
     }
 
-    async fn append_items(&self, items: Vec<ConversationItem>) {
+    async fn append_items(&self, items: Vec<TranscriptItem>) {
         let mut state = self.state.lock().await;
         state.conversation.extend(items);
     }
@@ -447,10 +447,10 @@ impl SessionState {
     }
 }
 
-fn can_continue_from_history(history: &[ConversationItem]) -> bool {
+fn can_continue_from_history(history: &[TranscriptItem]) -> bool {
     !matches!(
         history.last(),
-        Some(ConversationItem::Message { role, .. }) if role == "assistant"
+        Some(TranscriptItem::Message { role, .. }) if role == "assistant"
     )
 }
 
@@ -472,11 +472,11 @@ mod tests {
     use codex_llm::ToolCallRequest;
     use codex_llm::ToolDescriptor;
     use codex_llm::ToolInputSchema;
+    use codex_llm::TranscriptItem;
     use codex_llm::TurnEvent;
     use codex_llm::TurnEventStream;
-    use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ConversationItem;
-    use codex_protocol::protocol::TokenUsage;
+    use codex_llm_types::ContentItem;
+    use codex_llm_types::TokenUsage;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeMap;
     use std::collections::VecDeque;
@@ -507,7 +507,7 @@ mod tests {
         async fn compact_conversation_history(
             &self,
             input: &TurnRequest,
-        ) -> codex_llm::Result<Vec<ConversationItem>> {
+        ) -> codex_llm::Result<Vec<TranscriptItem>> {
             Ok(input.conversation.clone())
         }
     }
@@ -608,7 +608,7 @@ mod tests {
 
     fn assistant_item(text: &str) -> codex_llm::SemanticOutputItem {
         codex_llm::SemanticOutputItem::AssistantMessage {
-            item: ConversationItem::Message {
+            item: TranscriptItem::Message {
                 id: Some("msg-1".to_string()),
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
@@ -719,12 +719,6 @@ mod tests {
                         payload: ToolCallPayload::Function {
                             arguments: "{}".to_string(),
                         },
-                        item: ConversationItem::FunctionCall {
-                            id: None,
-                            name: "echo_tool".to_string(),
-                            arguments: "{}".to_string(),
-                            call_id: "call-1".to_string(),
-                        },
                     })),
                     Ok(TurnEvent::Completed {
                         response_id: "resp-1".to_string(),
@@ -776,7 +770,7 @@ mod tests {
         assert_eq!(snapshot.conversation.len(), 4);
         assert!(matches!(
             snapshot.conversation[2],
-            ConversationItem::FunctionCallOutput { .. }
+            TranscriptItem::FunctionCallOutput { .. }
         ));
     }
 
@@ -788,7 +782,7 @@ mod tests {
 
         {
             let mut state = session.inner.state.lock().await;
-            state.conversation.push(ConversationItem::Message {
+            state.conversation.push(TranscriptItem::Message {
                 id: None,
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {

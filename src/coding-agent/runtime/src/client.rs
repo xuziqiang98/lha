@@ -87,8 +87,8 @@ impl TurnRuntime {
             endpoint: endpoint.clone(),
             effort,
             summary,
-            conversation_id,
-            session_source: session_source.clone(),
+            session_id: conversation_id.to_string(),
+            origin_tag: Some(session_source_to_origin_tag(&session_source)),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             model_verbosity: config.model_verbosity,
             web_search_mode: config.web_search_mode,
@@ -329,6 +329,24 @@ impl TurnRuntime {
             .compact_conversation_history(request)
             .await
             .map_err(Into::into)
+    }
+}
+
+fn session_source_to_origin_tag(session_source: &SessionSource) -> String {
+    match session_source {
+        SessionSource::Cli => "cli".to_string(),
+        SessionSource::VSCode => "vscode".to_string(),
+        SessionSource::Exec => "exec".to_string(),
+        SessionSource::Mcp => "mcp".to_string(),
+        SessionSource::SubAgent(sub) => match sub {
+            codex_protocol::protocol::SubAgentSource::Review => "review".to_string(),
+            codex_protocol::protocol::SubAgentSource::Compact => "compact".to_string(),
+            codex_protocol::protocol::SubAgentSource::ThreadSpawn { .. } => {
+                "thread_spawn".to_string()
+            }
+            codex_protocol::protocol::SubAgentSource::Other(label) => label.clone(),
+        },
+        SessionSource::Unknown => "unknown".to_string(),
     }
 }
 

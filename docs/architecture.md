@@ -58,6 +58,8 @@ Today, `src/coding-agent/runtime` still contains substantial Codex-specific poli
 
 Follow-on extractions should continue to live between `src/core` and the product-specific parts of `src/coding-agent`, without collapsing the existing `src/llm` SDK boundary. Today that reusable session/runtime layer is `codex-agent-runtime`.
 
+The important nuance is that this extraction is not yet the same thing as migrating the product runtime. `codex-agent-runtime` and `codex-llm` now provide the cleaner SDK-facing layer, while `src/coding-agent/runtime` still owns the main Codex session loop, persistence integration, and product-specific tool behavior. `ThreadManager` and `CodexThread` therefore remain Codex-facing compatibility wrappers over the existing product runtime rather than a full rewrite on top of `codex-agent-runtime`.
+
 ## Workspace Root
 
 The repository root is the only Cargo workspace root. Build and test commands should be run from here unless a crate-specific workflow says otherwise.

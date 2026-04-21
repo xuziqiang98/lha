@@ -10,7 +10,13 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::mpsc;
 
 use crate::AuthSource;
+use crate::ModelInfo;
+use crate::ReasoningEffort;
+use crate::ReasoningSummary;
 use crate::Result;
+use crate::TranscriptItem;
+use crate::Verbosity;
+use crate::WebSearchMode;
 use crate::client::LlmClient;
 use crate::compatibility::ChatRoleCompatibilityHandle;
 use crate::compatibility::ChatRoleCompatibilityState;
@@ -28,19 +34,11 @@ use crate::semantic::TurnEventStream;
 use crate::semantic::TurnRequest;
 use crate::semantic::adapt_response_stream;
 use crate::transport::StreamingPreference;
-use codex_protocol::ThreadId;
-use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::config_types::Verbosity;
-use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::models::ConversationItem;
-use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::protocol::SessionSource;
 use futures::StreamExt;
 
 #[async_trait]
 trait PromptConversationCompactor: Send + Sync {
-    async fn compact_conversation_history(&self, input: &Prompt) -> Result<Vec<ConversationItem>>;
+    async fn compact_conversation_history(&self, input: &Prompt) -> Result<Vec<TranscriptItem>>;
 }
 
 #[async_trait]
@@ -63,7 +61,7 @@ pub trait SemanticConversationCompactor: Send + Sync {
     async fn compact_conversation_history(
         &self,
         input: &TurnRequest,
-    ) -> Result<Vec<ConversationItem>>;
+    ) -> Result<Vec<TranscriptItem>>;
 }
 
 #[async_trait]
@@ -86,10 +84,10 @@ pub struct RuntimeBuildSpec {
     pub model_info: ModelInfo,
     pub otel_manager: OtelManager,
     pub endpoint: RuntimeEndpoint,
-    pub effort: Option<ReasoningEffortConfig>,
-    pub summary: ReasoningSummaryConfig,
-    pub conversation_id: ThreadId,
-    pub session_source: SessionSource,
+    pub effort: Option<ReasoningEffort>,
+    pub summary: ReasoningSummary,
+    pub session_id: String,
+    pub origin_tag: Option<String>,
     pub show_raw_agent_reasoning: bool,
     pub model_verbosity: Option<Verbosity>,
     pub web_search_mode: Option<WebSearchMode>,
@@ -122,8 +120,8 @@ impl DefaultPromptRuntimeFactory {
             endpoint,
             effort,
             summary,
-            conversation_id,
-            session_source,
+            session_id,
+            origin_tag,
             show_raw_agent_reasoning,
             model_verbosity,
             web_search_mode,
@@ -157,8 +155,8 @@ impl DefaultPromptRuntimeFactory {
             endpoint.clone(),
             effort,
             summary,
-            conversation_id,
-            session_source,
+            session_id,
+            origin_tag,
             self.streaming_preference.clone(),
         );
 
@@ -201,7 +199,7 @@ struct DefaultPromptRuntime {
 
 #[async_trait]
 impl PromptConversationCompactor for DefaultPromptRuntime {
-    async fn compact_conversation_history(&self, input: &Prompt) -> Result<Vec<ConversationItem>> {
+    async fn compact_conversation_history(&self, input: &Prompt) -> Result<Vec<TranscriptItem>> {
         self.client.compact_conversation_history(input).await
     }
 }
@@ -255,7 +253,7 @@ impl SemanticConversationCompactor for PromptRuntimeAdapter {
     async fn compact_conversation_history(
         &self,
         input: &TurnRequest,
-    ) -> Result<Vec<ConversationItem>> {
+    ) -> Result<Vec<TranscriptItem>> {
         self.inner
             .compact_conversation_history(&input.to_prompt())
             .await

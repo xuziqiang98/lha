@@ -8,7 +8,7 @@ license.workspace = true
 async-trait = { workspace = true }
 bytes = { workspace = true }
 codex-client = { workspace = true }
-codex-protocol = { workspace = true }
+codex-llm-types = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

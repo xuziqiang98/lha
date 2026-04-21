@@ -6,8 +6,7 @@ use crate::provider::Provider;
 use crate::requests::headers::build_conversation_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
-use codex_protocol::models::ConversationItem;
-use codex_protocol::protocol::SessionSource;
+use codex_llm_types::ConversationItem;
 use http::HeaderMap;
 use serde_json::Value;
 
@@ -37,7 +36,7 @@ pub struct ResponsesRequestBuilder<'a> {
     prompt_cache_key: Option<String>,
     text: Option<TextControls>,
     conversation_id: Option<String>,
-    session_source: Option<SessionSource>,
+    origin_tag: Option<String>,
     store_override: Option<bool>,
     headers: HeaderMap,
     compression: Compression,
@@ -88,8 +87,8 @@ impl<'a> ResponsesRequestBuilder<'a> {
         self
     }
 
-    pub fn session_source(mut self, source: Option<SessionSource>) -> Self {
-        self.session_source = source;
+    pub fn origin_tag(mut self, origin_tag: Option<String>) -> Self {
+        self.origin_tag = origin_tag;
         self
     }
 
@@ -148,7 +147,7 @@ impl<'a> ResponsesRequestBuilder<'a> {
 
         let mut headers = self.headers;
         headers.extend(build_conversation_headers(self.conversation_id));
-        if let Some(subagent) = subagent_header(&self.session_source) {
+        if let Some(subagent) = subagent_header(&self.origin_tag) {
             insert_header(&mut headers, "x-openai-subagent", &subagent);
         }
 
@@ -192,7 +191,6 @@ mod tests {
     use super::*;
     use crate::provider::RetryConfig;
     use crate::provider::WireApi;
-    use codex_protocol::protocol::SubAgentSource;
     use http::HeaderValue;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
@@ -235,7 +233,7 @@ mod tests {
 
         let request = ResponsesRequestBuilder::new("gpt-test", "inst", &input)
             .conversation(Some("conv-1".into()))
-            .session_source(Some(SessionSource::SubAgent(SubAgentSource::Review)))
+            .origin_tag(Some("review".into()))
             .build(&provider)
             .expect("request");
 

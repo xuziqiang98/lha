@@ -29,6 +29,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ConversationItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::response_input_from_user_input;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::RolloutItem;
@@ -87,7 +88,7 @@ async fn run_compact_task_inner(
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
         .await;
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
+    let initial_input_for_turn: ResponseInputItem = response_input_from_user_input(input);
 
     let mut history = sess.clone_history().await;
     let (backfilled_plan_text, backfilled_update_plan, backfilled_skills) =
@@ -618,8 +619,10 @@ async fn drain_to_completed(
                     .await;
             }
             Ok(TurnEvent::ToolCall(request)) => {
-                sess.record_into_history(std::slice::from_ref(&request.item), turn_context)
-                    .await;
+                if let Some(item) = codex_llm::tool_call_to_transcript_item(&request) {
+                    sess.record_into_history(std::slice::from_ref(&item), turn_context)
+                        .await;
+                }
             }
             Ok(TurnEvent::ServerReasoningIncluded(included)) => {
                 sess.set_server_reasoning_included(included).await;

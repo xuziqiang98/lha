@@ -1,6 +1,6 @@
-use codex_protocol::protocol::CreditsSnapshot;
-use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::RateLimitWindow;
+use codex_llm_types::CreditsSnapshot;
+use codex_llm_types::RateLimitSnapshot;
+use codex_llm_types::RateLimitWindow;
 use http::HeaderMap;
 use std::fmt::Display;
 

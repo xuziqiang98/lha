@@ -6,10 +6,10 @@ use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
 
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ConversationItem;
-use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_protocol::models::FunctionCallOutputPayload;
+use codex_llm_types::ContentItem;
+use codex_llm_types::ConversationItem;
+use codex_llm_types::FunctionCallOutputContentItem;
+use codex_llm_types::FunctionCallOutputPayload;
 
 const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 const DEFAULT_MAX_TOKENS: u32 = 8_192;
@@ -346,7 +346,7 @@ mod tests {
     use super::*;
     use crate::provider::RetryConfig;
     use crate::provider::WireApi;
-    use codex_protocol::models::FunctionCallOutputPayload;
+    use codex_llm_types::FunctionCallOutputPayload;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 

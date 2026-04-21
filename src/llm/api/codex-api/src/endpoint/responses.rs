@@ -15,7 +15,6 @@ use crate::telemetry::SseTelemetry;
 use codex_client::HttpTransport;
 use codex_client::RequestCompression;
 use codex_client::RequestTelemetry;
-use codex_protocol::protocol::SessionSource;
 use http::HeaderMap;
 use serde_json::Value;
 use std::sync::Arc;
@@ -34,7 +33,7 @@ pub struct ResponsesOptions {
     pub text: Option<TextControls>,
     pub store_override: Option<bool>,
     pub conversation_id: Option<String>,
-    pub session_source: Option<SessionSource>,
+    pub origin_tag: Option<String>,
     pub extra_headers: HeaderMap,
     pub compression: Compression,
     pub turn_state: Option<Arc<OnceLock<String>>>,
@@ -85,7 +84,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             text,
             store_override,
             conversation_id,
-            session_source,
+            origin_tag,
             extra_headers,
             compression,
             turn_state,
@@ -99,7 +98,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             .prompt_cache_key(prompt_cache_key)
             .text(text)
             .conversation(conversation_id)
-            .session_source(session_source)
+            .origin_tag(origin_tag)
             .store_override(store_override)
             .extra_headers(extra_headers)
             .compression(compression)

@@ -6,10 +6,10 @@ use crate::proposed_plan_parser::ProposedPlanSegment;
 use crate::proposed_plan_parser::extract_proposed_plan_text;
 use crate::telemetry::SseTelemetry;
 use codex_client::StreamResponse;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ConversationItem;
-use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::protocol::TokenUsage;
+use codex_llm_types::ContentItem;
+use codex_llm_types::ConversationItem;
+use codex_llm_types::ReasoningItemContent;
+use codex_llm_types::TokenUsage;
 use eventsource_stream::Eventsource;
 use futures::Stream;
 use futures::StreamExt;
@@ -555,7 +555,7 @@ async fn emit_buffered_plan_events(
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
-    use codex_protocol::models::ConversationItem;
+    use codex_llm_types::ConversationItem;
     use futures::Stream;
     use futures::TryStreamExt;
     use pretty_assertions::assert_eq;

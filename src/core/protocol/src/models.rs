@@ -1,13 +1,8 @@
-use std::collections::HashMap;
 use std::path::Path;
 
 use codex_utils_image::load_and_resize_to_fit;
-use mcp_types::CallToolResult;
-use mcp_types::ContentBlock;
 use serde::Deserialize;
-use serde::Deserializer;
 use serde::Serialize;
-use serde::ser::Serializer;
 use ts_rs::TS;
 
 use crate::config_types::CollaborationMode;
@@ -20,7 +15,19 @@ use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
 use crate::user_input::UserInput;
 use codex_execpolicy::Policy;
-use codex_git::GhostCommit;
+pub use codex_llm_types::BASE_INSTRUCTIONS_DEFAULT;
+pub use codex_llm_types::BaseInstructions;
+pub use codex_llm_types::ContentItem;
+pub use codex_llm_types::ConversationItem;
+pub use codex_llm_types::FunctionCallOutputContentItem;
+pub use codex_llm_types::FunctionCallOutputPayload;
+pub use codex_llm_types::LocalShellAction;
+pub use codex_llm_types::LocalShellExecAction;
+pub use codex_llm_types::LocalShellStatus;
+pub use codex_llm_types::ReasoningItemContent;
+pub use codex_llm_types::ReasoningItemReasoningSummary;
+pub use codex_llm_types::ResponseInputItem;
+pub use codex_llm_types::WebSearchAction;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 
@@ -40,154 +47,6 @@ pub enum SandboxPermissions {
 impl SandboxPermissions {
     pub fn requires_escalated_permissions(self) -> bool {
         matches!(self, SandboxPermissions::RequireEscalated)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ResponseInputItem {
-    Message {
-        role: String,
-        content: Vec<ContentItem>,
-    },
-    FunctionCallOutput {
-        call_id: String,
-        output: FunctionCallOutputPayload,
-    },
-    McpToolCallOutput {
-        call_id: String,
-        result: Result<CallToolResult, String>,
-    },
-    CustomToolCallOutput {
-        call_id: String,
-        output: String,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ContentItem {
-    InputText { text: String },
-    InputImage { image_url: String },
-    OutputText { text: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ConversationItem {
-    Message {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: Option<String>,
-        role: String,
-        content: Vec<ContentItem>,
-        // Do not use directly, no available consistently across all providers.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        end_turn: Option<bool>,
-    },
-    Reasoning {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: String,
-        summary: Vec<ReasoningItemReasoningSummary>,
-        #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
-        #[ts(optional)]
-        content: Option<Vec<ReasoningItemContent>>,
-        encrypted_content: Option<String>,
-    },
-    LocalShellCall {
-        /// Set when using the chat completions API.
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: Option<String>,
-        /// Set when using the Responses API.
-        call_id: Option<String>,
-        status: LocalShellStatus,
-        action: LocalShellAction,
-    },
-    FunctionCall {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: Option<String>,
-        name: String,
-        // The Responses API returns the function call arguments as a *string* that contains
-        // JSON, not as an already‑parsed object. We keep it as a raw string here and let
-        // Session::handle_function_call parse it into a Value. This exactly matches the
-        // Chat Completions + Responses API behavior.
-        arguments: String,
-        call_id: String,
-    },
-    // NOTE: The input schema for `function_call_output` objects that clients send to the
-    // OpenAI /v1/responses endpoint is NOT the same shape as the objects the server returns on the
-    // SSE stream. When *sending* we must wrap the string output inside an object that includes a
-    // required `success` boolean. To ensure we serialize exactly the expected shape we introduce
-    // a dedicated payload struct and flatten it here.
-    FunctionCallOutput {
-        call_id: String,
-        output: FunctionCallOutputPayload,
-    },
-    CustomToolCall {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        status: Option<String>,
-
-        call_id: String,
-        name: String,
-        input: String,
-    },
-    CustomToolCallOutput {
-        call_id: String,
-        output: String,
-    },
-    // Emitted by the Responses API when the agent triggers a web search.
-    // Example payload (from SSE `response.output_item.done`):
-    // {
-    //   "id":"ws_...",
-    //   "type":"web_search_call",
-    //   "status":"completed",
-    //   "action": {"type":"search","query":"weather: San Francisco, CA"}
-    // }
-    WebSearchCall {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        status: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        action: Option<WebSearchAction>,
-    },
-    // Generated by the harness but considered exactly as a model response.
-    GhostSnapshot {
-        ghost_commit: GhostCommit,
-    },
-    #[serde(alias = "compaction_summary")]
-    Compaction {
-        encrypted_content: String,
-    },
-    #[serde(other)]
-    Other,
-}
-
-pub const BASE_INSTRUCTIONS_DEFAULT: &str = include_str!("prompts/base_instructions/default.md");
-
-/// Base instructions for the model in a thread. Corresponds to the `instructions` field in the ResponsesAPI.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(rename = "base_instructions", rename_all = "snake_case")]
-pub struct BaseInstructions {
-    pub text: String,
-}
-
-impl Default for BaseInstructions {
-    fn default() -> Self {
-        Self {
-            text: BASE_INSTRUCTIONS_DEFAULT.to_string(),
-        }
     }
 }
 
@@ -454,15 +313,6 @@ impl From<SandboxMode> for DeveloperInstructions {
     }
 }
 
-fn should_serialize_reasoning_content(content: &Option<Vec<ReasoningItemContent>>) -> bool {
-    match content {
-        Some(content) => !content
-            .iter()
-            .any(|c| matches!(c, ReasoningItemContent::ReasoningText { .. })),
-        None => false,
-    }
-}
-
 fn local_image_error_placeholder(
     path: &std::path::Path,
     error: impl std::fmt::Display,
@@ -588,127 +438,30 @@ pub fn local_image_content_items_with_label_number(
     }
 }
 
-impl From<ResponseInputItem> for ConversationItem {
-    fn from(item: ResponseInputItem) -> Self {
-        match item {
-            ResponseInputItem::Message { role, content } => Self::Message {
-                role,
-                content,
-                id: None,
-                end_turn: None,
-            },
-            ResponseInputItem::FunctionCallOutput { call_id, output } => {
-                Self::FunctionCallOutput { call_id, output }
-            }
-            ResponseInputItem::McpToolCallOutput { call_id, result } => {
-                let output = match result {
-                    Ok(result) => FunctionCallOutputPayload::from(&result),
-                    Err(tool_call_err) => FunctionCallOutputPayload {
-                        content: format!("err: {tool_call_err:?}"),
-                        success: Some(false),
-                        ..Default::default()
+pub fn response_input_from_user_input(items: Vec<UserInput>) -> ResponseInputItem {
+    let mut image_index = 0;
+    ResponseInputItem::Message {
+        role: "user".to_string(),
+        content: items
+            .into_iter()
+            .flat_map(|c| match c {
+                UserInput::Text { text, .. } => vec![ContentItem::InputText { text }],
+                UserInput::Image { image_url } => vec![
+                    ContentItem::InputText {
+                        text: image_open_tag_text(),
                     },
-                };
-                Self::FunctionCallOutput { call_id, output }
-            }
-            ResponseInputItem::CustomToolCallOutput { call_id, output } => {
-                Self::CustomToolCallOutput { call_id, output }
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum LocalShellStatus {
-    Completed,
-    InProgress,
-    Incomplete,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum LocalShellAction {
-    Exec(LocalShellExecAction),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-pub struct LocalShellExecAction {
-    pub command: Vec<String>,
-    pub timeout_ms: Option<u64>,
-    pub working_directory: Option<String>,
-    pub env: Option<HashMap<String, String>>,
-    pub user: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum WebSearchAction {
-    Search {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        query: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        queries: Option<Vec<String>>,
-    },
-    OpenPage {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        url: Option<String>,
-    },
-    FindInPage {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        url: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        pattern: Option<String>,
-    },
-
-    #[serde(other)]
-    Other,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ReasoningItemReasoningSummary {
-    SummaryText { text: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ReasoningItemContent {
-    ReasoningText { text: String },
-    Text { text: String },
-}
-
-impl From<Vec<UserInput>> for ResponseInputItem {
-    fn from(items: Vec<UserInput>) -> Self {
-        let mut image_index = 0;
-        Self::Message {
-            role: "user".to_string(),
-            content: items
-                .into_iter()
-                .flat_map(|c| match c {
-                    UserInput::Text { text, .. } => vec![ContentItem::InputText { text }],
-                    UserInput::Image { image_url } => vec![
-                        ContentItem::InputText {
-                            text: image_open_tag_text(),
-                        },
-                        ContentItem::InputImage { image_url },
-                        ContentItem::InputText {
-                            text: image_close_tag_text(),
-                        },
-                    ],
-                    UserInput::LocalImage { path } => {
-                        image_index += 1;
-                        local_image_content_items_with_label_number(&path, Some(image_index))
-                    }
-                    UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(), // Tool bodies are injected later in core
-                })
-                .collect::<Vec<ContentItem>>(),
-        }
+                    ContentItem::InputImage { image_url },
+                    ContentItem::InputText {
+                        text: image_close_tag_text(),
+                    },
+                ],
+                UserInput::LocalImage { path } => {
+                    image_index += 1;
+                    local_image_content_items_with_label_number(&path, Some(image_index))
+                }
+                UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(),
+            })
+            .collect::<Vec<ContentItem>>(),
     }
 }
 
@@ -756,177 +509,6 @@ pub struct ShellCommandToolCallParams {
     pub justification: Option<String>,
 }
 
-/// Responses API compatible content items that can be returned by a tool call.
-/// This is a subset of ContentItem with the types we support as function call outputs.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum FunctionCallOutputContentItem {
-    // Do not rename, these are serialized and used directly in the responses API.
-    InputText { text: String },
-    // Do not rename, these are serialized and used directly in the responses API.
-    InputImage { image_url: String },
-}
-
-/// The payload we send back to OpenAI when reporting a tool call result.
-///
-/// `content` preserves the historical plain-string payload so downstream
-/// integrations (tests, logging, etc.) can keep treating tool output as
-/// `String`. When an MCP server returns richer data we additionally populate
-/// `content_items` with the structured form that the Responses/Chat
-/// Completions APIs understand.
-#[derive(Debug, Default, Clone, PartialEq, JsonSchema, TS)]
-pub struct FunctionCallOutputPayload {
-    pub content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content_items: Option<Vec<FunctionCallOutputContentItem>>,
-    pub success: Option<bool>,
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum FunctionCallOutputPayloadSerde {
-    Text(String),
-    Items(Vec<FunctionCallOutputContentItem>),
-}
-
-// The Responses API expects two *different* shapes depending on success vs failure:
-//   • success → output is a plain string (no nested object)
-//   • failure → output is an object { content, success:false }
-impl Serialize for FunctionCallOutputPayload {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        if let Some(items) = &self.content_items {
-            items.serialize(serializer)
-        } else {
-            serializer.serialize_str(&self.content)
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for FunctionCallOutputPayload {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        match FunctionCallOutputPayloadSerde::deserialize(deserializer)? {
-            FunctionCallOutputPayloadSerde::Text(content) => Ok(FunctionCallOutputPayload {
-                content,
-                ..Default::default()
-            }),
-            FunctionCallOutputPayloadSerde::Items(items) => {
-                let content = serde_json::to_string(&items).map_err(serde::de::Error::custom)?;
-                Ok(FunctionCallOutputPayload {
-                    content,
-                    content_items: Some(items),
-                    success: None,
-                })
-            }
-        }
-    }
-}
-
-impl From<&CallToolResult> for FunctionCallOutputPayload {
-    fn from(call_tool_result: &CallToolResult) -> Self {
-        let CallToolResult {
-            content,
-            structured_content,
-            is_error,
-        } = call_tool_result;
-
-        let is_success = is_error != &Some(true);
-
-        if let Some(structured_content) = structured_content
-            && !structured_content.is_null()
-        {
-            match serde_json::to_string(structured_content) {
-                Ok(serialized_structured_content) => {
-                    return FunctionCallOutputPayload {
-                        content: serialized_structured_content,
-                        success: Some(is_success),
-                        ..Default::default()
-                    };
-                }
-                Err(err) => {
-                    return FunctionCallOutputPayload {
-                        content: err.to_string(),
-                        success: Some(false),
-                        ..Default::default()
-                    };
-                }
-            }
-        }
-
-        let serialized_content = match serde_json::to_string(content) {
-            Ok(serialized_content) => serialized_content,
-            Err(err) => {
-                return FunctionCallOutputPayload {
-                    content: err.to_string(),
-                    success: Some(false),
-                    ..Default::default()
-                };
-            }
-        };
-
-        let content_items = convert_content_blocks_to_items(content);
-
-        FunctionCallOutputPayload {
-            content: serialized_content,
-            content_items,
-            success: Some(is_success),
-        }
-    }
-}
-
-fn convert_content_blocks_to_items(
-    blocks: &[ContentBlock],
-) -> Option<Vec<FunctionCallOutputContentItem>> {
-    let mut saw_image = false;
-    let mut items = Vec::with_capacity(blocks.len());
-    tracing::warn!("Blocks: {:?}", blocks);
-    for block in blocks {
-        match block {
-            ContentBlock::TextContent(text) => {
-                items.push(FunctionCallOutputContentItem::InputText {
-                    text: text.text.clone(),
-                });
-            }
-            ContentBlock::ImageContent(image) => {
-                saw_image = true;
-                // Just in case the content doesn't include a data URL, add it.
-                let image_url = if image.data.starts_with("data:") {
-                    image.data.clone()
-                } else {
-                    format!("data:{};base64,{}", image.mime_type, image.data)
-                };
-                items.push(FunctionCallOutputContentItem::InputImage { image_url });
-            }
-            // TODO: render audio, resource, and embedded resource content to the model.
-            _ => return None,
-        }
-    }
-
-    if saw_image { Some(items) } else { None }
-}
-
-// Implement Display so callers can treat the payload like a plain string when logging or doing
-// trivial substring checks in tests (existing tests call `.contains()` on the output). Display
-// returns the raw `content` field.
-
-impl std::fmt::Display for FunctionCallOutputPayload {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.content)
-    }
-}
-
-impl std::ops::Deref for FunctionCallOutputPayload {
-    type Target = str;
-    fn deref(&self) -> &Self::Target {
-        &self.content
-    }
-}
-
 // (Moved event mapping logic into codex-coding-agent to avoid coupling protocol to UI-facing events.)
 
 #[cfg(test)]
@@ -936,6 +518,8 @@ mod tests {
     use crate::protocol::AskForApproval;
     use anyhow::Result;
     use codex_execpolicy::Policy;
+    use mcp_types::CallToolResult;
+    use mcp_types::ContentBlock;
     use mcp_types::ImageContent;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
@@ -1326,7 +910,7 @@ mod tests {
     fn wraps_image_user_input_with_tags() -> Result<()> {
         let image_url = "data:image/png;base64,abc".to_string();
 
-        let item = ResponseInputItem::from(vec![UserInput::Image {
+        let item = response_input_from_user_input(vec![UserInput::Image {
             image_url: image_url.clone(),
         }]);
 
@@ -1354,7 +938,7 @@ mod tests {
         let dir = tempdir()?;
         let missing_path = dir.path().join("missing-image.png");
 
-        let item = ResponseInputItem::from(vec![UserInput::LocalImage {
+        let item = response_input_from_user_input(vec![UserInput::LocalImage {
             path: missing_path.clone(),
         }]);
 
@@ -1388,7 +972,7 @@ mod tests {
         let json_path = dir.path().join("example.json");
         std::fs::write(&json_path, br#"{"hello":"world"}"#)?;
 
-        let item = ResponseInputItem::from(vec![UserInput::LocalImage {
+        let item = response_input_from_user_input(vec![UserInput::LocalImage {
             path: json_path.clone(),
         }]);
 
@@ -1425,7 +1009,7 @@ mod tests {
 <svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>"#,
         )?;
 
-        let item = ResponseInputItem::from(vec![UserInput::LocalImage {
+        let item = response_input_from_user_input(vec![UserInput::LocalImage {
             path: svg_path.clone(),
         }]);
 

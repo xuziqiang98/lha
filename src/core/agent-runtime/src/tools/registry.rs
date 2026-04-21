@@ -3,7 +3,7 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use async_trait::async_trait;
 use codex_llm::ToolDescriptor;
-use codex_protocol::models::ResponseInputItem;
+use codex_llm::ToolResultItem;
 use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
@@ -72,7 +72,7 @@ impl ToolRegistry {
         &self,
         invocation: ToolInvocation,
         cancellation_token: CancellationToken,
-    ) -> Result<ResponseInputItem, ToolError> {
+    ) -> Result<ToolResultItem, ToolError> {
         let tool_name = invocation.tool_name.clone();
         let handler = self.handlers.get(tool_name.as_str()).ok_or_else(|| {
             ToolError::RespondToModel(unsupported_tool_call_message(
@@ -124,7 +124,7 @@ impl ToolRegistryBuilder {
 fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &str) -> String {
     match payload {
         ToolPayload::Custom { .. } => format!("unsupported custom tool call: {tool_name}"),
-        ToolPayload::Function { .. } | ToolPayload::LocalShell { .. } => {
+        ToolPayload::Function { .. } => {
             format!("unsupported call: {tool_name}")
         }
     }

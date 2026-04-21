@@ -4,7 +4,7 @@ use crate::auth::auth_provider_from_context;
 use codex_api::ModelsClient;
 use codex_api::ReqwestTransport;
 use codex_client::HttpTransport;
-use codex_protocol::openai_models::ModelInfo;
+use codex_llm_types::ModelInfo;
 use http::HeaderMap;
 use reqwest::Client;
 use std::time::Duration;

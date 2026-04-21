@@ -1,8 +1,7 @@
 use codex_llm::ToolCallPayload as LlmToolCallPayload;
-use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::ShellToolCallParams;
+use codex_llm::ToolResultContentItem;
+use codex_llm::ToolResultItem;
+use codex_llm_types::FunctionCallOutputPayload;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolInvocation {
@@ -15,7 +14,6 @@ pub struct ToolInvocation {
 pub enum ToolPayload {
     Function { arguments: String },
     Custom { input: String },
-    LocalShell { params: ShellToolCallParams },
 }
 
 impl ToolPayload {
@@ -23,7 +21,6 @@ impl ToolPayload {
         match value {
             LlmToolCallPayload::Function { arguments } => Self::Function { arguments },
             LlmToolCallPayload::Custom { input } => Self::Custom { input },
-            LlmToolCallPayload::LocalShell { params } => Self::LocalShell { params },
         }
     }
 }
@@ -32,13 +29,13 @@ impl ToolPayload {
 pub enum ToolOutput {
     Function {
         content: String,
-        content_items: Option<Vec<FunctionCallOutputContentItem>>,
+        content_items: Option<Vec<ToolResultContentItem>>,
         success: Option<bool>,
     },
 }
 
 impl ToolOutput {
-    pub fn into_response(self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+    pub fn into_response(self, call_id: &str, payload: &ToolPayload) -> ToolResultItem {
         match self {
             Self::Function {
                 content,
@@ -46,12 +43,12 @@ impl ToolOutput {
                 success,
             } => {
                 if matches!(payload, ToolPayload::Custom { .. }) {
-                    ResponseInputItem::CustomToolCallOutput {
+                    ToolResultItem::CustomToolCallOutput {
                         call_id: call_id.to_string(),
                         output: content,
                     }
                 } else {
-                    ResponseInputItem::FunctionCallOutput {
+                    ToolResultItem::FunctionCallOutput {
                         call_id: call_id.to_string(),
                         output: FunctionCallOutputPayload {
                             content,

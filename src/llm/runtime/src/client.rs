@@ -29,16 +29,9 @@ use codex_api::common::ResponsesWsRequest;
 use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
 use codex_api::requests::responses::Compression;
+use codex_llm_types::ContentItem;
+use codex_llm_types::ConversationItem;
 use codex_otel::OtelManager;
-use codex_protocol::ThreadId;
-use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ConversationItem;
-use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::TokenUsage;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
 use futures::StreamExt;
@@ -55,7 +48,13 @@ use tracing::info;
 use tracing::warn;
 
 use crate::Error;
+use crate::ModelInfo;
+use crate::ReasoningEffort;
+use crate::ReasoningSummary;
 use crate::Result;
+use crate::TokenUsage;
+use crate::TranscriptItem;
+use crate::WebSearchMode;
 use crate::auth::AuthContext;
 use crate::auth::AuthSource;
 use crate::auth::UnauthorizedRecovery;
@@ -85,10 +84,10 @@ struct LlmClientState {
     chat_role_compatibility: Option<ChatRoleCompatibilityHandle>,
     otel_manager: OtelManager,
     endpoint: RuntimeEndpoint,
-    conversation_id: ThreadId,
-    effort: Option<ReasoningEffortConfig>,
-    summary: ReasoningSummaryConfig,
-    session_source: SessionSource,
+    session_id: String,
+    effort: Option<ReasoningEffort>,
+    summary: ReasoningSummary,
+    origin_tag: Option<String>,
     streaming_preference: StreamingPreference,
 }
 
@@ -115,10 +114,10 @@ impl LlmClient {
         chat_role_compatibility: Option<ChatRoleCompatibilityHandle>,
         otel_manager: OtelManager,
         endpoint: RuntimeEndpoint,
-        effort: Option<ReasoningEffortConfig>,
-        summary: ReasoningSummaryConfig,
-        conversation_id: ThreadId,
-        session_source: SessionSource,
+        effort: Option<ReasoningEffort>,
+        summary: ReasoningSummary,
+        session_id: String,
+        origin_tag: Option<String>,
         streaming_preference: StreamingPreference,
     ) -> Self {
         Self {
@@ -130,10 +129,10 @@ impl LlmClient {
                 chat_role_compatibility,
                 otel_manager,
                 endpoint,
-                conversation_id,
+                session_id,
                 effort,
                 summary,
-                session_source,
+                origin_tag,
                 streaming_preference,
             }),
         }
@@ -165,8 +164,8 @@ impl LlmClient {
             &api_prompt.input,
             &api_prompt.tools,
         )
-        .conversation_id(Some(self.state.conversation_id.to_string()))
-        .session_source(Some(self.state.session_source.clone()))
+        .conversation_id(Some(self.state.session_id.clone()))
+        .origin_tag(self.state.origin_tag.clone())
         .developer_role_handling(handling)
         .build(&api_provider)
         .ok()?;
@@ -177,7 +176,7 @@ impl LlmClient {
     pub async fn compact_conversation_history(
         &self,
         prompt: &Prompt,
-    ) -> Result<Vec<ConversationItem>> {
+    ) -> Result<Vec<TranscriptItem>> {
         if prompt.input.is_empty() {
             return Ok(Vec::new());
         }
@@ -200,18 +199,10 @@ impl LlmClient {
         };
 
         let mut extra_headers = ApiHeaderMap::new();
-        if let SessionSource::SubAgent(sub) = &self.state.session_source {
-            let subagent = match sub {
-                codex_protocol::protocol::SubAgentSource::Review => "review".to_string(),
-                codex_protocol::protocol::SubAgentSource::Compact => "compact".to_string(),
-                codex_protocol::protocol::SubAgentSource::ThreadSpawn { .. } => {
-                    "collab_spawn".to_string()
-                }
-                codex_protocol::protocol::SubAgentSource::Other(label) => label.clone(),
-            };
-            if let Ok(val) = HeaderValue::from_str(&subagent) {
-                extra_headers.insert("x-openai-subagent", val);
-            }
+        if let Some(origin_tag) = self.state.origin_tag.as_deref()
+            && let Ok(val) = HeaderValue::from_str(origin_tag)
+        {
+            extra_headers.insert("x-openai-subagent", val);
         }
         client
             .compact_input(&payload, extra_headers)
@@ -369,7 +360,7 @@ impl LlmClientSession {
         let reasoning = if model_info.supports_reasoning_summaries {
             Some(Reasoning {
                 effort: self.state.effort.or(default_reasoning_effort),
-                summary: if self.state.summary == ReasoningSummaryConfig::None {
+                summary: if self.state.summary == ReasoningSummary::None {
                     None
                 } else {
                     Some(self.state.summary)
@@ -401,16 +392,16 @@ impl LlmClientSession {
         };
 
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
-        let conversation_id = self.state.conversation_id.to_string();
+        let session_id = self.state.session_id.clone();
 
         ApiResponsesOptions {
             reasoning,
             include,
-            prompt_cache_key: Some(conversation_id.clone()),
+            prompt_cache_key: Some(session_id.clone()),
             text,
             store_override: None,
-            conversation_id: Some(conversation_id),
-            session_source: Some(self.state.session_source.clone()),
+            conversation_id: Some(session_id),
+            origin_tag: self.state.origin_tag.clone(),
             extra_headers: build_responses_headers(
                 &self.state.runtime_config,
                 Some(&self.turn_state),
@@ -523,8 +514,8 @@ impl LlmClientSession {
         let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
         let api_prompt = build_api_prompt(prompt, instructions, tools_json);
         let contains_developer_message = prompt_contains_developer_message(&api_prompt.input);
-        let conversation_id = self.state.conversation_id.to_string();
-        let session_source = self.state.session_source.clone();
+        let session_id = self.state.session_id.clone();
+        let origin_tag = self.state.origin_tag.clone();
 
         let mut auth_recovery = self.state.auth_source.unauthorized_recovery();
         loop {
@@ -544,8 +535,8 @@ impl LlmClientSession {
             let request = build_chat_request(
                 &self.state.model_info.slug,
                 &api_prompt,
-                conversation_id.as_str(),
-                &session_source,
+                session_id.as_str(),
+                origin_tag.as_deref(),
                 handling,
                 &request_provider,
             )?;
@@ -578,8 +569,8 @@ impl LlmClientSession {
                     let retry_request = build_chat_request(
                         &self.state.model_info.slug,
                         &api_prompt,
-                        conversation_id.as_str(),
-                        &session_source,
+                        session_id.as_str(),
+                        origin_tag.as_deref(),
                         DeveloperRoleHandling::DowngradeToSystem,
                         &request_provider,
                     )?;
@@ -789,13 +780,13 @@ fn build_chat_request(
     model: &str,
     prompt: &ApiPrompt,
     conversation_id: &str,
-    session_source: &SessionSource,
+    origin_tag: Option<&str>,
     developer_role_handling: DeveloperRoleHandling,
     provider: &codex_api::Provider,
 ) -> std::result::Result<codex_api::ChatRequest, Error> {
     ApiChatRequestBuilder::new(model, &prompt.instructions, &prompt.input, &prompt.tools)
         .conversation_id(Some(conversation_id.to_string()))
-        .session_source(Some(session_source.clone()))
+        .origin_tag(origin_tag.map(ToOwned::to_owned))
         .developer_role_handling(developer_role_handling)
         .build(provider)
         .map_err(Into::into)
@@ -1238,7 +1229,7 @@ impl WebsocketTelemetry for ApiTelemetry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::models::ReasoningItemContent;
+    use codex_llm_types::ReasoningItemContent;
     use serde_json::json;
 
     #[test]

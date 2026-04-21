@@ -76,6 +76,25 @@ impl ToolRouter {
     ) -> Result<ToolCall, FunctionCallError> {
         match request.payload {
             LlmToolCallPayload::Function { arguments } => {
+                if request.tool_name == "local_shell" {
+                    if request.call_id.is_empty() {
+                        return Err(FunctionCallError::MissingLocalShellCallId);
+                    }
+                    let mut params: ShellToolCallParams = serde_json::from_str(&arguments)
+                        .map_err(|err| {
+                            FunctionCallError::Fatal(format!(
+                                "failed to parse local_shell arguments: {err}"
+                            ))
+                        })?;
+                    params.sandbox_permissions = params
+                        .sandbox_permissions
+                        .or(Some(SandboxPermissions::UseDefault));
+                    return Ok(ToolCall {
+                        tool_name: request.tool_name,
+                        call_id: request.call_id,
+                        payload: ToolPayload::LocalShell { params },
+                    });
+                }
                 if let Some((server, tool)) = session.parse_mcp_tool_name(&request.tool_name).await
                 {
                     Ok(ToolCall {
@@ -100,26 +119,6 @@ impl ToolRouter {
                 call_id: request.call_id,
                 payload: ToolPayload::Custom { input },
             }),
-            LlmToolCallPayload::LocalShell { params } => {
-                if request.call_id.is_empty() {
-                    return Err(FunctionCallError::MissingLocalShellCallId);
-                }
-                let params = ShellToolCallParams {
-                    command: params.command,
-                    workdir: params.workdir,
-                    timeout_ms: params.timeout_ms,
-                    sandbox_permissions: params
-                        .sandbox_permissions
-                        .or(Some(SandboxPermissions::UseDefault)),
-                    prefix_rule: params.prefix_rule,
-                    justification: params.justification,
-                };
-                Ok(ToolCall {
-                    tool_name: request.tool_name,
-                    call_id: request.call_id,
-                    payload: ToolPayload::LocalShell { params },
-                })
-            }
         }
     }
 

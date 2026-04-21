@@ -12,10 +12,9 @@ use crate::telemetry::SseTelemetry;
 use codex_client::HttpTransport;
 use codex_client::RequestCompression;
 use codex_client::RequestTelemetry;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ConversationItem;
-use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::protocol::SessionSource;
+use codex_llm_types::ContentItem;
+use codex_llm_types::ConversationItem;
+use codex_llm_types::ReasoningItemContent;
 use futures::Stream;
 use http::HeaderMap;
 use serde_json::Value;
@@ -55,14 +54,14 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
         model: &str,
         prompt: &ApiPrompt,
         conversation_id: Option<String>,
-        session_source: Option<SessionSource>,
+        origin_tag: Option<String>,
     ) -> Result<ResponseStream, ApiError> {
         use crate::requests::ChatRequestBuilder;
 
         let request =
             ChatRequestBuilder::new(model, &prompt.instructions, &prompt.input, &prompt.tools)
                 .conversation_id(conversation_id)
-                .session_source(session_source)
+                .origin_tag(origin_tag)
                 .build(self.streaming.provider())?;
 
         self.stream_request(request).await
@@ -298,8 +297,8 @@ mod tests {
     use super::AggregateStreamExt;
     use super::ResponseEvent;
     use super::ResponseStream;
-    use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ConversationItem;
+    use codex_llm_types::ContentItem;
+    use codex_llm_types::ConversationItem;
     use futures::StreamExt;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc;

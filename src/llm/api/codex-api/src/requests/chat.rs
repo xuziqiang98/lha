@@ -3,11 +3,10 @@ use crate::provider::Provider;
 use crate::requests::headers::build_conversation_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ConversationItem;
-use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::protocol::SessionSource;
+use codex_llm_types::ContentItem;
+use codex_llm_types::ConversationItem;
+use codex_llm_types::FunctionCallOutputContentItem;
+use codex_llm_types::ReasoningItemContent;
 use http::HeaderMap;
 use serde_json::Value;
 use serde_json::json;
@@ -32,7 +31,7 @@ pub struct ChatRequestBuilder<'a> {
     input: &'a [ConversationItem],
     tools: &'a [Value],
     conversation_id: Option<String>,
-    session_source: Option<SessionSource>,
+    origin_tag: Option<String>,
     developer_role_handling: DeveloperRoleHandling,
 }
 
@@ -49,7 +48,7 @@ impl<'a> ChatRequestBuilder<'a> {
             input,
             tools,
             conversation_id: None,
-            session_source: None,
+            origin_tag: None,
             developer_role_handling: DeveloperRoleHandling::Preserve,
         }
     }
@@ -59,8 +58,8 @@ impl<'a> ChatRequestBuilder<'a> {
         self
     }
 
-    pub fn session_source(mut self, source: Option<SessionSource>) -> Self {
-        self.session_source = source;
+    pub fn origin_tag(mut self, origin_tag: Option<String>) -> Self {
+        self.origin_tag = origin_tag;
         self
     }
 
@@ -317,7 +316,7 @@ impl<'a> ChatRequestBuilder<'a> {
         });
 
         let mut headers = build_conversation_headers(self.conversation_id);
-        if let Some(subagent) = subagent_header(&self.session_source) {
+        if let Some(subagent) = subagent_header(&self.origin_tag) {
             insert_header(&mut headers, "x-openai-subagent", &subagent);
         }
 
@@ -371,9 +370,7 @@ mod tests {
     use super::*;
     use crate::provider::RetryConfig;
     use crate::provider::WireApi;
-    use codex_protocol::models::FunctionCallOutputPayload;
-    use codex_protocol::protocol::SessionSource;
-    use codex_protocol::protocol::SubAgentSource;
+    use codex_llm_types::FunctionCallOutputPayload;
     use http::HeaderValue;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
@@ -419,7 +416,7 @@ mod tests {
         }];
         let req = ChatRequestBuilder::new("gpt-test", "inst", &prompt_input, &[])
             .conversation_id(Some("conv-1".into()))
-            .session_source(Some(SessionSource::SubAgent(SubAgentSource::Review)))
+            .origin_tag(Some("review".into()))
             .build(&provider())
             .expect("request");
 

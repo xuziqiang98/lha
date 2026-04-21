@@ -7,7 +7,7 @@ use crate::provider::WireApi;
 use crate::telemetry::run_with_request_telemetry;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
-use codex_protocol::models::ConversationItem;
+use codex_llm_types::ConversationItem;
 use http::HeaderMap;
 use http::Method;
 use serde::Deserialize;

@@ -216,6 +216,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ConversationItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::response_input_from_user_input;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
@@ -2276,7 +2277,7 @@ impl Session {
         match active.as_mut() {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
-                ts.push_pending_input(input.into());
+                ts.push_pending_input(response_input_from_user_input(input));
                 self.pending_input_epoch.fetch_add(1, Ordering::SeqCst);
                 Ok(())
             }
@@ -3537,7 +3538,7 @@ pub(crate) async fn run_turn(
             .await;
     }
 
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
+    let initial_input_for_turn: ResponseInputItem = response_input_from_user_input(input.clone());
     let response_item: ConversationItem = initial_input_for_turn.clone().into();
     sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
         .await;

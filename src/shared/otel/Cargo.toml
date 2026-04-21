@@ -24,6 +24,7 @@ chrono = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-api = { workspace = true }
+codex-llm-types = { workspace = true }
 codex-protocol = { workspace = true }
 eventsource-stream = { workspace = true }
 opentelemetry = { workspace = true, features = ["logs", "metrics", "trace"] }

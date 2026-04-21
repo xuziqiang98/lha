@@ -2,15 +2,15 @@ use async_trait::async_trait;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_llm::ItemHandle;
+use codex_llm::ToolResultItem;
 use codex_llm::TurnEvent;
 use codex_llm::TurnEventStream;
-use codex_protocol::models::ResponseInputItem;
 use futures::StreamExt;
 use futures::future::BoxFuture;
 use futures::stream::FuturesOrdered;
 use tokio_util::sync::CancellationToken;
 
-pub type ToolFuture<E> = BoxFuture<'static, Result<ResponseInputItem, E>>;
+pub type ToolFuture<E> = BoxFuture<'static, Result<ToolResultItem, E>>;
 
 pub struct TurnEventUpdate<E> {
     pub tool_future: Option<ToolFuture<E>>,
@@ -67,7 +67,7 @@ pub trait TurnEventProcessor: Send {
         event: TurnEvent,
     ) -> Result<TurnEventUpdate<Self::Error>, Self::Error>;
 
-    async fn record_tool_result(&mut self, response: ResponseInputItem) -> Result<(), Self::Error>;
+    async fn record_tool_result(&mut self, response: ToolResultItem) -> Result<(), Self::Error>;
 
     async fn on_tool_future_error(&mut self, err: Self::Error) -> Result<(), Self::Error>;
 
@@ -138,10 +138,11 @@ mod tests {
     use codex_llm::SemanticOutputItem;
     use codex_llm::ToolCallPayload;
     use codex_llm::ToolCallRequest;
-    use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ConversationItem;
-    use codex_protocol::models::FunctionCallOutputPayload;
-    use codex_protocol::protocol::TokenUsage;
+    use codex_llm::ToolResultItem;
+    use codex_llm::TranscriptItem;
+    use codex_llm_types::ContentItem;
+    use codex_llm_types::FunctionCallOutputPayload;
+    use codex_llm_types::TokenUsage;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc;
 
@@ -173,7 +174,7 @@ mod tests {
                 TurnEvent::ItemCompleted { item, .. } => {
                     let last_agent_message = match item {
                         SemanticOutputItem::AssistantMessage {
-                            item: ConversationItem::Message { content, .. },
+                            item: TranscriptItem::Message { content, .. },
                         } => content.into_iter().find_map(|entry| match entry {
                             ContentItem::OutputText { text } => Some(text),
                             _ => None,
@@ -187,7 +188,7 @@ mod tests {
                 }
                 TurnEvent::ToolCall(call) => Ok(TurnEventUpdate {
                     tool_future: Some(Box::pin(async move {
-                        Ok(ResponseInputItem::FunctionCallOutput {
+                        Ok(ToolResultItem::FunctionCallOutput {
                             call_id: call.call_id,
                             output: FunctionCallOutputPayload {
                                 content: "tool-ok".to_string(),
@@ -209,7 +210,7 @@ mod tests {
 
         async fn record_tool_result(
             &mut self,
-            _response: ResponseInputItem,
+            _response: ToolResultItem,
         ) -> Result<(), Self::Error> {
             self.tool_results += 1;
             Ok(())
@@ -243,7 +244,7 @@ mod tests {
 
     fn assistant_message_item(text: &str) -> SemanticOutputItem {
         SemanticOutputItem::AssistantMessage {
-            item: ConversationItem::Message {
+            item: TranscriptItem::Message {
                 id: Some("msg-1".to_string()),
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
@@ -259,12 +260,6 @@ mod tests {
             tool_name: "test_tool".to_string(),
             call_id: "call-1".to_string(),
             payload: ToolCallPayload::Function {
-                arguments: "{}".to_string(),
-            },
-            item: ConversationItem::FunctionCall {
-                id: None,
-                call_id: "call-1".to_string(),
-                name: "test_tool".to_string(),
                 arguments: "{}".to_string(),
             },
         }

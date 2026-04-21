@@ -1,6 +1,6 @@
-use codex_protocol::config_types::Personality;
-use codex_protocol::models::BaseInstructions;
-use codex_protocol::models::ConversationItem;
+use crate::BaseInstructions;
+use crate::Personality;
+use crate::TranscriptItem as ConversationItem;
 use futures::Stream;
 use serde::Deserialize;
 use serde::Serialize;

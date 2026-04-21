@@ -1,3 +1,4 @@
+use crate::ModelInfo;
 use crate::provider::RuntimeEndpoint;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,7 +14,7 @@ pub struct RuntimeCapabilities {
 impl RuntimeCapabilities {
     pub(crate) fn from_endpoint_and_model(
         endpoint: &RuntimeEndpoint,
-        model_info: &codex_protocol::openai_models::ModelInfo,
+        model_info: &ModelInfo,
     ) -> Self {
         Self {
             supports_parallel_tool_calls: model_info.supports_parallel_tool_calls,

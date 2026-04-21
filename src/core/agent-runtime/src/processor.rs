@@ -10,10 +10,10 @@ use codex_agent_core::kernel::TurnEventProcessor;
 use codex_agent_core::kernel::TurnEventUpdate;
 use codex_agent_core::kernel::TurnStreamOutcome;
 use codex_agent_core::kernel::TurnStreamState;
+use codex_llm::ToolResultItem;
+use codex_llm::TranscriptItem;
 use codex_llm::TurnEvent;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ConversationItem;
-use codex_protocol::models::ResponseInputItem;
+use codex_llm_types::ContentItem;
 use serde_json::to_string;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -97,7 +97,9 @@ impl TurnEventProcessor for SessionTurnProcessor {
                 })
             }
             TurnEvent::ToolCall(call) => {
-                self.session.push_conversation_item(call.item.clone()).await;
+                if let Some(item) = codex_llm::tool_call_to_transcript_item(&call) {
+                    self.session.push_conversation_item(item).await;
+                }
                 self.session
                     .emit_event(AgentEvent::ToolCallRequested {
                         session_id: self.session.session_id,
@@ -225,8 +227,8 @@ impl TurnEventProcessor for SessionTurnProcessor {
         }
     }
 
-    async fn record_tool_result(&mut self, response: ResponseInputItem) -> Result<(), Self::Error> {
-        if let Some(item) = response_input_to_conversation_item(&response) {
+    async fn record_tool_result(&mut self, response: ToolResultItem) -> Result<(), Self::Error> {
+        if let Some(item) = codex_llm::tool_result_to_transcript_item(&response) {
             self.session.push_conversation_item(item).await;
         }
         self.tool_output_tokens += estimate_token_count(&response);
@@ -275,53 +277,29 @@ pub(crate) fn outcome_summary(outcome: TurnStreamOutcome) -> TurnSummary {
     }
 }
 
-fn last_assistant_message(item: &ConversationItem) -> Option<String> {
+fn last_assistant_message(item: &TranscriptItem) -> Option<String> {
     match item {
-        ConversationItem::Message { role, content, .. } if role == "assistant" => {
+        TranscriptItem::Message { role, content, .. } if role == "assistant" => {
             content.iter().rev().find_map(|entry| match entry {
                 ContentItem::OutputText { text } => Some(text.clone()),
                 ContentItem::InputText { .. } | ContentItem::InputImage { .. } => None,
             })
         }
-        ConversationItem::Reasoning { .. }
-        | ConversationItem::LocalShellCall { .. }
-        | ConversationItem::FunctionCall { .. }
-        | ConversationItem::FunctionCallOutput { .. }
-        | ConversationItem::CustomToolCall { .. }
-        | ConversationItem::CustomToolCallOutput { .. }
-        | ConversationItem::WebSearchCall { .. }
-        | ConversationItem::GhostSnapshot { .. }
-        | ConversationItem::Compaction { .. }
-        | ConversationItem::Other => None,
-        ConversationItem::Message { .. } => None,
+        TranscriptItem::Reasoning { .. }
+        | TranscriptItem::LocalShellCall { .. }
+        | TranscriptItem::FunctionCall { .. }
+        | TranscriptItem::FunctionCallOutput { .. }
+        | TranscriptItem::CustomToolCall { .. }
+        | TranscriptItem::CustomToolCallOutput { .. }
+        | TranscriptItem::WebSearchCall { .. }
+        | TranscriptItem::GhostSnapshot { .. }
+        | TranscriptItem::Compaction { .. }
+        | TranscriptItem::Other => None,
+        TranscriptItem::Message { .. } => None,
     }
 }
 
-fn response_input_to_conversation_item(response: &ResponseInputItem) -> Option<ConversationItem> {
-    match response {
-        ResponseInputItem::FunctionCallOutput { call_id, output } => {
-            Some(ConversationItem::FunctionCallOutput {
-                call_id: call_id.clone(),
-                output: output.clone(),
-            })
-        }
-        ResponseInputItem::CustomToolCallOutput { call_id, output } => {
-            Some(ConversationItem::CustomToolCallOutput {
-                call_id: call_id.clone(),
-                output: output.clone(),
-            })
-        }
-        ResponseInputItem::Message { role, content } => Some(ConversationItem::Message {
-            id: None,
-            role: role.clone(),
-            content: content.clone(),
-            end_turn: None,
-        }),
-        ResponseInputItem::McpToolCallOutput { .. } => None,
-    }
-}
-
-fn estimate_token_count(response: &ResponseInputItem) -> i64 {
+fn estimate_token_count(response: &ToolResultItem) -> i64 {
     to_string(response)
         .ok()
         .and_then(|text| i64::try_from((text.len() / 4) + 1).ok())

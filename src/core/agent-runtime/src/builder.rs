@@ -2,10 +2,10 @@ use crate::manager::AgentManager;
 use crate::tools::ToolHandler;
 use crate::tools::ToolRegistry;
 use crate::tools::ToolRegistryBuilder;
+use codex_llm::BaseInstructions;
+use codex_llm::Personality;
 use codex_llm::RuntimeMetadata;
 use codex_llm::SemanticRuntime;
-use codex_protocol::config_types::Personality;
-use codex_protocol::models::BaseInstructions;
 use serde_json::Value;
 use std::sync::Arc;
 

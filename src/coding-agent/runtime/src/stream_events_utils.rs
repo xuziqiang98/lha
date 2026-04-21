@@ -79,7 +79,8 @@ pub(crate) async fn handle_tool_call_request(
     request: ToolCallRequest,
 ) -> Result<OutputItemResult> {
     let mut output = OutputItemResult::default();
-    let source_item: ConversationItem = request.item.clone();
+    let source_item = codex_llm::tool_call_to_transcript_item(&request)
+        .ok_or_else(|| CodexErr::Fatal("failed to reconstruct tool call item".to_string()))?;
     let call_id = request.call_id.clone();
     let payload_outputs_custom = matches!(request.payload, ToolCallPayload::Custom { .. });
 

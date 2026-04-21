@@ -34,6 +34,10 @@ use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
+pub use codex_llm_types::CreditsSnapshot;
+pub use codex_llm_types::RateLimitSnapshot;
+pub use codex_llm_types::RateLimitWindow;
+pub use codex_llm_types::TokenUsage;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use mcp_types::CallToolResult;
 use mcp_types::RequestId;
@@ -1143,20 +1147,6 @@ pub struct TurnStartedEvent {
     pub collaboration_mode_kind: ModeKind,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]
-pub struct TokenUsage {
-    #[ts(type = "number")]
-    pub input_tokens: i64,
-    #[ts(type = "number")]
-    pub cached_input_tokens: i64,
-    #[ts(type = "number")]
-    pub output_tokens: i64,
-    #[ts(type = "number")]
-    pub reasoning_output_tokens: i64,
-    #[ts(type = "number")]
-    pub total_tokens: i64,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
@@ -1228,81 +1218,6 @@ impl TokenUsageInfo {
 pub struct TokenCountEvent {
     pub info: Option<TokenUsageInfo>,
     pub rate_limits: Option<RateLimitSnapshot>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-pub struct RateLimitSnapshot {
-    pub primary: Option<RateLimitWindow>,
-    pub secondary: Option<RateLimitWindow>,
-    pub credits: Option<CreditsSnapshot>,
-    pub plan_type: Option<crate::account::PlanType>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-pub struct RateLimitWindow {
-    /// Percentage (0-100) of the window that has been consumed.
-    pub used_percent: f64,
-    /// Rolling window duration, in minutes.
-    #[ts(type = "number | null")]
-    pub window_minutes: Option<i64>,
-    /// Unix timestamp (seconds since epoch) when the window resets.
-    #[ts(type = "number | null")]
-    pub resets_at: Option<i64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-pub struct CreditsSnapshot {
-    pub has_credits: bool,
-    pub unlimited: bool,
-    pub balance: Option<String>,
-}
-
-impl TokenUsage {
-    pub fn is_zero(&self) -> bool {
-        self.total_tokens == 0
-    }
-
-    pub fn cached_input(&self) -> i64 {
-        self.cached_input_tokens.max(0)
-    }
-
-    pub fn non_cached_input(&self) -> i64 {
-        (self.input_tokens - self.cached_input()).max(0)
-    }
-
-    /// Primary count for display as a single absolute value: non-cached input + output.
-    pub fn blended_total(&self) -> i64 {
-        (self.non_cached_input() + self.output_tokens.max(0)).max(0)
-    }
-
-    pub fn tokens_in_context_window(&self) -> i64 {
-        self.total_tokens
-    }
-
-    /// Estimate the remaining percentage of the current context window.
-    ///
-    /// `context_window` is the current effective size of the model's context
-    /// window after any runtime adjustments. The returned percentage uses the
-    /// same window and token count shown elsewhere in the UI so the percentage
-    /// matches the displayed `used / window` values.
-    pub fn percent_of_context_window_remaining(&self, context_window: i64) -> i64 {
-        if context_window <= 0 {
-            return 0;
-        }
-
-        let used = self.tokens_in_context_window().max(0);
-        let remaining = context_window.saturating_sub(used);
-        (remaining.saturating_mul(100) / context_window).clamp(0, 100)
-    }
-
-    /// In-place element-wise sum of token counts.
-    pub fn add_assign(&mut self, other: &TokenUsage) {
-        self.input_tokens += other.input_tokens;
-        self.cached_input_tokens += other.cached_input_tokens;
-        self.output_tokens += other.output_tokens;
-        self.reasoning_output_tokens += other.reasoning_output_tokens;
-        self.total_tokens += other.total_tokens;
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]

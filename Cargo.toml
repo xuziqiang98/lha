@@ -19,6 +19,7 @@ members = [
     "src/shared/common",
     "src/coding-agent/runtime",
     "src/platform/exec",
+    "src/llm/types",
     "src/llm/runtime",
     "src/platform/sandbox/execpolicy",
     "src/resources/keyring-store",
@@ -85,6 +86,7 @@ codex-keyring-store = { path = "src/resources/keyring-store" }
 codex-llm = { path = "src/llm/runtime" }
 codex-linux-sandbox = { path = "src/platform/sandbox/linux" }
 codex-login = { path = "src/coding-agent/login" }
+codex-llm-types = { path = "src/llm/types" }
 codex-mcp-server = { path = "src/integrations/mcp-server" }
 codex-otel = { path = "src/shared/otel" }
 codex-process-hardening = { path = "src/platform/sandbox/process-hardening" }

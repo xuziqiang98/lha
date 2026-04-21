@@ -16,7 +16,7 @@ workspace = true
 async-trait = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-llm = { workspace = true }
-codex-protocol = { workspace = true }
+codex-llm-types = { workspace = true }
 futures = { workspace = true }
 tokio-util = { workspace = true }
 

@@ -2,20 +2,20 @@ use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 
-use codex_protocol::config_types::Personality;
-use codex_protocol::models::BaseInstructions;
-use codex_protocol::models::ConversationItem;
-use codex_protocol::models::LocalShellAction;
-use codex_protocol::models::SandboxPermissions;
-use codex_protocol::models::ShellToolCallParams;
-use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::TokenUsage;
+use codex_llm_types::ConversationItem;
+use codex_llm_types::LocalShellAction;
 use futures::Stream;
 use futures::StreamExt;
 use serde_json::Value;
+use serde_json::json;
 use tokio::sync::mpsc;
 
+use crate::BaseInstructions;
+use crate::Personality;
+use crate::RateLimitSnapshot;
 use crate::Result;
+use crate::TokenUsage;
+use crate::TranscriptItem;
 use crate::prompt::FreeformTool;
 use crate::prompt::FreeformToolFormat;
 use crate::prompt::JsonSchema;
@@ -36,8 +36,6 @@ pub type ItemHandle = String;
 pub enum ToolDescriptor {
     #[serde(rename = "function")]
     Function(FunctionToolDescriptor),
-    #[serde(rename = "local_shell")]
-    LocalShell {},
     #[serde(rename = "web_search")]
     WebSearch {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -51,7 +49,6 @@ impl ToolDescriptor {
     pub fn name(&self) -> &str {
         match self {
             Self::Function(tool) => tool.name.as_str(),
-            Self::LocalShell {} => "local_shell",
             Self::WebSearch { .. } => "web_search",
             Self::Freeform(tool) => tool.name.as_str(),
         }
@@ -66,7 +63,7 @@ impl From<ToolSpec> for ToolDescriptor {
     fn from(value: ToolSpec) -> Self {
         match value {
             ToolSpec::Function(tool) => Self::Function(tool),
-            ToolSpec::LocalShell {} => Self::LocalShell {},
+            ToolSpec::LocalShell {} => Self::Function(local_shell_tool_descriptor()),
             ToolSpec::WebSearch {
                 external_web_access,
             } => Self::WebSearch {
@@ -80,8 +77,13 @@ impl From<ToolSpec> for ToolDescriptor {
 impl From<ToolDescriptor> for ToolSpec {
     fn from(value: ToolDescriptor) -> Self {
         match value {
-            ToolDescriptor::Function(tool) => Self::Function(tool),
-            ToolDescriptor::LocalShell {} => Self::LocalShell {},
+            ToolDescriptor::Function(tool) => {
+                if tool.name == "local_shell" {
+                    Self::LocalShell {}
+                } else {
+                    Self::Function(tool)
+                }
+            }
             ToolDescriptor::WebSearch {
                 external_web_access,
             } => Self::WebSearch {
@@ -100,7 +102,7 @@ impl From<&ToolDescriptor> for ToolSpec {
 
 #[derive(Default, Debug, Clone)]
 pub struct TurnRequest {
-    pub conversation: Vec<ConversationItem>,
+    pub conversation: Vec<TranscriptItem>,
     pub tools: Vec<ToolDescriptor>,
     pub parallel_tool_calls: bool,
     pub base_instructions: BaseInstructions,
@@ -154,13 +156,13 @@ impl From<&Prompt> for TurnRequest {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SemanticOutputItem {
-    AssistantMessage { item: ConversationItem },
-    Reasoning { item: ConversationItem },
-    WebSearch { item: ConversationItem },
+    AssistantMessage { item: TranscriptItem },
+    Reasoning { item: TranscriptItem },
+    WebSearch { item: TranscriptItem },
 }
 
 impl SemanticOutputItem {
-    pub fn item(&self) -> &ConversationItem {
+    pub fn item(&self) -> &TranscriptItem {
         match self {
             Self::AssistantMessage { item }
             | Self::Reasoning { item }
@@ -168,7 +170,7 @@ impl SemanticOutputItem {
         }
     }
 
-    pub fn into_item(self) -> ConversationItem {
+    pub fn into_item(self) -> TranscriptItem {
         match self {
             Self::AssistantMessage { item }
             | Self::Reasoning { item }
@@ -176,7 +178,7 @@ impl SemanticOutputItem {
         }
     }
 
-    fn from_conversation_item(item: ConversationItem) -> Option<Self> {
+    fn from_conversation_item(item: TranscriptItem) -> Option<Self> {
         match &item {
             ConversationItem::Message { role, .. } if role == "assistant" => {
                 Some(Self::AssistantMessage { item })
@@ -201,7 +203,6 @@ impl SemanticOutputItem {
 pub enum ToolCallPayload {
     Function { arguments: String },
     Custom { input: String },
-    LocalShell { params: ShellToolCallParams },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -209,12 +210,11 @@ pub struct ToolCallRequest {
     pub tool_name: String,
     pub call_id: String,
     pub payload: ToolCallPayload,
-    pub item: ConversationItem,
 }
 
 impl ToolCallRequest {
-    pub fn from_conversation_item(item: ConversationItem) -> Option<Self> {
-        match item.clone() {
+    pub fn from_conversation_item(item: TranscriptItem) -> Option<Self> {
+        match item {
             ConversationItem::FunctionCall {
                 name,
                 arguments,
@@ -224,7 +224,6 @@ impl ToolCallRequest {
                 tool_name: name,
                 call_id,
                 payload: ToolCallPayload::Function { arguments },
-                item,
             }),
             ConversationItem::CustomToolCall {
                 name,
@@ -235,7 +234,6 @@ impl ToolCallRequest {
                 tool_name: name,
                 call_id,
                 payload: ToolCallPayload::Custom { input },
-                item,
             }),
             ConversationItem::LocalShellCall {
                 id,
@@ -245,24 +243,54 @@ impl ToolCallRequest {
             } => {
                 let call_id = call_id.or(id).unwrap_or_default();
                 let LocalShellAction::Exec(exec) = action;
+                let arguments = serde_json::to_string(&json!({
+                    "command": exec.command,
+                    "workdir": exec.working_directory,
+                    "timeout_ms": exec.timeout_ms,
+                    "sandbox_permissions": "use_default",
+                }))
+                .ok()?;
                 Some(Self {
                     tool_name: "local_shell".to_string(),
                     call_id,
-                    payload: ToolCallPayload::LocalShell {
-                        params: ShellToolCallParams {
-                            command: exec.command,
-                            workdir: exec.working_directory,
-                            timeout_ms: exec.timeout_ms,
-                            sandbox_permissions: Some(SandboxPermissions::UseDefault),
-                            prefix_rule: None,
-                            justification: None,
-                        },
-                    },
-                    item,
+                    payload: ToolCallPayload::Function { arguments },
                 })
             }
             _ => None,
         }
+    }
+}
+
+fn local_shell_tool_descriptor() -> FunctionToolDescriptor {
+    FunctionToolDescriptor {
+        name: "local_shell".to_string(),
+        description: "Execute a local shell command.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties: std::collections::BTreeMap::from([
+                (
+                    "command".to_string(),
+                    JsonSchema::Array {
+                        items: Box::new(JsonSchema::String { description: None }),
+                        description: Some("Command and arguments to execute.".to_string()),
+                    },
+                ),
+                (
+                    "workdir".to_string(),
+                    JsonSchema::String {
+                        description: Some("Optional working directory.".to_string()),
+                    },
+                ),
+                (
+                    "timeout_ms".to_string(),
+                    JsonSchema::Number {
+                        description: Some("Optional timeout in milliseconds.".to_string()),
+                    },
+                ),
+            ]),
+            required: Some(vec!["command".to_string()]),
+            additional_properties: Some(false.into()),
+        },
     }
 }
 
@@ -334,7 +362,10 @@ impl TurnEvent {
             Self::RuntimeNotice(_) => return None,
             Self::ItemStarted { item, .. } => ResponseEvent::OutputItemAdded(item.item().clone()),
             Self::ItemCompleted { item, .. } => ResponseEvent::OutputItemDone(item.item().clone()),
-            Self::ToolCall(call) => ResponseEvent::OutputItemDone(call.item.clone()),
+            Self::ToolCall(call) => {
+                let item = crate::tool_call_to_transcript_item(call)?;
+                ResponseEvent::OutputItemDone(item)
+            }
             Self::OutputTextDelta { delta, .. } => ResponseEvent::OutputTextDelta(delta.clone()),
             Self::ProposedPlanDelta { delta, .. } => {
                 ResponseEvent::ProposedPlanDelta(delta.clone())
@@ -537,7 +568,7 @@ fn next_item_handle(next_synthetic_handle: &mut usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::models::ContentItem;
+    use codex_llm_types::ContentItem;
     #[test]
     fn tool_call_request_is_derived_from_function_call_items() {
         let item = ConversationItem::FunctionCall {
@@ -547,16 +578,24 @@ mod tests {
             call_id: "call-1".to_string(),
         };
 
-        let call = ToolCallRequest::from_conversation_item(item.clone()).expect("tool call");
+        let call = ToolCallRequest::from_conversation_item(item).expect("tool call");
 
         assert_eq!(call.tool_name, "shell");
         assert_eq!(call.call_id, "call-1");
-        assert_eq!(call.item, item);
         assert_eq!(
             call.payload,
             ToolCallPayload::Function {
                 arguments: "{\"command\":[\"pwd\"]}".to_string(),
             }
+        );
+        assert_eq!(
+            crate::tool_call_to_transcript_item(&call),
+            Some(ConversationItem::FunctionCall {
+                id: Some("call-1".to_string()),
+                name: "shell".to_string(),
+                arguments: "{\"command\":[\"pwd\"]}".to_string(),
+                call_id: "call-1".to_string(),
+            })
         );
     }
 

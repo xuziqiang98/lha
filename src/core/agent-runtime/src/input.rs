@@ -1,5 +1,5 @@
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ConversationItem;
+use codex_llm::TranscriptItem;
+use codex_llm_types::ContentItem;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputQueue {
@@ -10,20 +10,20 @@ pub enum InputQueue {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionInput {
-    items: Vec<ConversationItem>,
+    items: Vec<TranscriptItem>,
 }
 
 impl SessionInput {
-    pub fn new(items: Vec<ConversationItem>) -> Self {
+    pub fn new(items: Vec<TranscriptItem>) -> Self {
         Self { items }
     }
 
-    pub fn from_item(item: ConversationItem) -> Self {
+    pub fn from_item(item: TranscriptItem) -> Self {
         Self { items: vec![item] }
     }
 
     pub fn from_user_text(text: impl Into<String>) -> Self {
-        Self::from_item(ConversationItem::Message {
+        Self::from_item(TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText { text: text.into() }],
@@ -31,23 +31,23 @@ impl SessionInput {
         })
     }
 
-    pub fn items(&self) -> &[ConversationItem] {
+    pub fn items(&self) -> &[TranscriptItem] {
         &self.items
     }
 
-    pub fn into_items(self) -> Vec<ConversationItem> {
+    pub fn into_items(self) -> Vec<TranscriptItem> {
         self.items
     }
 }
 
-impl From<Vec<ConversationItem>> for SessionInput {
-    fn from(value: Vec<ConversationItem>) -> Self {
+impl From<Vec<TranscriptItem>> for SessionInput {
+    fn from(value: Vec<TranscriptItem>) -> Self {
         Self::new(value)
     }
 }
 
-impl From<ConversationItem> for SessionInput {
-    fn from(value: ConversationItem) -> Self {
+impl From<TranscriptItem> for SessionInput {
+    fn from(value: TranscriptItem) -> Self {
         Self::from_item(value)
     }
 }

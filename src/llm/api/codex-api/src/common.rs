@@ -1,10 +1,10 @@
 use crate::error::ApiError;
-use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::config_types::Verbosity as VerbosityConfig;
-use codex_protocol::models::ConversationItem;
-use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::TokenUsage;
+use codex_llm_types::ConversationItem;
+use codex_llm_types::RateLimitSnapshot;
+use codex_llm_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_llm_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_llm_types::TokenUsage;
+use codex_llm_types::Verbosity as VerbosityConfig;
 use futures::Stream;
 use serde::Serialize;
 use serde_json::Value;

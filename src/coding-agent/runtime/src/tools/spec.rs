@@ -381,6 +381,15 @@ Examples of valid command strings:
     })
 }
 
+fn create_local_shell_tool(include_prefix_rule: bool) -> ToolDescriptor {
+    let ToolDescriptor::Function(mut tool) = create_shell_tool(include_prefix_rule) else {
+        unreachable!("shell tool must be a function descriptor");
+    };
+    tool.name = "local_shell".to_string();
+    tool.description = "Execute a local shell command.".to_string();
+    ToolDescriptor::Function(tool)
+}
+
 fn create_shell_command_tool(include_prefix_rule: bool) -> ToolDescriptor {
     let mut properties = BTreeMap::from([
         (
@@ -1287,12 +1296,14 @@ pub fn create_tools_json_for_messages_api(
 
     for tool in tools {
         match tool {
-            ToolDescriptor::Function(tool) => tools_json.push(json!({
-                "name": tool.name,
-                "description": tool.description,
-                "input_schema": tool.parameters,
-            })),
-            ToolDescriptor::LocalShell {}
+            ToolDescriptor::Function(tool) if tool.name != "local_shell" => {
+                tools_json.push(json!({
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.parameters,
+                }))
+            }
+            ToolDescriptor::Function(_)
             | ToolDescriptor::WebSearch { .. }
             | ToolDescriptor::Freeform(_) => {
                 return Err(crate::error::CodexErr::UnsupportedOperation(format!(
@@ -1548,7 +1559,11 @@ pub(crate) fn build_specs(
             );
         }
         ConfigShellToolType::Local => {
-            maybe_push_spec(&mut builder, config, ToolDescriptor::LocalShell {});
+            maybe_push_spec(
+                &mut builder,
+                config,
+                create_local_shell_tool(config.request_rule_enabled),
+            );
         }
         ConfigShellToolType::UnifiedExec => {
             maybe_push_spec_and_register_handler(
@@ -1587,7 +1602,7 @@ pub(crate) fn build_specs(
                 }
             }
             ConfigShellToolType::Local => {
-                let local_shell_spec = ToolDescriptor::LocalShell {};
+                let local_shell_spec = create_local_shell_tool(config.request_rule_enabled);
                 if tool_is_exposed_for_runtime(config, &local_shell_spec) {
                     builder.register_handler("local_shell", shell_handler);
                 }
@@ -1888,7 +1903,6 @@ mod tests {
     fn tool_name(tool: &ToolDescriptor) -> &str {
         match tool {
             ToolDescriptor::Function(ResponsesApiTool { name, .. }) => name,
-            ToolDescriptor::LocalShell {} => "local_shell",
             ToolDescriptor::WebSearch { .. } => "web_search",
             ToolDescriptor::Freeform(FreeformToolDescriptor { name, .. }) => name,
         }
@@ -1967,9 +1981,7 @@ mod tests {
             ToolDescriptor::Function(ResponsesApiTool { parameters, .. }) => {
                 strip_descriptions_schema(parameters);
             }
-            ToolDescriptor::Freeform(_)
-            | ToolDescriptor::LocalShell {}
-            | ToolDescriptor::WebSearch { .. } => {}
+            ToolDescriptor::Freeform(_) | ToolDescriptor::WebSearch { .. } => {}
         }
     }
 
@@ -3293,7 +3305,7 @@ Examples of valid command strings:
 
     #[test]
     fn messages_tools_reject_local_shell() {
-        let tools = vec![ToolDescriptor::LocalShell {}];
+        let tools = vec![create_local_shell_tool(true)];
 
         let err =
             create_tools_json_for_messages_api(&tools).expect_err("should reject local shell");

@@ -2,12 +2,12 @@ use crate::input::InputQueue;
 use crate::session::SessionId;
 use crate::session::SubmissionId;
 use codex_llm::ItemHandle;
+use codex_llm::RateLimitSnapshot;
 use codex_llm::RuntimeNotice;
 use codex_llm::SemanticOutputItem;
 use codex_llm::ToolCallRequest;
-use codex_protocol::models::ConversationItem;
-use codex_protocol::models::ResponseInputItem;
-use codex_protocol::protocol::RateLimitSnapshot;
+use codex_llm::ToolResultItem;
+use codex_llm::TranscriptItem;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnItemDelta {
@@ -38,7 +38,7 @@ pub enum AgentEvent {
     InputQueued {
         session_id: SessionId,
         queue: InputQueue,
-        items: Vec<ConversationItem>,
+        items: Vec<TranscriptItem>,
     },
     TurnStarted {
         session_id: SessionId,
@@ -74,7 +74,7 @@ pub enum AgentEvent {
     ToolCallCompleted {
         session_id: SessionId,
         submission_id: SubmissionId,
-        response: ResponseInputItem,
+        response: ToolResultItem,
     },
     RateLimitsUpdated {
         session_id: SessionId,
