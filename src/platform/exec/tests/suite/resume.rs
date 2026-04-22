@@ -21,7 +21,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 /// Utility: scan the sessions dir for a rollout file that contains `marker`
-/// in any conversation_item.message.content entry. Returns the absolute path.
+/// in any transcript_item.message.content entry. Returns the absolute path.
 fn find_session_file_containing_marker(
     sessions_dir: &std::path::Path,
     marker: &str,
@@ -53,7 +53,7 @@ fn find_session_file_containing_marker(
             let Ok(item): Result<Value, _> = serde_json::from_str(line) else {
                 continue;
             };
-            if item.get("type").and_then(|t| t.as_str()) == Some("conversation_item")
+            if item.get("type").and_then(|t| t.as_str()) == Some("transcript_item")
                 && let Some(payload) = item.get("payload")
                 && payload.get("type").and_then(|t| t.as_str()) == Some("message")
                 && payload
@@ -92,7 +92,7 @@ fn last_user_image_count(path: &std::path::Path) -> usize {
         let Ok(item): Result<Value, _> = serde_json::from_str(line) else {
             continue;
         };
-        if item.get("type").and_then(|t| t.as_str()) != Some("conversation_item") {
+        if item.get("type").and_then(|t| t.as_str()) != Some("transcript_item") {
             continue;
         }
         let Some(payload) = item.get("payload") else {
@@ -152,7 +152,7 @@ fn write_fake_rollout(
         }),
         json!({
             "timestamp": meta_rfc3339,
-            "type":"conversation_item",
+            "type":"transcript_item",
             "payload": {
                 "type":"message",
                 "role":"user",

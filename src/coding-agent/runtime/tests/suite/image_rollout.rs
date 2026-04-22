@@ -6,8 +6,8 @@ use codex_agent::protocol::RolloutItem;
 use codex_agent::protocol::RolloutLine;
 use codex_agent::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ConversationItem;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -35,15 +35,16 @@ fn find_user_message_with_image(text: &str) -> Option<ConversationItem> {
             Ok(rollout) => rollout,
             Err(_) => continue,
         };
-        if let RolloutItem::ConversationItem(ConversationItem::Message { role, content, .. }) =
-            &rollout.item
-            && role == "user"
-            && content
-                .iter()
-                .any(|span| matches!(span, ContentItem::InputImage { .. }))
-            && let RolloutItem::ConversationItem(item) = rollout.item.clone()
-        {
-            return Some(item);
+        if let RolloutItem::TranscriptItem(item) = &rollout.item {
+            let item: ConversationItem = item.clone().into();
+            if let ConversationItem::Message { role, content, .. } = &item
+                && role == "user"
+                && content
+                    .iter()
+                    .any(|span| matches!(span, ContentItem::InputImage { .. }))
+            {
+                return Some(item);
+            }
         }
     }
     None

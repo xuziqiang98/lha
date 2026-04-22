@@ -53,11 +53,15 @@ impl ToolHandler for McpHandler {
         .await;
 
         match response {
-            codex_protocol::models::ResponseInputItem::McpToolCallOutput { result, .. } => {
-                Ok(ToolOutput::Mcp { result })
-            }
-            codex_protocol::models::ResponseInputItem::FunctionCallOutput { output, .. } => {
-                let codex_protocol::models::FunctionCallOutputPayload {
+            codex_protocol::legacy_transcript::ResponseInputItem::McpToolCallOutput {
+                result,
+                ..
+            } => Ok(ToolOutput::Mcp { result }),
+            codex_protocol::legacy_transcript::ResponseInputItem::FunctionCallOutput {
+                output,
+                ..
+            } => {
+                let codex_protocol::legacy_transcript::FunctionCallOutputPayload {
                     content,
                     content_items,
                     success,

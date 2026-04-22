@@ -253,13 +253,25 @@ fn function_call_output_text(body: &Value, call_id: &str) -> Option<String> {
         .and_then(Value::as_array)
         .and_then(|items| {
             items.iter().find(|item| {
-                item.get("type").and_then(Value::as_str) == Some("function_call_output")
-                    && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+                item.get("call_id").and_then(Value::as_str) == Some(call_id)
+                    && matches!(
+                        item.get("type").and_then(Value::as_str),
+                        Some("function_call_output") | Some("tool_result")
+                    )
             })
         })
-        .and_then(|item| item.get("output"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
+        .and_then(|item| {
+            item.get("output")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| {
+                    item.get("payload")
+                        .and_then(Value::as_object)
+                        .and_then(|payload| payload.get("content"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+        })
 }
 
 fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {

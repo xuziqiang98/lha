@@ -13,7 +13,7 @@ use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::models::ConversationItem;
+use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use core_test_support::load_default_config_for_test;
@@ -87,14 +87,17 @@ async fn responses_stream_includes_subagent_header_on_review() {
     .new_session();
 
     let turn = TurnRequest {
-        conversation: vec![ConversationItem::Message {
-            id: None,
-            role: "user".into(),
-            content: vec![ContentItem::InputText {
-                text: "hello".into(),
-            }],
-            end_turn: None,
-        }],
+        conversation: vec![
+            ConversationItem::Message {
+                id: None,
+                role: "user".into(),
+                content: vec![ContentItem::InputText {
+                    text: "hello".into(),
+                }],
+                end_turn: None,
+            }
+            .into(),
+        ],
         ..Default::default()
     };
 
@@ -176,14 +179,17 @@ async fn responses_stream_includes_subagent_header_on_other() {
     .new_session();
 
     let turn = TurnRequest {
-        conversation: vec![ConversationItem::Message {
-            id: None,
-            role: "user".into(),
-            content: vec![ContentItem::InputText {
-                text: "hello".into(),
-            }],
-            end_turn: None,
-        }],
+        conversation: vec![
+            ConversationItem::Message {
+                id: None,
+                role: "user".into(),
+                content: vec![ContentItem::InputText {
+                    text: "hello".into(),
+                }],
+                end_turn: None,
+            }
+            .into(),
+        ],
         ..Default::default()
     };
 
@@ -323,14 +329,17 @@ async fn responses_respects_model_info_overrides_from_config() {
     .new_session();
 
     let turn = TurnRequest {
-        conversation: vec![ConversationItem::Message {
-            id: None,
-            role: "user".into(),
-            content: vec![ContentItem::InputText {
-                text: "hello".into(),
-            }],
-            end_turn: None,
-        }],
+        conversation: vec![
+            ConversationItem::Message {
+                id: None,
+                role: "user".into(),
+                content: vec![ContentItem::InputText {
+                    text: "hello".into(),
+                }],
+                end_turn: None,
+            }
+            .into(),
+        ],
         ..Default::default()
     };
 

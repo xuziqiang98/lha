@@ -17,9 +17,10 @@ use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
 use codex_llm::ToolCallPayload;
 use codex_llm::ToolCallRequest;
-use codex_protocol::models::ConversationItem;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
+use codex_llm::ToolResultItem;
+use codex_protocol::legacy_transcript::ConversationItem;
+use codex_protocol::legacy_transcript::FunctionCallOutputPayload;
+use codex_protocol::legacy_transcript::ResponseInputItem;
 use futures::Future;
 use tracing::debug;
 use tracing::instrument;
@@ -28,7 +29,7 @@ use tracing::instrument;
 /// queuing any tool execution futures. This records items immediately so
 /// history and rollout stay in sync even if the turn is later cancelled.
 pub(crate) type InFlightFuture<'f> =
-    Pin<Box<dyn Future<Output = Result<ResponseInputItem>> + Send + 'f>>;
+    Pin<Box<dyn Future<Output = Result<ToolResultItem>> + Send + 'f>>;
 
 #[derive(Default)]
 pub(crate) struct OutputItemResult {
@@ -79,10 +80,9 @@ pub(crate) async fn handle_tool_call_request(
     request: ToolCallRequest,
 ) -> Result<OutputItemResult> {
     let mut output = OutputItemResult::default();
-    let source_item = codex_llm::tool_call_to_transcript_item(&request)
-        .ok_or_else(|| CodexErr::Fatal("failed to reconstruct tool call item".to_string()))?;
+    let source_item: ConversationItem = request.to_transcript_item().into();
     let call_id = request.call_id.clone();
-    let payload_outputs_custom = matches!(request.payload, ToolCallPayload::Custom { .. });
+    let payload_outputs_custom = matches!(request.payload, ToolCallPayload::TextInput { .. });
 
     match ToolRouter::build_tool_call(ctx.sess.as_ref(), request).await {
         Ok(call) => {
@@ -99,11 +99,15 @@ pub(crate) async fn handle_tool_call_request(
                 .await;
 
             let cancellation_token = ctx.cancellation_token.child_token();
-            output.tool_future = Some(Box::pin(
-                ctx.tool_runtime
-                    .clone()
-                    .handle_tool_call(call, cancellation_token),
-            ));
+            let tool_runtime = ctx.tool_runtime.clone();
+            output.tool_future = Some(Box::pin(async move {
+                let response = tool_runtime
+                    .handle_tool_call(call, cancellation_token)
+                    .await?;
+                response_input_to_tool_result_item(&response).ok_or_else(|| {
+                    CodexErr::Fatal("tool response was not a tool result".to_string())
+                })
+            }));
             output.needs_follow_up = true;
         }
         Err(FunctionCallError::RespondToModel(message)) => {
@@ -267,6 +271,71 @@ pub(crate) fn response_input_to_response_item(
         }
         _ => None,
     }
+}
+
+fn response_input_to_tool_result_item(input: &ResponseInputItem) -> Option<ToolResultItem> {
+    match input {
+        ResponseInputItem::FunctionCallOutput { call_id, output } => Some(ToolResultItem {
+            call_id: call_id.clone(),
+            tool_name: String::new(),
+            payload: codex_llm::ToolResultPayload::Structured {
+                content: output.content.clone(),
+                content_items: output
+                    .content_items
+                    .as_deref()
+                    .map(legacy_content_items_to_tool_result_items),
+                success: output.success,
+            },
+        }),
+        ResponseInputItem::CustomToolCallOutput { call_id, output } => Some(ToolResultItem {
+            call_id: call_id.clone(),
+            tool_name: String::new(),
+            payload: codex_llm::ToolResultPayload::Text {
+                output: output.clone(),
+            },
+        }),
+        ResponseInputItem::McpToolCallOutput { call_id, result } => {
+            let output = match result {
+                Ok(call_tool_result) => FunctionCallOutputPayload::from(call_tool_result),
+                Err(err) => FunctionCallOutputPayload {
+                    content: err.clone(),
+                    success: Some(false),
+                    ..Default::default()
+                },
+            };
+            Some(ToolResultItem {
+                call_id: call_id.clone(),
+                tool_name: "mcp".to_string(),
+                payload: codex_llm::ToolResultPayload::Structured {
+                    content: output.content,
+                    content_items: output
+                        .content_items
+                        .as_deref()
+                        .map(legacy_content_items_to_tool_result_items),
+                    success: output.success,
+                },
+            })
+        }
+        ResponseInputItem::Message { .. } => None,
+    }
+}
+
+fn legacy_content_items_to_tool_result_items(
+    items: &[codex_protocol::legacy_transcript::FunctionCallOutputContentItem],
+) -> Vec<codex_llm::ToolResultContentItem> {
+    items
+        .iter()
+        .map(|item| match item {
+            codex_protocol::legacy_transcript::FunctionCallOutputContentItem::InputText {
+                text,
+            } => codex_llm::ToolResultContentItem::InputText { text: text.clone() },
+            codex_protocol::legacy_transcript::FunctionCallOutputContentItem::InputImage {
+                image_url,
+            } => codex_llm::ToolResultContentItem::InputImage {
+                image_url: image_url.clone(),
+            },
+        })
+        .collect()
 }
 
 #[cfg(test)]

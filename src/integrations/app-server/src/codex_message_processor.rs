@@ -192,7 +192,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
 use codex_protocol::items::TurnItem;
-use codex_protocol::models::ConversationItem;
+use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
@@ -2571,7 +2571,7 @@ impl CodexMessageProcessor {
             InitialHistory::Forked(
                 history
                     .into_iter()
-                    .map(RolloutItem::ConversationItem)
+                    .map(RolloutItem::TranscriptItem)
                     .collect(),
             )
         } else if let Some(path) = path {
@@ -3607,7 +3607,7 @@ impl CodexMessageProcessor {
                 Some(history) if !history.is_empty() => InitialHistory::Forked(
                     history
                         .into_iter()
-                        .map(RolloutItem::ConversationItem)
+                        .map(RolloutItem::TranscriptItem)
                         .collect(),
                 ),
                 Some(_) | None => {
@@ -4818,7 +4818,7 @@ impl CodexMessageProcessor {
                             }
                         };
 
-                        if let EventMsg::RawConversationItem(_) = &event.msg
+                        if let EventMsg::RawTranscriptItem(_) = &event.msg
                             && !experimental_raw_events {
                                 continue;
                             }

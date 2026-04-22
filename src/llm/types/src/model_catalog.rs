@@ -57,37 +57,6 @@ pub enum ModelVisibility {
     None,
 }
 
-#[derive(
-    Debug,
-    Serialize,
-    Deserialize,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    TS,
-    JsonSchema,
-    EnumIter,
-    Display,
-    Hash,
-)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum ConfigShellToolType {
-    Default,
-    Local,
-    UnifiedExec,
-    Disabled,
-    ShellCommand,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, TS, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ApplyPatchToolType {
-    Freeform,
-    Function,
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TruncationMode {
@@ -129,7 +98,6 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_reasoning_level: Option<ReasoningEffort>,
     pub supported_reasoning_levels: Vec<ReasoningEffortPreset>,
-    pub shell_type: ConfigShellToolType,
     pub visibility: ModelVisibility,
     pub supported_in_api: bool,
     pub priority: i32,
@@ -140,7 +108,6 @@ pub struct ModelInfo {
     pub supports_reasoning_summaries: bool,
     pub support_verbosity: bool,
     pub default_verbosity: Option<Verbosity>,
-    pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub truncation_policy: TruncationPolicyConfig,
     pub supports_parallel_tool_calls: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -149,7 +116,6 @@ pub struct ModelInfo {
     pub auto_compact_token_limit: Option<i64>,
     #[serde(default = "default_effective_context_window_percent")]
     pub effective_context_window_percent: i64,
-    pub experimental_supported_tools: Vec<String>,
 }
 
 impl ModelInfo {

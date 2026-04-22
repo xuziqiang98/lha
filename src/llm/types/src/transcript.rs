@@ -1,35 +1,8 @@
-use std::collections::HashMap;
-
-use codex_git::GhostCommit;
-use mcp_types::CallToolResult;
-use mcp_types::ContentBlock;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde::Deserializer;
 use serde::Serialize;
-use serde::ser::Serializer;
+use serde_json::Value;
 use ts_rs::TS;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ResponseInputItem {
-    Message {
-        role: String,
-        content: Vec<ContentItem>,
-    },
-    FunctionCallOutput {
-        call_id: String,
-        output: FunctionCallOutputPayload,
-    },
-    McpToolCallOutput {
-        call_id: String,
-        result: Result<CallToolResult, String>,
-    },
-    CustomToolCallOutput {
-        call_id: String,
-        output: String,
-    },
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -37,86 +10,6 @@ pub enum ContentItem {
     InputText { text: String },
     InputImage { image_url: String },
     OutputText { text: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ConversationItem {
-    Message {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: Option<String>,
-        role: String,
-        content: Vec<ContentItem>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        end_turn: Option<bool>,
-    },
-    Reasoning {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: String,
-        summary: Vec<ReasoningItemReasoningSummary>,
-        #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
-        #[ts(optional)]
-        content: Option<Vec<ReasoningItemContent>>,
-        encrypted_content: Option<String>,
-    },
-    LocalShellCall {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: Option<String>,
-        call_id: Option<String>,
-        status: LocalShellStatus,
-        action: LocalShellAction,
-    },
-    FunctionCall {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: Option<String>,
-        name: String,
-        arguments: String,
-        call_id: String,
-    },
-    FunctionCallOutput {
-        call_id: String,
-        output: FunctionCallOutputPayload,
-    },
-    CustomToolCall {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        status: Option<String>,
-        call_id: String,
-        name: String,
-        input: String,
-    },
-    CustomToolCallOutput {
-        call_id: String,
-        output: String,
-    },
-    WebSearchCall {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        status: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        action: Option<WebSearchAction>,
-    },
-    GhostSnapshot {
-        ghost_commit: GhostCommit,
-    },
-    #[serde(alias = "compaction_summary")]
-    Compaction {
-        encrypted_content: String,
-    },
-    #[serde(other)]
-    Other,
 }
 
 pub const BASE_INSTRUCTIONS_DEFAULT: &str =
@@ -145,87 +38,6 @@ fn should_serialize_reasoning_content(content: &Option<Vec<ReasoningItemContent>
     }
 }
 
-impl From<ResponseInputItem> for ConversationItem {
-    fn from(item: ResponseInputItem) -> Self {
-        match item {
-            ResponseInputItem::Message { role, content } => Self::Message {
-                role,
-                content,
-                id: None,
-                end_turn: None,
-            },
-            ResponseInputItem::FunctionCallOutput { call_id, output } => {
-                Self::FunctionCallOutput { call_id, output }
-            }
-            ResponseInputItem::McpToolCallOutput { call_id, result } => {
-                let output = match result {
-                    Ok(result) => FunctionCallOutputPayload::from(&result),
-                    Err(tool_call_err) => FunctionCallOutputPayload {
-                        content: format!("err: {tool_call_err:?}"),
-                        success: Some(false),
-                        ..Default::default()
-                    },
-                };
-                Self::FunctionCallOutput { call_id, output }
-            }
-            ResponseInputItem::CustomToolCallOutput { call_id, output } => {
-                Self::CustomToolCallOutput { call_id, output }
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum LocalShellStatus {
-    Completed,
-    InProgress,
-    Incomplete,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum LocalShellAction {
-    Exec(LocalShellExecAction),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-pub struct LocalShellExecAction {
-    pub command: Vec<String>,
-    pub timeout_ms: Option<u64>,
-    pub working_directory: Option<String>,
-    pub env: Option<HashMap<String, String>>,
-    pub user: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum WebSearchAction {
-    Search {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        query: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        queries: Option<Vec<String>>,
-    },
-    OpenPage {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        url: Option<String>,
-    },
-    FindInPage {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        url: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        pattern: Option<String>,
-    },
-    #[serde(other)]
-    Other,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReasoningItemReasoningSummary {
@@ -239,153 +51,244 @@ pub enum ReasoningItemContent {
     Text { text: String },
 }
 
+pub type MessageRole = String;
+pub type MessageContentItem = ContentItem;
+pub type ReasoningSummaryItem = ReasoningItemReasoningSummary;
+pub type ReasoningContentItem = ReasoningItemContent;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum FunctionCallOutputContentItem {
+pub enum ToolResultContentItem {
     InputText { text: String },
     InputImage { image_url: String },
 }
 
-#[derive(Debug, Default, Clone, PartialEq, JsonSchema, TS)]
-pub struct FunctionCallOutputPayload {
-    pub content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content_items: Option<Vec<FunctionCallOutputContentItem>>,
-    pub success: Option<bool>,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+pub struct MessageItem {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub id: Option<String>,
+    pub role: MessageRole,
+    pub content: Vec<MessageContentItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub end_turn: Option<bool>,
 }
 
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum FunctionCallOutputPayloadSerde {
-    Text(String),
-    Items(Vec<FunctionCallOutputContentItem>),
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+pub struct ReasoningItem {
+    pub id: String,
+    pub summary: Vec<ReasoningSummaryItem>,
+    #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
+    #[ts(optional)]
+    pub content: Option<Vec<ReasoningContentItem>>,
+    pub encrypted_content: Option<String>,
 }
 
-impl Serialize for FunctionCallOutputPayload {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        if let Some(items) = &self.content_items {
-            items.serialize(serializer)
-        } else {
-            serializer.serialize_str(&self.content)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+pub struct HostedActivityItem {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub id: Option<String>,
+    pub activity_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub status: Option<String>,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolCallPayload {
+    JsonArguments { arguments: String },
+    TextInput { input: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+pub struct ToolCallItem {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub id: Option<String>,
+    pub call_id: String,
+    pub tool_name: String,
+    pub payload: ToolCallPayload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolResultPayload {
+    Structured {
+        content: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        content_items: Option<Vec<ToolResultContentItem>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        success: Option<bool>,
+    },
+    Text {
+        output: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+pub struct ToolResultItem {
+    pub call_id: String,
+    pub tool_name: String,
+    pub payload: ToolResultPayload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+pub struct UnknownItem {
+    pub raw: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TranscriptItem {
+    Message {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        id: Option<String>,
+        role: MessageRole,
+        content: Vec<MessageContentItem>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        end_turn: Option<bool>,
+    },
+    Reasoning {
+        id: String,
+        summary: Vec<ReasoningSummaryItem>,
+        #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
+        #[ts(optional)]
+        content: Option<Vec<ReasoningContentItem>>,
+        encrypted_content: Option<String>,
+    },
+    HostedActivity {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        id: Option<String>,
+        activity_type: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        status: Option<String>,
+        payload: Value,
+    },
+    ToolCall {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        id: Option<String>,
+        call_id: String,
+        tool_name: String,
+        payload: ToolCallPayload,
+    },
+    ToolResult {
+        call_id: String,
+        tool_name: String,
+        payload: ToolResultPayload,
+    },
+    Unknown {
+        raw: Value,
+    },
+}
+
+impl TranscriptItem {
+    pub fn id(&self) -> Option<&String> {
+        match self {
+            Self::Message { id, .. } => id.as_ref(),
+            Self::Reasoning { id, .. } => Some(id),
+            Self::HostedActivity { id, .. } => id.as_ref(),
+            Self::ToolCall { id, .. } => id.as_ref(),
+            Self::ToolResult { .. } | Self::Unknown { .. } => None,
         }
     }
 }
 
-impl<'de> Deserialize<'de> for FunctionCallOutputPayload {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        match FunctionCallOutputPayloadSerde::deserialize(deserializer)? {
-            FunctionCallOutputPayloadSerde::Text(content) => Ok(FunctionCallOutputPayload {
-                content,
-                ..Default::default()
+impl From<MessageItem> for TranscriptItem {
+    fn from(value: MessageItem) -> Self {
+        Self::Message {
+            id: value.id,
+            role: value.role,
+            content: value.content,
+            end_turn: value.end_turn,
+        }
+    }
+}
+
+impl From<ReasoningItem> for TranscriptItem {
+    fn from(value: ReasoningItem) -> Self {
+        Self::Reasoning {
+            id: value.id,
+            summary: value.summary,
+            content: value.content,
+            encrypted_content: value.encrypted_content,
+        }
+    }
+}
+
+impl From<HostedActivityItem> for TranscriptItem {
+    fn from(value: HostedActivityItem) -> Self {
+        Self::HostedActivity {
+            id: value.id,
+            activity_type: value.activity_type,
+            status: value.status,
+            payload: value.payload,
+        }
+    }
+}
+
+impl From<ToolCallItem> for TranscriptItem {
+    fn from(value: ToolCallItem) -> Self {
+        Self::ToolCall {
+            id: value.id,
+            call_id: value.call_id,
+            tool_name: value.tool_name,
+            payload: value.payload,
+        }
+    }
+}
+
+impl From<ToolResultItem> for TranscriptItem {
+    fn from(value: ToolResultItem) -> Self {
+        Self::ToolResult {
+            call_id: value.call_id,
+            tool_name: value.tool_name,
+            payload: value.payload,
+        }
+    }
+}
+
+impl From<UnknownItem> for TranscriptItem {
+    fn from(value: UnknownItem) -> Self {
+        Self::Unknown { raw: value.raw }
+    }
+}
+
+impl ToolCallItem {
+    pub fn from_transcript_item(item: TranscriptItem) -> Option<Self> {
+        match item {
+            TranscriptItem::ToolCall {
+                id,
+                call_id,
+                tool_name,
+                payload,
+            } => Some(Self {
+                id,
+                call_id,
+                tool_name,
+                payload,
             }),
-            FunctionCallOutputPayloadSerde::Items(items) => {
-                let content = serde_json::to_string(&items).map_err(serde::de::Error::custom)?;
-                Ok(FunctionCallOutputPayload {
-                    content,
-                    content_items: Some(items),
-                    success: None,
-                })
-            }
-        }
-    }
-}
-
-impl From<&CallToolResult> for FunctionCallOutputPayload {
-    fn from(call_tool_result: &CallToolResult) -> Self {
-        let CallToolResult {
-            content,
-            structured_content,
-            is_error,
-        } = call_tool_result;
-
-        let is_success = is_error != &Some(true);
-
-        if let Some(structured_content) = structured_content
-            && !structured_content.is_null()
-        {
-            return match serde_json::to_string(structured_content) {
-                Ok(serialized_structured_content) => FunctionCallOutputPayload {
-                    content: serialized_structured_content,
-                    success: Some(is_success),
-                    ..Default::default()
-                },
-                Err(err) => FunctionCallOutputPayload {
-                    content: err.to_string(),
-                    success: Some(false),
-                    ..Default::default()
-                },
-            };
-        }
-
-        let serialized_content = match serde_json::to_string(content) {
-            Ok(serialized_content) => serialized_content,
-            Err(err) => {
-                return FunctionCallOutputPayload {
-                    content: err.to_string(),
-                    success: Some(false),
-                    ..Default::default()
-                };
-            }
-        };
-
-        let content_items = convert_content_blocks_to_items(content);
-
-        FunctionCallOutputPayload {
-            content: serialized_content,
-            content_items,
-            success: Some(is_success),
-        }
-    }
-}
-
-fn convert_content_blocks_to_items(
-    blocks: &[ContentBlock],
-) -> Option<Vec<FunctionCallOutputContentItem>> {
-    let mut saw_image = false;
-    let mut items = Vec::with_capacity(blocks.len());
-    for block in blocks {
-        match block {
-            ContentBlock::TextContent(text) => {
-                items.push(FunctionCallOutputContentItem::InputText {
-                    text: text.text.clone(),
-                });
-            }
-            ContentBlock::ImageContent(image) => {
-                saw_image = true;
-                let image_url = if image.data.starts_with("data:") {
-                    image.data.clone()
-                } else {
-                    format!("data:{};base64,{}", image.mime_type, image.data)
-                };
-                items.push(FunctionCallOutputContentItem::InputImage { image_url });
-            }
-            _ => return None,
+            _ => None,
         }
     }
 
-    if saw_image { Some(items) } else { None }
-}
-
-impl std::fmt::Display for FunctionCallOutputPayload {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.content)
+    pub fn to_transcript_item(&self) -> TranscriptItem {
+        self.clone().into()
     }
 }
 
-impl std::ops::Deref for FunctionCallOutputPayload {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        &self.content
+impl ToolResultItem {
+    pub fn to_transcript_item(&self) -> TranscriptItem {
+        self.clone().into()
     }
 }
-
-pub type TranscriptItem = ConversationItem;
-pub type ToolResultContentItem = FunctionCallOutputContentItem;
-pub type ToolResultItem = ResponseInputItem;

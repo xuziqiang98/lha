@@ -33,7 +33,7 @@ use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
-use codex_protocol::models::ConversationItem;
+use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::protocol::SessionMetaLine;
 
 const PAGE_SIZE: usize = 25;
@@ -1105,8 +1105,8 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
 mod tests {
     use super::*;
     use chrono::Duration;
+    use codex_protocol::legacy_transcript::ConversationItem;
     use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ConversationItem;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::GitInfo;
     use codex_protocol::protocol::RolloutItem;
@@ -1199,14 +1199,17 @@ mod tests {
             },
             RolloutLine {
                 timestamp: ts.to_rfc3339(),
-                item: RolloutItem::ConversationItem(ConversationItem::Message {
-                    id: None,
-                    role: "user".to_string(),
-                    content: vec![ContentItem::InputText {
-                        text: preview.to_string(),
-                    }],
-                    end_turn: None,
-                }),
+                item: RolloutItem::TranscriptItem(
+                    ConversationItem::Message {
+                        id: None,
+                        role: "user".to_string(),
+                        content: vec![ContentItem::InputText {
+                            text: preview.to_string(),
+                        }],
+                        end_turn: None,
+                    }
+                    .into(),
+                ),
             },
             RolloutLine {
                 timestamp: ts.to_rfc3339(),

@@ -62,7 +62,7 @@ use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind as V2PatchChangeKind;
 use codex_app_server_protocol::PlanDeltaNotification;
-use codex_app_server_protocol::RawConversationItemCompletedNotification;
+use codex_app_server_protocol::RawTranscriptItemCompletedNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
@@ -877,12 +877,12 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::ItemCompleted(completed))
                 .await;
         }
-        EventMsg::RawConversationItem(raw_conversation_item_event) => {
-            maybe_emit_raw_conversation_item_completed(
+        EventMsg::RawTranscriptItem(raw_transcript_item_event) => {
+            maybe_emit_raw_transcript_item_completed(
                 api_version,
                 conversation_id,
                 &event_turn_id,
-                raw_conversation_item_event.item,
+                raw_transcript_item_event.item,
                 outgoing.as_ref(),
             )
             .await;
@@ -1328,26 +1328,24 @@ async fn complete_command_execution_item(
         .await;
 }
 
-async fn maybe_emit_raw_conversation_item_completed(
+async fn maybe_emit_raw_transcript_item_completed(
     api_version: ApiVersion,
     conversation_id: ThreadId,
     turn_id: &str,
-    item: codex_protocol::models::ConversationItem,
+    item: codex_protocol::models::TranscriptItem,
     outgoing: &OutgoingMessageSender,
 ) {
     let ApiVersion::V2 = api_version else {
         return;
     };
 
-    let notification = RawConversationItemCompletedNotification {
+    let notification = RawTranscriptItemCompletedNotification {
         thread_id: conversation_id.to_string(),
         turn_id: turn_id.to_string(),
         item,
     };
     outgoing
-        .send_server_notification(ServerNotification::RawConversationItemCompleted(
-            notification,
-        ))
+        .send_server_notification(ServerNotification::RawTranscriptItemCompleted(notification))
         .await;
 }
 

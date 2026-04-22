@@ -26,7 +26,7 @@ pub fn create_tools_json_for_messages_api(tools: &[ToolSpec]) -> Result<Vec<Valu
                 "description": tool.description,
                 "input_schema": tool.parameters,
             })),
-            ToolSpec::LocalShell {} | ToolSpec::WebSearch { .. } | ToolSpec::Freeform(_) => {
+            ToolSpec::WebSearch { .. } | ToolSpec::Freeform(_) => {
                 return Err(Error::UnsupportedOperation(format!(
                     "Messages API only supports function tools; unsupported tool: {}",
                     tool.name()
@@ -129,15 +129,46 @@ mod tests {
     }
 
     #[test]
-    fn messages_tools_reject_local_shell() {
-        let tools = vec![ToolSpec::LocalShell {}];
+    fn messages_tools_accept_function_named_local_shell() {
+        let tools = vec![ToolSpec::Function(ResponsesApiTool {
+            name: "local_shell".to_string(),
+            description: "Execute a local shell command.".to_string(),
+            strict: false,
+            parameters: JsonSchema::Object {
+                properties: BTreeMap::new(),
+                required: None,
+                additional_properties: Some(false.into()),
+            },
+        })];
 
-        let err =
-            create_tools_json_for_messages_api(&tools).expect_err("should reject local shell");
+        let tools_json =
+            create_tools_json_for_messages_api(&tools).expect("local_shell function tool");
+
+        assert_eq!(
+            tools_json,
+            vec![json!({
+                "name": "local_shell",
+                "description": "Execute a local shell command.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false,
+                },
+            })]
+        );
+    }
+
+    #[test]
+    fn messages_tools_reject_web_search() {
+        let tools = vec![ToolSpec::WebSearch {
+            external_web_access: None,
+        }];
+
+        let err = create_tools_json_for_messages_api(&tools).expect_err("should reject web search");
 
         assert_eq!(
             err.to_string(),
-            "unsupported operation: Messages API only supports function tools; unsupported tool: local_shell"
+            "unsupported operation: Messages API only supports function tools; unsupported tool: web_search"
         );
     }
 }

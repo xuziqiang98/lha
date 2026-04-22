@@ -15,7 +15,7 @@ The public interface of this crate is intentionally small and uniform:
   - Input: a single `Prompt` plus endpoint-specific options.
     - `Prompt` (re-exported as `codex_api::Prompt`) carries:
       - `instructions: String` – the fully-resolved system prompt for this turn.
-      - `input: Vec<ConversationItem>` – conversation history and user/tool messages.
+      - `input: Vec<TranscriptItem>` – transcript history and user/tool messages.
       - `tools: Vec<serde_json::Value>` – JSON tools compatible with the target API.
       - `parallel_tool_calls: bool`.
       - `output_schema: Option<Value>` – used to build `text.format` when present.
@@ -24,9 +24,9 @@ The public interface of this crate is intentionally small and uniform:
 - **Compaction endpoint**
   - Input: `CompactionInput<'a>` (re-exported as `codex_api::CompactionInput`):
     - `model: &str`.
-    - `input: &[ConversationItem]` – history to compact.
+    - `input: &[TranscriptItem]` – history to compact.
     - `instructions: &str` – fully-resolved compaction instructions.
-  - Output: `Vec<ConversationItem>`.
+  - Output: `Vec<TranscriptItem>`.
   - `CompactClient::compact_input(&CompactionInput, extra_headers)` wraps the JSON encoding and retry/telemetry wiring.
 
-All HTTP details (URLs, headers, retry/backoff policies, SSE framing) are encapsulated in `codex-api` and `codex-client`. Callers construct prompts/inputs using protocol types and work with typed streams of `ResponseEvent` or compacted `ConversationItem` values.
+All HTTP details (URLs, headers, retry/backoff policies, SSE framing) are encapsulated in `codex-api` and `codex-client`. Callers construct prompts/inputs using transcript semantics and work with typed streams of `ResponseEvent` or compacted `TranscriptItem` values.

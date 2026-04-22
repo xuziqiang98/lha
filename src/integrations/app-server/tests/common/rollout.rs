@@ -104,7 +104,7 @@ pub fn create_fake_rollout_with_cwds(
         .to_string(),
         json!({
             "timestamp": meta_rfc3339,
-            "type":"conversation_item",
+            "type":"transcript_item",
             "payload": {
                 "type":"message",
                 "role":"user",
@@ -202,7 +202,7 @@ pub fn create_fake_rollout_with_source(
         .to_string(),
         json!({
             "timestamp": meta_rfc3339,
-            "type":"conversation_item",
+            "type":"transcript_item",
             "payload": {
                 "type":"message",
                 "role":"user",
@@ -282,7 +282,7 @@ pub fn create_fake_rollout_with_text_elements(
         .to_string(),
         json!( {
             "timestamp": meta_rfc3339,
-            "type":"conversation_item",
+            "type":"transcript_item",
             "payload": {
                 "type":"message",
                 "role":"user",

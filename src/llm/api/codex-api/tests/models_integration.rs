@@ -4,13 +4,12 @@ use codex_api::provider::Provider;
 use codex_api::provider::RetryConfig;
 use codex_api::provider::WireApi;
 use codex_client::ReqwestTransport;
-use codex_protocol::openai_models::ConfigShellToolType;
-use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ModelVisibility;
-use codex_protocol::openai_models::ModelsResponse;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::openai_models::ReasoningEffortPreset;
-use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_llm_types::ModelInfo;
+use codex_llm_types::ModelVisibility;
+use codex_llm_types::ModelsResponse;
+use codex_llm_types::ReasoningEffort;
+use codex_llm_types::ReasoningEffortPreset;
+use codex_llm_types::TruncationPolicyConfig;
 use http::HeaderMap;
 use http::Method;
 use wiremock::Mock;
@@ -71,7 +70,6 @@ async fn models_client_hits_models_endpoint() {
                     description: ReasoningEffort::High.to_string(),
                 },
             ],
-            shell_type: ConfigShellToolType::ShellCommand,
             visibility: ModelVisibility::List,
             supported_in_api: true,
             priority: 1,
@@ -81,13 +79,11 @@ async fn models_client_hits_models_endpoint() {
             supports_reasoning_summaries: false,
             support_verbosity: false,
             default_verbosity: None,
-            apply_patch_tool_type: None,
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             supports_parallel_tool_calls: false,
             context_window: Some(272_000),
             auto_compact_token_limit: None,
             effective_context_window_percent: 95,
-            experimental_supported_tools: Vec::new(),
         }],
     };
 

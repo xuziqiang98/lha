@@ -17,8 +17,8 @@ use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolRouter;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
+use codex_protocol::legacy_transcript::FunctionCallOutputPayload;
+use codex_protocol::legacy_transcript::ResponseInputItem;
 
 #[derive(Clone)]
 pub(crate) struct ToolCallRuntime {

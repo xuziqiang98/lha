@@ -7,9 +7,10 @@ use crate::proposed_plan_parser::extract_proposed_plan_text;
 use crate::telemetry::SseTelemetry;
 use codex_client::StreamResponse;
 use codex_llm_types::ContentItem;
-use codex_llm_types::ConversationItem;
-use codex_llm_types::ReasoningItemContent;
+use codex_llm_types::ReasoningContentItem;
 use codex_llm_types::TokenUsage;
+use codex_llm_types::ToolCallPayload;
+use codex_llm_types::TranscriptItem;
 use eventsource_stream::Eventsource;
 use futures::Stream;
 use futures::StreamExt;
@@ -78,16 +79,16 @@ pub async fn process_chat_sse<S>(
     let mut tool_call_index_by_id: HashMap<String, usize> = HashMap::new();
     let mut next_tool_call_index = 0usize;
     let mut last_tool_call_index: Option<usize> = None;
-    let mut assistant_item: Option<ConversationItem> = None;
-    let mut reasoning_item: Option<ConversationItem> = None;
+    let mut assistant_item: Option<TranscriptItem> = None;
+    let mut reasoning_item: Option<TranscriptItem> = None;
     let mut token_usage: Option<TokenUsage> = None;
     let mut completion_pending = false;
     let mut assistant_plan_parser: Option<ProposedPlanParser> = None;
 
     async fn flush_and_complete(
         tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
-        reasoning_item: &mut Option<ConversationItem>,
-        assistant_item: &mut Option<ConversationItem>,
+        reasoning_item: &mut Option<TranscriptItem>,
+        assistant_item: &mut Option<TranscriptItem>,
         assistant_plan_parser: &mut Option<ProposedPlanParser>,
         token_usage: &Option<TokenUsage>,
     ) {
@@ -382,11 +383,11 @@ pub async fn process_chat_sse<S>(
                         debug!("Skipping tool call at index {index} because name is missing");
                         continue;
                     };
-                    let item = ConversationItem::FunctionCall {
+                    let item = TranscriptItem::ToolCall {
                         id: None,
-                        name,
-                        arguments,
                         call_id: id.unwrap_or_else(|| format!("tool-call-{index}")),
+                        tool_name: name,
+                        payload: ToolCallPayload::JsonArguments { arguments },
                     };
                     let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                 }
@@ -450,12 +451,12 @@ fn parse_chat_token_usage(value: &serde_json::Value) -> Option<TokenUsage> {
 
 async fn append_assistant_text(
     tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
-    assistant_item: &mut Option<ConversationItem>,
+    assistant_item: &mut Option<TranscriptItem>,
     assistant_plan_parser: &mut Option<ProposedPlanParser>,
     text: String,
 ) {
     if assistant_item.is_none() {
-        let item = ConversationItem::Message {
+        let item = TranscriptItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![],
@@ -470,7 +471,7 @@ async fn append_assistant_text(
     let parser = assistant_plan_parser.get_or_insert_with(ProposedPlanParser::new);
     emit_plan_deltas(tx_event, parser.parse(&text)).await;
 
-    if let Some(ConversationItem::Message { content, .. }) = assistant_item {
+    if let Some(TranscriptItem::Message { content, .. }) = assistant_item {
         content.push(ContentItem::OutputText { text: text.clone() });
         let _ = tx_event
             .send(Ok(ResponseEvent::OutputTextDelta(text.clone())))
@@ -480,11 +481,11 @@ async fn append_assistant_text(
 
 async fn append_reasoning_text(
     tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
-    reasoning_item: &mut Option<ConversationItem>,
+    reasoning_item: &mut Option<TranscriptItem>,
     text: String,
 ) {
     if reasoning_item.is_none() {
-        let item = ConversationItem::Reasoning {
+        let item = TranscriptItem::Reasoning {
             id: String::new(),
             summary: Vec::new(),
             content: Some(vec![]),
@@ -496,13 +497,13 @@ async fn append_reasoning_text(
             .await;
     }
 
-    if let Some(ConversationItem::Reasoning {
+    if let Some(TranscriptItem::Reasoning {
         content: Some(content),
         ..
     }) = reasoning_item
     {
         let content_index = content.len() as i64;
-        content.push(ReasoningItemContent::ReasoningText { text: text.clone() });
+        content.push(ReasoningContentItem::ReasoningText { text: text.clone() });
 
         let _ = tx_event
             .send(Ok(ResponseEvent::ReasoningContentDelta {
@@ -529,14 +530,14 @@ async fn emit_plan_deltas(
 async fn emit_buffered_plan_events(
     tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
     assistant_plan_parser: &mut Option<ProposedPlanParser>,
-    assistant: &ConversationItem,
+    assistant: &TranscriptItem,
 ) {
     if let Some(parser) = assistant_plan_parser.as_mut() {
         emit_plan_deltas(tx_event, parser.finish()).await;
     }
     *assistant_plan_parser = None;
 
-    if let ConversationItem::Message { content, .. } = assistant {
+    if let TranscriptItem::Message { content, .. } = assistant {
         let mut text = String::new();
         for entry in content {
             if let ContentItem::OutputText { text: chunk } = entry {
@@ -555,7 +556,7 @@ async fn emit_buffered_plan_events(
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
-    use codex_llm_types::ConversationItem;
+    use codex_llm_types::TranscriptItem;
     use futures::Stream;
     use futures::TryStreamExt;
     use pretty_assertions::assert_eq;
@@ -667,7 +668,12 @@ mod tests {
         assert_matches!(
             &events[..],
             [
-                ResponseEvent::OutputItemDone(ConversationItem::FunctionCall { call_id, name, arguments, .. }),
+                ResponseEvent::OutputItemDone(TranscriptItem::ToolCall {
+                    call_id,
+                    tool_name: name,
+                    payload: ToolCallPayload::JsonArguments { arguments },
+                    ..
+                }),
                 ResponseEvent::Completed { .. }
             ] if call_id == "call_a" && name == "do_a" && arguments == "{ \"foo\":1}"
         );
@@ -708,8 +714,18 @@ mod tests {
         assert_matches!(
             &events[..],
             [
-                ResponseEvent::OutputItemDone(ConversationItem::FunctionCall { call_id: call_a, name: name_a, arguments: args_a, .. }),
-                ResponseEvent::OutputItemDone(ConversationItem::FunctionCall { call_id: call_b, name: name_b, arguments: args_b, .. }),
+                ResponseEvent::OutputItemDone(TranscriptItem::ToolCall {
+                    call_id: call_a,
+                    tool_name: name_a,
+                    payload: ToolCallPayload::JsonArguments { arguments: args_a },
+                    ..
+                }),
+                ResponseEvent::OutputItemDone(TranscriptItem::ToolCall {
+                    call_id: call_b,
+                    tool_name: name_b,
+                    payload: ToolCallPayload::JsonArguments { arguments: args_b },
+                    ..
+                }),
                 ResponseEvent::Completed { .. }
             ] if call_a == "call_a" && name_a == "do_a" && args_a == "{\"foo\":1}" && call_b == "call_b" && name_b == "do_b" && args_b == "{\"bar\":2}"
         );
@@ -747,8 +763,18 @@ mod tests {
         assert_matches!(
             &events[..],
             [
-                ResponseEvent::OutputItemDone(ConversationItem::FunctionCall { call_id: call_a, name: name_a, arguments: args_a, .. }),
-                ResponseEvent::OutputItemDone(ConversationItem::FunctionCall { call_id: call_b, name: name_b, arguments: args_b, .. }),
+                ResponseEvent::OutputItemDone(TranscriptItem::ToolCall {
+                    call_id: call_a,
+                    tool_name: name_a,
+                    payload: ToolCallPayload::JsonArguments { arguments: args_a },
+                    ..
+                }),
+                ResponseEvent::OutputItemDone(TranscriptItem::ToolCall {
+                    call_id: call_b,
+                    tool_name: name_b,
+                    payload: ToolCallPayload::JsonArguments { arguments: args_b },
+                    ..
+                }),
                 ResponseEvent::Completed { .. }
             ] if call_a == "call_a" && name_a == "do_a" && args_a == "{}" && call_b == "call_b" && name_b == "do_b" && args_b == "{}"
         );
@@ -790,7 +816,12 @@ mod tests {
         assert_matches!(
             &events[..],
             [
-                ResponseEvent::OutputItemDone(ConversationItem::FunctionCall { call_id, name, arguments, .. }),
+                ResponseEvent::OutputItemDone(TranscriptItem::ToolCall {
+                    call_id,
+                    tool_name: name,
+                    payload: ToolCallPayload::JsonArguments { arguments },
+                    ..
+                }),
                 ResponseEvent::Completed { .. }
             ] if call_id == "call_a" && name == "do_a" && arguments == "{ \"foo\":1}"
         );
@@ -831,7 +862,11 @@ mod tests {
         assert_matches!(
             &events[..],
             [
-                ResponseEvent::OutputItemDone(ConversationItem::FunctionCall { name, arguments, .. }),
+                ResponseEvent::OutputItemDone(TranscriptItem::ToolCall {
+                    tool_name: name,
+                    payload: ToolCallPayload::JsonArguments { arguments },
+                    ..
+                }),
                 ResponseEvent::Completed { .. }
             ] if name == "do_a" && arguments == "{}"
         );
@@ -864,13 +899,17 @@ mod tests {
         assert_matches!(
             &events[..],
             [
-                ResponseEvent::OutputItemAdded(ConversationItem::Reasoning { .. }),
+                ResponseEvent::OutputItemAdded(TranscriptItem::Reasoning { .. }),
                 ResponseEvent::ReasoningContentDelta { .. },
-                ResponseEvent::OutputItemAdded(ConversationItem::Message { .. }),
+                ResponseEvent::OutputItemAdded(TranscriptItem::Message { .. }),
                 ResponseEvent::OutputTextDelta(delta),
-                ResponseEvent::OutputItemDone(ConversationItem::Reasoning { .. }),
-                ResponseEvent::OutputItemDone(ConversationItem::FunctionCall { call_id, name, .. }),
-                ResponseEvent::OutputItemDone(ConversationItem::Message { .. }),
+                ResponseEvent::OutputItemDone(TranscriptItem::Reasoning { .. }),
+                ResponseEvent::OutputItemDone(TranscriptItem::ToolCall {
+                    call_id,
+                    tool_name: name,
+                    ..
+                }),
+                ResponseEvent::OutputItemDone(TranscriptItem::Message { .. }),
                 ResponseEvent::Completed { .. }
             ] if delta == "hi" && call_id == "call_a" && name == "do_a"
         );
@@ -901,7 +940,7 @@ mod tests {
         assert!(!events.iter().any(|ev| {
             matches!(
                 ev,
-                ResponseEvent::OutputItemDone(ConversationItem::FunctionCall { .. })
+                ResponseEvent::OutputItemDone(TranscriptItem::ToolCall { .. })
             )
         }));
         assert_matches!(events.last(), Some(ResponseEvent::Completed { .. }));
@@ -938,9 +977,9 @@ mod tests {
         assert_matches!(
             &events[..3],
             [
-                ResponseEvent::OutputItemAdded(ConversationItem::Message { .. }),
+                ResponseEvent::OutputItemAdded(TranscriptItem::Message { .. }),
                 ResponseEvent::OutputTextDelta(delta),
-                ResponseEvent::OutputItemDone(ConversationItem::Message { .. })
+                ResponseEvent::OutputItemDone(TranscriptItem::Message { .. })
             ] if delta == "hi"
         );
 
@@ -1024,13 +1063,17 @@ mod tests {
         assert_matches!(
             &events[..],
             [
-                ResponseEvent::OutputItemAdded(ConversationItem::Reasoning { .. }),
+                ResponseEvent::OutputItemAdded(TranscriptItem::Reasoning { .. }),
                 ResponseEvent::ReasoningContentDelta { .. },
-                ResponseEvent::OutputItemAdded(ConversationItem::Message { .. }),
+                ResponseEvent::OutputItemAdded(TranscriptItem::Message { .. }),
                 ResponseEvent::OutputTextDelta(delta),
-                ResponseEvent::OutputItemDone(ConversationItem::Reasoning { .. }),
-                ResponseEvent::OutputItemDone(ConversationItem::FunctionCall { call_id, name, .. }),
-                ResponseEvent::OutputItemDone(ConversationItem::Message { .. }),
+                ResponseEvent::OutputItemDone(TranscriptItem::Reasoning { .. }),
+                ResponseEvent::OutputItemDone(TranscriptItem::ToolCall {
+                    call_id,
+                    tool_name: name,
+                    ..
+                }),
+                ResponseEvent::OutputItemDone(TranscriptItem::Message { .. }),
                 ResponseEvent::Completed { .. }
             ] if delta == "hi" && call_id == "call_a" && name == "do_a"
         );

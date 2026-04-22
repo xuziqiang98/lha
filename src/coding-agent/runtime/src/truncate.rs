@@ -2,7 +2,7 @@
 //! and suffix on UTF-8 boundaries, and helpers for line/token‑based truncation
 //! used across the core crate.
 
-use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::legacy_transcript::FunctionCallOutputContentItem;
 use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::protocol::TruncationPolicy as ProtocolTruncationPolicy;
@@ -314,7 +314,7 @@ mod tests {
     use super::truncate_function_output_items_with_policy;
     use super::truncate_text;
     use super::truncate_with_token_budget;
-    use codex_protocol::models::FunctionCallOutputContentItem;
+    use codex_protocol::legacy_transcript::FunctionCallOutputContentItem;
     use pretty_assertions::assert_eq;
 
     #[test]

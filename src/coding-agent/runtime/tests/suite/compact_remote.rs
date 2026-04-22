@@ -16,8 +16,8 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::items::TurnItem;
+use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ConversationItem;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once;
@@ -417,7 +417,14 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
         };
         if let RolloutItem::Compacted(compacted) = entry.item
             && compacted.message.is_empty()
-            && compacted.replacement_history.as_ref() == Some(&compacted_history)
+            && compacted.replacement_history.as_ref()
+                == Some(
+                    &compacted_history
+                        .iter()
+                        .cloned()
+                        .map(Into::into)
+                        .collect::<Vec<_>>(),
+                )
         {
             saw_compacted_history = true;
             break;

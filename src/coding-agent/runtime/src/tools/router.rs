@@ -14,7 +14,7 @@ use codex_llm::ToolCallPayload as LlmToolCallPayload;
 use codex_llm::ToolCallRequest as LlmToolCallRequest;
 use codex_llm::ToolDescriptor;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_protocol::models::ResponseInputItem;
+use codex_protocol::legacy_transcript::ResponseInputItem;
 use codex_protocol::models::ShellToolCallParams;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -75,7 +75,7 @@ impl ToolRouter {
         request: LlmToolCallRequest,
     ) -> Result<ToolCall, FunctionCallError> {
         match request.payload {
-            LlmToolCallPayload::Function { arguments } => {
+            LlmToolCallPayload::JsonArguments { arguments } => {
                 if request.tool_name == "local_shell" {
                     if request.call_id.is_empty() {
                         return Err(FunctionCallError::MissingLocalShellCallId);
@@ -114,7 +114,7 @@ impl ToolRouter {
                     })
                 }
             }
-            LlmToolCallPayload::Custom { input } => Ok(ToolCall {
+            LlmToolCallPayload::TextInput { input } => Ok(ToolCall {
                 tool_name: request.tool_name,
                 call_id: request.call_id,
                 payload: ToolPayload::Custom { input },
@@ -181,7 +181,7 @@ impl ToolRouter {
         } else {
             ResponseInputItem::FunctionCallOutput {
                 call_id,
-                output: codex_protocol::models::FunctionCallOutputPayload {
+                output: codex_protocol::legacy_transcript::FunctionCallOutputPayload {
                     content: message,
                     success: Some(false),
                     ..Default::default()
@@ -341,7 +341,7 @@ mod tests {
             response,
             ResponseInputItem::FunctionCallOutput {
                 call_id: "call-2".to_string(),
-                output: codex_protocol::models::FunctionCallOutputPayload {
+                output: codex_protocol::legacy_transcript::FunctionCallOutputPayload {
                     content: "unsupported call: container.exec".to_string(),
                     success: Some(false),
                     ..Default::default()
@@ -388,7 +388,7 @@ mod tests {
             response,
             ResponseInputItem::FunctionCallOutput {
                 call_id: "call-3".to_string(),
-                output: codex_protocol::models::FunctionCallOutputPayload {
+                output: codex_protocol::legacy_transcript::FunctionCallOutputPayload {
                     content: "alias ok".to_string(),
                     success: Some(true),
                     ..Default::default()

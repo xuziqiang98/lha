@@ -30,8 +30,8 @@ use crate::session_prefix::TURN_ABORTED_OPEN_TAG;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ConversationItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 
@@ -267,7 +267,7 @@ impl Session {
             };
             self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
                 .await;
-            self.persist_rollout_items(&[RolloutItem::ConversationItem(marker)])
+            self.persist_rollout_items(&[RolloutItem::TranscriptItem(marker.into())])
                 .await;
             // Ensure the marker is durably visible before emitting TurnAborted: some clients
             // synchronously re-read the rollout on receipt of the abort event.

@@ -6,19 +6,156 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
-pub use codex_llm_types::ApplyPatchToolType;
-pub use codex_llm_types::ConfigShellToolType;
-pub use codex_llm_types::ModelInfo;
 pub use codex_llm_types::ModelInfoUpgrade;
 pub use codex_llm_types::ModelInstructionsVariables;
 pub use codex_llm_types::ModelMessages;
 pub use codex_llm_types::ModelVisibility;
-pub use codex_llm_types::ModelsResponse;
 pub use codex_llm_types::ReasoningEffort;
 pub use codex_llm_types::ReasoningEffortPreset;
 pub use codex_llm_types::TruncationMode;
 pub use codex_llm_types::TruncationPolicyConfig;
 pub use codex_llm_types::reasoning_effort_mapping_from_presets;
+
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema, strum_macros::Display,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum ConfigShellToolType {
+    Default,
+    Local,
+    UnifiedExec,
+    Disabled,
+    ShellCommand,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplyPatchToolType {
+    Freeform,
+    Function,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+pub struct ModelInfo {
+    pub slug: String,
+    pub display_name: String,
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_reasoning_level: Option<ReasoningEffort>,
+    pub supported_reasoning_levels: Vec<ReasoningEffortPreset>,
+    pub shell_type: ConfigShellToolType,
+    pub visibility: ModelVisibility,
+    pub supported_in_api: bool,
+    pub priority: i32,
+    pub upgrade: Option<ModelInfoUpgrade>,
+    pub base_instructions: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_messages: Option<ModelMessages>,
+    pub supports_reasoning_summaries: bool,
+    pub support_verbosity: bool,
+    pub default_verbosity: Option<codex_llm_types::Verbosity>,
+    pub apply_patch_tool_type: Option<ApplyPatchToolType>,
+    pub truncation_policy: TruncationPolicyConfig,
+    pub supports_parallel_tool_calls: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_compact_token_limit: Option<i64>,
+    #[serde(default = "default_effective_context_window_percent")]
+    pub effective_context_window_percent: i64,
+    #[serde(default)]
+    pub experimental_supported_tools: Vec<String>,
+}
+
+const fn default_effective_context_window_percent() -> i64 {
+    95
+}
+
+impl ModelInfo {
+    pub fn auto_compact_token_limit(&self) -> Option<i64> {
+        self.auto_compact_token_limit.or_else(|| {
+            self.context_window
+                .map(|context_window| (context_window * 9) / 10)
+        })
+    }
+
+    pub fn supports_personality(&self) -> bool {
+        self.semantic_model_info().supports_personality()
+    }
+
+    pub fn get_model_instructions(
+        &self,
+        personality: Option<codex_llm_types::Personality>,
+    ) -> String {
+        self.semantic_model_info()
+            .get_model_instructions(personality)
+    }
+
+    pub fn semantic_model_info(&self) -> codex_llm_types::ModelInfo {
+        codex_llm_types::ModelInfo {
+            slug: self.slug.clone(),
+            display_name: self.display_name.clone(),
+            description: self.description.clone(),
+            default_reasoning_level: self.default_reasoning_level,
+            supported_reasoning_levels: self.supported_reasoning_levels.clone(),
+            visibility: self.visibility,
+            supported_in_api: self.supported_in_api,
+            priority: self.priority,
+            upgrade: self.upgrade.clone(),
+            base_instructions: self.base_instructions.clone(),
+            model_messages: self.model_messages.clone(),
+            supports_reasoning_summaries: self.supports_reasoning_summaries,
+            support_verbosity: self.support_verbosity,
+            default_verbosity: self.default_verbosity,
+            truncation_policy: self.truncation_policy,
+            supports_parallel_tool_calls: self.supports_parallel_tool_calls,
+            context_window: self.context_window,
+            auto_compact_token_limit: self.auto_compact_token_limit,
+            effective_context_window_percent: self.effective_context_window_percent,
+        }
+    }
+}
+
+impl From<codex_llm_types::ModelInfo> for ModelInfo {
+    fn from(value: codex_llm_types::ModelInfo) -> Self {
+        Self {
+            slug: value.slug,
+            display_name: value.display_name,
+            description: value.description,
+            default_reasoning_level: value.default_reasoning_level,
+            supported_reasoning_levels: value.supported_reasoning_levels,
+            shell_type: ConfigShellToolType::Default,
+            visibility: value.visibility,
+            supported_in_api: value.supported_in_api,
+            priority: value.priority,
+            upgrade: value.upgrade,
+            base_instructions: value.base_instructions,
+            model_messages: value.model_messages,
+            supports_reasoning_summaries: value.supports_reasoning_summaries,
+            support_verbosity: value.support_verbosity,
+            default_verbosity: value.default_verbosity,
+            apply_patch_tool_type: None,
+            truncation_policy: value.truncation_policy,
+            supports_parallel_tool_calls: value.supports_parallel_tool_calls,
+            context_window: value.context_window,
+            auto_compact_token_limit: value.auto_compact_token_limit,
+            effective_context_window_percent: value.effective_context_window_percent,
+            experimental_supported_tools: Vec::new(),
+        }
+    }
+}
+
+impl From<ModelInfo> for codex_llm_types::ModelInfo {
+    fn from(value: ModelInfo) -> Self {
+        value.semantic_model_info()
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema, Default)]
+pub struct ModelsResponse {
+    pub models: Vec<ModelInfo>,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct ModelUpgrade {

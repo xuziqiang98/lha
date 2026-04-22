@@ -6,9 +6,12 @@ use crate::provider::Provider;
 use crate::requests::headers::build_conversation_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
-use codex_llm_types::ConversationItem;
+use codex_llm_types::ToolCallPayload;
+use codex_llm_types::ToolResultPayload;
+use codex_llm_types::TranscriptItem;
 use http::HeaderMap;
 use serde_json::Value;
+use serde_json::json;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Compression {
@@ -28,7 +31,7 @@ pub struct ResponsesRequest {
 pub struct ResponsesRequestBuilder<'a> {
     model: Option<&'a str>,
     instructions: Option<&'a str>,
-    input: Option<&'a [ConversationItem]>,
+    input: Option<&'a [TranscriptItem]>,
     tools: Option<&'a [Value]>,
     parallel_tool_calls: bool,
     reasoning: Option<Reasoning>,
@@ -43,7 +46,7 @@ pub struct ResponsesRequestBuilder<'a> {
 }
 
 impl<'a> ResponsesRequestBuilder<'a> {
-    pub fn new(model: &'a str, instructions: &'a str, input: &'a [ConversationItem]) -> Self {
+    pub fn new(model: &'a str, instructions: &'a str, input: &'a [TranscriptItem]) -> Self {
         Self {
             model: Some(model),
             instructions: Some(instructions),
@@ -141,6 +144,14 @@ impl<'a> ResponsesRequestBuilder<'a> {
         let mut body = serde_json::to_value(&req)
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
 
+        if let Some(obj) = body.as_object_mut() {
+            let provider_input = input
+                .iter()
+                .map(transcript_item_to_provider_value)
+                .collect::<Result<Vec<_>, _>>()?;
+            obj.insert("input".to_string(), Value::Array(provider_input));
+        }
+
         if store && provider.is_azure_responses_endpoint() {
             attach_item_ids(&mut body, input);
         }
@@ -159,7 +170,82 @@ impl<'a> ResponsesRequestBuilder<'a> {
     }
 }
 
-fn attach_item_ids(payload_json: &mut Value, original_items: &[ConversationItem]) {
+fn transcript_item_to_provider_value(item: &TranscriptItem) -> Result<Value, ApiError> {
+    Ok(match item {
+        TranscriptItem::Message {
+            role,
+            content,
+            end_turn,
+            ..
+        } => json!({
+            "type": "message",
+            "role": role,
+            "content": content,
+            "end_turn": end_turn,
+        }),
+        TranscriptItem::Reasoning {
+            summary,
+            content,
+            encrypted_content,
+            ..
+        } => json!({
+            "type": "reasoning",
+            "summary": summary,
+            "content": content,
+            "encrypted_content": encrypted_content,
+        }),
+        TranscriptItem::HostedActivity {
+            activity_type,
+            status,
+            payload,
+            ..
+        } => json!({
+            "type": if activity_type == "web_search" {
+                "web_search_call"
+            } else {
+                "hosted_activity"
+            },
+            "status": status,
+            "action": payload,
+        }),
+        TranscriptItem::ToolCall {
+            call_id,
+            tool_name,
+            payload,
+            ..
+        } => match payload {
+            ToolCallPayload::JsonArguments { arguments } => json!({
+                "type": "function_call",
+                "call_id": call_id,
+                "name": tool_name,
+                "arguments": arguments,
+            }),
+            ToolCallPayload::TextInput { input } => json!({
+                "type": "custom_tool_call",
+                "call_id": call_id,
+                "name": tool_name,
+                "input": input,
+            }),
+        },
+        TranscriptItem::ToolResult {
+            call_id, payload, ..
+        } => match payload {
+            ToolResultPayload::Structured { content, .. } => json!({
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": content,
+            }),
+            ToolResultPayload::Text { output } => json!({
+                "type": "custom_tool_call_output",
+                "call_id": call_id,
+                "output": output,
+            }),
+        },
+        TranscriptItem::Unknown { raw } => raw.clone(),
+    })
+}
+
+fn attach_item_ids(payload_json: &mut Value, original_items: &[TranscriptItem]) {
     let Some(input_value) = payload_json.get_mut("input") else {
         return;
     };
@@ -168,13 +254,7 @@ fn attach_item_ids(payload_json: &mut Value, original_items: &[ConversationItem]
     };
 
     for (value, item) in items.iter_mut().zip(original_items.iter()) {
-        if let ConversationItem::Reasoning { id, .. }
-        | ConversationItem::Message { id: Some(id), .. }
-        | ConversationItem::WebSearchCall { id: Some(id), .. }
-        | ConversationItem::FunctionCall { id: Some(id), .. }
-        | ConversationItem::LocalShellCall { id: Some(id), .. }
-        | ConversationItem::CustomToolCall { id: Some(id), .. } = item
-        {
+        if let Some(id) = item.id() {
             if id.is_empty() {
                 continue;
             }
@@ -217,13 +297,13 @@ mod tests {
     fn azure_default_store_attaches_ids_and_headers() {
         let provider = provider("azure", "https://example.openai.azure.com/v1");
         let input = vec![
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: Some("m1".into()),
                 role: "assistant".into(),
                 content: Vec::new(),
                 end_turn: None,
             },
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "assistant".into(),
                 content: Vec::new(),

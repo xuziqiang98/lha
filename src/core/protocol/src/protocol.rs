@@ -26,7 +26,7 @@ use crate::items::TurnItem;
 use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
-use crate::models::ConversationItem;
+use crate::models::TranscriptItem;
 use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -841,7 +841,8 @@ pub enum EventMsg {
     /// Exited review mode with an optional final result to apply.
     ExitedReviewMode(ExitedReviewModeEvent),
 
-    RawConversationItem(RawConversationItemEvent),
+    #[serde(rename = "raw_transcript_item", alias = "raw_conversation_item")]
+    RawTranscriptItem(RawTranscriptItemEvent),
 
     ItemStarted(ItemStartedEvent),
     ItemCompleted(ItemCompletedEvent),
@@ -990,8 +991,9 @@ pub enum CodexErrorInfo {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
-pub struct RawConversationItemEvent {
-    pub item: ConversationItem,
+pub struct RawTranscriptItemEvent {
+    #[serde(deserialize_with = "crate::legacy_transcript::deserialize_transcript_item_compat")]
+    pub item: TranscriptItem,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -1627,7 +1629,11 @@ pub struct SessionMetaLine {
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
-    ConversationItem(ConversationItem),
+    #[serde(alias = "conversation_item")]
+    TranscriptItem(
+        #[serde(deserialize_with = "crate::legacy_transcript::deserialize_transcript_item_compat")]
+        TranscriptItem,
+    ),
     Compacted(CompactedItem),
     TurnContext(TurnContextItem),
     EventMsg(EventMsg),
@@ -1636,15 +1642,19 @@ pub enum RolloutItem {
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct CompactedItem {
     pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub replacement_history: Option<Vec<ConversationItem>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::legacy_transcript::deserialize_optional_transcript_history_compat"
+    )]
+    pub replacement_history: Option<Vec<TranscriptItem>>,
     #[serde(default)]
     pub replacement_history_omits_initial_context: bool,
 }
 
-impl From<CompactedItem> for ConversationItem {
+impl From<CompactedItem> for TranscriptItem {
     fn from(value: CompactedItem) -> Self {
-        ConversationItem::Message {
+        TranscriptItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {

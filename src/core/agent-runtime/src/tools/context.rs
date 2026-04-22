@@ -1,7 +1,7 @@
 use codex_llm::ToolCallPayload as LlmToolCallPayload;
 use codex_llm::ToolResultContentItem;
 use codex_llm::ToolResultItem;
-use codex_llm_types::FunctionCallOutputPayload;
+use codex_llm_types::ToolResultPayload;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolInvocation {
@@ -12,15 +12,15 @@ pub struct ToolInvocation {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolPayload {
-    Function { arguments: String },
-    Custom { input: String },
+    JsonArguments { arguments: String },
+    TextInput { input: String },
 }
 
 impl ToolPayload {
     pub fn from_llm(value: LlmToolCallPayload) -> Self {
         match value {
-            LlmToolCallPayload::Function { arguments } => Self::Function { arguments },
-            LlmToolCallPayload::Custom { input } => Self::Custom { input },
+            LlmToolCallPayload::JsonArguments { arguments } => Self::JsonArguments { arguments },
+            LlmToolCallPayload::TextInput { input } => Self::TextInput { input },
         }
     }
 }
@@ -42,20 +42,19 @@ impl ToolOutput {
                 content_items,
                 success,
             } => {
-                if matches!(payload, ToolPayload::Custom { .. }) {
-                    ToolResultItem::CustomToolCallOutput {
-                        call_id: call_id.to_string(),
-                        output: content,
-                    }
-                } else {
-                    ToolResultItem::FunctionCallOutput {
-                        call_id: call_id.to_string(),
-                        output: FunctionCallOutputPayload {
-                            content,
-                            content_items,
-                            success,
-                        },
-                    }
+                let payload = match payload {
+                    ToolPayload::TextInput { .. } => ToolResultPayload::Text { output: content },
+                    ToolPayload::JsonArguments { .. } => ToolResultPayload::Structured {
+                        content,
+                        content_items,
+                        success,
+                    },
+                };
+
+                ToolResultItem {
+                    call_id: call_id.to_string(),
+                    tool_name: String::new(),
+                    payload,
                 }
             }
         }

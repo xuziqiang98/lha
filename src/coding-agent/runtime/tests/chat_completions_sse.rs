@@ -8,11 +8,11 @@ use codex_agent::ContentItem;
 use codex_agent::models_manager::manager::ModelsManager;
 use codex_llm::OutputItem;
 use codex_llm::RuntimeEndpoint;
+use codex_llm::TranscriptItem;
 use codex_llm::TurnEvent;
 use codex_llm::TurnRequest;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
-use codex_protocol::models::ConversationItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::protocol::SessionSource;
 use core_test_support::load_default_config_for_test;
@@ -100,7 +100,7 @@ async fn run_stream_with_show_raw_agent_reasoning(
     .new_session();
 
     let turn = TurnRequest {
-        conversation: vec![ConversationItem::Message {
+        conversation: vec![TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -167,8 +167,8 @@ async fn default_chat_aggregate_preserves_proposed_plan_deltas() {
     assert!(matches!(events.last(), Some(TurnEvent::Completed { .. })));
 }
 
-fn assert_message(item: &ConversationItem, expected: &str) {
-    if let ConversationItem::Message { content, .. } = item {
+fn assert_message(item: &TranscriptItem, expected: &str) {
+    if let TranscriptItem::Message { content, .. } = item {
         let text = content.iter().find_map(|part| match part {
             ContentItem::OutputText { text } | ContentItem::InputText { text } => Some(text),
             _ => None,
@@ -182,8 +182,8 @@ fn assert_message(item: &ConversationItem, expected: &str) {
     }
 }
 
-fn assert_reasoning(item: &ConversationItem, expected: &str) {
-    if let ConversationItem::Reasoning {
+fn assert_reasoning(item: &TranscriptItem, expected: &str) {
+    if let TranscriptItem::Reasoning {
         content: Some(parts),
         ..
     } = item
@@ -528,7 +528,7 @@ async fn streams_reasoning_before_tool_call() {
         TurnEvent::ToolCall(call) => {
             assert_eq!(call.tool_name, "run");
             match &call.payload {
-                codex_llm::ToolCallPayload::Function { arguments } => {
+                codex_llm::ToolCallPayload::JsonArguments { arguments } => {
                     assert_eq!(arguments, "{}");
                 }
                 other => panic!("expected function payload, got {other:?}"),

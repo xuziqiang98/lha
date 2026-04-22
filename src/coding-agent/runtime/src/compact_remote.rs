@@ -17,7 +17,7 @@ use crate::protocol::TurnStartedEvent;
 use codex_llm::TurnRequest;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
-use codex_protocol::models::ConversationItem;
+use codex_protocol::legacy_transcript::ConversationItem;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
@@ -73,7 +73,11 @@ async fn run_remote_compact_task_inner_impl(
         .collect();
 
     let prompt = TurnRequest {
-        conversation: history.for_compaction_prompt(),
+        conversation: history
+            .for_compaction_prompt()
+            .into_iter()
+            .map(Into::into)
+            .collect(),
         base_instructions: sess.get_base_instructions().await,
         personality: turn_context.personality,
         ..Default::default()
@@ -98,7 +102,7 @@ async fn run_remote_compact_task_inner_impl(
 
     let compacted_item = CompactedItem {
         message: String::new(),
-        replacement_history: Some(new_history),
+        replacement_history: Some(new_history.into_iter().map(Into::into).collect()),
         replacement_history_omits_initial_context: false,
     };
     sess.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])

@@ -437,9 +437,9 @@ where
 mod tests {
     use super::*;
     use async_channel::bounded;
-    use codex_protocol::models::ConversationItem;
+    use codex_protocol::legacy_transcript::ConversationItem;
     use codex_protocol::protocol::AgentStatus;
-    use codex_protocol::protocol::RawConversationItemEvent;
+    use codex_protocol::protocol::RawTranscriptItemEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
     use pretty_assertions::assert_eq;
@@ -482,14 +482,15 @@ mod tests {
         tx_events
             .send(Event {
                 id: "evt".to_string(),
-                msg: EventMsg::RawConversationItem(RawConversationItemEvent {
+                msg: EventMsg::RawTranscriptItem(RawTranscriptItemEvent {
                     item: ConversationItem::CustomToolCall {
                         id: None,
                         status: None,
                         call_id: "call-1".to_string(),
                         name: "tool".to_string(),
                         input: "{}".to_string(),
-                    },
+                    }
+                    .into(),
                 }),
             })
             .await

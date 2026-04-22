@@ -6,8 +6,16 @@ use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
 use codex_client::StreamResponse;
 use codex_client::TransportError;
-use codex_llm_types::ConversationItem;
+use codex_llm_types::HostedActivityItem;
+use codex_llm_types::MessageItem;
+use codex_llm_types::ReasoningItem;
 use codex_llm_types::TokenUsage;
+use codex_llm_types::ToolCallItem;
+use codex_llm_types::ToolCallPayload;
+use codex_llm_types::ToolResultItem;
+use codex_llm_types::ToolResultPayload;
+use codex_llm_types::TranscriptItem;
+use codex_llm_types::UnknownItem;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use futures::TryStreamExt;
@@ -184,10 +192,10 @@ pub fn process_responses_event(
     match event.kind.as_str() {
         "response.output_item.done" => {
             if let Some(item_val) = event.item {
-                if let Ok(item) = serde_json::from_value::<ConversationItem>(item_val) {
+                if let Some(item) = parse_response_item(item_val) {
                     return Ok(Some(ResponseEvent::OutputItemDone(item)));
                 }
-                debug!("failed to parse ConversationItem from output_item.done");
+                debug!("failed to parse TranscriptItem from output_item.done");
             }
         }
         "response.output_text.delta" => {
@@ -288,10 +296,10 @@ pub fn process_responses_event(
         }
         "response.output_item.added" => {
             if let Some(item_val) = event.item {
-                if let Ok(item) = serde_json::from_value::<ConversationItem>(item_val) {
+                if let Some(item) = parse_response_item(item_val) {
                     return Ok(Some(ResponseEvent::OutputItemAdded(item)));
                 }
-                debug!("failed to parse ConversationItem from output_item.added");
+                debug!("failed to parse TranscriptItem from output_item.added");
             }
         }
         "response.reasoning_summary_part.added" => {
@@ -307,6 +315,140 @@ pub fn process_responses_event(
     }
 
     Ok(None)
+}
+
+fn parse_response_item(item: Value) -> Option<TranscriptItem> {
+    let item_type = item.get("type")?.as_str()?;
+    match item_type {
+        "message" => serde_json::from_value::<MessageItem>(item)
+            .ok()
+            .map(TranscriptItem::from),
+        "reasoning" => serde_json::from_value::<ReasoningItem>(item)
+            .ok()
+            .map(TranscriptItem::from),
+        "hosted_activity" => serde_json::from_value::<HostedActivityItem>(item)
+            .ok()
+            .map(TranscriptItem::from),
+        "web_search_call" => {
+            let id = item
+                .get("id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            let status = item
+                .get("status")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            let payload = item.get("action").cloned().unwrap_or(Value::Null);
+            Some(
+                HostedActivityItem {
+                    id,
+                    activity_type: "web_search".to_string(),
+                    status,
+                    payload,
+                }
+                .into(),
+            )
+        }
+        "function_call" => Some(
+            ToolCallItem {
+                id: item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+                call_id: item.get("call_id")?.as_str()?.to_string(),
+                tool_name: item.get("name")?.as_str()?.to_string(),
+                payload: ToolCallPayload::JsonArguments {
+                    arguments: item.get("arguments")?.as_str()?.to_string(),
+                },
+            }
+            .into(),
+        ),
+        "custom_tool_call" => Some(
+            ToolCallItem {
+                id: item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+                call_id: item.get("call_id")?.as_str()?.to_string(),
+                tool_name: item.get("name")?.as_str()?.to_string(),
+                payload: ToolCallPayload::TextInput {
+                    input: item.get("input")?.as_str()?.to_string(),
+                },
+            }
+            .into(),
+        ),
+        "local_shell_call" => {
+            let id = item
+                .get("id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            let call_id = item
+                .get("call_id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+                .or_else(|| id.clone())
+                .unwrap_or_default();
+            let action = item.get("action")?;
+            let arguments = serde_json::json!({
+                "command": action.get("command").cloned().unwrap_or(Value::Array(Vec::new())),
+                "workdir": action.get("working_directory").cloned().unwrap_or(Value::Null),
+                "timeout_ms": action.get("timeout_ms").cloned().unwrap_or(Value::Null),
+            })
+            .to_string();
+            Some(
+                ToolCallItem {
+                    id,
+                    call_id,
+                    tool_name: "local_shell".to_string(),
+                    payload: ToolCallPayload::JsonArguments { arguments },
+                }
+                .into(),
+            )
+        }
+        "function_call_output" => Some(
+            ToolResultItem {
+                call_id: item.get("call_id")?.as_str()?.to_string(),
+                tool_name: String::new(),
+                payload: parse_structured_tool_result_payload(item.get("output")?)?,
+            }
+            .into(),
+        ),
+        "custom_tool_call_output" => Some(
+            ToolResultItem {
+                call_id: item.get("call_id")?.as_str()?.to_string(),
+                tool_name: String::new(),
+                payload: ToolResultPayload::Text {
+                    output: item.get("output")?.as_str()?.to_string(),
+                },
+            }
+            .into(),
+        ),
+        "tool_call" | "tool_result" | "unknown" => {
+            serde_json::from_value::<TranscriptItem>(item).ok()
+        }
+        _ => Some(UnknownItem { raw: item }.into()),
+    }
+}
+
+fn parse_structured_tool_result_payload(output: &Value) -> Option<ToolResultPayload> {
+    match output {
+        Value::String(content) => Some(ToolResultPayload::Structured {
+            content: content.clone(),
+            content_items: None,
+            success: None,
+        }),
+        Value::Object(map) => Some(ToolResultPayload::Structured {
+            content: map.get("content")?.as_str()?.to_string(),
+            content_items: map
+                .get("content_items")
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()
+                .ok()?,
+            success: map.get("success").and_then(Value::as_bool),
+        }),
+        _ => None,
+    }
 }
 
 pub async fn process_sse(
@@ -429,7 +571,7 @@ mod tests {
     use super::*;
     use assert_matches::assert_matches;
     use bytes::Bytes;
-    use codex_llm_types::ConversationItem;
+    use codex_llm_types::TranscriptItem;
     use futures::stream;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -523,13 +665,13 @@ mod tests {
 
         assert_matches!(
             &events[0],
-            Ok(ResponseEvent::OutputItemDone(ConversationItem::Message { role, .. }))
+            Ok(ResponseEvent::OutputItemDone(TranscriptItem::Message { role, .. }))
                 if role == "assistant"
         );
 
         assert_matches!(
             &events[1],
-            Ok(ResponseEvent::OutputItemDone(ConversationItem::Message { role, .. }))
+            Ok(ResponseEvent::OutputItemDone(TranscriptItem::Message { role, .. }))
                 if role == "assistant"
         );
 
@@ -630,6 +772,53 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn local_shell_call_maps_to_generic_tool_call_without_default_permissions() {
+        let item = json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "local_shell_call",
+                "id": "item-1",
+                "call_id": "shell-1",
+                "status": "completed",
+                "action": {
+                    "type": "exec",
+                    "command": ["/bin/echo", "hello"],
+                    "working_directory": "/tmp/demo",
+                    "timeout_ms": 5000
+                }
+            }
+        });
+
+        let events = run_sse(vec![
+            item,
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp-1" }
+            }),
+        ])
+        .await;
+
+        assert_eq!(events.len(), 2);
+        assert_matches!(
+            &events[0],
+            ResponseEvent::OutputItemDone(TranscriptItem::ToolCall {
+                id,
+                call_id,
+                tool_name,
+                payload: ToolCallPayload::JsonArguments { arguments },
+            }) if id.as_deref() == Some("item-1")
+                && call_id == "shell-1"
+                && tool_name == "local_shell"
+                && arguments == &json!({
+                    "command": ["/bin/echo", "hello"],
+                    "workdir": "/tmp/demo",
+                    "timeout_ms": 5000,
+                })
+                .to_string()
+        );
     }
 
     #[tokio::test]

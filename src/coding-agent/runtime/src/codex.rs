@@ -29,7 +29,6 @@ use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::handle_tool_call_request;
 use crate::stream_events_utils::last_assistant_message_from_item;
-use crate::stream_events_utils::response_input_to_response_item;
 use crate::subagents::AgentControl;
 use crate::subagents::AgentStatus;
 use crate::subagents::agent_status_from_event;
@@ -47,6 +46,7 @@ use codex_agent_core::kernel::TurnStreamOutcome;
 use codex_llm::DefaultRuntimeClientFactory;
 use codex_llm::RuntimeEndpoint;
 use codex_llm::RuntimeSession;
+use codex_llm::ToolResultItem;
 use codex_llm::TurnEvent;
 use codex_llm::TurnRequest;
 use codex_protocol::ThreadId;
@@ -66,7 +66,7 @@ use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
-use codex_protocol::protocol::RawConversationItemEvent;
+use codex_protocol::protocol::RawTranscriptItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
@@ -212,11 +212,12 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::legacy_transcript::ConversationItem;
+use codex_protocol::legacy_transcript::ResponseInputItem;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ConversationItem;
 use codex_protocol::models::DeveloperInstructions;
-use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::response_input_from_user_input;
+use codex_protocol::models::TranscriptItem;
+use codex_protocol::models::transcript_item_from_user_input;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
@@ -233,6 +234,15 @@ pub struct Codex {
     // Last known status of the agent.
     pub(crate) agent_status: watch::Receiver<AgentStatus>,
     pub(crate) session: Arc<Session>,
+}
+
+fn legacy_response_input_from_user_input(input: Vec<UserInput>) -> ResponseInputItem {
+    match transcript_item_from_user_input(input) {
+        TranscriptItem::Message { role, content, .. } => {
+            ResponseInputItem::Message { role, content }
+        }
+        _ => unreachable!("user input always maps to a message transcript item"),
+    }
 }
 
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
@@ -1868,7 +1878,7 @@ impl Session {
     ) {
         self.record_into_history(items, turn_context).await;
         self.persist_rollout_response_items(items).await;
-        self.send_raw_conversation_items(turn_context, items).await;
+        self.send_raw_transcript_items(turn_context, items).await;
     }
 
     async fn reconstruct_history_from_rollout(
@@ -1879,15 +1889,16 @@ impl Session {
         let mut history = ContextManager::new();
         for item in rollout_items {
             match item {
-                RolloutItem::ConversationItem(response_item) => {
+                RolloutItem::TranscriptItem(response_item) => {
+                    let response_item: ConversationItem = response_item.clone().into();
                     history.record_items(
-                        std::iter::once(response_item),
+                        std::iter::once(&response_item),
                         turn_context.truncation_policy,
                     );
                 }
                 RolloutItem::Compacted(compacted) => {
                     if let Some(replacement) = &compacted.replacement_history {
-                        history.replace(replacement.clone());
+                        history.replace(replacement.iter().cloned().map(Into::into).collect());
                     } else {
                         // Compatibility path for older local compaction rollouts that did not
                         // persist replacement_history.
@@ -1976,7 +1987,7 @@ impl Session {
         let rollout_items: Vec<RolloutItem> = items
             .iter()
             .cloned()
-            .map(RolloutItem::ConversationItem)
+            .map(|item| RolloutItem::TranscriptItem(item.into()))
             .collect();
         self.persist_rollout_items(&rollout_items).await;
     }
@@ -1994,7 +2005,7 @@ impl Session {
         state.session_configuration.collaboration_mode.clone()
     }
 
-    async fn send_raw_conversation_items(
+    async fn send_raw_transcript_items(
         &self,
         turn_context: &TurnContext,
         items: &[ConversationItem],
@@ -2002,7 +2013,9 @@ impl Session {
         for item in items {
             self.send_event(
                 turn_context,
-                EventMsg::RawConversationItem(RawConversationItemEvent { item: item.clone() }),
+                EventMsg::RawTranscriptItem(RawTranscriptItemEvent {
+                    item: item.clone().into(),
+                }),
             )
             .await;
         }
@@ -2277,7 +2290,7 @@ impl Session {
         match active.as_mut() {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
-                ts.push_pending_input(response_input_from_user_input(input));
+                ts.push_pending_input(legacy_response_input_from_user_input(input));
                 self.pending_input_epoch.fetch_add(1, Ordering::SeqCst);
                 Ok(())
             }
@@ -3538,7 +3551,8 @@ pub(crate) async fn run_turn(
             .await;
     }
 
-    let initial_input_for_turn: ResponseInputItem = response_input_from_user_input(input.clone());
+    let initial_input_for_turn: ResponseInputItem =
+        legacy_response_input_from_user_input(input.clone());
     let response_item: ConversationItem = initial_input_for_turn.clone().into();
     sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
         .await;
@@ -4081,7 +4095,7 @@ async fn run_sampling_request(
     let base_instructions = sess.get_base_instructions().await;
 
     let prompt = TurnRequest {
-        conversation: input,
+        conversation: input.into_iter().map(Into::into).collect(),
         tools: router.specs(),
         parallel_tool_calls: model_supports_parallel,
         base_instructions,
@@ -4606,6 +4620,7 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
             }
             TurnEvent::ItemCompleted { item, .. } => {
                 let item = item.into_item();
+                let protocol_item: ConversationItem = item.clone().into();
                 let previously_active_item = self.active_item.take();
                 let mut update = TurnEventUpdate::default();
 
@@ -4625,7 +4640,7 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
                     if handle_assistant_item_done_in_plan_mode(
                         &self.sess,
                         &self.turn_context,
-                        &item,
+                        &protocol_item,
                         state,
                         previously_active_item.as_ref(),
                         &mut update.last_agent_message,
@@ -4644,7 +4659,8 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
                 };
 
                 let output_result =
-                    handle_output_item_done(&mut ctx, item, previously_active_item).await?;
+                    handle_output_item_done(&mut ctx, protocol_item, previously_active_item)
+                        .await?;
                 update.tool_future = output_result.tool_future;
                 update.needs_follow_up = output_result.needs_follow_up;
                 update.last_agent_message = output_result.last_agent_message;
@@ -4667,7 +4683,7 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
                 })
             }
             TurnEvent::ItemStarted { item, .. } => {
-                let item = item.into_item();
+                let item: ConversationItem = item.into_item().into();
                 if let Some(turn_item) =
                     handle_non_tool_response_item(&item, self.plan_mode()).await
                 {
@@ -4831,18 +4847,17 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
         }
     }
 
-    async fn record_tool_result(&mut self, response: ResponseInputItem) -> Result<(), Self::Error> {
+    async fn record_tool_result(&mut self, response: ToolResultItem) -> Result<(), Self::Error> {
         let estimated_before = self
             .sess
             .clone_history()
             .await
             .estimate_token_count(self.turn_context.as_ref())
             .unwrap_or(0);
-        if let Some(item) = response_input_to_response_item(&response) {
-            self.sess
-                .record_conversation_items(&self.turn_context, &[item])
-                .await;
-        }
+        let item: ConversationItem = response.to_transcript_item().into();
+        self.sess
+            .record_conversation_items(&self.turn_context, &[item])
+            .await;
         let estimated_after = self
             .sess
             .clone_history()
@@ -5021,7 +5036,7 @@ mod tests {
     use crate::tools::format_exec_output_str;
 
     use codex_protocol::ThreadId;
-    use codex_protocol::models::FunctionCallOutputPayload;
+    use codex_protocol::legacy_transcript::FunctionCallOutputPayload;
 
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
@@ -5046,8 +5061,8 @@ mod tests {
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_app_server_protocol::AppInfo;
     use codex_app_server_protocol::AuthMode;
+    use codex_protocol::legacy_transcript::ConversationItem;
     use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ConversationItem;
     use std::path::Path;
     use std::time::Duration;
     use tokio::time::sleep;
@@ -5402,7 +5417,7 @@ mod tests {
         let mut rollout_items: Vec<RolloutItem> = initial_context
             .iter()
             .cloned()
-            .map(RolloutItem::ConversationItem)
+            .map(|item| RolloutItem::TranscriptItem(item.into()))
             .collect();
 
         let user_one = ConversationItem::Message {
@@ -5421,8 +5436,8 @@ mod tests {
             }],
             end_turn: None,
         };
-        rollout_items.push(RolloutItem::ConversationItem(user_one.clone()));
-        rollout_items.push(RolloutItem::ConversationItem(first_plan));
+        rollout_items.push(RolloutItem::TranscriptItem(user_one.clone().into()));
+        rollout_items.push(RolloutItem::TranscriptItem(first_plan.into()));
         rollout_items.push(RolloutItem::Compacted(CompactedItem {
             message: "summary one".to_string(),
             replacement_history: None,
@@ -5445,8 +5460,8 @@ mod tests {
             }],
             end_turn: None,
         };
-        rollout_items.push(RolloutItem::ConversationItem(user_two));
-        rollout_items.push(RolloutItem::ConversationItem(second_plan));
+        rollout_items.push(RolloutItem::TranscriptItem(user_two.into()));
+        rollout_items.push(RolloutItem::TranscriptItem(second_plan.into()));
         rollout_items.push(RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
             ThreadRolledBackEvent { num_turns: 1 },
         )));
@@ -6465,7 +6480,13 @@ mod tests {
         );
         let rollout_items = vec![RolloutItem::Compacted(CompactedItem {
             message: summary.to_string(),
-            replacement_history: Some(replacement_history.clone()),
+            replacement_history: Some(
+                replacement_history
+                    .clone()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            ),
             replacement_history_omits_initial_context: true,
         })];
         (rollout_items, replacement_history)
@@ -7048,7 +7069,7 @@ model_context_window = 64_000
             input: "{}".to_string(),
         };
 
-        let request = codex_llm::ToolCallRequest::from_conversation_item(item.clone())
+        let request = codex_llm::ToolCallRequest::from_transcript_item(item.clone().into())
             .expect("tool call request");
         let call = ToolRouter::build_tool_call(session.as_ref(), request)
             .await
@@ -7081,7 +7102,7 @@ model_context_window = 64_000
 
         let initial_context = session.build_initial_context(turn_context).await;
         for item in &initial_context {
-            rollout_items.push(RolloutItem::ConversationItem(item.clone()));
+            rollout_items.push(RolloutItem::TranscriptItem(item.clone().into()));
         }
         live_history.record_items(initial_context.iter(), turn_context.truncation_policy);
 
@@ -7094,7 +7115,7 @@ model_context_window = 64_000
             end_turn: None,
         };
         live_history.record_items(std::iter::once(&user1), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::ConversationItem(user1.clone()));
+        rollout_items.push(RolloutItem::TranscriptItem(user1.clone().into()));
 
         let assistant1 = ConversationItem::Message {
             id: None,
@@ -7105,7 +7126,7 @@ model_context_window = 64_000
             end_turn: None,
         };
         live_history.record_items(std::iter::once(&assistant1), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::ConversationItem(assistant1.clone()));
+        rollout_items.push(RolloutItem::TranscriptItem(assistant1.clone().into()));
 
         let summary1 = "summary one";
         let snapshot1 = live_history.clone().for_prompt();
@@ -7134,7 +7155,7 @@ model_context_window = 64_000
             end_turn: None,
         };
         live_history.record_items(std::iter::once(&user2), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::ConversationItem(user2.clone()));
+        rollout_items.push(RolloutItem::TranscriptItem(user2.clone().into()));
 
         let assistant2 = ConversationItem::Message {
             id: None,
@@ -7145,7 +7166,7 @@ model_context_window = 64_000
             end_turn: None,
         };
         live_history.record_items(std::iter::once(&assistant2), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::ConversationItem(assistant2.clone()));
+        rollout_items.push(RolloutItem::TranscriptItem(assistant2.clone().into()));
 
         let summary2 = "summary two";
         let snapshot2 = live_history.clone().for_prompt();
@@ -7174,7 +7195,7 @@ model_context_window = 64_000
             end_turn: None,
         };
         live_history.record_items(std::iter::once(&user3), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::ConversationItem(user3));
+        rollout_items.push(RolloutItem::TranscriptItem(user3.into()));
 
         let assistant3 = ConversationItem::Message {
             id: None,
@@ -7185,7 +7206,7 @@ model_context_window = 64_000
             end_turn: None,
         };
         live_history.record_items(std::iter::once(&assistant3), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::ConversationItem(assistant3));
+        rollout_items.push(RolloutItem::TranscriptItem(assistant3.into()));
 
         (rollout_items, live_history.for_prompt())
     }

@@ -97,9 +97,9 @@ impl TurnEventProcessor for SessionTurnProcessor {
                 })
             }
             TurnEvent::ToolCall(call) => {
-                if let Some(item) = codex_llm::tool_call_to_transcript_item(&call) {
-                    self.session.push_conversation_item(item).await;
-                }
+                self.session
+                    .push_conversation_item(call.to_transcript_item())
+                    .await;
                 self.session
                     .emit_event(AgentEvent::ToolCallRequested {
                         session_id: self.session.session_id,
@@ -228,9 +228,9 @@ impl TurnEventProcessor for SessionTurnProcessor {
     }
 
     async fn record_tool_result(&mut self, response: ToolResultItem) -> Result<(), Self::Error> {
-        if let Some(item) = codex_llm::tool_result_to_transcript_item(&response) {
-            self.session.push_conversation_item(item).await;
-        }
+        self.session
+            .push_conversation_item(response.to_transcript_item())
+            .await;
         self.tool_output_tokens += estimate_token_count(&response);
         self.session
             .emit_event(AgentEvent::ToolCallCompleted {
@@ -286,15 +286,10 @@ fn last_assistant_message(item: &TranscriptItem) -> Option<String> {
             })
         }
         TranscriptItem::Reasoning { .. }
-        | TranscriptItem::LocalShellCall { .. }
-        | TranscriptItem::FunctionCall { .. }
-        | TranscriptItem::FunctionCallOutput { .. }
-        | TranscriptItem::CustomToolCall { .. }
-        | TranscriptItem::CustomToolCallOutput { .. }
-        | TranscriptItem::WebSearchCall { .. }
-        | TranscriptItem::GhostSnapshot { .. }
-        | TranscriptItem::Compaction { .. }
-        | TranscriptItem::Other => None,
+        | TranscriptItem::HostedActivity { .. }
+        | TranscriptItem::ToolCall { .. }
+        | TranscriptItem::ToolResult { .. }
+        | TranscriptItem::Unknown { .. } => None,
         TranscriptItem::Message { .. } => None,
     }
 }

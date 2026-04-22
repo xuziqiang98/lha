@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use codex_protocol::models::ConversationItem;
+use codex_protocol::legacy_transcript::ConversationItem;
 use std::collections::HashMap;
 use std::collections::HashSet;
 

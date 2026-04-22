@@ -18,16 +18,9 @@ use codex_execpolicy::Policy;
 pub use codex_llm_types::BASE_INSTRUCTIONS_DEFAULT;
 pub use codex_llm_types::BaseInstructions;
 pub use codex_llm_types::ContentItem;
-pub use codex_llm_types::ConversationItem;
-pub use codex_llm_types::FunctionCallOutputContentItem;
-pub use codex_llm_types::FunctionCallOutputPayload;
-pub use codex_llm_types::LocalShellAction;
-pub use codex_llm_types::LocalShellExecAction;
-pub use codex_llm_types::LocalShellStatus;
 pub use codex_llm_types::ReasoningItemContent;
 pub use codex_llm_types::ReasoningItemReasoningSummary;
-pub use codex_llm_types::ResponseInputItem;
-pub use codex_llm_types::WebSearchAction;
+pub use codex_llm_types::TranscriptItem;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 
@@ -48,6 +41,34 @@ impl SandboxPermissions {
     pub fn requires_escalated_permissions(self) -> bool {
         matches!(self, SandboxPermissions::RequireEscalated)
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WebSearchAction {
+    Search {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        query: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        queries: Option<Vec<String>>,
+    },
+    OpenPage {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        url: Option<String>,
+    },
+    FindInPage {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        url: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        pattern: Option<String>,
+    },
+    #[serde(other)]
+    Other,
 }
 
 /// Developer-provided guidance that is injected into a turn as a developer role
@@ -289,9 +310,9 @@ fn render_command_prefix(prefix: &[String]) -> String {
     format!("[{tokens}]")
 }
 
-impl From<DeveloperInstructions> for ConversationItem {
+impl From<DeveloperInstructions> for TranscriptItem {
     fn from(di: DeveloperInstructions) -> Self {
-        ConversationItem::Message {
+        TranscriptItem::Message {
             id: None,
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {
@@ -438,9 +459,10 @@ pub fn local_image_content_items_with_label_number(
     }
 }
 
-pub fn response_input_from_user_input(items: Vec<UserInput>) -> ResponseInputItem {
+pub fn transcript_item_from_user_input(items: Vec<UserInput>) -> TranscriptItem {
     let mut image_index = 0;
-    ResponseInputItem::Message {
+    TranscriptItem::Message {
+        id: None,
         role: "user".to_string(),
         content: items
             .into_iter()
@@ -462,10 +484,24 @@ pub fn response_input_from_user_input(items: Vec<UserInput>) -> ResponseInputIte
                 UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(),
             })
             .collect::<Vec<ContentItem>>(),
+        end_turn: None,
     }
 }
 
-/// If the `name` of a `ConversationItem::FunctionCall` is either `container.exec`
+#[doc(hidden)]
+#[deprecated(note = "use transcript_item_from_user_input instead")]
+pub fn response_input_from_user_input(
+    items: Vec<UserInput>,
+) -> crate::legacy_transcript::ResponseInputItem {
+    match transcript_item_from_user_input(items) {
+        TranscriptItem::Message { role, content, .. } => {
+            crate::legacy_transcript::ResponseInputItem::Message { role, content }
+        }
+        _ => unreachable!("user input always maps to a message transcript item"),
+    }
+}
+
+/// If the `name` of a `TranscriptItem::FunctionCall` is either `container.exec`
 /// or `shell`, the `arguments` field should deserialize to this struct.
 #[derive(Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 pub struct ShellToolCallParams {
@@ -486,7 +522,7 @@ pub struct ShellToolCallParams {
     pub justification: Option<String>,
 }
 
-/// If the `name` of a `ConversationItem::FunctionCall` is `shell_command`, the
+/// If the `name` of a `TranscriptItem::FunctionCall` is `shell_command`, the
 /// `arguments` field should deserialize to this struct.
 #[derive(Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 pub struct ShellCommandToolCallParams {
@@ -515,6 +551,10 @@ pub struct ShellCommandToolCallParams {
 mod tests {
     use super::*;
     use crate::config_types::SandboxMode;
+    use crate::legacy_transcript::ConversationItem;
+    use crate::legacy_transcript::FunctionCallOutputContentItem;
+    use crate::legacy_transcript::FunctionCallOutputPayload;
+    use crate::legacy_transcript::ResponseInputItem;
     use crate::protocol::AskForApproval;
     use anyhow::Result;
     use codex_execpolicy::Policy;
@@ -910,12 +950,12 @@ mod tests {
     fn wraps_image_user_input_with_tags() -> Result<()> {
         let image_url = "data:image/png;base64,abc".to_string();
 
-        let item = response_input_from_user_input(vec![UserInput::Image {
+        let item = transcript_item_from_user_input(vec![UserInput::Image {
             image_url: image_url.clone(),
         }]);
 
         match item {
-            ResponseInputItem::Message { content, .. } => {
+            TranscriptItem::Message { content, .. } => {
                 let expected = vec![
                     ContentItem::InputText {
                         text: image_open_tag_text(),
@@ -938,12 +978,12 @@ mod tests {
         let dir = tempdir()?;
         let missing_path = dir.path().join("missing-image.png");
 
-        let item = response_input_from_user_input(vec![UserInput::LocalImage {
+        let item = transcript_item_from_user_input(vec![UserInput::LocalImage {
             path: missing_path.clone(),
         }]);
 
         match item {
-            ResponseInputItem::Message { content, .. } => {
+            TranscriptItem::Message { content, .. } => {
                 assert_eq!(content.len(), 1);
                 match &content[0] {
                     ContentItem::InputText { text } => {
@@ -972,12 +1012,12 @@ mod tests {
         let json_path = dir.path().join("example.json");
         std::fs::write(&json_path, br#"{"hello":"world"}"#)?;
 
-        let item = response_input_from_user_input(vec![UserInput::LocalImage {
+        let item = transcript_item_from_user_input(vec![UserInput::LocalImage {
             path: json_path.clone(),
         }]);
 
         match item {
-            ResponseInputItem::Message { content, .. } => {
+            TranscriptItem::Message { content, .. } => {
                 assert_eq!(content.len(), 1);
                 match &content[0] {
                     ContentItem::InputText { text } => {
@@ -1009,19 +1049,19 @@ mod tests {
 <svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>"#,
         )?;
 
-        let item = response_input_from_user_input(vec![UserInput::LocalImage {
+        let item = transcript_item_from_user_input(vec![UserInput::LocalImage {
             path: svg_path.clone(),
         }]);
 
         match item {
-            ResponseInputItem::Message { content, .. } => {
+            TranscriptItem::Message { content, .. } => {
                 assert_eq!(content.len(), 1);
                 let expected = format!(
                     "Codex cannot attach image at `{}`: unsupported image format `image/svg+xml`.",
                     svg_path.display()
                 );
                 match &content[0] {
-                    ContentItem::InputText { text } => assert_eq!(text, &expected),
+                    ContentItem::InputText { text } => assert_eq!(text.as_str(), expected),
                     other => panic!("expected placeholder text but found {other:?}"),
                 }
             }

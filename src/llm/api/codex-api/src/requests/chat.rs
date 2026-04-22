@@ -4,9 +4,11 @@ use crate::requests::headers::build_conversation_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
 use codex_llm_types::ContentItem;
-use codex_llm_types::ConversationItem;
-use codex_llm_types::FunctionCallOutputContentItem;
-use codex_llm_types::ReasoningItemContent;
+use codex_llm_types::ReasoningContentItem;
+use codex_llm_types::ToolCallPayload;
+use codex_llm_types::ToolResultContentItem;
+use codex_llm_types::ToolResultPayload;
+use codex_llm_types::TranscriptItem;
 use http::HeaderMap;
 use serde_json::Value;
 use serde_json::json;
@@ -28,7 +30,7 @@ pub enum DeveloperRoleHandling {
 pub struct ChatRequestBuilder<'a> {
     model: &'a str,
     instructions: &'a str,
-    input: &'a [ConversationItem],
+    input: &'a [TranscriptItem],
     tools: &'a [Value],
     conversation_id: Option<String>,
     origin_tag: Option<String>,
@@ -39,7 +41,7 @@ impl<'a> ChatRequestBuilder<'a> {
     pub fn new(
         model: &'a str,
         instructions: &'a str,
-        input: &'a [ConversationItem],
+        input: &'a [TranscriptItem],
         tools: &'a [Value],
     ) -> Self {
         Self {
@@ -77,23 +79,18 @@ impl<'a> ChatRequestBuilder<'a> {
         let mut last_emitted_role: Option<&str> = None;
         for item in input {
             match item {
-                ConversationItem::Message { role, .. } => last_emitted_role = Some(role.as_str()),
-                ConversationItem::FunctionCall { .. } | ConversationItem::LocalShellCall { .. } => {
-                    last_emitted_role = Some("assistant")
-                }
-                ConversationItem::FunctionCallOutput { .. } => last_emitted_role = Some("tool"),
-                ConversationItem::Reasoning { .. } | ConversationItem::Other => {}
-                ConversationItem::CustomToolCall { .. } => {}
-                ConversationItem::CustomToolCallOutput { .. } => {}
-                ConversationItem::WebSearchCall { .. } => {}
-                ConversationItem::GhostSnapshot { .. } => {}
-                ConversationItem::Compaction { .. } => {}
+                TranscriptItem::Message { role, .. } => last_emitted_role = Some(role.as_str()),
+                TranscriptItem::ToolCall { .. } => last_emitted_role = Some("assistant"),
+                TranscriptItem::ToolResult { .. } => last_emitted_role = Some("tool"),
+                TranscriptItem::Reasoning { .. }
+                | TranscriptItem::HostedActivity { .. }
+                | TranscriptItem::Unknown { .. } => {}
             }
         }
 
         let mut last_user_index: Option<usize> = None;
         for (idx, item) in input.iter().enumerate() {
-            if let ConversationItem::Message { role, .. } = item
+            if let TranscriptItem::Message { role, .. } = item
                 && role == "user"
             {
                 last_user_index = Some(idx);
@@ -108,7 +105,7 @@ impl<'a> ChatRequestBuilder<'a> {
                     continue;
                 }
 
-                if let ConversationItem::Reasoning {
+                if let TranscriptItem::Reasoning {
                     content: Some(items),
                     ..
                 } = item
@@ -116,8 +113,8 @@ impl<'a> ChatRequestBuilder<'a> {
                     let mut text = String::new();
                     for entry in items {
                         match entry {
-                            ReasoningItemContent::ReasoningText { text: segment }
-                            | ReasoningItemContent::Text { text: segment } => {
+                            ReasoningContentItem::ReasoningText { text: segment }
+                            | ReasoningContentItem::Text { text: segment } => {
                                 text.push_str(segment)
                             }
                         }
@@ -128,7 +125,7 @@ impl<'a> ChatRequestBuilder<'a> {
 
                     let mut attached = false;
                     if idx > 0
-                        && let ConversationItem::Message { role, .. } = &input[idx - 1]
+                        && let TranscriptItem::Message { role, .. } = &input[idx - 1]
                         && role == "assistant"
                     {
                         reasoning_by_anchor_index
@@ -140,14 +137,13 @@ impl<'a> ChatRequestBuilder<'a> {
 
                     if !attached && idx + 1 < input.len() {
                         match &input[idx + 1] {
-                            ConversationItem::FunctionCall { .. }
-                            | ConversationItem::LocalShellCall { .. } => {
+                            TranscriptItem::ToolCall { .. } => {
                                 reasoning_by_anchor_index
                                     .entry(idx + 1)
                                     .and_modify(|v| v.push_str(&text))
                                     .or_insert(text.clone());
                             }
-                            ConversationItem::Message { role, .. } if role == "assistant" => {
+                            TranscriptItem::Message { role, .. } if role == "assistant" => {
                                 reasoning_by_anchor_index
                                     .entry(idx + 1)
                                     .and_modify(|v| v.push_str(&text))
@@ -164,7 +160,7 @@ impl<'a> ChatRequestBuilder<'a> {
 
         for (idx, item) in input.iter().enumerate() {
             match item {
-                ConversationItem::Message { role, content, .. } => {
+                TranscriptItem::Message { role, content, .. } => {
                     let role = match (role.as_str(), self.developer_role_handling) {
                         ("developer", DeveloperRoleHandling::DowngradeToSystem) => "system",
                         _ => role.as_str(),
@@ -215,10 +211,10 @@ impl<'a> ChatRequestBuilder<'a> {
                     }
                     messages.push(msg);
                 }
-                ConversationItem::FunctionCall {
-                    name,
-                    arguments,
+                TranscriptItem::ToolCall {
                     call_id,
+                    tool_name,
+                    payload: ToolCallPayload::JsonArguments { arguments },
                     ..
                 } => {
                     let reasoning = reasoning_by_anchor_index.get(&idx).map(String::as_str);
@@ -226,43 +222,54 @@ impl<'a> ChatRequestBuilder<'a> {
                         "id": call_id,
                         "type": "function",
                         "function": {
-                            "name": name,
+                            "name": tool_name,
                             "arguments": arguments,
                         }
                     });
                     push_tool_call_message(&mut messages, tool_call, reasoning);
                 }
-                ConversationItem::LocalShellCall {
+                TranscriptItem::ToolCall {
                     id,
-                    call_id: _,
-                    status,
-                    action,
+                    tool_name,
+                    payload: ToolCallPayload::TextInput { input },
+                    ..
                 } => {
-                    let reasoning = reasoning_by_anchor_index.get(&idx).map(String::as_str);
                     let tool_call = json!({
-                        "id": id.clone().unwrap_or_default(),
-                        "type": "local_shell_call",
-                        "status": status,
-                        "action": action,
+                        "id": id,
+                        "type": "custom",
+                        "custom": {
+                            "name": tool_name,
+                            "input": input,
+                        }
                     });
+                    let reasoning = reasoning_by_anchor_index.get(&idx).map(String::as_str);
                     push_tool_call_message(&mut messages, tool_call, reasoning);
                 }
-                ConversationItem::FunctionCallOutput { call_id, output } => {
-                    let content_value = if let Some(items) = &output.content_items {
+                TranscriptItem::ToolResult {
+                    call_id,
+                    payload:
+                        ToolResultPayload::Structured {
+                            content,
+                            content_items,
+                            ..
+                        },
+                    ..
+                } => {
+                    let content_value = if let Some(items) = content_items {
                         let mapped: Vec<Value> = items
                             .iter()
                             .map(|it| match it {
-                                FunctionCallOutputContentItem::InputText { text } => {
+                                ToolResultContentItem::InputText { text } => {
                                     json!({"type":"text","text": text})
                                 }
-                                FunctionCallOutputContentItem::InputImage { image_url } => {
+                                ToolResultContentItem::InputImage { image_url } => {
                                     json!({"type":"image_url","image_url": {"url": image_url}})
                                 }
                             })
                             .collect();
                         json!(mapped)
                     } else {
-                        json!(output.content)
+                        json!(content)
                     };
 
                     messages.push(json!({
@@ -271,38 +278,20 @@ impl<'a> ChatRequestBuilder<'a> {
                         "content": content_value,
                     }));
                 }
-                ConversationItem::CustomToolCall {
-                    id,
-                    call_id: _,
-                    name,
-                    input,
-                    status: _,
+                TranscriptItem::ToolResult {
+                    call_id,
+                    payload: ToolResultPayload::Text { output },
+                    ..
                 } => {
-                    let tool_call = json!({
-                        "id": id,
-                        "type": "custom",
-                        "custom": {
-                            "name": name,
-                            "input": input,
-                        }
-                    });
-                    let reasoning = reasoning_by_anchor_index.get(&idx).map(String::as_str);
-                    push_tool_call_message(&mut messages, tool_call, reasoning);
-                }
-                ConversationItem::CustomToolCallOutput { call_id, output } => {
                     messages.push(json!({
                         "role": "tool",
                         "tool_call_id": call_id,
                         "content": output,
                     }));
                 }
-                ConversationItem::GhostSnapshot { .. } => {
-                    continue;
-                }
-                ConversationItem::Reasoning { .. }
-                | ConversationItem::WebSearchCall { .. }
-                | ConversationItem::Other
-                | ConversationItem::Compaction { .. } => {
+                TranscriptItem::Reasoning { .. }
+                | TranscriptItem::HostedActivity { .. }
+                | TranscriptItem::Unknown { .. } => {
                     continue;
                 }
             }
@@ -370,13 +359,15 @@ mod tests {
     use super::*;
     use crate::provider::RetryConfig;
     use crate::provider::WireApi;
-    use codex_llm_types::FunctionCallOutputPayload;
+    use codex_llm_types::ToolCallPayload;
+    use codex_llm_types::ToolResultPayload;
+    use codex_llm_types::TranscriptItem;
     use http::HeaderValue;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 
-    fn text_message(role: &str, text: &str) -> ConversationItem {
-        ConversationItem::Message {
+    fn text_message(role: &str, text: &str) -> TranscriptItem {
+        TranscriptItem::Message {
             id: None,
             role: role.to_string(),
             content: vec![ContentItem::InputText {
@@ -406,7 +397,7 @@ mod tests {
 
     #[test]
     fn attaches_conversation_and_subagent_headers() {
-        let prompt_input = vec![ConversationItem::Message {
+        let prompt_input = vec![TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -434,43 +425,55 @@ mod tests {
     fn groups_consecutive_tool_calls_into_a_single_assistant_message() {
         let prompt_input = vec![
             text_message("user", "read these"),
-            ConversationItem::FunctionCall {
+            TranscriptItem::ToolCall {
                 id: None,
-                name: "read_file".to_string(),
-                arguments: r#"{"path":"a.txt"}"#.to_string(),
                 call_id: "call-a".to_string(),
+                tool_name: "read_file".to_string(),
+                payload: ToolCallPayload::JsonArguments {
+                    arguments: r#"{"path":"a.txt"}"#.to_string(),
+                },
             },
-            ConversationItem::FunctionCall {
+            TranscriptItem::ToolCall {
                 id: None,
-                name: "read_file".to_string(),
-                arguments: r#"{"path":"b.txt"}"#.to_string(),
                 call_id: "call-b".to_string(),
+                tool_name: "read_file".to_string(),
+                payload: ToolCallPayload::JsonArguments {
+                    arguments: r#"{"path":"b.txt"}"#.to_string(),
+                },
             },
-            ConversationItem::FunctionCall {
+            TranscriptItem::ToolCall {
                 id: None,
-                name: "read_file".to_string(),
-                arguments: r#"{"path":"c.txt"}"#.to_string(),
                 call_id: "call-c".to_string(),
+                tool_name: "read_file".to_string(),
+                payload: ToolCallPayload::JsonArguments {
+                    arguments: r#"{"path":"c.txt"}"#.to_string(),
+                },
             },
-            ConversationItem::FunctionCallOutput {
+            TranscriptItem::ToolResult {
                 call_id: "call-a".to_string(),
-                output: FunctionCallOutputPayload {
+                tool_name: "read_file".to_string(),
+                payload: ToolResultPayload::Structured {
                     content: "A".to_string(),
-                    ..Default::default()
+                    content_items: None,
+                    success: None,
                 },
             },
-            ConversationItem::FunctionCallOutput {
+            TranscriptItem::ToolResult {
                 call_id: "call-b".to_string(),
-                output: FunctionCallOutputPayload {
+                tool_name: "read_file".to_string(),
+                payload: ToolResultPayload::Structured {
                     content: "B".to_string(),
-                    ..Default::default()
+                    content_items: None,
+                    success: None,
                 },
             },
-            ConversationItem::FunctionCallOutput {
+            TranscriptItem::ToolResult {
                 call_id: "call-c".to_string(),
-                output: FunctionCallOutputPayload {
+                tool_name: "read_file".to_string(),
+                payload: ToolResultPayload::Structured {
                     content: "C".to_string(),
-                    ..Default::default()
+                    content_items: None,
+                    success: None,
                 },
             },
         ];

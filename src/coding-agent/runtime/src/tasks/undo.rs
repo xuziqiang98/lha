@@ -10,7 +10,7 @@ use crate::tasks::SessionTaskContext;
 use async_trait::async_trait;
 use codex_git::RestoreGhostCommitOptions;
 use codex_git::restore_ghost_commit_with_options;
-use codex_protocol::models::ConversationItem;
+use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 use tracing::error;

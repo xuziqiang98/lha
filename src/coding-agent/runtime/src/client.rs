@@ -11,7 +11,7 @@ pub use codex_llm::WEB_SEARCH_ELIGIBLE_HEADER;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::models::ConversationItem;
+use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
@@ -82,7 +82,7 @@ impl TurnRuntime {
             endpoint_id: config.model_provider_id.clone(),
             auth_source,
             http_client: build_reqwest_client(),
-            model_info: model_info.clone(),
+            model_info: model_info.clone().into(),
             otel_manager: otel_manager.clone(),
             endpoint: endpoint.clone(),
             effort,
@@ -328,6 +328,7 @@ impl TurnRuntime {
             .runtime
             .compact_conversation_history(request)
             .await
+            .map(|items| items.into_iter().map(Into::into).collect())
             .map_err(Into::into)
     }
 }

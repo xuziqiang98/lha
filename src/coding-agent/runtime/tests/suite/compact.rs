@@ -843,9 +843,11 @@ async fn local_compact_persists_replacement_history_in_rollout() {
                 .as_ref()
                 .is_some_and(|history| {
                     history.iter().any(|item| {
+                        let item: codex_protocol::legacy_transcript::ConversationItem =
+                            item.clone().into();
                         matches!(
-                            item,
-                            codex_protocol::models::ConversationItem::Message { role, content, .. }
+                            &item,
+                            codex_protocol::legacy_transcript::ConversationItem::Message { role, content, .. }
                                 if role == "assistant"
                                     && content.iter().any(|content_item| {
                                         matches!(
@@ -1371,18 +1373,22 @@ async fn local_compact_persists_backfilled_update_plan_in_rollout() {
                 .as_ref()
                 .is_some_and(|history| {
                     history.iter().any(|item| {
+                        let item: codex_protocol::legacy_transcript::ConversationItem =
+                            item.clone().into();
                         matches!(
-                            item,
-                            codex_protocol::models::ConversationItem::FunctionCall {
+                            &item,
+                            codex_protocol::legacy_transcript::ConversationItem::FunctionCall {
                                 name,
                                 arguments,
                                 ..
                             } if name == "update_plan" && arguments == &update_plan_args_json
                         )
                     }) && history.iter().any(|item| {
+                        let item: codex_protocol::legacy_transcript::ConversationItem =
+                            item.clone().into();
                         matches!(
-                            item,
-                            codex_protocol::models::ConversationItem::FunctionCallOutput {
+                            &item,
+                            codex_protocol::legacy_transcript::ConversationItem::FunctionCallOutput {
                                 call_id,
                                 output,
                             } if call_id == "compact_backfill_update_plan"
@@ -2528,7 +2534,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
     let remote_summary = "REMOTE_COMPACT_SUMMARY";
 
     let compacted_history = vec![
-        codex_protocol::models::ConversationItem::Message {
+        codex_protocol::legacy_transcript::ConversationItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![codex_protocol::models::ContentItem::OutputText {
@@ -2536,7 +2542,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
             }],
             end_turn: None,
         },
-        codex_protocol::models::ConversationItem::Compaction {
+        codex_protocol::legacy_transcript::ConversationItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
         },
     ];
@@ -3608,7 +3614,7 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
     .await;
 
     let compacted_history = vec![
-        codex_protocol::models::ConversationItem::Message {
+        codex_protocol::legacy_transcript::ConversationItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![codex_protocol::models::ContentItem::OutputText {
@@ -3616,7 +3622,7 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
             }],
             end_turn: None,
         },
-        codex_protocol::models::ConversationItem::Compaction {
+        codex_protocol::legacy_transcript::ConversationItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
         },
     ];
@@ -3728,7 +3734,7 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
     mount_response_sequence(&server, responses).await;
 
     let compacted_history = vec![
-        codex_protocol::models::ConversationItem::Message {
+        codex_protocol::legacy_transcript::ConversationItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![codex_protocol::models::ContentItem::OutputText {
@@ -3736,7 +3742,7 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
             }],
             end_turn: None,
         },
-        codex_protocol::models::ConversationItem::Compaction {
+        codex_protocol::legacy_transcript::ConversationItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
         },
     ];

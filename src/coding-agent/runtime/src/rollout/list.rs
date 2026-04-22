@@ -1041,7 +1041,7 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     summary.head.push(val);
                 }
             }
-            RolloutItem::ConversationItem(item) => {
+            RolloutItem::TranscriptItem(item) => {
                 summary.created_at = summary
                     .created_at
                     .clone()

@@ -5,7 +5,7 @@ use crate::tools::ToolRegistry;
 use codex_agent_core::kernel::ToolFuture;
 use codex_llm::ToolCallRequest;
 use codex_llm::ToolResultItem;
-use codex_llm_types::FunctionCallOutputPayload;
+use codex_llm::ToolResultPayload;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -56,16 +56,20 @@ impl ToolExecutor {
 
     fn aborted_response(call: &ToolCallRequest) -> ToolResultItem {
         match call.payload {
-            codex_llm::ToolCallPayload::Custom { .. } => ToolResultItem::CustomToolCallOutput {
+            codex_llm::ToolCallPayload::TextInput { .. } => ToolResultItem {
                 call_id: call.call_id.clone(),
-                output: "aborted by user".to_string(),
+                tool_name: call.tool_name.clone(),
+                payload: ToolResultPayload::Text {
+                    output: "aborted by user".to_string(),
+                },
             },
-            _ => ToolResultItem::FunctionCallOutput {
+            codex_llm::ToolCallPayload::JsonArguments { .. } => ToolResultItem {
                 call_id: call.call_id.clone(),
-                output: FunctionCallOutputPayload {
+                tool_name: call.tool_name.clone(),
+                payload: ToolResultPayload::Structured {
                     content: "aborted by user".to_string(),
+                    content_items: None,
                     success: Some(false),
-                    ..Default::default()
                 },
             },
         }

@@ -30,7 +30,6 @@ use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
 use codex_api::requests::responses::Compression;
 use codex_llm_types::ContentItem;
-use codex_llm_types::ConversationItem;
 use codex_otel::OtelManager;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
@@ -99,7 +98,7 @@ pub struct LlmClient {
 pub struct LlmClientSession {
     state: Arc<LlmClientState>,
     connection: Option<ApiWebSocketConnection>,
-    websocket_last_items: Vec<ConversationItem>,
+    websocket_last_items: Vec<TranscriptItem>,
     streaming_preference: StreamingPreference,
     turn_state: Arc<OnceLock<String>>,
 }
@@ -192,9 +191,10 @@ impl LlmClient {
             .with_telemetry(Some(request_telemetry));
 
         let instructions = prompt.base_instructions.text.clone();
+        let formatted_input = prompt.input.clone();
         let payload = ApiCompactionInput {
             model: &self.state.model_info.slug,
-            input: &prompt.input,
+            input: &formatted_input,
             instructions: &instructions,
         };
 
@@ -207,6 +207,7 @@ impl LlmClient {
         client
             .compact_input(&payload, extra_headers)
             .await
+            .map(|items| items.into_iter().collect())
             .map_err(Into::into)
     }
 
@@ -411,10 +412,7 @@ impl LlmClientSession {
         }
     }
 
-    fn get_incremental_items(
-        &self,
-        input_items: &[ConversationItem],
-    ) -> Option<Vec<ConversationItem>> {
+    fn get_incremental_items(&self, input_items: &[TranscriptItem]) -> Option<Vec<TranscriptItem>> {
         let previous_len = self.websocket_last_items.len();
         let can_append = previous_len > 0
             && input_items.starts_with(&self.websocket_last_items)
@@ -428,12 +426,13 @@ impl LlmClientSession {
 
     fn prepare_websocket_request(
         &self,
+        prompt_input: &[TranscriptItem],
         api_prompt: &ApiPrompt,
         options: &ApiResponsesOptions,
     ) -> ResponsesWsRequest {
-        if let Some(append_items) = self.get_incremental_items(&api_prompt.input) {
+        if let Some(append_items) = self.get_incremental_items(prompt_input) {
             return ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest {
-                input: append_items,
+                input: append_items.into_iter().collect(),
             });
         }
 
@@ -513,7 +512,7 @@ impl LlmClientSession {
         let instructions = prompt.base_instructions.text.clone();
         let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
         let api_prompt = build_api_prompt(prompt, instructions, tools_json);
-        let contains_developer_message = prompt_contains_developer_message(&api_prompt.input);
+        let contains_developer_message = prompt_contains_developer_message(&prompt.input);
         let session_id = self.state.session_id.clone();
         let origin_tag = self.state.origin_tag.clone();
 
@@ -694,7 +693,7 @@ impl LlmClientSession {
             let compression = self.responses_request_compression(auth.as_ref());
 
             let options = self.build_responses_options(prompt, compression);
-            let request = self.prepare_websocket_request(&api_prompt, &options);
+            let request = self.prepare_websocket_request(&prompt.input, &api_prompt, &options);
 
             let connection = match self
                 .websocket_connection(api_provider.clone(), api_auth.clone(), &options)
@@ -711,7 +710,7 @@ impl LlmClientSession {
             };
 
             let stream_result = connection.stream_request(request).await?;
-            self.websocket_last_items = api_prompt.input.clone();
+            self.websocket_last_items = prompt.input.clone();
             return Ok(map_response_stream(
                 stream_result,
                 self.state.otel_manager.clone(),
@@ -734,7 +733,7 @@ impl LlmClientSession {
 fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value>) -> ApiPrompt {
     ApiPrompt {
         instructions,
-        input: prompt.get_formatted_input(),
+        input: prompt.input.clone(),
         tools: tools_json,
         parallel_tool_calls: prompt.parallel_tool_calls,
         output_schema: prompt.output_schema.clone(),
@@ -792,11 +791,11 @@ fn build_chat_request(
         .map_err(Into::into)
 }
 
-fn prompt_contains_developer_message(input: &[ConversationItem]) -> bool {
+fn prompt_contains_developer_message(input: &[TranscriptItem]) -> bool {
     input.iter().any(|item| {
         matches!(
             item,
-            ConversationItem::Message { role, .. } if role == "developer"
+            TranscriptItem::Message { role, .. } if role == "developer"
         )
     })
 }
@@ -916,7 +915,7 @@ where
             match event {
                 Ok(ResponseEvent::OutputItemDone(item)) => {
                     estimated_output_tokens = estimated_output_tokens
-                        .saturating_add(estimate_chat_output_tokens_for_item(&item));
+                        .saturating_add(estimate_chat_output_tokens_for_item(&item.clone()));
                     if tx_event
                         .send(Ok(ResponseEvent::OutputItemDone(item)))
                         .await
@@ -1117,9 +1116,9 @@ fn estimate_chat_semantic_value_chars(value: &Value) -> usize {
     }
 }
 
-fn estimate_chat_output_tokens_for_item(item: &ConversationItem) -> i64 {
+fn estimate_chat_output_tokens_for_item(item: &TranscriptItem) -> i64 {
     let chars = match item {
-        ConversationItem::Message { role, content, .. } if role == "assistant" => content
+        TranscriptItem::Message { role, content, .. } if role == "assistant" => content
             .iter()
             .map(|content_item| match content_item {
                 ContentItem::InputText { text } | ContentItem::OutputText { text } => {
@@ -1128,9 +1127,15 @@ fn estimate_chat_output_tokens_for_item(item: &ConversationItem) -> i64 {
                 ContentItem::InputImage { image_url } => count_chars(image_url),
             })
             .fold(0usize, usize::saturating_add),
-        ConversationItem::FunctionCall {
-            name, arguments, ..
-        } => count_chars(name).saturating_add(count_chars(arguments)),
+        TranscriptItem::ToolCall {
+            tool_name, payload, ..
+        } => {
+            let payload_chars = match payload {
+                crate::ToolCallPayload::JsonArguments { arguments } => count_chars(arguments),
+                crate::ToolCallPayload::TextInput { input } => count_chars(input),
+            };
+            count_chars(tool_name).saturating_add(payload_chars)
+        }
         _ => 0,
     };
 
@@ -1299,7 +1304,7 @@ mod tests {
 
     #[test]
     fn estimate_chat_output_tokens_counts_messages_and_tool_calls() {
-        let assistant = ConversationItem::Message {
+        let assistant = TranscriptItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -1307,13 +1312,15 @@ mod tests {
             }],
             end_turn: None,
         };
-        let tool_call = ConversationItem::FunctionCall {
+        let tool_call = TranscriptItem::ToolCall {
             id: None,
-            name: "read_file".to_string(),
-            arguments: "{\"path\":\"src/lib.rs\"}".to_string(),
             call_id: "call_1".to_string(),
+            tool_name: "read_file".to_string(),
+            payload: crate::ToolCallPayload::JsonArguments {
+                arguments: "{\"path\":\"src/lib.rs\"}".to_string(),
+            },
         };
-        let reasoning = ConversationItem::Reasoning {
+        let reasoning = TranscriptItem::Reasoning {
             id: String::new(),
             summary: Vec::new(),
             content: Some(vec![ReasoningItemContent::ReasoningText {

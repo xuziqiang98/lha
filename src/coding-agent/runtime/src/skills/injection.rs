@@ -8,7 +8,7 @@ use crate::analytics_client::TrackEventsContext;
 use crate::instructions::SkillInstructions;
 use crate::skills::SkillMetadata;
 use codex_otel::OtelManager;
-use codex_protocol::models::ConversationItem;
+use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::user_input::UserInput;
 use tokio::fs;
 

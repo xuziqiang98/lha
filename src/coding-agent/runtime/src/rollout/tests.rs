@@ -27,8 +27,8 @@ use crate::rollout::rollout_date_parts;
 use anyhow::Result;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ConversationItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V2;
@@ -1016,14 +1016,17 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
     for idx in 0..total_messages {
         let response_line = RolloutLine {
             timestamp: format!("{ts}-{idx:02}"),
-            item: RolloutItem::ConversationItem(ConversationItem::Message {
-                id: None,
-                role: "assistant".into(),
-                content: vec![ContentItem::OutputText {
-                    text: format!("reply-{idx}"),
-                }],
-                end_turn: None,
-            }),
+            item: RolloutItem::TranscriptItem(
+                ConversationItem::Message {
+                    id: None,
+                    role: "assistant".into(),
+                    content: vec![ContentItem::OutputText {
+                        text: format!("reply-{idx}"),
+                    }],
+                    end_turn: None,
+                }
+                .into(),
+            ),
         };
         writeln!(file, "{}", serde_json::to_string(&response_line)?)?;
     }

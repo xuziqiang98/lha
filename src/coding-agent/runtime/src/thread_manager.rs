@@ -753,8 +753,8 @@ mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
     use assert_matches::assert_matches;
+    use codex_protocol::legacy_transcript::ConversationItem;
     use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ConversationItem;
     use codex_protocol::models::ReasoningItemReasoningSummary;
     use pretty_assertions::assert_eq;
 
@@ -807,14 +807,14 @@ mod tests {
         let initial: Vec<RolloutItem> = items
             .iter()
             .cloned()
-            .map(RolloutItem::ConversationItem)
+            .map(|item| RolloutItem::TranscriptItem(item.into()))
             .collect();
         let truncated = truncate_before_nth_user_message(InitialHistory::Forked(initial), 1);
         let got_items = truncated.get_rollout_items();
         let expected_items = vec![
-            RolloutItem::ConversationItem(items[0].clone()),
-            RolloutItem::ConversationItem(items[1].clone()),
-            RolloutItem::ConversationItem(items[2].clone()),
+            RolloutItem::TranscriptItem(items[0].clone().into()),
+            RolloutItem::TranscriptItem(items[1].clone().into()),
+            RolloutItem::TranscriptItem(items[2].clone().into()),
         ];
         assert_eq!(
             serde_json::to_value(&got_items).unwrap(),
@@ -824,7 +824,7 @@ mod tests {
         let initial2: Vec<RolloutItem> = items
             .iter()
             .cloned()
-            .map(RolloutItem::ConversationItem)
+            .map(|item| RolloutItem::TranscriptItem(item.into()))
             .collect();
         let truncated2 = truncate_before_nth_user_message(InitialHistory::Forked(initial2), 2);
         assert_matches!(truncated2, InitialHistory::New);
@@ -842,17 +842,17 @@ mod tests {
         let rollout_items: Vec<RolloutItem> = items
             .iter()
             .cloned()
-            .map(RolloutItem::ConversationItem)
+            .map(|item| RolloutItem::TranscriptItem(item.into()))
             .collect();
 
         let truncated = truncate_before_nth_user_message(InitialHistory::Forked(rollout_items), 1);
         let got_items = truncated.get_rollout_items();
 
         let expected: Vec<RolloutItem> = vec![
-            RolloutItem::ConversationItem(items[0].clone()),
-            RolloutItem::ConversationItem(items[1].clone()),
-            RolloutItem::ConversationItem(items[2].clone()),
-            RolloutItem::ConversationItem(items[3].clone()),
+            RolloutItem::TranscriptItem(items[0].clone().into()),
+            RolloutItem::TranscriptItem(items[1].clone().into()),
+            RolloutItem::TranscriptItem(items[2].clone().into()),
+            RolloutItem::TranscriptItem(items[3].clone().into()),
         ];
 
         assert_eq!(

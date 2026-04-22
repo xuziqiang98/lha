@@ -18,8 +18,8 @@ use codex_client::Request;
 use codex_client::Response;
 use codex_client::StreamResponse;
 use codex_client::TransportError;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ConversationItem;
+use codex_llm_types::ContentItem;
+use codex_llm_types::TranscriptItem;
 use http::HeaderMap;
 use http::StatusCode;
 use pretty_assertions::assert_eq;
@@ -350,7 +350,7 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
 
     let prompt = codex_api::Prompt {
         instructions: "Say hi".to_string(),
-        input: vec![ConversationItem::Message {
+        input: vec![TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {

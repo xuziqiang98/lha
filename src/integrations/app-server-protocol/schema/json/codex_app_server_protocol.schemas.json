@@ -2308,352 +2308,6 @@
       },
       "type": "object"
     },
-    "ConversationItem": {
-      "oneOf": [
-        {
-          "properties": {
-            "content": {
-              "items": {
-                "$ref": "#/definitions/ContentItem"
-              },
-              "type": "array"
-            },
-            "end_turn": {
-              "type": [
-                "boolean",
-                "null"
-              ]
-            },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
-            },
-            "role": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "message"
-              ],
-              "title": "MessageConversationItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "content",
-            "role",
-            "type"
-          ],
-          "title": "MessageConversationItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "content": {
-              "default": null,
-              "items": {
-                "$ref": "#/definitions/ReasoningItemContent"
-              },
-              "type": [
-                "array",
-                "null"
-              ]
-            },
-            "encrypted_content": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "id": {
-              "type": "string",
-              "writeOnly": true
-            },
-            "summary": {
-              "items": {
-                "$ref": "#/definitions/ReasoningItemReasoningSummary"
-              },
-              "type": "array"
-            },
-            "type": {
-              "enum": [
-                "reasoning"
-              ],
-              "title": "ReasoningConversationItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "summary",
-            "type"
-          ],
-          "title": "ReasoningConversationItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "action": {
-              "$ref": "#/definitions/LocalShellAction"
-            },
-            "call_id": {
-              "description": "Set when using the Responses API.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "id": {
-              "description": "Set when using the chat completions API.",
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
-            },
-            "status": {
-              "$ref": "#/definitions/LocalShellStatus"
-            },
-            "type": {
-              "enum": [
-                "local_shell_call"
-              ],
-              "title": "LocalShellCallConversationItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "action",
-            "status",
-            "type"
-          ],
-          "title": "LocalShellCallConversationItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "arguments": {
-              "type": "string"
-            },
-            "call_id": {
-              "type": "string"
-            },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
-            },
-            "name": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "function_call"
-              ],
-              "title": "FunctionCallConversationItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "arguments",
-            "call_id",
-            "name",
-            "type"
-          ],
-          "title": "FunctionCallConversationItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "call_id": {
-              "type": "string"
-            },
-            "output": {
-              "$ref": "#/definitions/FunctionCallOutputPayload"
-            },
-            "type": {
-              "enum": [
-                "function_call_output"
-              ],
-              "title": "FunctionCallOutputConversationItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "output",
-            "type"
-          ],
-          "title": "FunctionCallOutputConversationItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "call_id": {
-              "type": "string"
-            },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
-            },
-            "input": {
-              "type": "string"
-            },
-            "name": {
-              "type": "string"
-            },
-            "status": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "custom_tool_call"
-              ],
-              "title": "CustomToolCallConversationItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "input",
-            "name",
-            "type"
-          ],
-          "title": "CustomToolCallConversationItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "call_id": {
-              "type": "string"
-            },
-            "output": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "custom_tool_call_output"
-              ],
-              "title": "CustomToolCallOutputConversationItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "output",
-            "type"
-          ],
-          "title": "CustomToolCallOutputConversationItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "action": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/WebSearchAction"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "id": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "writeOnly": true
-            },
-            "status": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "web_search_call"
-              ],
-              "title": "WebSearchCallConversationItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "WebSearchCallConversationItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "ghost_commit": {
-              "$ref": "#/definitions/GhostCommit"
-            },
-            "type": {
-              "enum": [
-                "ghost_snapshot"
-              ],
-              "title": "GhostSnapshotConversationItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "ghost_commit",
-            "type"
-          ],
-          "title": "GhostSnapshotConversationItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "encrypted_content": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "compaction"
-              ],
-              "title": "CompactionConversationItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "encrypted_content",
-            "type"
-          ],
-          "title": "CompactionConversationItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "other"
-              ],
-              "title": "OtherConversationItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "OtherConversationItem",
-          "type": "object"
-        }
-      ]
-    },
     "ConversationSummary": {
       "properties": {
         "cliVersion": {
@@ -4572,13 +4226,13 @@
         {
           "properties": {
             "item": {
-              "$ref": "#/definitions/v2/ConversationItem"
+              "$ref": "#/definitions/v2/TranscriptItem"
             },
             "type": {
               "enum": [
-                "raw_conversation_item"
+                "raw_transcript_item"
               ],
-              "title": "RawConversationItemEventMsgType",
+              "title": "RawTranscriptItemEventMsgType",
               "type": "string"
             }
           },
@@ -4586,7 +4240,7 @@
             "item",
             "type"
           ],
-          "title": "RawConversationItemEventMsg",
+          "title": "RawTranscriptItemEventMsg",
           "type": "object"
         },
         {
@@ -5700,78 +5354,6 @@
       "title": "ForkConversationResponse",
       "type": "object"
     },
-    "FunctionCallOutputContentItem": {
-      "description": "Responses API compatible content items that can be returned by a tool call. This is a subset of ContentItem with the types we support as function call outputs.",
-      "oneOf": [
-        {
-          "properties": {
-            "text": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "input_text"
-              ],
-              "title": "InputTextFunctionCallOutputContentItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "text",
-            "type"
-          ],
-          "title": "InputTextFunctionCallOutputContentItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "image_url": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "input_image"
-              ],
-              "title": "InputImageFunctionCallOutputContentItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "image_url",
-            "type"
-          ],
-          "title": "InputImageFunctionCallOutputContentItem",
-          "type": "object"
-        }
-      ]
-    },
-    "FunctionCallOutputPayload": {
-      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`content` preserves the historical plain-string payload so downstream integrations (tests, logging, etc.) can keep treating tool output as `String`. When an MCP server returns richer data we additionally populate `content_items` with the structured form that the Responses/Chat Completions APIs understand.",
-      "properties": {
-        "content": {
-          "type": "string"
-        },
-        "content_items": {
-          "items": {
-            "$ref": "#/definitions/FunctionCallOutputContentItem"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "success": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "content"
-      ],
-      "type": "object"
-    },
     "FuzzyFileSearchParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -5966,38 +5548,6 @@
         "config"
       ],
       "title": "GetUserSavedConfigResponse",
-      "type": "object"
-    },
-    "GhostCommit": {
-      "description": "Details of a ghost commit created from a repository state.",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "parent": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "preexisting_untracked_dirs": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "preexisting_untracked_files": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "id",
-        "preexisting_untracked_dirs",
-        "preexisting_untracked_files"
-      ],
       "type": "object"
     },
     "GitDiffToRemoteParams": {
@@ -6389,70 +5939,6 @@
       ],
       "title": "ListConversationsResponse",
       "type": "object"
-    },
-    "LocalShellAction": {
-      "oneOf": [
-        {
-          "properties": {
-            "command": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "env": {
-              "additionalProperties": {
-                "type": "string"
-              },
-              "type": [
-                "object",
-                "null"
-              ]
-            },
-            "timeout_ms": {
-              "format": "uint64",
-              "minimum": 0.0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "exec"
-              ],
-              "title": "ExecLocalShellActionType",
-              "type": "string"
-            },
-            "user": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "working_directory": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "command",
-            "type"
-          ],
-          "title": "ExecLocalShellAction",
-          "type": "object"
-        }
-      ]
-    },
-    "LocalShellStatus": {
-      "enum": [
-        "completed",
-        "in_progress",
-        "incomplete"
-      ],
-      "type": "string"
     },
     "LoginApiKeyParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -7011,7 +6497,6 @@
     "RateLimitWindow": {
       "properties": {
         "resets_at": {
-          "description": "Unix timestamp (seconds since epoch) when the window resets.",
           "format": "int64",
           "type": [
             "integer",
@@ -7019,12 +6504,10 @@
           ]
         },
         "used_percent": {
-          "description": "Percentage (0-100) of the window that has been consumed.",
           "format": "double",
           "type": "number"
         },
         "window_minutes": {
-          "description": "Rolling window duration, in minutes.",
           "format": "int64",
           "type": [
             "integer",
@@ -7038,7 +6521,6 @@
       "type": "object"
     },
     "ReasoningEffort": {
-      "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
       "enum": [
         "none",
         "minimal",
@@ -7118,24 +6600,13 @@
       ]
     },
     "ReasoningSummary": {
-      "description": "A summary of the reasoning performed by the model. This can be useful for debugging and understanding the model's reasoning process. See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries",
-      "oneOf": [
-        {
-          "enum": [
-            "auto",
-            "concise",
-            "detailed"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Option to disable reasoning summaries.",
-          "enum": [
-            "none"
-          ],
-          "type": "string"
-        }
-      ]
+      "enum": [
+        "auto",
+        "concise",
+        "detailed",
+        "none"
+      ],
+      "type": "string"
     },
     "RemoveConversationListenerParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -7410,7 +6881,7 @@
         },
         "history": {
           "items": {
-            "$ref": "#/definitions/ConversationItem"
+            "$ref": "#/definitions/TranscriptItem"
           },
           "type": [
             "array",
@@ -8153,20 +7624,20 @@
           "properties": {
             "method": {
               "enum": [
-                "rawConversationItem/completed"
+                "rawTranscriptItem/completed"
               ],
-              "title": "RawConversationItem/completedNotificationMethod",
+              "title": "RawTranscriptItem/completedNotificationMethod",
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/v2/RawConversationItemCompletedNotification"
+              "$ref": "#/definitions/v2/RawTranscriptItemCompletedNotification"
             }
           },
           "required": [
             "method",
             "params"
           ],
-          "title": "RawConversationItem/completedNotification",
+          "title": "RawTranscriptItem/completedNotification",
           "type": "object"
         },
         {
@@ -9351,6 +8822,50 @@
       },
       "type": "object"
     },
+    "ToolCallPayload": {
+      "oneOf": [
+        {
+          "properties": {
+            "arguments": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "json_arguments"
+              ],
+              "title": "JsonArgumentsToolCallPayloadType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "arguments",
+            "type"
+          ],
+          "title": "JsonArgumentsToolCallPayload",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "input": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "text_input"
+              ],
+              "title": "TextInputToolCallPayloadType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "input",
+            "type"
+          ],
+          "title": "TextInputToolCallPayload",
+          "type": "object"
+        }
+      ]
+    },
     "ToolInputSchema": {
       "description": "A JSON Schema object defining the expected parameters for the tool.",
       "properties": {
@@ -9505,6 +9020,109 @@
       "title": "ToolRequestUserInputResponse",
       "type": "object"
     },
+    "ToolResultContentItem": {
+      "oneOf": [
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "input_text"
+              ],
+              "title": "InputTextToolResultContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "title": "InputTextToolResultContentItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "image_url": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "input_image"
+              ],
+              "title": "InputImageToolResultContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "image_url",
+            "type"
+          ],
+          "title": "InputImageToolResultContentItem",
+          "type": "object"
+        }
+      ]
+    },
+    "ToolResultPayload": {
+      "oneOf": [
+        {
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "content_items": {
+              "items": {
+                "$ref": "#/definitions/ToolResultContentItem"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "success": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "structured"
+              ],
+              "title": "StructuredToolResultPayloadType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "type"
+          ],
+          "title": "StructuredToolResultPayload",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "output": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "text"
+              ],
+              "title": "TextToolResultPayloadType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "output",
+            "type"
+          ],
+          "title": "TextToolResultPayload",
+          "type": "object"
+        }
+      ]
+    },
     "Tools": {
       "properties": {
         "viewImage": {
@@ -9521,6 +9139,206 @@
         }
       },
       "type": "object"
+    },
+    "TranscriptItem": {
+      "oneOf": [
+        {
+          "properties": {
+            "content": {
+              "items": {
+                "$ref": "#/definitions/ContentItem"
+              },
+              "type": "array"
+            },
+            "end_turn": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "message"
+              ],
+              "title": "MessageTranscriptItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "role",
+            "type"
+          ],
+          "title": "MessageTranscriptItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "content": {
+              "default": null,
+              "items": {
+                "$ref": "#/definitions/ReasoningItemContent"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "encrypted_content": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "summary": {
+              "items": {
+                "$ref": "#/definitions/ReasoningItemReasoningSummary"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "reasoning"
+              ],
+              "title": "ReasoningTranscriptItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "summary",
+            "type"
+          ],
+          "title": "ReasoningTranscriptItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "activity_type": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "payload": true,
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "hosted_activity"
+              ],
+              "title": "HostedActivityTranscriptItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "activity_type",
+            "payload",
+            "type"
+          ],
+          "title": "HostedActivityTranscriptItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ToolCallPayload"
+            },
+            "tool_name": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "tool_call"
+              ],
+              "title": "ToolCallTranscriptItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "payload",
+            "tool_name",
+            "type"
+          ],
+          "title": "ToolCallTranscriptItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "payload": {
+              "$ref": "#/definitions/ToolResultPayload"
+            },
+            "tool_name": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "tool_result"
+              ],
+              "title": "ToolResultTranscriptItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "payload",
+            "tool_name",
+            "type"
+          ],
+          "title": "ToolResultTranscriptItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "raw": true,
+            "type": {
+              "enum": [
+                "unknown"
+              ],
+              "title": "UnknownTranscriptItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "raw",
+            "type"
+          ],
+          "title": "UnknownTranscriptItem",
+          "type": "object"
+        }
+      ]
     },
     "TurnAbortReason": {
       "enum": [
@@ -9989,7 +9807,6 @@
       "type": "object"
     },
     "Verbosity": {
-      "description": "Controls output length/detail on GPT-5 models via the Responses API. Serialized with lowercase values to match the OpenAI API.",
       "enum": [
         "low",
         "medium",
@@ -11705,352 +11522,6 @@
         "title": "ContextCompactedNotification",
         "type": "object"
       },
-      "ConversationItem": {
-        "oneOf": [
-          {
-            "properties": {
-              "content": {
-                "items": {
-                  "$ref": "#/definitions/v2/ContentItem"
-                },
-                "type": "array"
-              },
-              "end_turn": {
-                "type": [
-                  "boolean",
-                  "null"
-                ]
-              },
-              "id": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "writeOnly": true
-              },
-              "role": {
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "message"
-                ],
-                "title": "MessageConversationItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "content",
-              "role",
-              "type"
-            ],
-            "title": "MessageConversationItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "content": {
-                "default": null,
-                "items": {
-                  "$ref": "#/definitions/v2/ReasoningItemContent"
-                },
-                "type": [
-                  "array",
-                  "null"
-                ]
-              },
-              "encrypted_content": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "id": {
-                "type": "string",
-                "writeOnly": true
-              },
-              "summary": {
-                "items": {
-                  "$ref": "#/definitions/v2/ReasoningItemReasoningSummary"
-                },
-                "type": "array"
-              },
-              "type": {
-                "enum": [
-                  "reasoning"
-                ],
-                "title": "ReasoningConversationItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "summary",
-              "type"
-            ],
-            "title": "ReasoningConversationItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "action": {
-                "$ref": "#/definitions/v2/LocalShellAction"
-              },
-              "call_id": {
-                "description": "Set when using the Responses API.",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "id": {
-                "description": "Set when using the chat completions API.",
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "writeOnly": true
-              },
-              "status": {
-                "$ref": "#/definitions/v2/LocalShellStatus"
-              },
-              "type": {
-                "enum": [
-                  "local_shell_call"
-                ],
-                "title": "LocalShellCallConversationItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "action",
-              "status",
-              "type"
-            ],
-            "title": "LocalShellCallConversationItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "arguments": {
-                "type": "string"
-              },
-              "call_id": {
-                "type": "string"
-              },
-              "id": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "writeOnly": true
-              },
-              "name": {
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "function_call"
-                ],
-                "title": "FunctionCallConversationItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "arguments",
-              "call_id",
-              "name",
-              "type"
-            ],
-            "title": "FunctionCallConversationItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "call_id": {
-                "type": "string"
-              },
-              "output": {
-                "$ref": "#/definitions/v2/FunctionCallOutputPayload"
-              },
-              "type": {
-                "enum": [
-                  "function_call_output"
-                ],
-                "title": "FunctionCallOutputConversationItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "call_id",
-              "output",
-              "type"
-            ],
-            "title": "FunctionCallOutputConversationItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "call_id": {
-                "type": "string"
-              },
-              "id": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "writeOnly": true
-              },
-              "input": {
-                "type": "string"
-              },
-              "name": {
-                "type": "string"
-              },
-              "status": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "type": {
-                "enum": [
-                  "custom_tool_call"
-                ],
-                "title": "CustomToolCallConversationItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "call_id",
-              "input",
-              "name",
-              "type"
-            ],
-            "title": "CustomToolCallConversationItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "call_id": {
-                "type": "string"
-              },
-              "output": {
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "custom_tool_call_output"
-                ],
-                "title": "CustomToolCallOutputConversationItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "call_id",
-              "output",
-              "type"
-            ],
-            "title": "CustomToolCallOutputConversationItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "action": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/WebSearchAction"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "id": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "writeOnly": true
-              },
-              "status": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "type": {
-                "enum": [
-                  "web_search_call"
-                ],
-                "title": "WebSearchCallConversationItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "title": "WebSearchCallConversationItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "ghost_commit": {
-                "$ref": "#/definitions/v2/GhostCommit"
-              },
-              "type": {
-                "enum": [
-                  "ghost_snapshot"
-                ],
-                "title": "GhostSnapshotConversationItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "ghost_commit",
-              "type"
-            ],
-            "title": "GhostSnapshotConversationItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "encrypted_content": {
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "compaction"
-                ],
-                "title": "CompactionConversationItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "encrypted_content",
-              "type"
-            ],
-            "title": "CompactionConversationItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "type": {
-                "enum": [
-                  "other"
-                ],
-                "title": "OtherConversationItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "title": "OtherConversationItem",
-            "type": "object"
-          }
-        ]
-      },
       "CreditsSnapshot": {
         "properties": {
           "balance": {
@@ -12268,78 +11739,6 @@
         ],
         "type": "string"
       },
-      "FunctionCallOutputContentItem": {
-        "description": "Responses API compatible content items that can be returned by a tool call. This is a subset of ContentItem with the types we support as function call outputs.",
-        "oneOf": [
-          {
-            "properties": {
-              "text": {
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "input_text"
-                ],
-                "title": "InputTextFunctionCallOutputContentItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "text",
-              "type"
-            ],
-            "title": "InputTextFunctionCallOutputContentItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "image_url": {
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "input_image"
-                ],
-                "title": "InputImageFunctionCallOutputContentItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "image_url",
-              "type"
-            ],
-            "title": "InputImageFunctionCallOutputContentItem",
-            "type": "object"
-          }
-        ]
-      },
-      "FunctionCallOutputPayload": {
-        "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`content` preserves the historical plain-string payload so downstream integrations (tests, logging, etc.) can keep treating tool output as `String`. When an MCP server returns richer data we additionally populate `content_items` with the structured form that the Responses/Chat Completions APIs understand.",
-        "properties": {
-          "content": {
-            "type": "string"
-          },
-          "content_items": {
-            "items": {
-              "$ref": "#/definitions/v2/FunctionCallOutputContentItem"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "success": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "content"
-        ],
-        "type": "object"
-      },
       "GetAccountParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -12386,38 +11785,6 @@
           "requiresOpenaiAuth"
         ],
         "title": "GetAccountResponse",
-        "type": "object"
-      },
-      "GhostCommit": {
-        "description": "Details of a ghost commit created from a repository state.",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "parent": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "preexisting_untracked_dirs": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "preexisting_untracked_files": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "id",
-          "preexisting_untracked_dirs",
-          "preexisting_untracked_files"
-        ],
         "type": "object"
       },
       "GitInfo": {
@@ -12560,70 +11927,6 @@
         ],
         "title": "ListMcpServerStatusResponse",
         "type": "object"
-      },
-      "LocalShellAction": {
-        "oneOf": [
-          {
-            "properties": {
-              "command": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "env": {
-                "additionalProperties": {
-                  "type": "string"
-                },
-                "type": [
-                  "object",
-                  "null"
-                ]
-              },
-              "timeout_ms": {
-                "format": "uint64",
-                "minimum": 0.0,
-                "type": [
-                  "integer",
-                  "null"
-                ]
-              },
-              "type": {
-                "enum": [
-                  "exec"
-                ],
-                "title": "ExecLocalShellActionType",
-                "type": "string"
-              },
-              "user": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "working_directory": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              }
-            },
-            "required": [
-              "command",
-              "type"
-            ],
-            "title": "ExecLocalShellAction",
-            "type": "object"
-          }
-        ]
-      },
-      "LocalShellStatus": {
-        "enum": [
-          "completed",
-          "in_progress",
-          "incomplete"
-        ],
-        "type": "string"
       },
       "LoginAccountParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -13325,11 +12628,11 @@
         ],
         "type": "object"
       },
-      "RawConversationItemCompletedNotification": {
+      "RawTranscriptItemCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "item": {
-            "$ref": "#/definitions/v2/ConversationItem"
+            "$ref": "#/definitions/v2/TranscriptItem"
           },
           "threadId": {
             "type": "string"
@@ -13343,11 +12646,10 @@
           "threadId",
           "turnId"
         ],
-        "title": "RawConversationItemCompletedNotification",
+        "title": "RawTranscriptItemCompletedNotification",
         "type": "object"
       },
       "ReasoningEffort": {
-        "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
         "enum": [
           "none",
           "minimal",
@@ -13442,24 +12744,13 @@
         ]
       },
       "ReasoningSummary": {
-        "description": "A summary of the reasoning performed by the model. This can be useful for debugging and understanding the model's reasoning process. See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries",
-        "oneOf": [
-          {
-            "enum": [
-              "auto",
-              "concise",
-              "detailed"
-            ],
-            "type": "string"
-          },
-          {
-            "description": "Option to disable reasoning summaries.",
-            "enum": [
-              "none"
-            ],
-            "type": "string"
-          }
-        ]
+        "enum": [
+          "auto",
+          "concise",
+          "detailed",
+          "none"
+        ],
+        "type": "string"
       },
       "ReasoningSummaryPartAddedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -15432,7 +14723,7 @@
           "history": {
             "description": "[UNSTABLE] FOR CODEX CLOUD - DO NOT USE. If specified, the thread will be resumed with the provided history instead of loaded from disk.",
             "items": {
-              "$ref": "#/definitions/v2/ConversationItem"
+              "$ref": "#/definitions/v2/TranscriptItem"
             },
             "type": [
               "array",
@@ -15949,6 +15240,50 @@
         },
         "type": "object"
       },
+      "ToolCallPayload": {
+        "oneOf": [
+          {
+            "properties": {
+              "arguments": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "json_arguments"
+                ],
+                "title": "JsonArgumentsToolCallPayloadType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "arguments",
+              "type"
+            ],
+            "title": "JsonArgumentsToolCallPayload",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "input": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "text_input"
+                ],
+                "title": "TextInputToolCallPayloadType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "input",
+              "type"
+            ],
+            "title": "TextInputToolCallPayload",
+            "type": "object"
+          }
+        ]
+      },
       "ToolInputSchema": {
         "description": "A JSON Schema object defining the expected parameters for the tool.",
         "properties": {
@@ -15989,6 +15324,109 @@
         },
         "type": "object"
       },
+      "ToolResultContentItem": {
+        "oneOf": [
+          {
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "input_text"
+                ],
+                "title": "InputTextToolResultContentItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "type"
+            ],
+            "title": "InputTextToolResultContentItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "image_url": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "input_image"
+                ],
+                "title": "InputImageToolResultContentItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "image_url",
+              "type"
+            ],
+            "title": "InputImageToolResultContentItem",
+            "type": "object"
+          }
+        ]
+      },
+      "ToolResultPayload": {
+        "oneOf": [
+          {
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "content_items": {
+                "items": {
+                  "$ref": "#/definitions/v2/ToolResultContentItem"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "success": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "structured"
+                ],
+                "title": "StructuredToolResultPayloadType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "content",
+              "type"
+            ],
+            "title": "StructuredToolResultPayload",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "output": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "text"
+                ],
+                "title": "TextToolResultPayloadType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "output",
+              "type"
+            ],
+            "title": "TextToolResultPayload",
+            "type": "object"
+          }
+        ]
+      },
       "ToolsV2": {
         "properties": {
           "view_image": {
@@ -16005,6 +15443,206 @@
           }
         },
         "type": "object"
+      },
+      "TranscriptItem": {
+        "oneOf": [
+          {
+            "properties": {
+              "content": {
+                "items": {
+                  "$ref": "#/definitions/v2/ContentItem"
+                },
+                "type": "array"
+              },
+              "end_turn": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "role": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "message"
+                ],
+                "title": "MessageTranscriptItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "content",
+              "role",
+              "type"
+            ],
+            "title": "MessageTranscriptItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "content": {
+                "default": null,
+                "items": {
+                  "$ref": "#/definitions/v2/ReasoningItemContent"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "encrypted_content": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "summary": {
+                "items": {
+                  "$ref": "#/definitions/v2/ReasoningItemReasoningSummary"
+                },
+                "type": "array"
+              },
+              "type": {
+                "enum": [
+                  "reasoning"
+                ],
+                "title": "ReasoningTranscriptItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "summary",
+              "type"
+            ],
+            "title": "ReasoningTranscriptItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "activity_type": {
+                "type": "string"
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "payload": true,
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "hosted_activity"
+                ],
+                "title": "HostedActivityTranscriptItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "activity_type",
+              "payload",
+              "type"
+            ],
+            "title": "HostedActivityTranscriptItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "call_id": {
+                "type": "string"
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "payload": {
+                "$ref": "#/definitions/v2/ToolCallPayload"
+              },
+              "tool_name": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "tool_call"
+                ],
+                "title": "ToolCallTranscriptItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "call_id",
+              "payload",
+              "tool_name",
+              "type"
+            ],
+            "title": "ToolCallTranscriptItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "call_id": {
+                "type": "string"
+              },
+              "payload": {
+                "$ref": "#/definitions/v2/ToolResultPayload"
+              },
+              "tool_name": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "tool_result"
+                ],
+                "title": "ToolResultTranscriptItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "call_id",
+              "payload",
+              "tool_name",
+              "type"
+            ],
+            "title": "ToolResultTranscriptItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "raw": true,
+              "type": {
+                "enum": [
+                  "unknown"
+                ],
+                "title": "UnknownTranscriptItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "raw",
+              "type"
+            ],
+            "title": "UnknownTranscriptItem",
+            "type": "object"
+          }
+        ]
       },
       "Turn": {
         "properties": {
@@ -16445,7 +16083,6 @@
         ]
       },
       "Verbosity": {
-        "description": "Controls output length/detail on GPT-5 models via the Responses API. Serialized with lowercase values to match the OpenAI API.",
         "enum": [
           "low",
           "medium",
@@ -16490,7 +16127,7 @@
             "properties": {
               "type": {
                 "enum": [
-                  "open_page"
+                  "openPage"
                 ],
                 "title": "OpenPageWebSearchActionType",
                 "type": "string"
@@ -16518,7 +16155,7 @@
               },
               "type": {
                 "enum": [
-                  "find_in_page"
+                  "findInPage"
                 ],
                 "title": "FindInPageWebSearchActionType",
                 "type": "string"

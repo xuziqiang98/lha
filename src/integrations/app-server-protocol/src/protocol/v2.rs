@@ -14,7 +14,7 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
-use codex_protocol::models::ConversationItem;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
@@ -1220,7 +1220,7 @@ pub struct ThreadResumeParams {
     /// [UNSTABLE] FOR CODEX CLOUD - DO NOT USE.
     /// If specified, the thread will be resumed with the provided history
     /// instead of loaded from disk.
-    pub history: Option<Vec<ConversationItem>>,
+    pub history: Option<Vec<TranscriptItem>>,
 
     /// [UNSTABLE] Specify the rollout path to resume from.
     /// If specified, the thread_id param will be ignored.
@@ -2488,10 +2488,10 @@ pub struct ItemCompletedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct RawConversationItemCompletedNotification {
+pub struct RawTranscriptItemCompletedNotification {
     pub thread_id: String,
     pub turn_id: String,
-    pub item: ConversationItem,
+    pub item: TranscriptItem,
 }
 
 // Item-specific progress notifications

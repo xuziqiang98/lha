@@ -65,7 +65,7 @@ impl TestRuntimeClient {
             endpoint_id: config.model_provider_id.clone(),
             auth_source: Arc::new(NoAuthSource),
             http_client: build_reqwest_client(),
-            model_info,
+            model_info: model_info.into(),
             otel_manager,
             endpoint,
             effort,

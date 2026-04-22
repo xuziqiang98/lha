@@ -2,12 +2,9 @@ use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 
-use codex_llm_types::ConversationItem;
-use codex_llm_types::LocalShellAction;
 use futures::Stream;
 use futures::StreamExt;
 use serde_json::Value;
-use serde_json::json;
 use tokio::sync::mpsc;
 
 use crate::BaseInstructions;
@@ -22,14 +19,220 @@ use crate::prompt::JsonSchema;
 use crate::prompt::Prompt;
 use crate::prompt::ResponseEvent;
 use crate::prompt::ResponseStream;
-use crate::prompt::ResponsesApiTool;
 use crate::prompt::ToolSpec;
+use crate::types::ToolCallItem as ToolCallRequest;
+#[cfg(test)]
+use crate::types::ToolCallPayload;
 
-pub type FunctionToolDescriptor = ResponsesApiTool;
-pub type ToolInputSchema = JsonSchema;
-pub type FreeformToolDescriptor = FreeformTool;
-pub type FreeformToolDescriptorFormat = FreeformToolFormat;
 pub type ItemHandle = String;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum AdditionalProperties {
+    Boolean(bool),
+    Schema(Box<ToolInputSchema>),
+}
+
+impl From<bool> for AdditionalProperties {
+    fn from(value: bool) -> Self {
+        Self::Boolean(value)
+    }
+}
+
+impl From<ToolInputSchema> for AdditionalProperties {
+    fn from(value: ToolInputSchema) -> Self {
+        Self::Schema(Box::new(value))
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum ToolInputSchema {
+    Boolean {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+    String {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+    #[serde(alias = "integer")]
+    Number {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+    Array {
+        items: Box<ToolInputSchema>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+    Object {
+        properties: std::collections::BTreeMap<String, ToolInputSchema>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        required: Option<Vec<String>>,
+        #[serde(
+            rename = "additionalProperties",
+            skip_serializing_if = "Option::is_none"
+        )]
+        additional_properties: Option<AdditionalProperties>,
+    },
+}
+
+impl From<JsonSchema> for ToolInputSchema {
+    fn from(value: JsonSchema) -> Self {
+        match value {
+            JsonSchema::Boolean { description } => Self::Boolean { description },
+            JsonSchema::String { description } => Self::String { description },
+            JsonSchema::Number { description } => Self::Number { description },
+            JsonSchema::Array { items, description } => Self::Array {
+                items: Box::new(Self::from(*items)),
+                description,
+            },
+            JsonSchema::Object {
+                properties,
+                required,
+                additional_properties,
+            } => Self::Object {
+                properties: properties
+                    .into_iter()
+                    .map(|(key, value)| (key, Self::from(value)))
+                    .collect(),
+                required,
+                additional_properties: additional_properties.map(Into::into),
+            },
+        }
+    }
+}
+
+impl From<ToolInputSchema> for JsonSchema {
+    fn from(value: ToolInputSchema) -> Self {
+        match value {
+            ToolInputSchema::Boolean { description } => Self::Boolean { description },
+            ToolInputSchema::String { description } => Self::String { description },
+            ToolInputSchema::Number { description } => Self::Number { description },
+            ToolInputSchema::Array { items, description } => Self::Array {
+                items: Box::new(Self::from(*items)),
+                description,
+            },
+            ToolInputSchema::Object {
+                properties,
+                required,
+                additional_properties,
+            } => Self::Object {
+                properties: properties
+                    .into_iter()
+                    .map(|(key, value)| (key, Self::from(value)))
+                    .collect(),
+                required,
+                additional_properties: additional_properties.map(Into::into),
+            },
+        }
+    }
+}
+
+impl From<crate::prompt::AdditionalProperties> for AdditionalProperties {
+    fn from(value: crate::prompt::AdditionalProperties) -> Self {
+        match value {
+            crate::prompt::AdditionalProperties::Boolean(value) => Self::Boolean(value),
+            crate::prompt::AdditionalProperties::Schema(schema) => {
+                Self::Schema(Box::new(ToolInputSchema::from(*schema)))
+            }
+        }
+    }
+}
+
+impl From<AdditionalProperties> for crate::prompt::AdditionalProperties {
+    fn from(value: AdditionalProperties) -> Self {
+        match value {
+            AdditionalProperties::Boolean(value) => Self::Boolean(value),
+            AdditionalProperties::Schema(schema) => Self::Schema(Box::new((*schema).into())),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct FunctionToolDescriptor {
+    pub name: String,
+    pub description: String,
+    pub strict: bool,
+    pub parameters: ToolInputSchema,
+}
+
+impl From<crate::prompt::ResponsesApiTool> for FunctionToolDescriptor {
+    fn from(value: crate::prompt::ResponsesApiTool) -> Self {
+        Self {
+            name: value.name,
+            description: value.description,
+            strict: value.strict,
+            parameters: value.parameters.into(),
+        }
+    }
+}
+
+impl From<FunctionToolDescriptor> for crate::prompt::ResponsesApiTool {
+    fn from(value: FunctionToolDescriptor) -> Self {
+        Self {
+            name: value.name,
+            description: value.description,
+            strict: value.strict,
+            parameters: value.parameters.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct FreeformToolDescriptor {
+    pub name: String,
+    pub description: String,
+    pub format: FreeformToolDescriptorFormat,
+}
+
+impl From<FreeformTool> for FreeformToolDescriptor {
+    fn from(value: FreeformTool) -> Self {
+        Self {
+            name: value.name,
+            description: value.description,
+            format: value.format.into(),
+        }
+    }
+}
+
+impl From<FreeformToolDescriptor> for FreeformTool {
+    fn from(value: FreeformToolDescriptor) -> Self {
+        Self {
+            name: value.name,
+            description: value.description,
+            format: value.format.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct FreeformToolDescriptorFormat {
+    pub r#type: String,
+    pub syntax: String,
+    pub definition: String,
+}
+
+impl From<FreeformToolFormat> for FreeformToolDescriptorFormat {
+    fn from(value: FreeformToolFormat) -> Self {
+        Self {
+            r#type: value.r#type,
+            syntax: value.syntax,
+            definition: value.definition,
+        }
+    }
+}
+
+impl From<FreeformToolDescriptorFormat> for FreeformToolFormat {
+    fn from(value: FreeformToolDescriptorFormat) -> Self {
+        Self {
+            r#type: value.r#type,
+            syntax: value.syntax,
+            definition: value.definition,
+        }
+    }
+}
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq)]
 #[serde(tag = "type")]
@@ -53,23 +256,18 @@ impl ToolDescriptor {
             Self::Freeform(tool) => tool.name.as_str(),
         }
     }
-
-    pub fn to_legacy_tool_spec(&self) -> ToolSpec {
-        self.clone().into()
-    }
 }
 
 impl From<ToolSpec> for ToolDescriptor {
     fn from(value: ToolSpec) -> Self {
         match value {
-            ToolSpec::Function(tool) => Self::Function(tool),
-            ToolSpec::LocalShell {} => Self::Function(local_shell_tool_descriptor()),
+            ToolSpec::Function(tool) => Self::Function(tool.into()),
             ToolSpec::WebSearch {
                 external_web_access,
             } => Self::WebSearch {
                 external_web_access,
             },
-            ToolSpec::Freeform(tool) => Self::Freeform(tool),
+            ToolSpec::Freeform(tool) => Self::Freeform(tool.into()),
         }
     }
 }
@@ -77,19 +275,13 @@ impl From<ToolSpec> for ToolDescriptor {
 impl From<ToolDescriptor> for ToolSpec {
     fn from(value: ToolDescriptor) -> Self {
         match value {
-            ToolDescriptor::Function(tool) => {
-                if tool.name == "local_shell" {
-                    Self::LocalShell {}
-                } else {
-                    Self::Function(tool)
-                }
-            }
+            ToolDescriptor::Function(tool) => Self::Function(tool.into()),
             ToolDescriptor::WebSearch {
                 external_web_access,
             } => Self::WebSearch {
                 external_web_access,
             },
-            ToolDescriptor::Freeform(tool) => Self::Freeform(tool),
+            ToolDescriptor::Freeform(tool) => Self::Freeform(tool.into()),
         }
     }
 }
@@ -158,7 +350,7 @@ impl From<&Prompt> for TurnRequest {
 pub enum SemanticOutputItem {
     AssistantMessage { item: TranscriptItem },
     Reasoning { item: TranscriptItem },
-    WebSearch { item: TranscriptItem },
+    HostedActivity { item: TranscriptItem },
 }
 
 impl SemanticOutputItem {
@@ -166,7 +358,7 @@ impl SemanticOutputItem {
         match self {
             Self::AssistantMessage { item }
             | Self::Reasoning { item }
-            | Self::WebSearch { item } => item,
+            | Self::HostedActivity { item } => item,
         }
     }
 
@@ -174,123 +366,28 @@ impl SemanticOutputItem {
         match self {
             Self::AssistantMessage { item }
             | Self::Reasoning { item }
-            | Self::WebSearch { item } => item,
+            | Self::HostedActivity { item } => item,
         }
     }
 
-    fn from_conversation_item(item: TranscriptItem) -> Option<Self> {
+    fn from_transcript_item(item: TranscriptItem) -> Option<Self> {
         match &item {
-            ConversationItem::Message { role, .. } if role == "assistant" => {
+            TranscriptItem::Message { role, .. } if role == "assistant" => {
                 Some(Self::AssistantMessage { item })
             }
-            ConversationItem::Reasoning { .. } => Some(Self::Reasoning { item }),
-            ConversationItem::WebSearchCall { .. } => Some(Self::WebSearch { item }),
+            TranscriptItem::Reasoning { .. } => Some(Self::Reasoning { item }),
+            TranscriptItem::HostedActivity { .. } => Some(Self::HostedActivity { item }),
             _ => None,
         }
     }
 
     fn suggested_handle(&self) -> Option<String> {
         match self.item() {
-            ConversationItem::Message { id, .. } => id.clone(),
-            ConversationItem::Reasoning { id, .. } => Some(id.clone()),
-            ConversationItem::WebSearchCall { id, .. } => id.clone(),
+            TranscriptItem::Message { id, .. } => id.clone(),
+            TranscriptItem::Reasoning { id, .. } => Some(id.clone()),
+            TranscriptItem::HostedActivity { id, .. } => id.clone(),
             _ => None,
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ToolCallPayload {
-    Function { arguments: String },
-    Custom { input: String },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ToolCallRequest {
-    pub tool_name: String,
-    pub call_id: String,
-    pub payload: ToolCallPayload,
-}
-
-impl ToolCallRequest {
-    pub fn from_conversation_item(item: TranscriptItem) -> Option<Self> {
-        match item {
-            ConversationItem::FunctionCall {
-                name,
-                arguments,
-                call_id,
-                ..
-            } => Some(Self {
-                tool_name: name,
-                call_id,
-                payload: ToolCallPayload::Function { arguments },
-            }),
-            ConversationItem::CustomToolCall {
-                name,
-                input,
-                call_id,
-                ..
-            } => Some(Self {
-                tool_name: name,
-                call_id,
-                payload: ToolCallPayload::Custom { input },
-            }),
-            ConversationItem::LocalShellCall {
-                id,
-                call_id,
-                action,
-                ..
-            } => {
-                let call_id = call_id.or(id).unwrap_or_default();
-                let LocalShellAction::Exec(exec) = action;
-                let arguments = serde_json::to_string(&json!({
-                    "command": exec.command,
-                    "workdir": exec.working_directory,
-                    "timeout_ms": exec.timeout_ms,
-                    "sandbox_permissions": "use_default",
-                }))
-                .ok()?;
-                Some(Self {
-                    tool_name: "local_shell".to_string(),
-                    call_id,
-                    payload: ToolCallPayload::Function { arguments },
-                })
-            }
-            _ => None,
-        }
-    }
-}
-
-fn local_shell_tool_descriptor() -> FunctionToolDescriptor {
-    FunctionToolDescriptor {
-        name: "local_shell".to_string(),
-        description: "Execute a local shell command.".to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties: std::collections::BTreeMap::from([
-                (
-                    "command".to_string(),
-                    JsonSchema::Array {
-                        items: Box::new(JsonSchema::String { description: None }),
-                        description: Some("Command and arguments to execute.".to_string()),
-                    },
-                ),
-                (
-                    "workdir".to_string(),
-                    JsonSchema::String {
-                        description: Some("Optional working directory.".to_string()),
-                    },
-                ),
-                (
-                    "timeout_ms".to_string(),
-                    JsonSchema::Number {
-                        description: Some("Optional timeout in milliseconds.".to_string()),
-                    },
-                ),
-            ]),
-            required: Some(vec!["command".to_string()]),
-            additional_properties: Some(false.into()),
-        },
     }
 }
 
@@ -362,10 +459,7 @@ impl TurnEvent {
             Self::RuntimeNotice(_) => return None,
             Self::ItemStarted { item, .. } => ResponseEvent::OutputItemAdded(item.item().clone()),
             Self::ItemCompleted { item, .. } => ResponseEvent::OutputItemDone(item.item().clone()),
-            Self::ToolCall(call) => {
-                let item = crate::tool_call_to_transcript_item(call)?;
-                ResponseEvent::OutputItemDone(item)
-            }
+            Self::ToolCall(call) => ResponseEvent::OutputItemDone(call.to_transcript_item()),
             Self::OutputTextDelta { delta, .. } => ResponseEvent::OutputTextDelta(delta.clone()),
             Self::ProposedPlanDelta { delta, .. } => {
                 ResponseEvent::ProposedPlanDelta(delta.clone())
@@ -470,7 +564,7 @@ fn adapt_response_event(
 ) -> Result<Vec<TurnEvent>> {
     let event = match event {
         ResponseEvent::Created => vec![TurnEvent::Created],
-        ResponseEvent::OutputItemAdded(item) => SemanticOutputItem::from_conversation_item(item)
+        ResponseEvent::OutputItemAdded(item) => SemanticOutputItem::from_transcript_item(item)
             .map(|item| {
                 let handle = item
                     .suggested_handle()
@@ -480,9 +574,9 @@ fn adapt_response_event(
             })
             .unwrap_or_default(),
         ResponseEvent::OutputItemDone(item) => {
-            if let Some(call) = ToolCallRequest::from_conversation_item(item.clone()) {
+            if let Some(call) = ToolCallRequest::from_transcript_item(item.clone()) {
                 vec![TurnEvent::ToolCall(call)]
-            } else if let Some(item) = SemanticOutputItem::from_conversation_item(item) {
+            } else if let Some(item) = SemanticOutputItem::from_transcript_item(item) {
                 let handle = active_handle
                     .take()
                     .or_else(|| item.suggested_handle())
@@ -569,39 +663,44 @@ fn next_item_handle(next_synthetic_handle: &mut usize) -> String {
 mod tests {
     use super::*;
     use codex_llm_types::ContentItem;
+
     #[test]
     fn tool_call_request_is_derived_from_function_call_items() {
-        let item = ConversationItem::FunctionCall {
+        let item = TranscriptItem::ToolCall {
             id: Some("fn-1".to_string()),
-            name: "shell".to_string(),
-            arguments: "{\"command\":[\"pwd\"]}".to_string(),
             call_id: "call-1".to_string(),
+            tool_name: "shell".to_string(),
+            payload: ToolCallPayload::JsonArguments {
+                arguments: "{\"command\":[\"pwd\"]}".to_string(),
+            },
         };
 
-        let call = ToolCallRequest::from_conversation_item(item).expect("tool call");
+        let call = ToolCallRequest::from_transcript_item(item).expect("tool call");
 
         assert_eq!(call.tool_name, "shell");
         assert_eq!(call.call_id, "call-1");
         assert_eq!(
             call.payload,
-            ToolCallPayload::Function {
+            ToolCallPayload::JsonArguments {
                 arguments: "{\"command\":[\"pwd\"]}".to_string(),
             }
         );
         assert_eq!(
-            crate::tool_call_to_transcript_item(&call),
-            Some(ConversationItem::FunctionCall {
-                id: Some("call-1".to_string()),
-                name: "shell".to_string(),
-                arguments: "{\"command\":[\"pwd\"]}".to_string(),
+            call.to_transcript_item(),
+            TranscriptItem::ToolCall {
+                id: Some("fn-1".to_string()),
                 call_id: "call-1".to_string(),
-            })
+                tool_name: "shell".to_string(),
+                payload: ToolCallPayload::JsonArguments {
+                    arguments: "{\"command\":[\"pwd\"]}".to_string(),
+                },
+            }
         );
     }
 
     #[test]
     fn semantic_output_items_roundtrip_to_legacy_events() {
-        let item = ConversationItem::Message {
+        let item = TranscriptItem::Message {
             id: Some("msg-1".to_string()),
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -610,7 +709,7 @@ mod tests {
             end_turn: None,
         };
         let semantic_item =
-            SemanticOutputItem::from_conversation_item(item.clone()).expect("assistant item");
+            SemanticOutputItem::from_transcript_item(item.clone()).expect("assistant item");
 
         match (TurnEvent::ItemStarted {
             handle: "msg-1".to_string(),

@@ -1,9 +1,9 @@
 use crate::error::ApiError;
-use codex_llm_types::ConversationItem;
 use codex_llm_types::RateLimitSnapshot;
 use codex_llm_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_llm_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_llm_types::TokenUsage;
+use codex_llm_types::TranscriptItem;
 use codex_llm_types::Verbosity as VerbosityConfig;
 use futures::Stream;
 use serde::Serialize;
@@ -19,7 +19,7 @@ pub struct Prompt {
     /// Fully-resolved system instructions for this turn.
     pub instructions: String,
     /// Conversation history and user/tool messages.
-    pub input: Vec<ConversationItem>,
+    pub input: Vec<TranscriptItem>,
     /// JSON-encoded tool definitions compatible with the target API.
     // TODO(jif) have a proper type here
     pub tools: Vec<Value>,
@@ -33,15 +33,15 @@ pub struct Prompt {
 #[derive(Debug, Clone, Serialize)]
 pub struct CompactionInput<'a> {
     pub model: &'a str,
-    pub input: &'a [ConversationItem],
+    pub input: &'a [TranscriptItem],
     pub instructions: &'a str,
 }
 
 #[derive(Debug)]
 pub enum ResponseEvent {
     Created,
-    OutputItemDone(ConversationItem),
-    OutputItemAdded(ConversationItem),
+    OutputItemDone(TranscriptItem),
+    OutputItemAdded(TranscriptItem),
     ProposedPlanDelta(String),
     ProposedPlanDone(String),
     /// Emitted when `X-Reasoning-Included: true` is present on the response,
@@ -128,7 +128,7 @@ impl From<VerbosityConfig> for OpenAiVerbosity {
 pub struct ResponsesApiRequest<'a> {
     pub model: &'a str,
     pub instructions: &'a str,
-    pub input: &'a [ConversationItem],
+    pub input: &'a [TranscriptItem],
     pub tools: &'a [serde_json::Value],
     pub tool_choice: &'static str,
     pub parallel_tool_calls: bool,
@@ -146,7 +146,7 @@ pub struct ResponsesApiRequest<'a> {
 pub struct ResponseCreateWsRequest {
     pub model: String,
     pub instructions: String,
-    pub input: Vec<ConversationItem>,
+    pub input: Vec<TranscriptItem>,
     pub tools: Vec<Value>,
     pub tool_choice: String,
     pub parallel_tool_calls: bool,
@@ -162,7 +162,7 @@ pub struct ResponseCreateWsRequest {
 
 #[derive(Debug, Serialize)]
 pub struct ResponseAppendWsRequest {
-    pub input: Vec<ConversationItem>,
+    pub input: Vec<TranscriptItem>,
 }
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]

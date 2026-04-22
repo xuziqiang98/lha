@@ -356,6 +356,8 @@ impl ModelsManager {
         )
         .await?;
 
+        let models: Vec<ModelInfo> = models.into_iter().map(Into::into).collect();
+
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();
         self.cache_manager_snapshot()

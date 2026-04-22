@@ -136,10 +136,10 @@ pub use codex_protocol::protocol;
 pub use codex_protocol::config_types as protocol_config_types;
 
 pub use client_common::REVIEW_PROMPT;
+pub use codex_protocol::legacy_transcript::LocalShellAction;
+pub use codex_protocol::legacy_transcript::LocalShellExecAction;
+pub use codex_protocol::legacy_transcript::LocalShellStatus;
 pub use codex_protocol::models::ContentItem;
-pub use codex_protocol::models::LocalShellAction;
-pub use codex_protocol::models::LocalShellExecAction;
-pub use codex_protocol::models::LocalShellStatus;
 pub use compact::content_items_to_text;
 pub use event_mapping::parse_turn_item;
 pub mod compact;

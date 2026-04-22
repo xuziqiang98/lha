@@ -5,6 +5,8 @@ The Rust workspace is organized around the current top-level domains under `src/
 - `src/llm`: the LLM-facing SDK boundary.
   - `src/llm/api` owns wire-level API clients and provider protocol details.
   - `src/llm/runtime` exposes the semantic runtime interface consumed by the agent layer.
+    Its public surface should remain semantic and provider-neutral rather than
+    re-exporting protocol compatibility helpers or wire-specific request types.
   - `src/llm/providers` is reserved for provider-specific adapters when needed.
 - `src/core`: cross-surface product primitives that should not depend on a specific UI.
   - `src/core/agent-core` owns the reusable agent-loop kernel that sits above `codex-llm` and below product-specific agent behavior.
@@ -34,6 +36,12 @@ The main product path is:
 
 The important boundary in this stack is that `codex-coding-agent` should talk to `codex-llm` as an SDK, not by reaching into provider-specific internals.
 The reusable turn-stream kernel now lives in `codex-agent-core`, and the higher-level reusable session runtime lives in `codex-agent-runtime`, so new agent products should prefer building on those layers instead of reimplementing the loop inside a product crate.
+In particular, `codex-llm` should expose semantic tool descriptors, turn requests,
+and turn events, while conversion to provider-specific payloads stays inside
+`src/llm/api` and `src/llm/runtime`.
+Tool names such as `local_shell` should remain generic function-tool names at
+the `codex-llm` boundary; product defaults such as sandbox policy belong above
+that SDK boundary.
 
 ## Intended Dependency Direction
 

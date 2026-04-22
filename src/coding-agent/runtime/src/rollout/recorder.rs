@@ -46,7 +46,7 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_state::ThreadMetadataBuilder;
 
-/// Records all [`codex_protocol::models::ConversationItem`]s for a session and flushes them to disk after
+/// Records all [`codex_protocol::legacy_transcript::ConversationItem`]s for a session and flushes them to disk after
 /// every update.
 ///
 /// Rollouts are recorded as JSONL and can be inspected with tools such as:
@@ -433,8 +433,8 @@ impl RolloutRecorder {
                         }
                         items.push(RolloutItem::SessionMeta(session_meta_line));
                     }
-                    RolloutItem::ConversationItem(item) => {
-                        items.push(RolloutItem::ConversationItem(item));
+                    RolloutItem::TranscriptItem(item) => {
+                        items.push(RolloutItem::TranscriptItem(item));
                     }
                     RolloutItem::Compacted(item) => {
                         items.push(RolloutItem::Compacted(item));

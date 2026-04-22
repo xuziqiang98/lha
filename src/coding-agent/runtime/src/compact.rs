@@ -25,11 +25,12 @@ use codex_llm::TurnEvent;
 use codex_llm::TurnRequest;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
+use codex_protocol::legacy_transcript::ConversationItem;
+use codex_protocol::legacy_transcript::FunctionCallOutputPayload;
+use codex_protocol::legacy_transcript::ResponseInputItem;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ConversationItem;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::response_input_from_user_input;
+use codex_protocol::models::TranscriptItem;
+use codex_protocol::models::transcript_item_from_user_input;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::RolloutItem;
@@ -45,6 +46,15 @@ const BACKFILLED_SKILL_TOTAL_MAX_TOKENS: usize = 20_000;
 const PROPOSED_PLAN_OPEN_TAG: &str = "<proposed_plan>\n";
 const PROPOSED_PLAN_CLOSE_TAG: &str = "</proposed_plan>";
 const BACKFILLED_UPDATE_PLAN_CALL_ID: &str = "compact_backfill_update_plan";
+
+fn legacy_response_input_from_user_input(input: Vec<UserInput>) -> ResponseInputItem {
+    match transcript_item_from_user_input(input) {
+        TranscriptItem::Message { role, content, .. } => {
+            ResponseInputItem::Message { role, content }
+        }
+        _ => unreachable!("user input always maps to a message transcript item"),
+    }
+}
 
 pub(crate) fn should_use_remote_compact_task(
     session: &Session,
@@ -88,7 +98,7 @@ async fn run_compact_task_inner(
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
         .await;
-    let initial_input_for_turn: ResponseInputItem = response_input_from_user_input(input);
+    let initial_input_for_turn: ResponseInputItem = legacy_response_input_from_user_input(input);
 
     let mut history = sess.clone_history().await;
     let (backfilled_plan_text, backfilled_update_plan, backfilled_skills) =
@@ -134,7 +144,7 @@ async fn run_compact_task_inner(
         let turn_input = history.clone().for_compaction_prompt();
         let turn_input_len = turn_input.len();
         let prompt = TurnRequest {
-            conversation: turn_input,
+            conversation: turn_input.into_iter().map(Into::into).collect(),
             base_instructions: sess.get_base_instructions().await,
             personality: turn_context.personality,
             ..Default::default()
@@ -208,7 +218,7 @@ async fn run_compact_task_inner(
 
     let rollout_item = RolloutItem::Compacted(CompactedItem {
         message: summary_text.clone(),
-        replacement_history: Some(replacement_history),
+        replacement_history: Some(replacement_history.into_iter().map(Into::into).collect()),
         replacement_history_omits_initial_context: true,
     });
     sess.persist_rollout_items(&[rollout_item]).await;
@@ -614,15 +624,14 @@ async fn drain_to_completed(
                 sess.send_event(turn_context, warning).await;
             }
             Ok(TurnEvent::ItemCompleted { item, .. }) => {
-                let item = item.into_item();
+                let item: ConversationItem = item.into_item().into();
                 sess.record_into_history(std::slice::from_ref(&item), turn_context)
                     .await;
             }
             Ok(TurnEvent::ToolCall(request)) => {
-                if let Some(item) = codex_llm::tool_call_to_transcript_item(&request) {
-                    sess.record_into_history(std::slice::from_ref(&item), turn_context)
-                        .await;
-                }
+                let item: ConversationItem = request.to_transcript_item().into();
+                sess.record_into_history(std::slice::from_ref(&item), turn_context)
+                    .await;
             }
             Ok(TurnEvent::ServerReasoningIncluded(included)) => {
                 sess.set_server_reasoning_included(included).await;
@@ -647,7 +656,7 @@ mod tests {
     use super::*;
     use crate::instructions::SkillInstructions;
     use crate::session_prefix::TURN_ABORTED_OPEN_TAG;
-    use codex_protocol::models::ConversationItem;
+    use codex_protocol::legacy_transcript::ConversationItem;
     use pretty_assertions::assert_eq;
 
     #[test]

@@ -5,13 +5,13 @@
 
 use crate::event_mapping;
 use codex_protocol::items::TurnItem;
-use codex_protocol::models::ConversationItem;
+use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 
 /// Return the indices of user message boundaries in a rollout.
 ///
-/// A user message boundary is a `RolloutItem::ConversationItem(ConversationItem::Message { .. })`
+/// A user message boundary is a `RolloutItem::TranscriptItem(ConversationItem::Message { .. })`
 /// whose parsed turn item is `TurnItem::UserMessage`.
 ///
 /// Rollouts can contain `ThreadRolledBack` markers. Those markers indicate that the
@@ -21,13 +21,16 @@ pub(crate) fn user_message_positions_in_rollout(items: &[RolloutItem]) -> Vec<us
     let mut user_positions = Vec::new();
     for (idx, item) in items.iter().enumerate() {
         match item {
-            RolloutItem::ConversationItem(item @ ConversationItem::Message { .. })
-                if matches!(
-                    event_mapping::parse_turn_item(item),
-                    Some(TurnItem::UserMessage(_))
-                ) =>
-            {
-                user_positions.push(idx);
+            RolloutItem::TranscriptItem(item) => {
+                let item: ConversationItem = item.clone().into();
+                if matches!(&item, ConversationItem::Message { .. })
+                    && matches!(
+                        event_mapping::parse_turn_item(&item),
+                        Some(TurnItem::UserMessage(_))
+                    )
+                {
+                    user_positions.push(idx);
+                }
             }
             RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
                 let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
@@ -128,14 +131,14 @@ mod tests {
         let rollout: Vec<RolloutItem> = items
             .iter()
             .cloned()
-            .map(RolloutItem::ConversationItem)
+            .map(|item| RolloutItem::TranscriptItem(item.into()))
             .collect();
 
         let truncated = truncate_rollout_before_nth_user_message_from_start(&rollout, 1);
         let expected = vec![
-            RolloutItem::ConversationItem(items[0].clone()),
-            RolloutItem::ConversationItem(items[1].clone()),
-            RolloutItem::ConversationItem(items[2].clone()),
+            RolloutItem::TranscriptItem(items[0].clone().into()),
+            RolloutItem::TranscriptItem(items[1].clone().into()),
+            RolloutItem::TranscriptItem(items[2].clone().into()),
         ];
         assert_eq!(
             serde_json::to_value(&truncated).unwrap(),
@@ -149,9 +152,9 @@ mod tests {
     #[test]
     fn truncation_max_keeps_full_rollout() {
         let rollout = vec![
-            RolloutItem::ConversationItem(user_msg("u1")),
-            RolloutItem::ConversationItem(assistant_msg("a1")),
-            RolloutItem::ConversationItem(user_msg("u2")),
+            RolloutItem::TranscriptItem(user_msg("u1").into()),
+            RolloutItem::TranscriptItem(assistant_msg("a1").into()),
+            RolloutItem::TranscriptItem(user_msg("u2").into()),
         ];
 
         let truncated = truncate_rollout_before_nth_user_message_from_start(&rollout, usize::MAX);
@@ -165,17 +168,17 @@ mod tests {
     #[test]
     fn truncates_rollout_from_start_applies_thread_rollback_markers() {
         let rollout_items = vec![
-            RolloutItem::ConversationItem(user_msg("u1")),
-            RolloutItem::ConversationItem(assistant_msg("a1")),
-            RolloutItem::ConversationItem(user_msg("u2")),
-            RolloutItem::ConversationItem(assistant_msg("a2")),
+            RolloutItem::TranscriptItem(user_msg("u1").into()),
+            RolloutItem::TranscriptItem(assistant_msg("a1").into()),
+            RolloutItem::TranscriptItem(user_msg("u2").into()),
+            RolloutItem::TranscriptItem(assistant_msg("a2").into()),
             RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
                 num_turns: 1,
             })),
-            RolloutItem::ConversationItem(user_msg("u3")),
-            RolloutItem::ConversationItem(assistant_msg("a3")),
-            RolloutItem::ConversationItem(user_msg("u4")),
-            RolloutItem::ConversationItem(assistant_msg("a4")),
+            RolloutItem::TranscriptItem(user_msg("u3").into()),
+            RolloutItem::TranscriptItem(assistant_msg("a3").into()),
+            RolloutItem::TranscriptItem(user_msg("u4").into()),
+            RolloutItem::TranscriptItem(assistant_msg("a4").into()),
         ];
 
         // Effective user history after applying rollback(1) is: u1, u3, u4.
@@ -200,15 +203,15 @@ mod tests {
         let rollout_items: Vec<RolloutItem> = items
             .iter()
             .cloned()
-            .map(RolloutItem::ConversationItem)
+            .map(|item| RolloutItem::TranscriptItem(item.into()))
             .collect();
 
         let truncated = truncate_rollout_before_nth_user_message_from_start(&rollout_items, 1);
         let expected: Vec<RolloutItem> = vec![
-            RolloutItem::ConversationItem(items[0].clone()),
-            RolloutItem::ConversationItem(items[1].clone()),
-            RolloutItem::ConversationItem(items[2].clone()),
-            RolloutItem::ConversationItem(items[3].clone()),
+            RolloutItem::TranscriptItem(items[0].clone().into()),
+            RolloutItem::TranscriptItem(items[1].clone().into()),
+            RolloutItem::TranscriptItem(items[2].clone().into()),
+            RolloutItem::TranscriptItem(items[3].clone().into()),
         ];
 
         assert_eq!(

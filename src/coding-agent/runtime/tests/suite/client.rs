@@ -27,8 +27,8 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::items::TurnItem;
-use codex_protocol::models::ConversationItem;
-use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::legacy_transcript::ConversationItem;
+use codex_protocol::legacy_transcript::FunctionCallOutputPayload;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::WebSearchAction;
@@ -264,7 +264,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     .unwrap();
 
     // Prior item: user message (should be delivered)
-    let prior_user = codex_protocol::models::ConversationItem::Message {
+    let prior_user = codex_protocol::legacy_transcript::ConversationItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![codex_protocol::models::ContentItem::InputText {
@@ -278,14 +278,14 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         "{}",
         json!({
             "timestamp": "2024-01-01T00:00:01.000Z",
-            "type": "conversation_item",
+            "type": "transcript_item",
             "payload": prior_user_json
         })
     )
     .unwrap();
 
     // Prior item: system message (excluded from API history)
-    let prior_system = codex_protocol::models::ConversationItem::Message {
+    let prior_system = codex_protocol::legacy_transcript::ConversationItem::Message {
         id: None,
         role: "system".to_string(),
         content: vec![codex_protocol::models::ContentItem::OutputText {
@@ -299,14 +299,14 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         "{}",
         json!({
             "timestamp": "2024-01-01T00:00:02.000Z",
-            "type": "conversation_item",
+            "type": "transcript_item",
             "payload": prior_system_json
         })
     )
     .unwrap();
 
     // Prior item: assistant message
-    let prior_item = codex_protocol::models::ConversationItem::Message {
+    let prior_item = codex_protocol::legacy_transcript::ConversationItem::Message {
         id: None,
         role: "assistant".to_string(),
         content: vec![codex_protocol::models::ContentItem::OutputText {
@@ -320,7 +320,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         "{}",
         json!({
             "timestamp": "2024-01-01T00:00:03.000Z",
-            "type": "conversation_item",
+            "type": "transcript_item",
             "payload": prior_item_json
         })
     )
@@ -1535,70 +1535,92 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     .new_session();
 
     let mut turn = TurnRequest::default();
-    turn.conversation.push(ConversationItem::Reasoning {
-        id: "reasoning-id".into(),
-        summary: vec![ReasoningItemReasoningSummary::SummaryText {
-            text: "summary".into(),
-        }],
-        content: Some(vec![ReasoningItemContent::ReasoningText {
-            text: "content".into(),
-        }]),
-        encrypted_content: None,
-    });
-    turn.conversation.push(ConversationItem::Message {
-        id: Some("message-id".into()),
-        role: "assistant".into(),
-        content: vec![ContentItem::OutputText {
-            text: "message".into(),
-        }],
-        end_turn: None,
-    });
-    turn.conversation.push(ConversationItem::WebSearchCall {
-        id: Some("web-search-id".into()),
-        status: Some("completed".into()),
-        action: Some(WebSearchAction::Search {
-            query: Some("weather".into()),
-            queries: None,
-        }),
-    });
-    turn.conversation.push(ConversationItem::FunctionCall {
-        id: Some("function-id".into()),
-        name: "do_thing".into(),
-        arguments: "{}".into(),
-        call_id: "function-call-id".into(),
-    });
-    turn.conversation
-        .push(ConversationItem::FunctionCallOutput {
+    turn.conversation.push(
+        ConversationItem::Reasoning {
+            id: "reasoning-id".into(),
+            summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                text: "summary".into(),
+            }],
+            content: Some(vec![ReasoningItemContent::ReasoningText {
+                text: "content".into(),
+            }]),
+            encrypted_content: None,
+        }
+        .into(),
+    );
+    turn.conversation.push(
+        ConversationItem::Message {
+            id: Some("message-id".into()),
+            role: "assistant".into(),
+            content: vec![ContentItem::OutputText {
+                text: "message".into(),
+            }],
+            end_turn: None,
+        }
+        .into(),
+    );
+    turn.conversation.push(
+        ConversationItem::WebSearchCall {
+            id: Some("web-search-id".into()),
+            status: Some("completed".into()),
+            action: Some(WebSearchAction::Search {
+                query: Some("weather".into()),
+                queries: None,
+            }),
+        }
+        .into(),
+    );
+    turn.conversation.push(
+        ConversationItem::FunctionCall {
+            id: Some("function-id".into()),
+            name: "do_thing".into(),
+            arguments: "{}".into(),
+            call_id: "function-call-id".into(),
+        }
+        .into(),
+    );
+    turn.conversation.push(
+        ConversationItem::FunctionCallOutput {
             call_id: "function-call-id".into(),
             output: FunctionCallOutputPayload {
                 content: "ok".into(),
                 ..Default::default()
             },
-        });
-    turn.conversation.push(ConversationItem::LocalShellCall {
-        id: Some("local-shell-id".into()),
-        call_id: Some("local-shell-call-id".into()),
-        status: LocalShellStatus::Completed,
-        action: LocalShellAction::Exec(LocalShellExecAction {
-            command: vec!["echo".into(), "hello".into()],
-            timeout_ms: None,
-            working_directory: None,
-            env: None,
-            user: None,
-        }),
-    });
-    turn.conversation.push(ConversationItem::CustomToolCall {
-        id: Some("custom-tool-id".into()),
-        status: Some("completed".into()),
-        call_id: "custom-tool-call-id".into(),
-        name: "custom_tool".into(),
-        input: "{}".into(),
-    });
-    turn.conversation
-        .push(ConversationItem::CustomToolCallOutput {
+        }
+        .into(),
+    );
+    turn.conversation.push(
+        ConversationItem::LocalShellCall {
+            id: Some("local-shell-id".into()),
+            call_id: Some("local-shell-call-id".into()),
+            status: LocalShellStatus::Completed,
+            action: LocalShellAction::Exec(LocalShellExecAction {
+                command: vec!["echo".into(), "hello".into()],
+                timeout_ms: None,
+                working_directory: None,
+                env: None,
+                user: None,
+            }),
+        }
+        .into(),
+    );
+    turn.conversation.push(
+        ConversationItem::CustomToolCall {
+            id: Some("custom-tool-id".into()),
+            status: Some("completed".into()),
+            call_id: "custom-tool-call-id".into(),
+            name: "custom_tool".into(),
+            input: "{}".into(),
+        }
+        .into(),
+    );
+    turn.conversation.push(
+        ConversationItem::CustomToolCallOutput {
             call_id: "custom-tool-call-id".into(),
             output: "ok".into(),
-        });
+        }
+        .into(),
+    );
 
     let mut stream = client
         .run_turn(&turn)

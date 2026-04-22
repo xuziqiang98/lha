@@ -1,12 +1,12 @@
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
-use codex_protocol::models::ConversationItem;
+use codex_protocol::models::TranscriptItem;
 
 /// Whether a rollout `item` should be persisted in rollout files.
 #[inline]
 pub(crate) fn is_persisted_response_item(item: &RolloutItem) -> bool {
     match item {
-        RolloutItem::ConversationItem(item) => should_persist_response_item(item),
+        RolloutItem::TranscriptItem(item) => should_persist_response_item(item),
         RolloutItem::EventMsg(ev) => should_persist_event_msg(ev),
         // Persist Codex executive markers so we can analyze flows (e.g., compaction, API turns).
         RolloutItem::Compacted(_) | RolloutItem::TurnContext(_) | RolloutItem::SessionMeta(_) => {
@@ -15,21 +15,16 @@ pub(crate) fn is_persisted_response_item(item: &RolloutItem) -> bool {
     }
 }
 
-/// Whether a `ConversationItem` should be persisted in rollout files.
+/// Whether a semantic transcript item should be persisted in rollout files.
 #[inline]
-pub(crate) fn should_persist_response_item(item: &ConversationItem) -> bool {
+pub(crate) fn should_persist_response_item(item: &TranscriptItem) -> bool {
     match item {
-        ConversationItem::Message { .. }
-        | ConversationItem::Reasoning { .. }
-        | ConversationItem::LocalShellCall { .. }
-        | ConversationItem::FunctionCall { .. }
-        | ConversationItem::FunctionCallOutput { .. }
-        | ConversationItem::CustomToolCall { .. }
-        | ConversationItem::CustomToolCallOutput { .. }
-        | ConversationItem::WebSearchCall { .. }
-        | ConversationItem::GhostSnapshot { .. }
-        | ConversationItem::Compaction { .. } => true,
-        ConversationItem::Other => false,
+        TranscriptItem::Message { .. }
+        | TranscriptItem::Reasoning { .. }
+        | TranscriptItem::HostedActivity { .. }
+        | TranscriptItem::ToolCall { .. }
+        | TranscriptItem::ToolResult { .. }
+        | TranscriptItem::Unknown { .. } => true,
     }
 }
 
@@ -66,7 +61,7 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::AgentReasoningDelta(_)
         | EventMsg::AgentReasoningRawContentDelta(_)
         | EventMsg::AgentReasoningSectionBreak(_)
-        | EventMsg::RawConversationItem(_)
+        | EventMsg::RawTranscriptItem(_)
         | EventMsg::SessionConfigured(_)
         | EventMsg::ThreadNameUpdated(_)
         | EventMsg::McpToolCallBegin(_)

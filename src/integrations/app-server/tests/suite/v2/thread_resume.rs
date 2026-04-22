@@ -17,8 +17,8 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_protocol::config_types::Personality;
+use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ConversationItem;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use core_test_support::responses;
@@ -344,7 +344,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id,
-            history: Some(history),
+            history: Some(history.into_iter().map(Into::into).collect()),
             model: Some("mock-model".to_string()),
             model_provider: Some("mock_provider".to_string()),
             ..Default::default()

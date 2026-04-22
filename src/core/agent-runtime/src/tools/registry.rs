@@ -123,8 +123,8 @@ impl ToolRegistryBuilder {
 
 fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &str) -> String {
     match payload {
-        ToolPayload::Custom { .. } => format!("unsupported custom tool call: {tool_name}"),
-        ToolPayload::Function { .. } => {
+        ToolPayload::TextInput { .. } => format!("unsupported custom tool call: {tool_name}"),
+        ToolPayload::JsonArguments { .. } => {
             format!("unsupported call: {tool_name}")
         }
     }

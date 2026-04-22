@@ -612,7 +612,7 @@ server_notification_definitions! {
     ItemStarted => "item/started" (v2::ItemStartedNotification),
     ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
     /// This event is internal-only. Used by Codex Cloud.
-    RawConversationItemCompleted => "rawConversationItem/completed" (v2::RawConversationItemCompletedNotification),
+    RawTranscriptItemCompleted => "rawTranscriptItem/completed" (v2::RawTranscriptItemCompletedNotification),
     AgentMessageDelta => "item/agentMessage/delta" (v2::AgentMessageDeltaNotification),
     /// EXPERIMENTAL - proposed plan streaming deltas for plan items.
     PlanDelta => "item/plan/delta" (v2::PlanDeltaNotification),

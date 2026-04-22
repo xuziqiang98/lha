@@ -13,8 +13,8 @@ use codex_client::HttpTransport;
 use codex_client::RequestCompression;
 use codex_client::RequestTelemetry;
 use codex_llm_types::ContentItem;
-use codex_llm_types::ConversationItem;
-use codex_llm_types::ReasoningItemContent;
+use codex_llm_types::ReasoningContentItem;
+use codex_llm_types::TranscriptItem;
 use futures::Stream;
 use http::HeaderMap;
 use serde_json::Value;
@@ -132,14 +132,14 @@ impl Stream for AggregatedStream {
                 Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(item)))) => {
                     let is_assistant_message = matches!(
                         &item,
-                        ConversationItem::Message { role, .. } if role == "assistant"
+                        TranscriptItem::Message { role, .. } if role == "assistant"
                     );
 
                     if is_assistant_message {
                         match this.mode {
                             AggregateMode::AggregatedOnly => {
                                 if this.cumulative.is_empty()
-                                    && let ConversationItem::Message { content, .. } = &item
+                                    && let TranscriptItem::Message { content, .. } = &item
                                     && let Some(text) = content.iter().find_map(|c| match c {
                                         ContentItem::OutputText { text } => Some(text),
                                         _ => None,
@@ -179,10 +179,10 @@ impl Stream for AggregatedStream {
                     let mut emitted_any = false;
 
                     if !this.cumulative_reasoning.is_empty() {
-                        let aggregated_reasoning = ConversationItem::Reasoning {
+                        let aggregated_reasoning = TranscriptItem::Reasoning {
                             id: String::new(),
                             summary: Vec::new(),
-                            content: Some(vec![ReasoningItemContent::ReasoningText {
+                            content: Some(vec![ReasoningContentItem::ReasoningText {
                                 text: std::mem::take(&mut this.cumulative_reasoning),
                             }]),
                             encrypted_content: None,
@@ -193,7 +193,7 @@ impl Stream for AggregatedStream {
                     }
 
                     if !this.cumulative.is_empty() {
-                        let aggregated_message = ConversationItem::Message {
+                        let aggregated_message = TranscriptItem::Message {
                             id: None,
                             role: "assistant".to_string(),
                             content: vec![ContentItem::OutputText {
@@ -298,7 +298,7 @@ mod tests {
     use super::ResponseEvent;
     use super::ResponseStream;
     use codex_llm_types::ContentItem;
-    use codex_llm_types::ConversationItem;
+    use codex_llm_types::TranscriptItem;
     use futures::StreamExt;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc;
@@ -355,7 +355,7 @@ mod tests {
         ));
         assert!(matches!(
             &events[2],
-            ResponseEvent::OutputItemDone(ConversationItem::Message { content, .. })
+            ResponseEvent::OutputItemDone(TranscriptItem::Message { content, .. })
                 if content == &vec![ContentItem::OutputText {
                     text: "Intro\n<proposed_plan>\n- Step 1\n</proposed_plan>\nOutro".to_string(),
                 }]

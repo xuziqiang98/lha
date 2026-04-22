@@ -9,7 +9,7 @@ use codex_git::CreateGhostCommitOptions;
 use codex_git::GhostSnapshotReport;
 use codex_git::GitToolingError;
 use codex_git::create_ghost_commit_with_report;
-use codex_protocol::models::ConversationItem;
+use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::Token;

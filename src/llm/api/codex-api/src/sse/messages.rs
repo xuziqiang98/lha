@@ -8,8 +8,9 @@ use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
 use codex_client::StreamResponse;
 use codex_llm_types::ContentItem;
-use codex_llm_types::ConversationItem;
 use codex_llm_types::TokenUsage;
+use codex_llm_types::ToolCallPayload;
+use codex_llm_types::TranscriptItem;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use serde::Deserialize;
@@ -143,7 +144,7 @@ pub async fn process_messages_sse(
     telemetry: Option<Arc<dyn SseTelemetry>>,
 ) {
     let mut stream = stream.eventsource();
-    let mut assistant_item: Option<ConversationItem> = None;
+    let mut assistant_item: Option<TranscriptItem> = None;
     let mut assistant_item_id: Option<String> = None;
     let mut tool_uses: HashMap<usize, ToolUseState> = HashMap::new();
     let mut usage_state = UsageState::default();
@@ -301,11 +302,13 @@ pub async fn process_messages_sse(
 
                 let _ = tx_event
                     .send(Ok(ResponseEvent::OutputItemDone(
-                        ConversationItem::FunctionCall {
+                        TranscriptItem::ToolCall {
                             id: None,
-                            name,
-                            arguments: input_json,
                             call_id,
+                            tool_name: name,
+                            payload: ToolCallPayload::JsonArguments {
+                                arguments: input_json,
+                            },
                         },
                     )))
                     .await;
@@ -377,13 +380,13 @@ pub async fn process_messages_sse(
 
 async fn append_assistant_text(
     tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
-    assistant_item: &mut Option<ConversationItem>,
+    assistant_item: &mut Option<TranscriptItem>,
     assistant_plan_parser: &mut Option<ProposedPlanParser>,
     assistant_item_id: String,
     text: String,
 ) {
     if assistant_item.is_none() {
-        let item = ConversationItem::Message {
+        let item = TranscriptItem::Message {
             id: Some(assistant_item_id),
             role: "assistant".to_string(),
             content: vec![],
@@ -398,7 +401,7 @@ async fn append_assistant_text(
     let parser = assistant_plan_parser.get_or_insert_with(ProposedPlanParser::new);
     emit_plan_deltas(tx_event, parser.parse(&text)).await;
 
-    if let Some(ConversationItem::Message { content, .. }) = assistant_item {
+    if let Some(TranscriptItem::Message { content, .. }) = assistant_item {
         if let Some(ContentItem::OutputText {
             text: aggregated_text,
         }) = content.last_mut()
@@ -429,14 +432,14 @@ async fn emit_plan_deltas(
 async fn emit_buffered_plan_events(
     tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
     assistant_plan_parser: &mut Option<ProposedPlanParser>,
-    assistant: &ConversationItem,
+    assistant: &TranscriptItem,
 ) {
     if let Some(parser) = assistant_plan_parser.as_mut() {
         emit_plan_deltas(tx_event, parser.finish()).await;
     }
     *assistant_plan_parser = None;
 
-    if let ConversationItem::Message { content, .. } = assistant {
+    if let TranscriptItem::Message { content, .. } = assistant {
         let mut text = String::new();
         for entry in content {
             if let ContentItem::OutputText { text: chunk } = entry {
@@ -459,6 +462,7 @@ fn next_assistant_item_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_llm_types::TranscriptItem;
     use futures::TryStreamExt;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc;
@@ -504,11 +508,11 @@ mod tests {
         assert!(matches!(events[2], ResponseEvent::OutputTextDelta(_)));
         assert!(matches!(
             events[3],
-            ResponseEvent::OutputItemDone(ConversationItem::FunctionCall { .. })
+            ResponseEvent::OutputItemDone(TranscriptItem::ToolCall { .. })
         ));
         assert!(matches!(
             events[4],
-            ResponseEvent::OutputItemDone(ConversationItem::Message { .. })
+            ResponseEvent::OutputItemDone(TranscriptItem::Message { .. })
         ));
         assert!(matches!(events[5], ResponseEvent::Completed { .. }));
     }
@@ -555,14 +559,14 @@ mod tests {
         assert!(matches!(events[2], ResponseEvent::OutputTextDelta(ref delta) if delta == "Hello"));
         assert!(matches!(events[4], ResponseEvent::Completed { .. }));
 
-        let ResponseEvent::OutputItemAdded(ConversationItem::Message {
+        let ResponseEvent::OutputItemAdded(TranscriptItem::Message {
             id: Some(added_id), ..
         }) = &events[1]
         else {
             panic!("unexpected added event: {:?}", events[1]);
         };
 
-        let ResponseEvent::OutputItemDone(ConversationItem::Message {
+        let ResponseEvent::OutputItemDone(TranscriptItem::Message {
             id: Some(completed_id),
             ..
         }) = &events[3]
@@ -573,7 +577,7 @@ mod tests {
         assert_eq!(added_id, "msg_1");
         assert_eq!(completed_id, "msg_1");
 
-        let ResponseEvent::OutputItemDone(ConversationItem::Message { content, .. }) = &events[3]
+        let ResponseEvent::OutputItemDone(TranscriptItem::Message { content, .. }) = &events[3]
         else {
             panic!("unexpected completed event: {:?}", events[3]);
         };
@@ -613,7 +617,7 @@ mod tests {
         assert!(matches!(events[0], ResponseEvent::Created));
         assert!(matches!(
             &events[1],
-            ResponseEvent::OutputItemAdded(ConversationItem::Message {
+            ResponseEvent::OutputItemAdded(TranscriptItem::Message {
                 id: Some(id),
                 role,
                 content,
@@ -633,7 +637,7 @@ mod tests {
             ResponseEvent::OutputTextDelta(delta) if delta == "I help you today?"
         ));
 
-        let ResponseEvent::OutputItemDone(ConversationItem::Message {
+        let ResponseEvent::OutputItemDone(TranscriptItem::Message {
             id: Some(id),
             role,
             content,
@@ -679,14 +683,14 @@ mod tests {
             events.push(event.expect("event should succeed"));
         }
 
-        let ResponseEvent::OutputItemAdded(ConversationItem::Message {
+        let ResponseEvent::OutputItemAdded(TranscriptItem::Message {
             id: Some(added_id), ..
         }) = &events[1]
         else {
             panic!("unexpected added event: {:?}", events[1]);
         };
 
-        let ResponseEvent::OutputItemDone(ConversationItem::Message {
+        let ResponseEvent::OutputItemDone(TranscriptItem::Message {
             id: Some(completed_id),
             ..
         }) = &events[3]

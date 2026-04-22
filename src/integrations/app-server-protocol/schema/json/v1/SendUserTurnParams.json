@@ -143,7 +143,6 @@
       "type": "string"
     },
     "ReasoningEffort": {
-      "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
       "enum": [
         "none",
         "minimal",
@@ -155,24 +154,13 @@
       "type": "string"
     },
     "ReasoningSummary": {
-      "description": "A summary of the reasoning performed by the model. This can be useful for debugging and understanding the model's reasoning process. See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries",
-      "oneOf": [
-        {
-          "enum": [
-            "auto",
-            "concise",
-            "detailed"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Option to disable reasoning summaries.",
-          "enum": [
-            "none"
-          ],
-          "type": "string"
-        }
-      ]
+      "enum": [
+        "auto",
+        "concise",
+        "detailed",
+        "none"
+      ],
+      "type": "string"
     },
     "SandboxPolicy": {
       "description": "Determines execution restrictions for model shell commands.",

@@ -31,6 +31,13 @@ The intended stack is:
 - Approval, sandbox, exec-policy, and coding tool UX
 - Skills, project-doc injection, review flows, and subagents
 
+`codex-agent-runtime` also should not depend on `codex-llm` compatibility bridges
+that reconstruct provider-facing transcript items. Session/runtime code should
+append semantic transcript items directly from tool calls and tool results.
+It should also treat tool names such as `local_shell` as ordinary semantic tool
+identifiers; product-specific interpretation and defaulting stays in higher
+layers.
+
 Those concerns remain in `codex-coding-agent` or other higher-level crates.
 
 ## Current migration shape
@@ -42,6 +49,11 @@ The current migration path is:
 3. Gradually move generic runtime behavior out of `src/coding-agent/runtime` and into `src/core/agent-runtime`.
 
 This lets the workspace expose a small reusable agent SDK without forcing an all-at-once product rewrite.
+
+Recent cleanup in `codex-llm` also keeps its public API focused on semantic
+runtime types. Tool-call/transcript reconstruction helpers are expected to live
+with the semantic types or with higher-level adapters rather than as public
+runtime bridge APIs.
 
 ## Minimal SDK shape
 

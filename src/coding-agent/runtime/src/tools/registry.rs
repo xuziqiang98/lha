@@ -8,7 +8,7 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use async_trait::async_trait;
 use codex_llm::ToolDescriptor;
-use codex_protocol::models::ResponseInputItem;
+use codex_protocol::legacy_transcript::ResponseInputItem;
 use codex_utils_readiness::Readiness;
 use tracing::warn;
 

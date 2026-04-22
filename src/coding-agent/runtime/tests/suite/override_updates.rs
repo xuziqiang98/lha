@@ -12,7 +12,7 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ConversationItem;
+use codex_protocol::models::TranscriptItem;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
@@ -61,11 +61,10 @@ fn rollout_developer_texts(text: &str) -> Vec<String> {
             Ok(rollout) => rollout,
             Err(_) => continue,
         };
-        if let RolloutItem::ConversationItem(ConversationItem::Message { role, content, .. }) =
-            rollout.item
-            && role == "developer"
+        if let RolloutItem::TranscriptItem(TranscriptItem::Message(message)) = rollout.item
+            && message.role == "developer"
         {
-            for item in content {
+            for item in message.content {
                 if let ContentItem::InputText { text } = item {
                     texts.push(text);
                 }
@@ -86,11 +85,10 @@ fn rollout_environment_texts(text: &str) -> Vec<String> {
             Ok(rollout) => rollout,
             Err(_) => continue,
         };
-        if let RolloutItem::ConversationItem(ConversationItem::Message { role, content, .. }) =
-            rollout.item
-            && role == "user"
+        if let RolloutItem::TranscriptItem(TranscriptItem::Message(message)) = rollout.item
+            && message.role == "user"
         {
-            for item in content {
+            for item in message.content {
                 if let ContentItem::InputText { text } = item
                     && text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG)
                 {

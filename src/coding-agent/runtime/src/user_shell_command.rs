@@ -1,7 +1,7 @@
 use std::time::Duration;
 
+use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ConversationItem;
 
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;

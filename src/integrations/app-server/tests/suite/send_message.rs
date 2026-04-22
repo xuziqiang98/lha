@@ -13,11 +13,11 @@ use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
 use codex_execpolicy::Policy;
 use codex_protocol::ThreadId;
+use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ConversationItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::RawConversationItemEvent;
+use codex_protocol::protocol::RawTranscriptItemEvent;
 use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
@@ -136,7 +136,7 @@ async fn send_message(
 
     let raw_attempt = tokio::time::timeout(
         std::time::Duration::from_millis(200),
-        mcp.read_stream_until_notification_message("codex/event/raw_conversation_item"),
+        mcp.read_stream_until_notification_message("codex/event/raw_transcript_item"),
     )
     .await;
     assert!(
@@ -201,16 +201,16 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
         })
         .await?;
 
-    let permissions = read_raw_conversation_item(&mut mcp, conversation_id).await;
+    let permissions = read_raw_transcript_item(&mut mcp, conversation_id).await;
     assert_permissions_message(&permissions);
 
-    let developer = read_raw_conversation_item(&mut mcp, conversation_id).await;
+    let developer = read_raw_transcript_item(&mut mcp, conversation_id).await;
     assert_developer_message(&developer, "Use the test harness tools.");
 
-    let instructions = read_raw_conversation_item(&mut mcp, conversation_id).await;
+    let instructions = read_raw_transcript_item(&mut mcp, conversation_id).await;
     assert_instructions_message(&instructions);
 
-    let environment = read_raw_conversation_item(&mut mcp, conversation_id).await;
+    let environment = read_raw_transcript_item(&mut mcp, conversation_id).await;
     assert_environment_message(&environment);
 
     let response: JSONRPCResponse = timeout(
@@ -220,10 +220,10 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
     .await??;
     let _ok: SendUserMessageResponse = to_response::<SendUserMessageResponse>(response)?;
 
-    let user_message = read_raw_conversation_item(&mut mcp, conversation_id).await;
+    let user_message = read_raw_transcript_item(&mut mcp, conversation_id).await;
     assert_user_message(&user_message, "Hello");
 
-    let assistant_message = read_raw_conversation_item(&mut mcp, conversation_id).await;
+    let assistant_message = read_raw_transcript_item(&mut mcp, conversation_id).await;
     assert_assistant_message(&assistant_message, "Done");
 
     let _ = tokio::time::timeout(
@@ -291,25 +291,24 @@ stream_max_retries = 0
 }
 
 #[expect(clippy::expect_used)]
-async fn read_raw_conversation_item(
+async fn read_raw_transcript_item(
     mcp: &mut McpProcess,
     conversation_id: ThreadId,
 ) -> ConversationItem {
-    // TODO: Switch to rawConversationItem/completed once we migrate to app server v2 in codex web.
     loop {
         let raw_notification: JSONRPCNotification = timeout(
             DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("codex/event/raw_conversation_item"),
+            mcp.read_stream_until_notification_message("codex/event/raw_transcript_item"),
         )
         .await
-        .expect("codex/event/raw_conversation_item notification timeout")
-        .expect("codex/event/raw_conversation_item notification resp");
+        .expect("codex/event/raw_transcript_item notification timeout")
+        .expect("codex/event/raw_transcript_item notification resp");
 
         let serde_json::Value::Object(params) = raw_notification
             .params
-            .expect("codex/event/raw_conversation_item should have params")
+            .expect("codex/event/raw_transcript_item should have params")
         else {
-            panic!("codex/event/raw_conversation_item should have params");
+            panic!("codex/event/raw_transcript_item should have params");
         };
 
         let conversation_id_value = params
@@ -329,10 +328,11 @@ async fn read_raw_conversation_item(
             .expect("raw response item should include msg payload");
 
         // Ghost snapshots are produced concurrently and may arrive before the model reply.
-        let event: RawConversationItemEvent =
+        let event: RawTranscriptItemEvent =
             serde_json::from_value(msg_value).expect("deserialize raw response item");
-        if !matches!(event.item, ConversationItem::GhostSnapshot { .. }) {
-            return event.item;
+        let item: ConversationItem = event.item.into();
+        if !matches!(item, ConversationItem::GhostSnapshot { .. }) {
+            return item;
         }
     }
 }

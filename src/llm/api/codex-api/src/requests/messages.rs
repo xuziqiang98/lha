@@ -7,9 +7,10 @@ use serde_json::Value;
 use serde_json::json;
 
 use codex_llm_types::ContentItem;
-use codex_llm_types::ConversationItem;
-use codex_llm_types::FunctionCallOutputContentItem;
-use codex_llm_types::FunctionCallOutputPayload;
+use codex_llm_types::ToolCallPayload;
+use codex_llm_types::ToolResultContentItem;
+use codex_llm_types::ToolResultPayload;
+use codex_llm_types::TranscriptItem;
 
 const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 const DEFAULT_MAX_TOKENS: u32 = 8_192;
@@ -25,7 +26,7 @@ pub struct MessagesRequest {
 pub struct MessagesRequestBuilder<'a> {
     model: &'a str,
     instructions: &'a str,
-    input: &'a [ConversationItem],
+    input: &'a [TranscriptItem],
     tools: &'a [Value],
     parallel_tool_calls: bool,
     max_tokens: u32,
@@ -35,7 +36,7 @@ impl<'a> MessagesRequestBuilder<'a> {
     pub fn new(
         model: &'a str,
         instructions: &'a str,
-        input: &'a [ConversationItem],
+        input: &'a [TranscriptItem],
         tools: &'a [Value],
     ) -> Self {
         Self {
@@ -94,12 +95,12 @@ impl<'a> MessagesRequestBuilder<'a> {
     }
 }
 
-fn build_messages(input: &[ConversationItem]) -> Result<Vec<Value>, ApiError> {
+fn build_messages(input: &[TranscriptItem]) -> Result<Vec<Value>, ApiError> {
     let mut messages = Vec::new();
 
     for item in input {
         match item {
-            ConversationItem::Message { role, content, .. } => {
+            TranscriptItem::Message { role, content, .. } => {
                 if is_messages_role(role) {
                     let blocks = map_message_content(content);
                     if !blocks.is_empty() {
@@ -107,10 +108,10 @@ fn build_messages(input: &[ConversationItem]) -> Result<Vec<Value>, ApiError> {
                     }
                 }
             }
-            ConversationItem::FunctionCall {
-                name,
-                arguments,
+            TranscriptItem::ToolCall {
                 call_id,
+                tool_name,
+                payload: ToolCallPayload::JsonArguments { arguments },
                 ..
             } => {
                 push_assistant_tool_use(
@@ -118,15 +119,15 @@ fn build_messages(input: &[ConversationItem]) -> Result<Vec<Value>, ApiError> {
                     json!({
                         "type": "tool_use",
                         "id": call_id,
-                        "name": name,
+                        "name": tool_name,
                         "input": parse_tool_input(arguments)?,
                     }),
                 );
             }
-            ConversationItem::CustomToolCall {
+            TranscriptItem::ToolCall {
                 call_id,
-                name,
-                input,
+                tool_name,
+                payload: ToolCallPayload::TextInput { input },
                 ..
             } => {
                 push_assistant_tool_use(
@@ -134,48 +135,19 @@ fn build_messages(input: &[ConversationItem]) -> Result<Vec<Value>, ApiError> {
                     json!({
                         "type": "tool_use",
                         "id": call_id,
-                        "name": name,
+                        "name": tool_name,
                         "input": {"input": input},
                     }),
                 );
             }
-            ConversationItem::LocalShellCall {
-                id,
-                call_id,
-                action,
-                ..
+            TranscriptItem::ToolResult {
+                call_id, payload, ..
             } => {
-                let tool_call_id = call_id.clone().or_else(|| id.clone()).ok_or_else(|| {
-                    ApiError::Stream("local shell call missing identifier".into())
-                })?;
-                push_assistant_tool_use(
-                    &mut messages,
-                    json!({
-                        "type": "tool_use",
-                        "id": tool_call_id,
-                        "name": "local_shell",
-                        "input": action,
-                    }),
-                );
+                push_user_tool_result(&mut messages, build_tool_result_block(call_id, payload));
             }
-            ConversationItem::FunctionCallOutput { call_id, output } => {
-                push_user_tool_result(&mut messages, build_tool_result_block(call_id, output));
-            }
-            ConversationItem::CustomToolCallOutput { call_id, output } => {
-                push_user_tool_result(
-                    &mut messages,
-                    json!({
-                        "type": "tool_result",
-                        "tool_use_id": call_id,
-                        "content": [{"type": "text", "text": output}],
-                    }),
-                );
-            }
-            ConversationItem::Reasoning { .. }
-            | ConversationItem::WebSearchCall { .. }
-            | ConversationItem::GhostSnapshot { .. }
-            | ConversationItem::Compaction { .. }
-            | ConversationItem::Other => {}
+            TranscriptItem::Reasoning { .. }
+            | TranscriptItem::HostedActivity { .. }
+            | TranscriptItem::Unknown { .. } => {}
         }
     }
 
@@ -184,7 +156,7 @@ fn build_messages(input: &[ConversationItem]) -> Result<Vec<Value>, ApiError> {
 
 fn build_system_prompt(
     base_instructions: &str,
-    input: &[ConversationItem],
+    input: &[TranscriptItem],
 ) -> Result<String, ApiError> {
     let mut parts = Vec::new();
 
@@ -193,7 +165,7 @@ fn build_system_prompt(
     }
 
     for item in input {
-        if let ConversationItem::Message { role, content, .. } = item
+        if let TranscriptItem::Message { role, content, .. } = item
             && !is_messages_role(role)
             && let Some(text) = message_text_for_system(content)?
         {
@@ -253,42 +225,55 @@ fn map_message_content(content: &[ContentItem]) -> Vec<Value> {
         .collect()
 }
 
-fn map_tool_result_content(
-    items: Option<&[FunctionCallOutputContentItem]>,
-    raw_content: &str,
-) -> Vec<Value> {
-    if let Some(items) = items {
-        return items
-            .iter()
-            .map(|item| match item {
-                FunctionCallOutputContentItem::InputText { text } => {
-                    json!({"type": "text", "text": text})
-                }
-                FunctionCallOutputContentItem::InputImage { image_url } => {
-                    json!({
-                        "type": "image",
-                        "source": {
-                            "type": "url",
-                            "url": image_url,
+fn map_tool_result_content(payload: &ToolResultPayload) -> Vec<Value> {
+    match payload {
+        ToolResultPayload::Structured {
+            content,
+            content_items,
+            ..
+        } => {
+            if let Some(items) = content_items {
+                return items
+                    .iter()
+                    .map(|item| match item {
+                        ToolResultContentItem::InputText { text } => {
+                            json!({"type": "text", "text": text})
+                        }
+                        ToolResultContentItem::InputImage { image_url } => {
+                            json!({
+                                "type": "image",
+                                "source": {
+                                    "type": "url",
+                                    "url": image_url,
+                                }
+                            })
                         }
                     })
-                }
-            })
-            .collect();
-    }
+                    .collect();
+            }
 
-    vec![json!({"type": "text", "text": raw_content})]
+            vec![json!({"type": "text", "text": content})]
+        }
+        ToolResultPayload::Text { output } => {
+            vec![json!({"type": "text", "text": output})]
+        }
+    }
 }
 
-fn build_tool_result_block(call_id: &str, output: &FunctionCallOutputPayload) -> Value {
+fn build_tool_result_block(call_id: &str, payload: &ToolResultPayload) -> Value {
     let mut block = json!({
         "type": "tool_result",
         "tool_use_id": call_id,
-        "content": map_tool_result_content(output.content_items.as_deref(), &output.content),
+        "content": map_tool_result_content(payload),
     });
 
-    if output.success == Some(false)
-        && let Some(obj) = block.as_object_mut()
+    if matches!(
+        payload,
+        ToolResultPayload::Structured {
+            success: Some(false),
+            ..
+        }
+    ) && let Some(obj) = block.as_object_mut()
     {
         obj.insert("is_error".to_string(), Value::Bool(true));
     }
@@ -346,7 +331,9 @@ mod tests {
     use super::*;
     use crate::provider::RetryConfig;
     use crate::provider::WireApi;
-    use codex_llm_types::FunctionCallOutputPayload;
+    use codex_llm_types::ToolCallPayload;
+    use codex_llm_types::ToolResultPayload;
+    use codex_llm_types::TranscriptItem;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 
@@ -371,7 +358,7 @@ mod tests {
     #[test]
     fn builds_messages_request_without_tools() {
         let input = vec![
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -379,15 +366,18 @@ mod tests {
                 }],
                 end_turn: None,
             },
-            ConversationItem::FunctionCall {
+            TranscriptItem::ToolCall {
                 id: None,
-                name: "read_file".to_string(),
-                arguments: r#"{"path":"src/main.rs"}"#.to_string(),
                 call_id: "call-1".to_string(),
+                tool_name: "read_file".to_string(),
+                payload: ToolCallPayload::JsonArguments {
+                    arguments: r#"{"path":"src/main.rs"}"#.to_string(),
+                },
             },
-            ConversationItem::FunctionCallOutput {
+            TranscriptItem::ToolResult {
                 call_id: "call-1".to_string(),
-                output: FunctionCallOutputPayload {
+                tool_name: "read_file".to_string(),
+                payload: ToolResultPayload::Structured {
                     content: "done".to_string(),
                     content_items: None,
                     success: Some(true),
@@ -421,7 +411,7 @@ mod tests {
 
     #[test]
     fn builds_messages_request_with_tools() {
-        let input = vec![ConversationItem::Message {
+        let input = vec![TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -459,7 +449,7 @@ mod tests {
     #[test]
     fn folds_non_user_assistant_messages_into_system_prompt() {
         let input = vec![
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
@@ -467,7 +457,7 @@ mod tests {
                 }],
                 end_turn: None,
             },
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "system".to_string(),
                 content: vec![ContentItem::OutputText {
@@ -475,7 +465,7 @@ mod tests {
                 }],
                 end_turn: None,
             },
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -483,7 +473,7 @@ mod tests {
                 }],
                 end_turn: None,
             },
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
@@ -516,7 +506,7 @@ mod tests {
 
     #[test]
     fn parallel_tool_calls_omit_disable_parallel_tool_use() {
-        let input = vec![ConversationItem::Message {
+        let input = vec![TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -553,9 +543,10 @@ mod tests {
 
     #[test]
     fn failed_function_call_outputs_include_is_error() {
-        let input = vec![ConversationItem::FunctionCallOutput {
+        let input = vec![TranscriptItem::ToolResult {
             call_id: "call-1".to_string(),
-            output: FunctionCallOutputPayload {
+            tool_name: "read_file".to_string(),
+            payload: ToolResultPayload::Structured {
                 content: "denied".to_string(),
                 content_items: None,
                 success: Some(false),
@@ -575,9 +566,10 @@ mod tests {
 
     #[test]
     fn successful_function_call_outputs_omit_is_error() {
-        let input = vec![ConversationItem::FunctionCallOutput {
+        let input = vec![TranscriptItem::ToolResult {
             call_id: "call-1".to_string(),
-            output: FunctionCallOutputPayload {
+            tool_name: "read_file".to_string(),
+            payload: ToolResultPayload::Structured {
                 content: "done".to_string(),
                 content_items: None,
                 success: Some(true),
@@ -595,7 +587,7 @@ mod tests {
 
     #[test]
     fn rejects_images_in_folded_system_messages() {
-        let input = vec![ConversationItem::Message {
+        let input = vec![TranscriptItem::Message {
             id: None,
             role: "developer".to_string(),
             content: vec![ContentItem::InputImage {
@@ -616,11 +608,13 @@ mod tests {
 
     #[test]
     fn rejects_non_object_tool_input() {
-        let input = vec![ConversationItem::FunctionCall {
+        let input = vec![TranscriptItem::ToolCall {
             id: None,
-            name: "oops".to_string(),
-            arguments: "[]".to_string(),
             call_id: "call-1".to_string(),
+            tool_name: "oops".to_string(),
+            payload: ToolCallPayload::JsonArguments {
+                arguments: "[]".to_string(),
+            },
         }];
 
         let err = MessagesRequestBuilder::new("claude", "be helpful", &input, &[])

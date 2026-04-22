@@ -15,7 +15,7 @@ use codex_agent::protocol::ReviewTarget;
 use codex_agent::protocol::RolloutItem;
 use codex_agent::protocol::RolloutLine;
 use codex_agent::review_format::render_review_output_text;
-use codex_protocol::models::ConversationItem;
+use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::responses::ResponseMock;
@@ -130,28 +130,29 @@ async fn review_op_emits_lifecycle_and_review_output() {
         }
         let v: serde_json::Value = serde_json::from_str(line).expect("jsonl line");
         let rl: RolloutLine = serde_json::from_value(v).expect("rollout line");
-        if let RolloutItem::ConversationItem(ConversationItem::Message { role, content, .. }) =
-            rl.item
-        {
-            if role == "user" {
-                for c in content {
-                    if let ContentItem::InputText { text } = c {
-                        if text.contains("full review output from reviewer model") {
-                            saw_header = true;
-                        }
-                        if text.contains("- Prefer Stylize helpers — /tmp/file.rs:10-20") {
-                            saw_finding_line = true;
+        if let RolloutItem::TranscriptItem(item) = rl.item {
+            let item: ConversationItem = item.into();
+            if let ConversationItem::Message { role, content, .. } = item {
+                if role == "user" {
+                    for c in &content {
+                        if let ContentItem::InputText { text } = c {
+                            if text.contains("full review output from reviewer model") {
+                                saw_header = true;
+                            }
+                            if text.contains("- Prefer Stylize helpers — /tmp/file.rs:10-20") {
+                                saw_finding_line = true;
+                            }
                         }
                     }
-                }
-            } else if role == "assistant" {
-                for c in content {
-                    if let ContentItem::OutputText { text } = c {
-                        if text.contains("<user_action>") {
-                            saw_assistant_xml = true;
-                        }
-                        if text == expected_assistant_text {
-                            saw_assistant_plain = true;
+                } else if role == "assistant" {
+                    for c in &content {
+                        if let ContentItem::OutputText { text } = c {
+                            if text.contains("<user_action>") {
+                                saw_assistant_xml = true;
+                            }
+                            if text == &expected_assistant_text {
+                                saw_assistant_plain = true;
+                            }
                         }
                     }
                 }
@@ -524,8 +525,8 @@ async fn review_input_isolated_from_parent_history() {
             .await
             .unwrap();
 
-        // Prior user message (enveloped conversation_item)
-        let user = codex_protocol::models::ConversationItem::Message {
+        // Prior user message (enveloped transcript_item)
+        let user = codex_protocol::legacy_transcript::ConversationItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![codex_protocol::models::ContentItem::InputText {
@@ -536,15 +537,15 @@ async fn review_input_isolated_from_parent_history() {
         let user_json = serde_json::to_value(&user).unwrap();
         let user_line = serde_json::json!({
             "timestamp": "2024-01-01T00:00:01.000Z",
-            "type": "conversation_item",
+            "type": "transcript_item",
             "payload": user_json
         });
         f.write_all(format!("{user_line}\n").as_bytes())
             .await
             .unwrap();
 
-        // Prior assistant message (enveloped conversation_item)
-        let assistant = codex_protocol::models::ConversationItem::Message {
+        // Prior assistant message (enveloped transcript_item)
+        let assistant = codex_protocol::legacy_transcript::ConversationItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![codex_protocol::models::ContentItem::OutputText {
@@ -555,7 +556,7 @@ async fn review_input_isolated_from_parent_history() {
         let assistant_json = serde_json::to_value(&assistant).unwrap();
         let assistant_line = serde_json::json!({
             "timestamp": "2024-01-01T00:00:02.000Z",
-            "type": "conversation_item",
+            "type": "transcript_item",
             "payload": assistant_json
         });
         f.write_all(format!("{assistant_line}\n").as_bytes())
@@ -636,16 +637,18 @@ async fn review_input_isolated_from_parent_history() {
         }
         let v: serde_json::Value = serde_json::from_str(line).expect("jsonl line");
         let rl: RolloutLine = serde_json::from_value(v).expect("rollout line");
-        if let RolloutItem::ConversationItem(ConversationItem::Message { role, content, .. }) =
-            rl.item
-            && role == "user"
-        {
-            for c in content {
-                if let ContentItem::InputText { text } = c
-                    && text.contains("User initiated a review task, but was interrupted.")
-                {
-                    saw_interruption_message = true;
-                    break;
+        if let RolloutItem::TranscriptItem(item) = rl.item {
+            let item: ConversationItem = item.into();
+            if let ConversationItem::Message { role, content, .. } = item
+                && role == "user"
+            {
+                for c in content {
+                    if let ContentItem::InputText { text } = c
+                        && text.contains("User initiated a review task, but was interrupted.")
+                    {
+                        saw_interruption_message = true;
+                        break;
+                    }
                 }
             }
         }

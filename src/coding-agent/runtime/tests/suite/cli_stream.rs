@@ -334,7 +334,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         let Ok(item) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        if item.get("type").and_then(|t| t.as_str()) == Some("conversation_item")
+        if item.get("type").and_then(|t| t.as_str()) == Some("transcript_item")
             && let Some(payload) = item.get("payload")
             && payload.get("type").and_then(|t| t.as_str()) == Some("message")
             && let Some(c) = payload.get("content")

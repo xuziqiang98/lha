@@ -6,7 +6,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
-use codex_protocol::models::ConversationItem;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::AskForApproval;
@@ -156,7 +156,7 @@ pub struct ListConversationsResponse {
 pub struct ResumeConversationParams {
     pub path: Option<PathBuf>,
     pub conversation_id: Option<ThreadId>,
-    pub history: Option<Vec<ConversationItem>>,
+    pub history: Option<Vec<TranscriptItem>>,
     pub overrides: Option<NewConversationParams>,
 }
 

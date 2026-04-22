@@ -139,9 +139,9 @@ mod tests {
     use codex_llm::ToolCallPayload;
     use codex_llm::ToolCallRequest;
     use codex_llm::ToolResultItem;
+    use codex_llm::ToolResultPayload;
     use codex_llm::TranscriptItem;
     use codex_llm_types::ContentItem;
-    use codex_llm_types::FunctionCallOutputPayload;
     use codex_llm_types::TokenUsage;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc;
@@ -188,12 +188,13 @@ mod tests {
                 }
                 TurnEvent::ToolCall(call) => Ok(TurnEventUpdate {
                     tool_future: Some(Box::pin(async move {
-                        Ok(ToolResultItem::FunctionCallOutput {
+                        Ok(ToolResultItem {
                             call_id: call.call_id,
-                            output: FunctionCallOutputPayload {
+                            tool_name: call.tool_name,
+                            payload: ToolResultPayload::Structured {
                                 content: "tool-ok".to_string(),
+                                content_items: None,
                                 success: Some(true),
-                                ..Default::default()
                             },
                         })
                     })),
@@ -257,9 +258,10 @@ mod tests {
 
     fn tool_call_request() -> ToolCallRequest {
         ToolCallRequest {
+            id: None,
             tool_name: "test_tool".to_string(),
             call_id: "call-1".to_string(),
-            payload: ToolCallPayload::Function {
+            payload: ToolCallPayload::JsonArguments {
                 arguments: "{}".to_string(),
             },
         }

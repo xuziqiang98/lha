@@ -14,7 +14,7 @@ use codex_llm::RuntimeEndpoint;
 use codex_llm::TurnRequest;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
-use codex_protocol::models::ConversationItem;
+use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::protocol::SessionSource;
 use core_test_support::load_default_config_for_test;
@@ -109,7 +109,7 @@ async fn run_request(input: Vec<ConversationItem>) -> Value {
     .new_session();
 
     let turn = TurnRequest {
-        conversation: input,
+        conversation: input.into_iter().map(Into::into).collect(),
         ..Default::default()
     };
 
@@ -181,7 +181,7 @@ async fn build_client(provider: RuntimeEndpoint) -> TestRuntimeClient {
 async fn run_turn(client: &TestRuntimeClient, input: Vec<ConversationItem>) -> Result<(), String> {
     let mut client_session = client.new_session();
     let turn = TurnRequest {
-        conversation: input,
+        conversation: input.into_iter().map(Into::into).collect(),
         ..Default::default()
     };
 

@@ -714,9 +714,10 @@ mod tests {
             FakeTurnScript {
                 events: vec![
                     Ok(TurnEvent::ToolCall(ToolCallRequest {
+                        id: None,
                         tool_name: "echo_tool".to_string(),
                         call_id: "call-1".to_string(),
-                        payload: ToolCallPayload::Function {
+                        payload: ToolCallPayload::JsonArguments {
                             arguments: "{}".to_string(),
                         },
                     })),
@@ -770,7 +771,7 @@ mod tests {
         assert_eq!(snapshot.conversation.len(), 4);
         assert!(matches!(
             snapshot.conversation[2],
-            TranscriptItem::FunctionCallOutput { .. }
+            TranscriptItem::ToolResult { .. }
         ));
     }
 

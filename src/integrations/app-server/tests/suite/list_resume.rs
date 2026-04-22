@@ -13,8 +13,8 @@ use codex_app_server_protocol::ResumeConversationParams;
 use codex_app_server_protocol::ResumeConversationResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionConfiguredNotification;
+use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ConversationItem;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -313,7 +313,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
         .send_resume_conversation_request(ResumeConversationParams {
             path: None,
             conversation_id: None,
-            history: Some(history),
+            history: Some(history.into_iter().map(Into::into).collect()),
             overrides: Some(NewConversationParams {
                 model: Some("o3".to_string()),
                 ..Default::default()

@@ -14,7 +14,7 @@ use chrono::Utc;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
-use codex_llm_types::ConversationItem;
+use codex_llm_types::TranscriptItem;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -86,14 +86,14 @@ impl OtelManager {
         match event {
             ResponseEvent::OutputItemDone(item) => {
                 handle_responses_span.record("from", "output_item_done");
-                if let ConversationItem::FunctionCall { name, .. } = &item {
-                    handle_responses_span.record("tool_name", name.as_str());
+                if let TranscriptItem::ToolCall { tool_name, .. } = &item {
+                    handle_responses_span.record("tool_name", tool_name.as_str());
                 }
             }
             ResponseEvent::OutputItemAdded(item) => {
                 handle_responses_span.record("from", "output_item_added");
-                if let ConversationItem::FunctionCall { name, .. } = &item {
-                    handle_responses_span.record("tool_name", name.as_str());
+                if let TranscriptItem::ToolCall { tool_name, .. } = &item {
+                    handle_responses_span.record("tool_name", tool_name.as_str());
                 }
             }
             _ => {}
@@ -340,17 +340,8 @@ impl OtelManager {
                         Ok(error) if sse.event == "response.failed" => {
                             self.sse_event_failed(Some(&sse.event), duration, &error);
                         }
-                        Ok(content) if sse.event == "response.output_item.done" => {
-                            match serde_json::from_value::<ConversationItem>(content) {
-                                Ok(_) => self.sse_event(&sse.event, duration),
-                                Err(_) => {
-                                    self.sse_event_failed(
-                                        Some(&sse.event),
-                                        duration,
-                                        &"failed to parse response.output_item.done",
-                                    );
-                                }
-                            };
+                        Ok(_) if sse.event == "response.output_item.done" => {
+                            self.sse_event(&sse.event, duration);
                         }
                         Ok(_) => {
                             self.sse_event(&sse.event, duration);
@@ -671,19 +662,28 @@ impl OtelManager {
         }
     }
 
-    fn responses_item_type(item: &ConversationItem) -> String {
+    fn responses_item_type(item: &TranscriptItem) -> String {
         match item {
-            ConversationItem::Message { role, .. } => format!("message_from_{role}"),
-            ConversationItem::Reasoning { .. } => "reasoning".into(),
-            ConversationItem::LocalShellCall { .. } => "local_shell_call".into(),
-            ConversationItem::FunctionCall { .. } => "function_call".into(),
-            ConversationItem::FunctionCallOutput { .. } => "function_call_output".into(),
-            ConversationItem::CustomToolCall { .. } => "custom_tool_call".into(),
-            ConversationItem::CustomToolCallOutput { .. } => "custom_tool_call_output".into(),
-            ConversationItem::WebSearchCall { .. } => "web_search_call".into(),
-            ConversationItem::GhostSnapshot { .. } => "ghost_snapshot".into(),
-            ConversationItem::Compaction { .. } => "compaction".into(),
-            ConversationItem::Other => "other".into(),
+            TranscriptItem::Message { role, .. } => format!("message_from_{role}"),
+            TranscriptItem::Reasoning { .. } => "reasoning".into(),
+            TranscriptItem::HostedActivity { activity_type, .. } => {
+                if activity_type == "web_search" {
+                    "web_search_call".into()
+                } else {
+                    format!("hosted_activity_{activity_type}")
+                }
+            }
+            TranscriptItem::ToolCall { payload, .. } => match payload {
+                codex_llm_types::ToolCallPayload::JsonArguments { .. } => "function_call".into(),
+                codex_llm_types::ToolCallPayload::TextInput { .. } => "custom_tool_call".into(),
+            },
+            TranscriptItem::ToolResult { payload, .. } => match payload {
+                codex_llm_types::ToolResultPayload::Structured { .. } => {
+                    "function_call_output".into()
+                }
+                codex_llm_types::ToolResultPayload::Text { .. } => "custom_tool_call_output".into(),
+            },
+            TranscriptItem::Unknown { .. } => "unknown".into(),
         }
     }
 }

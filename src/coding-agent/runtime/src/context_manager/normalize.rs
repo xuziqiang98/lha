@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use codex_protocol::models::ConversationItem;
-use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::legacy_transcript::ConversationItem;
+use codex_protocol::legacy_transcript::FunctionCallOutputPayload;
 
 use crate::util::error_or_panic;
 use tracing::info;
