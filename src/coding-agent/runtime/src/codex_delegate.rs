@@ -437,7 +437,8 @@ where
 mod tests {
     use super::*;
     use async_channel::bounded;
-    use codex_protocol::legacy_transcript::ConversationItem;
+    use codex_llm::ToolCallPayload;
+    use codex_protocol::models::TranscriptItem;
     use codex_protocol::protocol::AgentStatus;
     use codex_protocol::protocol::RawTranscriptItemEvent;
     use codex_protocol::protocol::TurnAbortReason;
@@ -483,14 +484,14 @@ mod tests {
             .send(Event {
                 id: "evt".to_string(),
                 msg: EventMsg::RawTranscriptItem(RawTranscriptItemEvent {
-                    item: ConversationItem::CustomToolCall {
+                    item: TranscriptItem::ToolCall {
                         id: None,
-                        status: None,
                         call_id: "call-1".to_string(),
-                        name: "tool".to_string(),
-                        input: "{}".to_string(),
-                    }
-                    .into(),
+                        tool_name: "tool".to_string(),
+                        payload: ToolCallPayload::TextInput {
+                            input: "{}".to_string(),
+                        },
+                    },
                 }),
             })
             .await

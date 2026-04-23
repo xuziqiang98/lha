@@ -10,8 +10,9 @@ use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
-use codex_protocol::legacy_transcript::FunctionCallOutputPayload;
-use codex_protocol::legacy_transcript::ResponseInputItem;
+use codex_llm::ToolResultItem;
+use codex_llm::ToolResultPayload;
+use codex_protocol::models::tool_result_payload_from_call_tool_result;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_user_input::RequestUserInputArgs;
@@ -30,7 +31,7 @@ pub(crate) async fn handle_mcp_tool_call(
     server: String,
     tool_name: String,
     arguments: String,
-) -> ResponseInputItem {
+) -> ToolResultItem {
     // Parse the `arguments` as JSON. An empty string is OK, but invalid JSON
     // is not.
     let arguments_value = if arguments.trim().is_empty() {
@@ -40,12 +41,13 @@ pub(crate) async fn handle_mcp_tool_call(
             Ok(value) => Some(value),
             Err(e) => {
                 error!("failed to parse tool call arguments: {e}");
-                return ResponseInputItem::FunctionCallOutput {
+                return ToolResultItem {
                     call_id: call_id.clone(),
-                    output: FunctionCallOutputPayload {
+                    tool_name: tool_name.clone(),
+                    payload: ToolResultPayload::Structured {
                         content: format!("err: {e}"),
+                        content_items: None,
                         success: Some(false),
-                        ..Default::default()
                     },
                 };
             }
@@ -123,7 +125,19 @@ pub(crate) async fn handle_mcp_tool_call(
             .get_otel_manager()
             .counter("codex.mcp.call", 1, &[("status", status)]);
 
-        return ResponseInputItem::McpToolCallOutput { call_id, result };
+        let payload = match result {
+            Ok(call_tool_result) => tool_result_payload_from_call_tool_result(&call_tool_result),
+            Err(err) => ToolResultPayload::Structured {
+                content: err,
+                content_items: None,
+                success: Some(false),
+            },
+        };
+        return ToolResultItem {
+            call_id,
+            tool_name,
+            payload,
+        };
     }
 
     let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
@@ -156,7 +170,19 @@ pub(crate) async fn handle_mcp_tool_call(
         .get_otel_manager()
         .counter("codex.mcp.call", 1, &[("status", status)]);
 
-    ResponseInputItem::McpToolCallOutput { call_id, result }
+    let payload = match result {
+        Ok(call_tool_result) => tool_result_payload_from_call_tool_result(&call_tool_result),
+        Err(err) => ToolResultPayload::Structured {
+            content: err,
+            content_items: None,
+            success: Some(false),
+        },
+    };
+    ToolResultItem {
+        call_id,
+        tool_name,
+        payload,
+    }
 }
 
 async fn notify_mcp_tool_call_event(sess: &Session, turn_context: &TurnContext, event: EventMsg) {

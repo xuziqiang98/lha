@@ -15,7 +15,7 @@ use codex_agent::protocol::ReviewTarget;
 use codex_agent::protocol::RolloutItem;
 use codex_agent::protocol::RolloutLine;
 use codex_agent::review_format::render_review_output_text;
-use codex_protocol::legacy_transcript::ConversationItem;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::responses::ResponseMock;
@@ -131,8 +131,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
         let v: serde_json::Value = serde_json::from_str(line).expect("jsonl line");
         let rl: RolloutLine = serde_json::from_value(v).expect("rollout line");
         if let RolloutItem::TranscriptItem(item) = rl.item {
-            let item: ConversationItem = item.into();
-            if let ConversationItem::Message { role, content, .. } = item {
+            if let TranscriptItem::Message { role, content, .. } = item {
                 if role == "user" {
                     for c in &content {
                         if let ContentItem::InputText { text } = c {
@@ -526,7 +525,7 @@ async fn review_input_isolated_from_parent_history() {
             .unwrap();
 
         // Prior user message (enveloped transcript_item)
-        let user = codex_protocol::legacy_transcript::ConversationItem::Message {
+        let user = TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![codex_protocol::models::ContentItem::InputText {
@@ -545,7 +544,7 @@ async fn review_input_isolated_from_parent_history() {
             .unwrap();
 
         // Prior assistant message (enveloped transcript_item)
-        let assistant = codex_protocol::legacy_transcript::ConversationItem::Message {
+        let assistant = TranscriptItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![codex_protocol::models::ContentItem::OutputText {
@@ -638,8 +637,7 @@ async fn review_input_isolated_from_parent_history() {
         let v: serde_json::Value = serde_json::from_str(line).expect("jsonl line");
         let rl: RolloutLine = serde_json::from_value(v).expect("rollout line");
         if let RolloutItem::TranscriptItem(item) = rl.item {
-            let item: ConversationItem = item.into();
-            if let ConversationItem::Message { role, content, .. } = item
+            if let TranscriptItem::Message { role, content, .. } = item
                 && role == "user"
             {
                 for c in content {

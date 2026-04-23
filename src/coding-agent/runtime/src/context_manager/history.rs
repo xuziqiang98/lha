@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
 use crate::instructions::SkillInstructionSource;
@@ -10,19 +12,18 @@ use crate::truncate::approx_tokens_from_byte_count;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
 use crate::user_shell_command::is_user_shell_command_text;
-use codex_protocol::legacy_transcript::ConversationItem;
-use codex_protocol::legacy_transcript::FunctionCallOutputContentItem;
-use codex_protocol::legacy_transcript::FunctionCallOutputPayload;
+use codex_llm::ToolResultContentItem;
+use codex_llm::ToolResultPayload;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
-use std::ops::Deref;
 
 /// Transcript of thread history
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
-    items: Vec<ConversationItem>,
+    items: Vec<TranscriptItem>,
     token_info: Option<TokenUsageInfo>,
 }
 
@@ -55,26 +56,24 @@ impl ContextManager {
     pub(crate) fn record_items<I>(&mut self, items: I, policy: TruncationPolicy)
     where
         I: IntoIterator,
-        I::Item: std::ops::Deref<Target = ConversationItem>,
+        I::Item: Deref,
+        <I::Item as Deref>::Target: Clone + Into<TranscriptItem>,
     {
         for item in items {
-            let item_ref = item.deref();
-            let is_ghost_snapshot = matches!(item_ref, ConversationItem::GhostSnapshot { .. });
-            if !is_api_message(item_ref) && !is_ghost_snapshot {
+            let item_ref: TranscriptItem = item.deref().clone().into();
+            if !is_api_message(&item_ref) {
                 continue;
             }
 
-            let processed = self.process_item(item_ref, policy);
+            let processed = self.process_item(&item_ref, policy);
             self.items.push(processed);
         }
     }
 
     /// Returns the history prepared for sending to the model. This applies a proper
     /// normalization and drop un-suited items.
-    pub(crate) fn for_prompt(mut self) -> Vec<ConversationItem> {
+    pub(crate) fn for_prompt(mut self) -> Vec<TranscriptItem> {
         self.normalize_history();
-        self.items
-            .retain(|item| !matches!(item, ConversationItem::GhostSnapshot { .. }));
         self.items
     }
 
@@ -82,11 +81,10 @@ impl ContextManager {
     /// Synthetic compact-backfilled skills are preserved in history for follow-up
     /// turns, but excluded from the next compaction prompt to avoid re-summarizing
     /// their contents.
-    pub(crate) fn for_compaction_prompt(mut self) -> Vec<ConversationItem> {
+    pub(crate) fn for_compaction_prompt(mut self) -> Vec<TranscriptItem> {
         self.normalize_history();
         self.items.retain(|item| match item {
-            ConversationItem::GhostSnapshot { .. } => false,
-            ConversationItem::Message { role, content, .. } if role == "user" => !matches!(
+            TranscriptItem::Message { role, content, .. } if role == "user" => !matches!(
                 SkillInstructions::from_message_with_source(content),
                 Some((_, SkillInstructionSource::CompactBackfill))
             ),
@@ -96,7 +94,7 @@ impl ContextManager {
     }
 
     /// Returns raw items in the history.
-    pub(crate) fn raw_items(&self) -> &[ConversationItem] {
+    pub(crate) fn raw_items(&self) -> &[TranscriptItem] {
         &self.items
     }
 
@@ -112,13 +110,9 @@ impl ContextManager {
 
         let items_tokens = self.items.iter().fold(0i64, |acc, item| {
             acc + match item {
-                ConversationItem::GhostSnapshot { .. } => 0,
-                ConversationItem::Reasoning {
+                TranscriptItem::Reasoning {
                     encrypted_content: Some(content),
                     ..
-                }
-                | ConversationItem::Compaction {
-                    encrypted_content: content,
                 } => {
                     let reasoning_bytes = estimate_reasoning_length(content.len());
                     i64::try_from(approx_tokens_from_byte_count(reasoning_bytes))
@@ -146,30 +140,37 @@ impl ContextManager {
         }
     }
 
-    pub(crate) fn replace(&mut self, items: Vec<ConversationItem>) {
-        self.items = items;
+    pub(crate) fn replace<T>(&mut self, items: Vec<T>)
+    where
+        T: Into<TranscriptItem>,
+    {
+        self.items = items.into_iter().map(Into::into).collect();
     }
 
     /// Replace image content in the last turn if it originated from a tool output.
     /// Returns true when a tool image was replaced, false otherwise.
     pub(crate) fn replace_last_turn_images(&mut self, placeholder: &str) -> bool {
         let Some(index) = self.items.iter().rposition(|item| {
-            matches!(item, ConversationItem::FunctionCallOutput { .. })
-                || matches!(item, ConversationItem::Message { role, .. } if role == "user")
+            matches!(item, TranscriptItem::ToolResult { .. })
+                || matches!(item, TranscriptItem::Message { role, .. } if role == "user")
         }) else {
             return false;
         };
 
         match &mut self.items[index] {
-            ConversationItem::FunctionCallOutput { output, .. } => {
-                let Some(content_items) = output.content_items.as_mut() else {
-                    return false;
-                };
+            TranscriptItem::ToolResult {
+                payload:
+                    ToolResultPayload::Structured {
+                        content_items: Some(content_items),
+                        ..
+                    },
+                ..
+            } => {
                 let mut replaced = false;
                 let placeholder = placeholder.to_string();
                 for item in content_items.iter_mut() {
-                    if matches!(item, FunctionCallOutputContentItem::InputImage { .. }) {
-                        *item = FunctionCallOutputContentItem::InputText {
+                    if matches!(item, ToolResultContentItem::InputImage { .. }) {
+                        *item = ToolResultContentItem::InputText {
                             text: placeholder.clone(),
                         };
                         replaced = true;
@@ -177,14 +178,15 @@ impl ContextManager {
                 }
                 replaced
             }
-            ConversationItem::Message { role, .. } if role == "user" => false,
+            TranscriptItem::ToolResult { .. } => false,
+            TranscriptItem::Message { role, .. } if role == "user" => false,
             _ => false,
         }
     }
 
     /// Drop the last `num_turns` user turns from this history.
     ///
-    /// "User turns" are identified as `ConversationItem::Message` entries whose role is `"user"`.
+    /// "User turns" are identified as `TranscriptItem::Message` entries whose role is `"user"`.
     ///
     /// This mirrors thread-rollback semantics:
     /// - `num_turns == 0` is a no-op
@@ -228,7 +230,7 @@ impl ContextManager {
     fn get_non_last_reasoning_items_tokens(&self) -> usize {
         // get reasoning items excluding all the ones after the last user message
         let Some(last_user_index) = self.items.iter().rposition(
-            |item| matches!(item, ConversationItem::Message { role, .. } if role == "user"),
+            |item| matches!(item, TranscriptItem::Message { role, .. } if role == "user"),
         ) else {
             return 0usize;
         };
@@ -238,7 +240,7 @@ impl ContextManager {
             .iter()
             .take(last_user_index)
             .filter_map(|item| {
-                if let ConversationItem::Reasoning {
+                if let TranscriptItem::Reasoning {
                     encrypted_content: Some(content),
                     ..
                 } = item
@@ -271,72 +273,76 @@ impl ContextManager {
     }
 
     /// This function enforces a couple of invariants on the in-memory history:
-    /// 1. every call (function/custom) has a corresponding output entry
-    /// 2. every output has a corresponding call entry
+    /// 1. every tool call has a corresponding result entry
+    /// 2. every result has a corresponding call entry
     fn normalize_history(&mut self) {
-        // all function/tool calls must have a corresponding output
+        // all tool calls must have a corresponding result
         normalize::ensure_call_outputs_present(&mut self.items);
 
-        // all outputs must have a corresponding function/tool call
+        // all results must have a corresponding tool call
         normalize::remove_orphan_outputs(&mut self.items);
     }
 
-    fn process_item(&self, item: &ConversationItem, policy: TruncationPolicy) -> ConversationItem {
+    fn process_item(&self, item: &TranscriptItem, policy: TruncationPolicy) -> TranscriptItem {
         let policy_with_serialization_budget = policy * 1.2;
         match item {
-            ConversationItem::FunctionCallOutput { call_id, output } => {
-                let truncated =
-                    truncate_text(output.content.as_str(), policy_with_serialization_budget);
-                let truncated_items = output.content_items.as_ref().map(|items| {
+            TranscriptItem::ToolResult {
+                call_id,
+                tool_name,
+                payload:
+                    ToolResultPayload::Structured {
+                        content,
+                        content_items,
+                        success,
+                    },
+            } => {
+                let truncated = truncate_text(content.as_str(), policy_with_serialization_budget);
+                let truncated_items = content_items.as_ref().map(|items| {
                     truncate_function_output_items_with_policy(
                         items,
                         policy_with_serialization_budget,
                     )
                 });
-                ConversationItem::FunctionCallOutput {
+                TranscriptItem::ToolResult {
                     call_id: call_id.clone(),
-                    output: FunctionCallOutputPayload {
+                    tool_name: tool_name.clone(),
+                    payload: ToolResultPayload::Structured {
                         content: truncated,
                         content_items: truncated_items,
-                        success: output.success,
+                        success: *success,
                     },
                 }
             }
-            ConversationItem::CustomToolCallOutput { call_id, output } => {
+            TranscriptItem::ToolResult {
+                call_id,
+                tool_name,
+                payload: ToolResultPayload::Text { output },
+            } => {
                 let truncated = truncate_text(output, policy_with_serialization_budget);
-                ConversationItem::CustomToolCallOutput {
+                TranscriptItem::ToolResult {
                     call_id: call_id.clone(),
-                    output: truncated,
+                    tool_name: tool_name.clone(),
+                    payload: ToolResultPayload::Text { output: truncated },
                 }
             }
-            ConversationItem::Message { .. }
-            | ConversationItem::Reasoning { .. }
-            | ConversationItem::LocalShellCall { .. }
-            | ConversationItem::FunctionCall { .. }
-            | ConversationItem::WebSearchCall { .. }
-            | ConversationItem::CustomToolCall { .. }
-            | ConversationItem::Compaction { .. }
-            | ConversationItem::GhostSnapshot { .. }
-            | ConversationItem::Other => item.clone(),
+            TranscriptItem::Message { .. }
+            | TranscriptItem::Reasoning { .. }
+            | TranscriptItem::HostedActivity { .. }
+            | TranscriptItem::ToolCall { .. }
+            | TranscriptItem::Unknown { .. } => item.clone(),
         }
     }
 }
 
-/// API messages include every non-system item (user/assistant messages, reasoning,
-/// tool calls, tool outputs, shell calls, and web-search calls).
-fn is_api_message(message: &ConversationItem) -> bool {
+/// API messages include every non-system semantic transcript item.
+fn is_api_message(message: &TranscriptItem) -> bool {
     match message {
-        ConversationItem::Message { role, .. } => role.as_str() != "system",
-        ConversationItem::FunctionCallOutput { .. }
-        | ConversationItem::FunctionCall { .. }
-        | ConversationItem::CustomToolCall { .. }
-        | ConversationItem::CustomToolCallOutput { .. }
-        | ConversationItem::LocalShellCall { .. }
-        | ConversationItem::Reasoning { .. }
-        | ConversationItem::WebSearchCall { .. }
-        | ConversationItem::Compaction { .. } => true,
-        ConversationItem::GhostSnapshot { .. } => false,
-        ConversationItem::Other => false,
+        TranscriptItem::Message { role, .. } => role.as_str() != "system",
+        TranscriptItem::Reasoning { .. }
+        | TranscriptItem::HostedActivity { .. }
+        | TranscriptItem::ToolCall { .. }
+        | TranscriptItem::ToolResult { .. } => true,
+        TranscriptItem::Unknown { .. } => false,
     }
 }
 
@@ -348,8 +354,8 @@ fn estimate_reasoning_length(encoded_len: usize) -> usize {
         .saturating_sub(650)
 }
 
-pub(crate) fn is_user_turn_boundary(item: &ConversationItem) -> bool {
-    let ConversationItem::Message { role, content, .. } = item else {
+pub(crate) fn is_user_turn_boundary(item: &TranscriptItem) -> bool {
+    let TranscriptItem::Message { role, content, .. } = item else {
         return false;
     };
 
@@ -382,7 +388,7 @@ pub(crate) fn is_user_turn_boundary(item: &ConversationItem) -> bool {
     true
 }
 
-fn user_message_positions(items: &[ConversationItem]) -> Vec<usize> {
+fn user_message_positions(items: &[TranscriptItem]) -> Vec<usize> {
     let mut positions = Vec::new();
     for (idx, item) in items.iter().enumerate() {
         if is_user_turn_boundary(item) {

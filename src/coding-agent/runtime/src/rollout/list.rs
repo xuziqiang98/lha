@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
+use super::is_unsupported_rollout_schema_error;
 use crate::path_utils;
 use crate::protocol::EventMsg;
 use crate::state_db;
@@ -24,8 +25,10 @@ use codex_file_search as file_search;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use tracing::warn;
 
 /// Returned page of thread (thread) summaries.
 #[derive(Debug, Default, PartialEq)]
@@ -704,9 +707,15 @@ async fn build_thread_item(
     updated_at: Option<String>,
 ) -> Option<ThreadItem> {
     // Read head and detect message events; stop once meta + user are found.
-    let summary = read_head_summary(&path, HEAD_RECORD_LIMIT)
-        .await
-        .unwrap_or_default();
+    let summary = match read_head_summary(&path, HEAD_RECORD_LIMIT).await {
+        Ok(summary) => summary,
+        Err(err) => {
+            if is_unsupported_rollout_schema_error(&err) {
+                warn!("skipping unsupported legacy rollout {}", path.display());
+            }
+            return None;
+        }
+    };
     if !allowed_sources.is_empty()
         && !summary
             .source
@@ -1027,6 +1036,11 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
 
         match rollout_line.item {
             RolloutItem::SessionMeta(session_meta_line) => {
+                if session_meta_line.meta.rollout_schema_version != ROLLOUT_SCHEMA_VERSION_V3 {
+                    return Err(super::recorder::unsupported_rollout_schema_error(
+                        session_meta_line.meta.rollout_schema_version,
+                    ));
+                }
                 summary.source = Some(session_meta_line.meta.source.clone());
                 summary.model_provider = session_meta_line.meta.model_provider.clone();
                 summary.session_cwd = Some(session_meta_line.meta.cwd.clone());
@@ -1055,7 +1069,7 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             RolloutItem::TurnContext(_) => {
                 // Not included in `head`; skip.
             }
-            RolloutItem::Compacted(_) => {
+            RolloutItem::GhostSnapshot(_) | RolloutItem::Compacted(_) => {
                 // Not included in `head`; skip.
             }
             RolloutItem::EventMsg(ev) => {

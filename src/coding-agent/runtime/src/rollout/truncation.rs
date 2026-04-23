@@ -1,17 +1,17 @@
 //! Helpers for truncating rollouts based on "user turn" boundaries.
 //!
-//! In core, "user turns" are detected by scanning `ConversationItem::Message` items and
+//! In core, "user turns" are detected by scanning `TranscriptItem::Message` items and
 //! interpreting them via `event_mapping::parse_turn_item(...)`.
 
 use crate::event_mapping;
 use codex_protocol::items::TurnItem;
-use codex_protocol::legacy_transcript::ConversationItem;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 
 /// Return the indices of user message boundaries in a rollout.
 ///
-/// A user message boundary is a `RolloutItem::TranscriptItem(ConversationItem::Message { .. })`
+/// A user message boundary is a `RolloutItem::TranscriptItem(TranscriptItem::Message { .. })`
 /// whose parsed turn item is `TurnItem::UserMessage`.
 ///
 /// Rollouts can contain `ThreadRolledBack` markers. Those markers indicate that the
@@ -22,10 +22,9 @@ pub(crate) fn user_message_positions_in_rollout(items: &[RolloutItem]) -> Vec<us
     for (idx, item) in items.iter().enumerate() {
         match item {
             RolloutItem::TranscriptItem(item) => {
-                let item: ConversationItem = item.clone().into();
-                if matches!(&item, ConversationItem::Message { .. })
+                if matches!(item, TranscriptItem::Message { .. })
                     && matches!(
-                        event_mapping::parse_turn_item(&item),
+                        event_mapping::parse_turn_item(item),
                         Some(TurnItem::UserMessage(_))
                     )
                 {
@@ -81,8 +80,8 @@ mod tests {
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use pretty_assertions::assert_eq;
 
-    fn user_msg(text: &str) -> ConversationItem {
-        ConversationItem::Message {
+    fn user_msg(text: &str) -> TranscriptItem {
+        TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::OutputText {
@@ -92,8 +91,8 @@ mod tests {
         }
     }
 
-    fn assistant_msg(text: &str) -> ConversationItem {
-        ConversationItem::Message {
+    fn assistant_msg(text: &str) -> TranscriptItem {
+        TranscriptItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -111,7 +110,7 @@ mod tests {
             assistant_msg("a2"),
             user_msg("u2"),
             assistant_msg("a3"),
-            ConversationItem::Reasoning {
+            TranscriptItem::Reasoning {
                 id: "r1".to_string(),
                 summary: vec![ReasoningItemReasoningSummary::SummaryText {
                     text: "s".to_string(),
@@ -119,11 +118,13 @@ mod tests {
                 content: None,
                 encrypted_content: None,
             },
-            ConversationItem::FunctionCall {
+            TranscriptItem::ToolCall {
                 id: None,
-                name: "tool".to_string(),
-                arguments: "{}".to_string(),
                 call_id: "c1".to_string(),
+                tool_name: "tool".to_string(),
+                payload: codex_llm::ToolCallPayload::JsonArguments {
+                    arguments: "{}".to_string(),
+                },
             },
             assistant_msg("a4"),
         ];
@@ -131,14 +132,14 @@ mod tests {
         let rollout: Vec<RolloutItem> = items
             .iter()
             .cloned()
-            .map(|item| RolloutItem::TranscriptItem(item.into()))
+            .map(RolloutItem::TranscriptItem)
             .collect();
 
         let truncated = truncate_rollout_before_nth_user_message_from_start(&rollout, 1);
         let expected = vec![
-            RolloutItem::TranscriptItem(items[0].clone().into()),
-            RolloutItem::TranscriptItem(items[1].clone().into()),
-            RolloutItem::TranscriptItem(items[2].clone().into()),
+            RolloutItem::TranscriptItem(items[0].clone()),
+            RolloutItem::TranscriptItem(items[1].clone()),
+            RolloutItem::TranscriptItem(items[2].clone()),
         ];
         assert_eq!(
             serde_json::to_value(&truncated).unwrap(),
@@ -152,9 +153,9 @@ mod tests {
     #[test]
     fn truncation_max_keeps_full_rollout() {
         let rollout = vec![
-            RolloutItem::TranscriptItem(user_msg("u1").into()),
-            RolloutItem::TranscriptItem(assistant_msg("a1").into()),
-            RolloutItem::TranscriptItem(user_msg("u2").into()),
+            RolloutItem::TranscriptItem(user_msg("u1")),
+            RolloutItem::TranscriptItem(assistant_msg("a1")),
+            RolloutItem::TranscriptItem(user_msg("u2")),
         ];
 
         let truncated = truncate_rollout_before_nth_user_message_from_start(&rollout, usize::MAX);
@@ -168,17 +169,17 @@ mod tests {
     #[test]
     fn truncates_rollout_from_start_applies_thread_rollback_markers() {
         let rollout_items = vec![
-            RolloutItem::TranscriptItem(user_msg("u1").into()),
-            RolloutItem::TranscriptItem(assistant_msg("a1").into()),
-            RolloutItem::TranscriptItem(user_msg("u2").into()),
-            RolloutItem::TranscriptItem(assistant_msg("a2").into()),
+            RolloutItem::TranscriptItem(user_msg("u1")),
+            RolloutItem::TranscriptItem(assistant_msg("a1")),
+            RolloutItem::TranscriptItem(user_msg("u2")),
+            RolloutItem::TranscriptItem(assistant_msg("a2")),
             RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
                 num_turns: 1,
             })),
-            RolloutItem::TranscriptItem(user_msg("u3").into()),
-            RolloutItem::TranscriptItem(assistant_msg("a3").into()),
-            RolloutItem::TranscriptItem(user_msg("u4").into()),
-            RolloutItem::TranscriptItem(assistant_msg("a4").into()),
+            RolloutItem::TranscriptItem(user_msg("u3")),
+            RolloutItem::TranscriptItem(assistant_msg("a3")),
+            RolloutItem::TranscriptItem(user_msg("u4")),
+            RolloutItem::TranscriptItem(assistant_msg("a4")),
         ];
 
         // Effective user history after applying rollback(1) is: u1, u3, u4.
@@ -203,15 +204,15 @@ mod tests {
         let rollout_items: Vec<RolloutItem> = items
             .iter()
             .cloned()
-            .map(|item| RolloutItem::TranscriptItem(item.into()))
+            .map(RolloutItem::TranscriptItem)
             .collect();
 
         let truncated = truncate_rollout_before_nth_user_message_from_start(&rollout_items, 1);
         let expected: Vec<RolloutItem> = vec![
-            RolloutItem::TranscriptItem(items[0].clone().into()),
-            RolloutItem::TranscriptItem(items[1].clone().into()),
-            RolloutItem::TranscriptItem(items[2].clone().into()),
-            RolloutItem::TranscriptItem(items[3].clone().into()),
+            RolloutItem::TranscriptItem(items[0].clone()),
+            RolloutItem::TranscriptItem(items[1].clone()),
+            RolloutItem::TranscriptItem(items[2].clone()),
+            RolloutItem::TranscriptItem(items[3].clone()),
         ];
 
         assert_eq!(

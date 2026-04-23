@@ -1,6 +1,8 @@
 use std::path::Path;
 
 use codex_utils_image::load_and_resize_to_fit;
+use mcp_types::CallToolResult;
+use mcp_types::ContentBlock;
 use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
@@ -20,6 +22,8 @@ pub use codex_llm_types::BaseInstructions;
 pub use codex_llm_types::ContentItem;
 pub use codex_llm_types::ReasoningItemContent;
 pub use codex_llm_types::ReasoningItemReasoningSummary;
+pub use codex_llm_types::ToolResultContentItem;
+pub use codex_llm_types::ToolResultPayload;
 pub use codex_llm_types::TranscriptItem;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
@@ -488,17 +492,76 @@ pub fn transcript_item_from_user_input(items: Vec<UserInput>) -> TranscriptItem 
     }
 }
 
-#[doc(hidden)]
-#[deprecated(note = "use transcript_item_from_user_input instead")]
-pub fn response_input_from_user_input(
-    items: Vec<UserInput>,
-) -> crate::legacy_transcript::ResponseInputItem {
-    match transcript_item_from_user_input(items) {
-        TranscriptItem::Message { role, content, .. } => {
-            crate::legacy_transcript::ResponseInputItem::Message { role, content }
-        }
-        _ => unreachable!("user input always maps to a message transcript item"),
+pub fn tool_result_payload_from_call_tool_result(call_tool_result: &CallToolResult) -> ToolResultPayload {
+    let CallToolResult {
+        content,
+        structured_content,
+        is_error,
+    } = call_tool_result;
+
+    let success = Some(is_error != &Some(true));
+
+    if let Some(structured_content) = structured_content
+        && !structured_content.is_null()
+    {
+        return match serde_json::to_string(structured_content) {
+            Ok(content) => ToolResultPayload::Structured {
+                content,
+                content_items: None,
+                success,
+            },
+            Err(err) => ToolResultPayload::Structured {
+                content: err.to_string(),
+                content_items: None,
+                success: Some(false),
+            },
+        };
     }
+
+    let serialized_content = match serde_json::to_string(content) {
+        Ok(content) => content,
+        Err(err) => {
+            return ToolResultPayload::Structured {
+                content: err.to_string(),
+                content_items: None,
+                success: Some(false),
+            };
+        }
+    };
+
+    ToolResultPayload::Structured {
+        content: serialized_content,
+        content_items: content_blocks_to_tool_result_items(content),
+        success,
+    }
+}
+
+fn content_blocks_to_tool_result_items(
+    blocks: &[ContentBlock],
+) -> Option<Vec<ToolResultContentItem>> {
+    let mut saw_image = false;
+    let mut items = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        match block {
+            ContentBlock::TextContent(text) => {
+                items.push(ToolResultContentItem::InputText {
+                    text: text.text.clone(),
+                });
+            }
+            ContentBlock::ImageContent(image) => {
+                saw_image = true;
+                let image_url = if image.data.starts_with("data:") {
+                    image.data.clone()
+                } else {
+                    format!("data:{};base64,{}", image.mime_type, image.data)
+                };
+                items.push(ToolResultContentItem::InputImage { image_url });
+            }
+            _ => return None,
+        }
+    }
+
+    if saw_image { Some(items) } else { None }
 }
 
 /// If the `name` of a `TranscriptItem::FunctionCall` is either `container.exec`
@@ -551,15 +614,10 @@ pub struct ShellCommandToolCallParams {
 mod tests {
     use super::*;
     use crate::config_types::SandboxMode;
-    use crate::legacy_transcript::ConversationItem;
-    use crate::legacy_transcript::FunctionCallOutputContentItem;
-    use crate::legacy_transcript::FunctionCallOutputPayload;
-    use crate::legacy_transcript::ResponseInputItem;
     use crate::protocol::AskForApproval;
     use anyhow::Result;
     use codex_execpolicy::Policy;
-    use mcp_types::CallToolResult;
-    use mcp_types::ContentBlock;
+    use codex_llm_types::TranscriptItem;
     use mcp_types::ImageContent;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
@@ -709,43 +767,7 @@ mod tests {
     }
 
     #[test]
-    fn serializes_success_as_plain_string() -> Result<()> {
-        let item = ResponseInputItem::FunctionCallOutput {
-            call_id: "call1".into(),
-            output: FunctionCallOutputPayload {
-                content: "ok".into(),
-                ..Default::default()
-            },
-        };
-
-        let json = serde_json::to_string(&item)?;
-        let v: serde_json::Value = serde_json::from_str(&json)?;
-
-        // Success case -> output should be a plain string
-        assert_eq!(v.get("output").unwrap().as_str().unwrap(), "ok");
-        Ok(())
-    }
-
-    #[test]
-    fn serializes_failure_as_string() -> Result<()> {
-        let item = ResponseInputItem::FunctionCallOutput {
-            call_id: "call1".into(),
-            output: FunctionCallOutputPayload {
-                content: "bad".into(),
-                success: Some(false),
-                ..Default::default()
-            },
-        };
-
-        let json = serde_json::to_string(&item)?;
-        let v: serde_json::Value = serde_json::from_str(&json)?;
-
-        assert_eq!(v.get("output").unwrap().as_str().unwrap(), "bad");
-        Ok(())
-    }
-
-    #[test]
-    fn serializes_image_outputs_as_array() -> Result<()> {
+    fn tool_result_payload_from_call_tool_result_preserves_image_blocks() -> Result<()> {
         let call_tool_result = CallToolResult {
             content: vec![
                 ContentBlock::TextContent(TextContent {
@@ -764,162 +786,86 @@ mod tests {
             structured_content: None,
         };
 
-        let payload = FunctionCallOutputPayload::from(&call_tool_result);
-        assert_eq!(payload.success, Some(true));
-        let items = payload.content_items.clone().expect("content items");
+        let ToolResultPayload::Structured {
+            content,
+            content_items,
+            success,
+        } = tool_result_payload_from_call_tool_result(&call_tool_result)
+        else {
+            panic!("expected structured payload");
+        };
+        assert_eq!(success, Some(true));
+        let items = content_items.expect("content items");
         assert_eq!(
             items,
             vec![
-                FunctionCallOutputContentItem::InputText {
+                ToolResultContentItem::InputText {
                     text: "caption".into(),
                 },
-                FunctionCallOutputContentItem::InputImage {
+                ToolResultContentItem::InputImage {
                     image_url: "data:image/png;base64,BASE64".into(),
                 },
             ]
         );
+        assert_eq!(content, serde_json::to_string(&call_tool_result.content)?);
+        Ok(())
+    }
 
-        let item = ResponseInputItem::FunctionCallOutput {
-            call_id: "call1".into(),
-            output: payload,
+    #[test]
+    fn tool_result_payload_from_call_tool_result_prefers_structured_content() -> Result<()> {
+        let call_tool_result = CallToolResult {
+            content: vec![ContentBlock::TextContent(TextContent {
+                annotations: None,
+                text: "caption".into(),
+                r#type: "text".into(),
+            })],
+            is_error: Some(true),
+            structured_content: Some(serde_json::json!({
+                "summary": "structured wins",
+                "count": 2,
+            })),
         };
 
-        let json = serde_json::to_string(&item)?;
-        let v: serde_json::Value = serde_json::from_str(&json)?;
-
-        let output = v.get("output").expect("output field");
-        assert!(output.is_array(), "expected array output");
-
+        let ToolResultPayload::Structured {
+            content,
+            content_items,
+            success,
+        } = tool_result_payload_from_call_tool_result(&call_tool_result)
+        else {
+            panic!("expected structured payload");
+        };
+        assert_eq!(content, r#"{"count":2,"summary":"structured wins"}"#);
+        assert_eq!(content_items, None);
+        assert_eq!(success, Some(false));
         Ok(())
     }
 
     #[test]
-    fn deserializes_array_payload_into_items() -> Result<()> {
-        let json = r#"[
-            {"type": "input_text", "text": "note"},
-            {"type": "input_image", "image_url": "data:image/png;base64,XYZ"}
-        ]"#;
+    fn transcript_item_roundtrips_web_search_hosted_activity() -> Result<()> {
+        let payload = serde_json::to_value(WebSearchAction::FindInPage {
+            url: Some("https://example.com/docs".into()),
+            pattern: Some("installation".into()),
+        })?;
+        let item = TranscriptItem::HostedActivity {
+            id: Some("ws_partial".into()),
+            activity_type: "web_search".into(),
+            status: Some("in_progress".into()),
+            payload: payload.clone(),
+        };
 
-        let payload: FunctionCallOutputPayload = serde_json::from_str(json)?;
-
-        assert_eq!(payload.success, None);
-        let expected_items = vec![
-            FunctionCallOutputContentItem::InputText {
-                text: "note".into(),
-            },
-            FunctionCallOutputContentItem::InputImage {
-                image_url: "data:image/png;base64,XYZ".into(),
-            },
-        ];
-        assert_eq!(payload.content_items, Some(expected_items.clone()));
-
-        let expected_content = serde_json::to_string(&expected_items)?;
-        assert_eq!(payload.content, expected_content);
-
-        Ok(())
-    }
-
-    #[test]
-    fn deserializes_compaction_alias() -> Result<()> {
-        let json = r#"{"type":"compaction_summary","encrypted_content":"abc"}"#;
-
-        let item: ConversationItem = serde_json::from_str(json)?;
-
+        let json = serde_json::to_value(&item)?;
         assert_eq!(
-            item,
-            ConversationItem::Compaction {
-                encrypted_content: "abc".into(),
-            }
+            json,
+            serde_json::json!({
+                "type": "hosted_activity",
+                "id": "ws_partial",
+                "activity_type": "web_search",
+                "status": "in_progress",
+                "payload": payload,
+            })
         );
-        Ok(())
-    }
-
-    #[test]
-    fn roundtrips_web_search_call_actions() -> Result<()> {
-        let cases = vec![
-            (
-                r#"{
-                    "type": "web_search_call",
-                    "status": "completed",
-                    "action": {
-                        "type": "search",
-                        "query": "weather seattle",
-                        "queries": ["weather seattle", "seattle weather now"]
-                    }
-                }"#,
-                None,
-                Some(WebSearchAction::Search {
-                    query: Some("weather seattle".into()),
-                    queries: Some(vec!["weather seattle".into(), "seattle weather now".into()]),
-                }),
-                Some("completed".into()),
-                true,
-            ),
-            (
-                r#"{
-                    "type": "web_search_call",
-                    "status": "open",
-                    "action": {
-                        "type": "open_page",
-                        "url": "https://example.com"
-                    }
-                }"#,
-                None,
-                Some(WebSearchAction::OpenPage {
-                    url: Some("https://example.com".into()),
-                }),
-                Some("open".into()),
-                true,
-            ),
-            (
-                r#"{
-                    "type": "web_search_call",
-                    "status": "in_progress",
-                    "action": {
-                        "type": "find_in_page",
-                        "url": "https://example.com/docs",
-                        "pattern": "installation"
-                    }
-                }"#,
-                None,
-                Some(WebSearchAction::FindInPage {
-                    url: Some("https://example.com/docs".into()),
-                    pattern: Some("installation".into()),
-                }),
-                Some("in_progress".into()),
-                true,
-            ),
-            (
-                r#"{
-                    "type": "web_search_call",
-                    "status": "in_progress",
-                    "id": "ws_partial"
-                }"#,
-                Some("ws_partial".into()),
-                None,
-                Some("in_progress".into()),
-                false,
-            ),
-        ];
-
-        for (json_literal, expected_id, expected_action, expected_status, expect_roundtrip) in cases
-        {
-            let parsed: ConversationItem = serde_json::from_str(json_literal)?;
-            let expected = ConversationItem::WebSearchCall {
-                id: expected_id.clone(),
-                status: expected_status.clone(),
-                action: expected_action.clone(),
-            };
-            assert_eq!(parsed, expected);
-
-            let serialized = serde_json::to_value(&parsed)?;
-            let mut expected_serialized: serde_json::Value = serde_json::from_str(json_literal)?;
-            if !expect_roundtrip && let Some(obj) = expected_serialized.as_object_mut() {
-                obj.remove("id");
-            }
-            assert_eq!(serialized, expected_serialized);
-        }
-
+        let parsed: TranscriptItem = serde_json::from_value(json)?;
+        assert_eq!(parsed, item);
         Ok(())
     }
 

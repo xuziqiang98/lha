@@ -9,7 +9,8 @@ use codex_git::CreateGhostCommitOptions;
 use codex_git::GhostSnapshotReport;
 use codex_git::GitToolingError;
 use codex_git::create_ghost_commit_with_report;
-use codex_protocol::legacy_transcript::ConversationItem;
+use codex_protocol::protocol::GhostSnapshotRecord;
+use codex_protocol::protocol::GhostSnapshotStatus;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::Token;
@@ -106,9 +107,15 @@ impl SessionTask for GhostSnapshotTask {
                             }
                             session
                                 .session
-                                .record_conversation_items(&ctx, &[ConversationItem::GhostSnapshot {
-                                    ghost_commit: ghost_commit.clone(),
-                                }])
+                                .record_ghost_snapshot(
+                                    &ctx,
+                                    GhostSnapshotRecord {
+                                        turn_id: ctx.sub_id.clone(),
+                                        status: GhostSnapshotStatus::Captured {
+                                            ghost_commit: ghost_commit.clone(),
+                                        },
+                                    },
+                                )
                                 .await;
                             info!("ghost commit captured: {}", ghost_commit.id());
                         }

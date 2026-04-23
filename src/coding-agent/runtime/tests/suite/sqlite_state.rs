@@ -94,7 +94,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                     cwd: codex_home.to_path_buf(),
                     originator: "test".to_string(),
                     cli_version: "test".to_string(),
-                    rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V2,
+                    rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
                     source: SessionSource::default(),
                     model_provider: None,
                     base_instructions: None,

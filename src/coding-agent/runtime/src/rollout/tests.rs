@@ -27,11 +27,11 @@ use crate::rollout::rollout_date_parts;
 use anyhow::Result;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V2;
+use codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
@@ -45,7 +45,7 @@ const NO_SOURCE_FILTER: &[SessionSource] = &[];
 const TEST_PROVIDER: &str = "test-provider";
 
 fn session_meta_payload(mut payload: serde_json::Value) -> serde_json::Value {
-    payload["rollout_schema_version"] = serde_json::Value::from(ROLLOUT_SCHEMA_VERSION_V2);
+    payload["rollout_schema_version"] = serde_json::Value::from(ROLLOUT_SCHEMA_VERSION_V3);
     payload
 }
 
@@ -990,7 +990,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 cwd: ".".into(),
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
-                rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V2,
+                rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
                 source: SessionSource::VSCode,
                 model_provider: Some("test-provider".into()),
                 base_instructions: None,
@@ -1017,7 +1017,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
         let response_line = RolloutLine {
             timestamp: format!("{ts}-{idx:02}"),
             item: RolloutItem::TranscriptItem(
-                ConversationItem::Message {
+                TranscriptItem::Message {
                     id: None,
                     role: "assistant".into(),
                     content: vec![ContentItem::OutputText {

@@ -27,8 +27,8 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::TranscriptItem;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -119,16 +119,13 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
     let responses_log = responses::mount_sse_sequence(&server, vec![sse1, sse2, sse3]).await;
 
     let compacted_history = vec![
-        ConversationItem::Message {
+        TranscriptItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
                 text: "REMOTE_COMPACT_SUMMARY".to_string(),
             }],
             end_turn: None,
-        },
-        ConversationItem::Compaction {
-            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
         },
     ];
     let compact_mock = responses::mount_compact_json_once(

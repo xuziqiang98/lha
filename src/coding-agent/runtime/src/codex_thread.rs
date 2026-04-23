@@ -9,8 +9,8 @@ use codex_agent_runtime::SessionStatus;
 use codex_llm::RuntimeEndpoint;
 use codex_llm::RuntimeMetadata;
 use codex_protocol::config_types::Personality;
-use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
@@ -100,12 +100,7 @@ impl CodexThread {
         SessionSnapshot {
             session_id: hasher.finish(),
             status,
-            conversation: history
-                .raw_items()
-                .iter()
-                .cloned()
-                .map(Into::into)
-                .collect(),
+            conversation: history.raw_items().to_vec(),
             steering_queue: Vec::new(),
             follow_up_queue: Vec::new(),
             runtime: RuntimeMetadata {
@@ -122,7 +117,7 @@ impl CodexThread {
 
     pub(crate) async fn inject_user_message_without_turn(&self, message: String) {
         let turn_context = self.codex.session.new_default_turn().await;
-        let item = ConversationItem::Message {
+        let item = TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText { text: message }],

@@ -8,9 +8,10 @@ use crate::subagents::role::DEFAULT_ROLE_NAME;
 use crate::subagents::role::resolve_role_config;
 use crate::subagents::status::is_final;
 use crate::thread_manager::ThreadManagerState;
+use codex_llm::ToolResultItem;
+use codex_llm::ToolResultPayload;
 use codex_protocol::ThreadId;
-use codex_protocol::legacy_transcript::ConversationItem;
-use codex_protocol::legacy_transcript::FunctionCallOutputPayload;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
@@ -157,15 +158,15 @@ impl AgentControl {
                             .await?
                             .get_rollout_items();
                     forked_rollout_items.push(RolloutItem::TranscriptItem(
-                        ConversationItem::FunctionCallOutput {
+                        TranscriptItem::from(ToolResultItem {
                             call_id: call_id.clone(),
-                            output: FunctionCallOutputPayload {
+                            tool_name: "spawn_agent".to_string(),
+                            payload: ToolResultPayload::Structured {
                                 content: FORKED_SPAWN_AGENT_OUTPUT_MESSAGE.to_string(),
                                 content_items: None,
                                 success: Some(true),
                             },
-                        }
-                        .into(),
+                        }),
                     ));
                     state
                         .spawn_thread_with_initial_history_and_source(

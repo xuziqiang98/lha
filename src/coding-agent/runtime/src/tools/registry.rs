@@ -8,7 +8,7 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use async_trait::async_trait;
 use codex_llm::ToolDescriptor;
-use codex_protocol::legacy_transcript::ResponseInputItem;
+use codex_llm::ToolResultItem;
 use codex_utils_readiness::Readiness;
 use tracing::warn;
 
@@ -67,7 +67,7 @@ impl ToolRegistry {
     pub async fn dispatch(
         &self,
         invocation: ToolInvocation,
-    ) -> Result<ResponseInputItem, FunctionCallError> {
+    ) -> Result<ToolResultItem, FunctionCallError> {
         let tool_name = invocation.tool_name.clone();
         let call_id_owned = invocation.call_id.clone();
         let otel = invocation.turn.runtime.get_otel_manager();
@@ -142,7 +142,11 @@ impl ToolRegistry {
                 let output = guard.take().ok_or_else(|| {
                     FunctionCallError::Fatal("tool produced no output".to_string())
                 })?;
-                Ok(output.into_response(&call_id_owned, &payload_for_response))
+                Ok(output.into_tool_result(
+                    &call_id_owned,
+                    tool_name.as_ref(),
+                    &payload_for_response,
+                ))
             }
             Err(err) => Err(err),
         }

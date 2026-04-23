@@ -4,10 +4,10 @@ use codex_protocol::items::ReasoningItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::WebSearchItem;
-use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::models::is_image_close_tag_text;
 use codex_protocol::models::is_image_open_tag_text;
@@ -88,20 +88,24 @@ fn parse_agent_message(id: Option<&String>, message: &[ContentItem]) -> AgentMes
     AgentMessageItem { id, content }
 }
 
-pub fn parse_turn_item(item: &ConversationItem) -> Option<TurnItem> {
+pub fn parse_turn_item<T>(item: &T) -> Option<TurnItem>
+where
+    T: Clone + Into<TranscriptItem>,
+{
+    let item: TranscriptItem = item.clone().into();
     match item {
-        ConversationItem::Message {
+        TranscriptItem::Message {
             role, content, id, ..
         } => match role.as_str() {
-            "user" => parse_user_message(content).map(TurnItem::UserMessage),
+            "user" => parse_user_message(&content).map(TurnItem::UserMessage),
             "assistant" => Some(TurnItem::AgentMessage(parse_agent_message(
                 id.as_ref(),
-                content,
+                &content,
             ))),
             "system" => None,
             _ => None,
         },
-        ConversationItem::Reasoning {
+        TranscriptItem::Reasoning {
             id,
             summary,
             content,
@@ -114,7 +118,6 @@ pub fn parse_turn_item(item: &ConversationItem) -> Option<TurnItem> {
                 })
                 .collect();
             let raw_content = content
-                .clone()
                 .unwrap_or_default()
                 .into_iter()
                 .map(|entry| match entry {
@@ -123,18 +126,21 @@ pub fn parse_turn_item(item: &ConversationItem) -> Option<TurnItem> {
                 })
                 .collect();
             Some(TurnItem::Reasoning(ReasoningItem {
-                id: id.clone(),
+                id,
                 summary_text,
                 raw_content,
             }))
         }
-        ConversationItem::WebSearchCall { id, action, .. } => {
-            let (action, query) = match action {
-                Some(action) => (action.clone(), web_search_action_detail(action)),
-                None => (WebSearchAction::Other, String::new()),
-            };
+        TranscriptItem::HostedActivity {
+            id,
+            activity_type,
+            payload,
+            ..
+        } if activity_type == "web_search" => {
+            let action = serde_json::from_value(payload).unwrap_or(WebSearchAction::Other);
+            let query = web_search_action_detail(&action);
             Some(TurnItem::WebSearch(WebSearchItem {
-                id: id.clone().unwrap_or_default(),
+                id: id.unwrap_or_default(),
                 query,
                 action,
             }))
@@ -149,10 +155,10 @@ mod tests {
     use codex_protocol::items::AgentMessageContent;
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::WebSearchItem;
-    use codex_protocol::legacy_transcript::ConversationItem;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemContent;
     use codex_protocol::models::ReasoningItemReasoningSummary;
+    use codex_protocol::models::TranscriptItem;
     use codex_protocol::models::WebSearchAction;
     use codex_protocol::user_input::UserInput;
     use pretty_assertions::assert_eq;
@@ -162,7 +168,7 @@ mod tests {
         let img1 = "https://example.com/one.png".to_string();
         let img2 = "https://example.com/two.jpg".to_string();
 
-        let item = ConversationItem::Message {
+        let item = TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![
@@ -203,7 +209,7 @@ mod tests {
         let label = codex_protocol::models::local_image_open_tag_text(1);
         let user_text = "Please review this image.".to_string();
 
-        let item = ConversationItem::Message {
+        let item = TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![
@@ -244,7 +250,7 @@ mod tests {
         let label = codex_protocol::models::image_open_tag_text();
         let user_text = "Please review this image.".to_string();
 
-        let item = ConversationItem::Message {
+        let item = TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![
@@ -282,7 +288,7 @@ mod tests {
     #[test]
     fn skips_user_instructions_and_env() {
         let items = vec![
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -290,7 +296,7 @@ mod tests {
                 }],
                 end_turn: None,
             },
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -298,7 +304,7 @@ mod tests {
                 }],
                 end_turn: None,
             },
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -306,7 +312,7 @@ mod tests {
                 }],
                 end_turn: None,
             },
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -315,7 +321,7 @@ mod tests {
                 }],
                 end_turn: None,
             },
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -333,7 +339,7 @@ mod tests {
 
     #[test]
     fn parses_agent_message() {
-        let item = ConversationItem::Message {
+        let item = TranscriptItem::Message {
             id: Some("msg-1".to_string()),
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -357,7 +363,7 @@ mod tests {
 
     #[test]
     fn parses_reasoning_summary_and_raw_content() {
-        let item = ConversationItem::Reasoning {
+        let item = TranscriptItem::Reasoning {
             id: "reasoning_1".to_string(),
             summary: vec![
                 ReasoningItemReasoningSummary::SummaryText {
@@ -389,7 +395,7 @@ mod tests {
 
     #[test]
     fn parses_reasoning_including_raw_content() {
-        let item = ConversationItem::Reasoning {
+        let item = TranscriptItem::Reasoning {
             id: "reasoning_2".to_string(),
             summary: vec![ReasoningItemReasoningSummary::SummaryText {
                 text: "Summarized step".to_string(),
@@ -421,13 +427,15 @@ mod tests {
 
     #[test]
     fn parses_web_search_call() {
-        let item = ConversationItem::WebSearchCall {
+        let item = TranscriptItem::HostedActivity {
             id: Some("ws_1".to_string()),
+            activity_type: "web_search".to_string(),
             status: Some("completed".to_string()),
-            action: Some(WebSearchAction::Search {
+            payload: serde_json::to_value(WebSearchAction::Search {
                 query: Some("weather".to_string()),
                 queries: None,
-            }),
+            })
+            .expect("serialize web search action"),
         };
 
         let turn_item = parse_turn_item(&item).expect("expected web search turn item");
@@ -450,12 +458,14 @@ mod tests {
 
     #[test]
     fn parses_web_search_open_page_call() {
-        let item = ConversationItem::WebSearchCall {
+        let item = TranscriptItem::HostedActivity {
             id: Some("ws_open".to_string()),
+            activity_type: "web_search".to_string(),
             status: Some("completed".to_string()),
-            action: Some(WebSearchAction::OpenPage {
+            payload: serde_json::to_value(WebSearchAction::OpenPage {
                 url: Some("https://example.com".to_string()),
-            }),
+            })
+            .expect("serialize web search action"),
         };
 
         let turn_item = parse_turn_item(&item).expect("expected web search turn item");
@@ -477,13 +487,15 @@ mod tests {
 
     #[test]
     fn parses_web_search_find_in_page_call() {
-        let item = ConversationItem::WebSearchCall {
+        let item = TranscriptItem::HostedActivity {
             id: Some("ws_find".to_string()),
+            activity_type: "web_search".to_string(),
             status: Some("completed".to_string()),
-            action: Some(WebSearchAction::FindInPage {
+            payload: serde_json::to_value(WebSearchAction::FindInPage {
                 url: Some("https://example.com".to_string()),
                 pattern: Some("needle".to_string()),
-            }),
+            })
+            .expect("serialize web search action"),
         };
 
         let turn_item = parse_turn_item(&item).expect("expected web search turn item");
@@ -506,10 +518,11 @@ mod tests {
 
     #[test]
     fn parses_partial_web_search_call_without_action_as_other() {
-        let item = ConversationItem::WebSearchCall {
+        let item = TranscriptItem::HostedActivity {
             id: Some("ws_partial".to_string()),
+            activity_type: "web_search".to_string(),
             status: Some("in_progress".to_string()),
-            action: None,
+            payload: serde_json::Value::Null,
         };
 
         let turn_item = parse_turn_item(&item).expect("expected web search turn item");

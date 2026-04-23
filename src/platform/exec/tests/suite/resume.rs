@@ -138,7 +138,7 @@ fn write_fake_rollout(
         cwd: cwd.to_path_buf(),
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
-        rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V2,
+        rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
         source: SessionSource::Cli,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,

@@ -13,8 +13,8 @@ use codex_app_server_protocol::ResumeConversationParams;
 use codex_app_server_protocol::ResumeConversationResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionConfiguredNotification;
-use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::TranscriptItem;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -301,7 +301,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
 
     // Resuming with explicit history should succeed even without a stored rollout.
     let fork_history_text = "Hello from history";
-    let history = vec![ConversationItem::Message {
+    let history = vec![TranscriptItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {

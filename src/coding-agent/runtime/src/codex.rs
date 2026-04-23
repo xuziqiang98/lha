@@ -63,6 +63,8 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::GhostSnapshotRecord;
+use codex_protocol::protocol::GhostSnapshotStatus;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
@@ -212,8 +214,6 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::legacy_transcript::ConversationItem;
-use codex_protocol::legacy_transcript::ResponseInputItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::TranscriptItem;
@@ -236,13 +236,8 @@ pub struct Codex {
     pub(crate) session: Arc<Session>,
 }
 
-fn legacy_response_input_from_user_input(input: Vec<UserInput>) -> ResponseInputItem {
-    match transcript_item_from_user_input(input) {
-        TranscriptItem::Message { role, content, .. } => {
-            ResponseInputItem::Message { role, content }
-        }
-        _ => unreachable!("user input always maps to a message transcript item"),
-    }
+fn transcript_input_from_user_input(input: Vec<UserInput>) -> TranscriptItem {
+    transcript_item_from_user_input(input)
 }
 
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
@@ -1204,6 +1199,8 @@ impl Session {
                     .reconstruct_history_from_rollout(&turn_context, &rollout_items)
                     .await;
                 if !reconstructed_history.is_empty() {
+                    let reconstructed_history =
+                        reconstructed_history.into_iter().collect::<Vec<_>>();
                     self.record_into_history(&reconstructed_history, &turn_context)
                         .await;
                 }
@@ -1225,6 +1222,8 @@ impl Session {
                     .reconstruct_history_from_rollout(&turn_context, &rollout_items)
                     .await;
                 if !reconstructed_history.is_empty() {
+                    let reconstructed_history =
+                        reconstructed_history.into_iter().collect::<Vec<_>>();
                     self.record_into_history(&reconstructed_history, &turn_context)
                         .await;
                 }
@@ -1412,7 +1411,7 @@ impl Session {
         &self,
         previous: Option<&Arc<TurnContext>>,
         next: &TurnContext,
-    ) -> Option<ConversationItem> {
+    ) -> Option<TranscriptItem> {
         let prev = previous?;
 
         let shell = self.user_shell();
@@ -1421,7 +1420,7 @@ impl Session {
         if prev_context.equals_except_shell(&next_context) {
             return None;
         }
-        Some(ConversationItem::from(EnvironmentContext::diff(
+        Some(TranscriptItem::from(EnvironmentContext::diff(
             prev.as_ref(),
             next,
             shell.as_ref(),
@@ -1432,7 +1431,7 @@ impl Session {
         &self,
         previous: Option<&Arc<TurnContext>>,
         next: &TurnContext,
-    ) -> Option<ConversationItem> {
+    ) -> Option<TranscriptItem> {
         let prev = previous?;
         if prev.sandbox_policy == next.sandbox_policy
             && prev.approval_policy == next.approval_policy
@@ -1456,7 +1455,7 @@ impl Session {
         &self,
         previous: Option<&Arc<TurnContext>>,
         next: &TurnContext,
-    ) -> Option<ConversationItem> {
+    ) -> Option<TranscriptItem> {
         if !self.features.enabled(Feature::Personality) {
             return None;
         }
@@ -1488,7 +1487,7 @@ impl Session {
         &self,
         previous: Option<&Arc<TurnContext>>,
         next: &TurnContext,
-    ) -> Option<ConversationItem> {
+    ) -> Option<TranscriptItem> {
         let prev = previous?;
         if prev.collaboration_mode != next.collaboration_mode {
             // If the next mode has empty developer instructions, this returns None and we emit no
@@ -1503,7 +1502,7 @@ impl Session {
         &self,
         previous_context: Option<&Arc<TurnContext>>,
         current_context: &TurnContext,
-    ) -> Vec<ConversationItem> {
+    ) -> Vec<TranscriptItem> {
         let mut update_items = Vec::new();
         if let Some(env_item) =
             self.build_environment_update_item(previous_context, current_context)
@@ -1652,7 +1651,7 @@ impl Session {
             return;
         };
         let text = format!("Approved command prefix saved:\n{prefixes}");
-        let message: ConversationItem = DeveloperInstructions::new(text.clone()).into();
+        let message: TranscriptItem = DeveloperInstructions::new(text.clone()).into();
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
             self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
@@ -1661,9 +1660,11 @@ impl Session {
         }
 
         if self
-            .inject_response_items(vec![ResponseInputItem::Message {
+            .inject_transcript_items(vec![TranscriptItem::Message {
+                id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText { text }],
+                end_turn: None,
             }])
             .await
             .is_err()
@@ -1874,31 +1875,37 @@ impl Session {
     pub(crate) async fn record_conversation_items(
         &self,
         turn_context: &TurnContext,
-        items: &[ConversationItem],
+        items: &[impl Clone + Into<TranscriptItem>],
     ) {
-        self.record_into_history(items, turn_context).await;
-        self.persist_rollout_response_items(items).await;
-        self.send_raw_transcript_items(turn_context, items).await;
+        let transcript_items = items
+            .iter()
+            .cloned()
+            .map(Into::into)
+            .collect::<Vec<TranscriptItem>>();
+        self.record_into_history(&transcript_items, turn_context)
+            .await;
+        self.persist_rollout_response_items(&transcript_items).await;
+        self.send_raw_transcript_items(turn_context, &transcript_items)
+            .await;
     }
 
     async fn reconstruct_history_from_rollout(
         &self,
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
-    ) -> Vec<ConversationItem> {
+    ) -> Vec<TranscriptItem> {
         let mut history = ContextManager::new();
         for item in rollout_items {
             match item {
                 RolloutItem::TranscriptItem(response_item) => {
-                    let response_item: ConversationItem = response_item.clone().into();
                     history.record_items(
-                        std::iter::once(&response_item),
+                        std::iter::once(response_item),
                         turn_context.truncation_policy,
                     );
                 }
                 RolloutItem::Compacted(compacted) => {
                     if let Some(replacement) = &compacted.replacement_history {
-                        history.replace(replacement.iter().cloned().map(Into::into).collect());
+                        history.replace(replacement.clone());
                     } else {
                         // Compatibility path for older local compaction rollouts that did not
                         // persist replacement_history.
@@ -1937,21 +1944,22 @@ impl Session {
         history.raw_items().to_vec()
     }
 
-    /// Append ConversationItems to the in-memory conversation history only.
+    /// Append transcript items to the in-memory conversation history only.
     pub(crate) async fn record_into_history(
         &self,
-        items: &[ConversationItem],
+        items: &[impl Clone + Into<TranscriptItem>],
         turn_context: &TurnContext,
     ) {
+        let transcript_items = items.iter().cloned().map(Into::into).collect::<Vec<_>>();
         let mut state = self.state.lock().await;
-        state.record_items(items.iter(), turn_context.truncation_policy);
+        state.record_items(&transcript_items, turn_context.truncation_policy);
     }
 
     pub(crate) async fn record_model_warning(&self, message: impl Into<String>, ctx: &TurnContext) {
         self.services
             .otel_manager
             .counter("codex.model_warning", 1, &[]);
-        let item = ConversationItem::Message {
+        let item = TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -1963,9 +1971,13 @@ impl Session {
         self.record_conversation_items(ctx, &[item]).await;
     }
 
-    pub(crate) async fn replace_history(&self, items: Vec<ConversationItem>) {
+    pub(crate) async fn replace_history<T>(&self, items: Vec<T>)
+    where
+        T: Into<TranscriptItem>,
+    {
+        let transcript_items = items.into_iter().map(Into::into).collect::<Vec<_>>();
         let mut state = self.state.lock().await;
-        state.replace_history(items);
+        state.replace_history(transcript_items);
     }
 
     pub(crate) async fn seed_initial_context_if_needed(&self, turn_context: &TurnContext) {
@@ -1983,11 +1995,11 @@ impl Session {
         self.flush_rollout().await;
     }
 
-    async fn persist_rollout_response_items(&self, items: &[ConversationItem]) {
+    async fn persist_rollout_response_items(&self, items: &[TranscriptItem]) {
         let rollout_items: Vec<RolloutItem> = items
             .iter()
             .cloned()
-            .map(|item| RolloutItem::TranscriptItem(item.into()))
+            .map(RolloutItem::TranscriptItem)
             .collect();
         self.persist_rollout_items(&rollout_items).await;
     }
@@ -2008,14 +2020,12 @@ impl Session {
     async fn send_raw_transcript_items(
         &self,
         turn_context: &TurnContext,
-        items: &[ConversationItem],
+        items: &[TranscriptItem],
     ) {
         for item in items {
             self.send_event(
                 turn_context,
-                EventMsg::RawTranscriptItem(RawTranscriptItemEvent {
-                    item: item.clone().into(),
-                }),
+                EventMsg::RawTranscriptItem(RawTranscriptItemEvent { item: item.clone() }),
             )
             .await;
         }
@@ -2024,8 +2034,8 @@ impl Session {
     pub(crate) async fn build_initial_context(
         &self,
         turn_context: &TurnContext,
-    ) -> Vec<ConversationItem> {
-        let mut items = Vec::<ConversationItem>::with_capacity(4);
+    ) -> Vec<TranscriptItem> {
+        let mut items = Vec::<TranscriptItem>::with_capacity(4);
         let shell = self.user_shell();
         items.push(
             DeveloperInstructions::from_policy(
@@ -2070,10 +2080,10 @@ impl Session {
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             items.push(
-                UserInstructions {
+                TranscriptItem::from(UserInstructions {
                     text: user_instructions.to_string(),
                     directory: turn_context.cwd.to_string_lossy().into_owned(),
-                }
+                })
                 .into(),
             );
         }
@@ -2082,10 +2092,13 @@ impl Session {
             .agent_control
             .format_environment_context_subagents(self.conversation_id)
             .await;
-        items.push(ConversationItem::from(
-            EnvironmentContext::new(Some(turn_context.cwd.clone()), shell.as_ref().clone())
-                .with_subagents(subagents),
-        ));
+        items.push(
+            TranscriptItem::from(
+                EnvironmentContext::new(Some(turn_context.cwd.clone()), shell.as_ref().clone())
+                    .with_subagents(subagents),
+            )
+            .into(),
+        );
         items
     }
 
@@ -2104,6 +2117,29 @@ impl Session {
     pub(crate) async fn clone_history(&self) -> ContextManager {
         let state = self.state.lock().await;
         state.clone_history()
+    }
+
+    pub(crate) async fn clone_ghost_snapshots(&self) -> Vec<GhostSnapshotRecord> {
+        let state = self.state.lock().await;
+        state.clone_ghost_snapshots()
+    }
+
+    pub(crate) async fn record_ghost_snapshot(
+        &self,
+        turn_context: &TurnContext,
+        item: GhostSnapshotRecord,
+    ) {
+        let should_emit_token_count = matches!(item.status, GhostSnapshotStatus::Captured { .. });
+        {
+            let mut state = self.state.lock().await;
+            state.record_ghost_snapshot(item.clone());
+        }
+        self.persist_rollout_items(&[RolloutItem::GhostSnapshot(item)])
+            .await;
+        self.flush_rollout().await;
+        if should_emit_token_count {
+            self.send_token_count_event(turn_context).await;
+        }
     }
 
     pub(crate) async fn update_token_usage_info(
@@ -2216,7 +2252,7 @@ impl Session {
     pub(crate) async fn record_response_item_and_emit_turn_item(
         &self,
         turn_context: &TurnContext,
-        response_item: ConversationItem,
+        response_item: TranscriptItem,
     ) {
         // Add to conversation history and persist response item to rollout.
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
@@ -2233,10 +2269,10 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         input: &[UserInput],
-        response_item: ConversationItem,
+        response_item: TranscriptItem,
     ) {
         // Persist the user message to history, but emit the turn item from `UserInput` so
-        // UI-only `text_elements` are preserved. `ConversationItem::Message` does not carry
+        // UI-only `text_elements` are preserved. `TranscriptItem::Message` does not carry
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
@@ -2273,6 +2309,14 @@ impl Session {
         };
 
         info!("spawning ghost snapshot task");
+        self.record_ghost_snapshot(
+            turn_context.as_ref(),
+            GhostSnapshotRecord {
+                turn_id: turn_context.sub_id.clone(),
+                status: GhostSnapshotStatus::Pending,
+            },
+        )
+        .await;
         let task = GhostSnapshotTask::new(token);
         Arc::new(task)
             .run(
@@ -2290,7 +2334,7 @@ impl Session {
         match active.as_mut() {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
-                ts.push_pending_input(legacy_response_input_from_user_input(input));
+                ts.push_pending_input(transcript_input_from_user_input(input));
                 self.pending_input_epoch.fetch_add(1, Ordering::SeqCst);
                 Ok(())
             }
@@ -2299,10 +2343,10 @@ impl Session {
     }
 
     /// Returns the input if there was no task running to inject into
-    pub async fn inject_response_items(
+    pub async fn inject_transcript_items(
         &self,
-        input: Vec<ResponseInputItem>,
-    ) -> Result<(), Vec<ResponseInputItem>> {
+        input: Vec<TranscriptItem>,
+    ) -> Result<(), Vec<TranscriptItem>> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
@@ -2324,7 +2368,7 @@ impl Session {
             && self.has_pending_input().await
     }
 
-    pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
+    pub async fn get_pending_input(&self) -> Vec<TranscriptItem> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
@@ -3551,9 +3595,7 @@ pub(crate) async fn run_turn(
             .await;
     }
 
-    let initial_input_for_turn: ResponseInputItem =
-        legacy_response_input_from_user_input(input.clone());
-    let response_item: ConversationItem = initial_input_for_turn.clone().into();
+    let response_item = transcript_input_from_user_input(input.clone());
     sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
         .await;
 
@@ -3577,15 +3619,10 @@ pub(crate) async fn run_turn(
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
-        let pending_input = sess
-            .get_pending_input()
-            .await
-            .into_iter()
-            .map(ConversationItem::from)
-            .collect::<Vec<ConversationItem>>();
+        let pending_input = sess.get_pending_input().await;
 
         // Construct the input that we will send to the model.
-        let sampling_request_input: Vec<ConversationItem> = {
+        let sampling_request_input: Vec<TranscriptItem> = {
             sess.record_conversation_items(&turn_context, &pending_input)
                 .await;
             sess.clone_history().await.for_prompt()
@@ -3931,12 +3968,15 @@ async fn learn_dynamic_context_window(
     }
 }
 
-fn filter_connectors_for_input(
+fn filter_connectors_for_input<T>(
     connectors: Vec<connectors::AppInfo>,
-    input: &[ConversationItem],
+    input: &[T],
     explicit_app_paths: &[String],
     skill_name_counts_lower: &HashMap<String, usize>,
-) -> Vec<connectors::AppInfo> {
+) -> Vec<connectors::AppInfo>
+where
+    T: Clone + Into<TranscriptItem>,
+{
     let user_messages = collect_user_messages(input);
     if user_messages.is_empty() && explicit_app_paths.is_empty() {
         return Vec::new();
@@ -4043,7 +4083,7 @@ async fn run_sampling_request(
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut dyn RuntimeSession,
-    input: Vec<ConversationItem>,
+    input: Vec<TranscriptItem>,
     tool_selection: SamplingRequestToolSelection<'_>,
     cancellation_token: CancellationToken,
 ) -> Result<SamplingRequestResult, SamplingRequestError> {
@@ -4095,7 +4135,7 @@ async fn run_sampling_request(
     let base_instructions = sess.get_base_instructions().await;
 
     let prompt = TurnRequest {
-        conversation: input.into_iter().map(Into::into).collect(),
+        conversation: input.into_iter().collect(),
         tools: router.specs(),
         parallel_tool_calls: model_supports_parallel,
         base_instructions,
@@ -4418,9 +4458,9 @@ async fn maybe_complete_plan_item_from_message(
     sess: &Session,
     turn_context: &TurnContext,
     state: &mut PlanModeStreamState,
-    item: &ConversationItem,
+    item: &TranscriptItem,
 ) {
-    if let ConversationItem::Message { role, content, .. } = item
+    if let TranscriptItem::Message { role, content, .. } = item
         && role == "assistant"
     {
         let mut text = String::new();
@@ -4507,12 +4547,12 @@ async fn emit_turn_item_in_plan_mode(
 async fn handle_assistant_item_done_in_plan_mode(
     sess: &Session,
     turn_context: &TurnContext,
-    item: &ConversationItem,
+    item: &TranscriptItem,
     state: &mut PlanModeStreamState,
     previously_active_item: Option<&TurnItem>,
     last_agent_message: &mut Option<String>,
 ) -> bool {
-    if let ConversationItem::Message { role, .. } = item
+    if let TranscriptItem::Message { role, .. } = item
         && role == "assistant"
     {
         maybe_complete_plan_item_from_message(sess, turn_context, state, item).await;
@@ -4620,7 +4660,6 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
             }
             TurnEvent::ItemCompleted { item, .. } => {
                 let item = item.into_item();
-                let protocol_item: ConversationItem = item.clone().into();
                 let previously_active_item = self.active_item.take();
                 let mut update = TurnEventUpdate::default();
 
@@ -4640,7 +4679,7 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
                     if handle_assistant_item_done_in_plan_mode(
                         &self.sess,
                         &self.turn_context,
-                        &protocol_item,
+                        &item,
                         state,
                         previously_active_item.as_ref(),
                         &mut update.last_agent_message,
@@ -4659,8 +4698,7 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
                 };
 
                 let output_result =
-                    handle_output_item_done(&mut ctx, protocol_item, previously_active_item)
-                        .await?;
+                    handle_output_item_done(&mut ctx, item, previously_active_item).await?;
                 update.tool_future = output_result.tool_future;
                 update.needs_follow_up = output_result.needs_follow_up;
                 update.last_agent_message = output_result.last_agent_message;
@@ -4683,7 +4721,7 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
                 })
             }
             TurnEvent::ItemStarted { item, .. } => {
-                let item: ConversationItem = item.into_item().into();
+                let item = item.into_item();
                 if let Some(turn_item) =
                     handle_non_tool_response_item(&item, self.plan_mode()).await
                 {
@@ -4854,7 +4892,7 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
             .await
             .estimate_token_count(self.turn_context.as_ref())
             .unwrap_or(0);
-        let item: ConversationItem = response.to_transcript_item().into();
+        let item = response.to_transcript_item();
         self.sess
             .record_conversation_items(&self.turn_context, &[item])
             .await;
@@ -4996,10 +5034,10 @@ async fn try_run_sampling_request(
 }
 
 pub(super) fn get_last_assistant_message_from_turn(
-    responses: &[ConversationItem],
+    responses: &[impl Clone + Into<TranscriptItem>],
 ) -> Option<String> {
     responses.iter().rev().find_map(|item| {
-        if let ConversationItem::Message { role, content, .. } = item {
+        if let TranscriptItem::Message { role, content, .. } = item.clone().into() {
             if role == "assistant" {
                 content.iter().rev().find_map(|ci| {
                     if let ContentItem::OutputText { text } = ci {
@@ -5035,8 +5073,9 @@ mod tests {
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
 
+    use codex_llm::ToolCallPayload;
+    use codex_llm::ToolResultPayload;
     use codex_protocol::ThreadId;
-    use codex_protocol::legacy_transcript::FunctionCallOutputPayload;
 
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
@@ -5061,8 +5100,9 @@ mod tests {
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_app_server_protocol::AppInfo;
     use codex_app_server_protocol::AuthMode;
-    use codex_protocol::legacy_transcript::ConversationItem;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::TranscriptItem;
+    use codex_protocol::models::tool_result_payload_from_call_tool_result;
     use std::path::Path;
     use std::time::Duration;
     use tokio::time::sleep;
@@ -5081,8 +5121,8 @@ mod tests {
         expects_apply_patch_instructions: bool,
     }
 
-    fn user_message(text: &str) -> ConversationItem {
-        ConversationItem::Message {
+    fn user_message(text: &str) -> TranscriptItem {
+        TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -5417,10 +5457,10 @@ mod tests {
         let mut rollout_items: Vec<RolloutItem> = initial_context
             .iter()
             .cloned()
-            .map(|item| RolloutItem::TranscriptItem(item.into()))
+            .map(RolloutItem::TranscriptItem)
             .collect();
 
-        let user_one = ConversationItem::Message {
+        let user_one = TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -5428,7 +5468,7 @@ mod tests {
             }],
             end_turn: None,
         };
-        let first_plan = ConversationItem::Message {
+        let first_plan = TranscriptItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -5444,7 +5484,7 @@ mod tests {
             replacement_history_omits_initial_context: false,
         }));
 
-        let user_two = ConversationItem::Message {
+        let user_two = TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -5452,7 +5492,7 @@ mod tests {
             }],
             end_turn: None,
         };
-        let second_plan = ConversationItem::Message {
+        let second_plan = TranscriptItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -5813,7 +5853,7 @@ mod tests {
             .await;
 
         let turn_1 = vec![
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -5821,7 +5861,7 @@ mod tests {
                 }],
                 end_turn: None,
             },
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
@@ -5833,7 +5873,7 @@ mod tests {
         sess.record_into_history(&turn_1, tc.as_ref()).await;
 
         let turn_2 = vec![
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -5841,7 +5881,7 @@ mod tests {
                 }],
                 end_turn: None,
             },
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
@@ -5859,7 +5899,7 @@ mod tests {
 
         let mut expected = Vec::new();
         expected.extend(initial_context);
-        expected.extend(turn_1);
+        expected.extend(turn_1.into_iter().map(Into::into));
 
         let history = sess.clone_history().await;
         assert_eq!(expected, history.raw_items());
@@ -5873,7 +5913,7 @@ mod tests {
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
-        let turn_1 = vec![ConversationItem::Message {
+        let turn_1 = vec![TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -6112,15 +6152,15 @@ mod tests {
             })),
         };
 
-        let got = FunctionCallOutputPayload::from(&ctr);
-        let expected = FunctionCallOutputPayload {
+        let got = tool_result_payload_from_call_tool_result(&ctr);
+        let expected = ToolResultPayload::Structured {
             content: serde_json::to_string(&json!({
                 "ok": true,
                 "value": 42
             }))
             .unwrap(),
+            content_items: None,
             success: Some(true),
-            ..Default::default()
         };
 
         assert_eq!(expected, got);
@@ -6154,12 +6194,12 @@ mod tests {
             structured_content: Some(serde_json::Value::Null),
         };
 
-        let got = FunctionCallOutputPayload::from(&ctr);
-        let expected = FunctionCallOutputPayload {
+        let got = tool_result_payload_from_call_tool_result(&ctr);
+        let expected = ToolResultPayload::Structured {
             content: serde_json::to_string(&vec![text_block("hello"), text_block("world")])
                 .unwrap(),
+            content_items: None,
             success: Some(true),
-            ..Default::default()
         };
 
         assert_eq!(expected, got);
@@ -6173,11 +6213,11 @@ mod tests {
             structured_content: Some(json!({ "message": "bad" })),
         };
 
-        let got = FunctionCallOutputPayload::from(&ctr);
-        let expected = FunctionCallOutputPayload {
+        let got = tool_result_payload_from_call_tool_result(&ctr);
+        let expected = ToolResultPayload::Structured {
             content: serde_json::to_string(&json!({ "message": "bad" })).unwrap(),
+            content_items: None,
             success: Some(false),
-            ..Default::default()
         };
 
         assert_eq!(expected, got);
@@ -6191,11 +6231,11 @@ mod tests {
             structured_content: None,
         };
 
-        let got = FunctionCallOutputPayload::from(&ctr);
-        let expected = FunctionCallOutputPayload {
+        let got = tool_result_payload_from_call_tool_result(&ctr);
+        let expected = ToolResultPayload::Structured {
             content: serde_json::to_string(&vec![text_block("alpha")]).unwrap(),
+            content_items: None,
             success: Some(true),
-            ..Default::default()
         };
 
         assert_eq!(expected, got);
@@ -6464,7 +6504,7 @@ mod tests {
         session: &Session,
         turn_context: &TurnContext,
         summary: &str,
-    ) -> (Vec<RolloutItem>, Vec<ConversationItem>) {
+    ) -> (Vec<RolloutItem>, Vec<TranscriptItem>) {
         let initial_context = session.build_initial_context(turn_context).await;
         let compacted_history = compact::build_compacted_history(
             initial_context.clone(),
@@ -6480,13 +6520,7 @@ mod tests {
         );
         let rollout_items = vec![RolloutItem::Compacted(CompactedItem {
             message: summary.to_string(),
-            replacement_history: Some(
-                replacement_history
-                    .clone()
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-            ),
+            replacement_history: Some(replacement_history.clone().into_iter().collect()),
             replacement_history_omits_initial_context: true,
         })];
         (rollout_items, replacement_history)
@@ -6855,7 +6889,7 @@ model_context_window = 64_000
         let last = history_items.last().expect("warning recorded");
 
         match last {
-            ConversationItem::Message { role, content, .. } => {
+            codex_protocol::models::TranscriptItem::Message { role, content, .. } => {
                 assert_eq!(role, "user");
                 assert_eq!(
                     content,
@@ -7022,7 +7056,8 @@ model_context_window = 64_000
         // recorded in history for the model.
         assert!(
             history.raw_items().iter().any(|item| {
-                let ConversationItem::Message { role, content, .. } = item else {
+                let codex_protocol::models::TranscriptItem::Message { role, content, .. } = item
+                else {
                     return false;
                 };
                 if role != "user" {
@@ -7061,12 +7096,13 @@ model_context_window = 64_000
             ),
             turn_context.dynamic_tools.as_slice(),
         );
-        let item = ConversationItem::CustomToolCall {
+        let item = TranscriptItem::ToolCall {
             id: None,
-            status: None,
             call_id: "call-1".to_string(),
-            name: "shell".to_string(),
-            input: "{}".to_string(),
+            tool_name: "shell".to_string(),
+            payload: ToolCallPayload::TextInput {
+                input: "{}".to_string(),
+            },
         };
 
         let request = codex_llm::ToolCallRequest::from_transcript_item(item.clone().into())
@@ -7096,17 +7132,17 @@ model_context_window = 64_000
     async fn sample_rollout(
         session: &Session,
         turn_context: &TurnContext,
-    ) -> (Vec<RolloutItem>, Vec<ConversationItem>) {
+    ) -> (Vec<RolloutItem>, Vec<TranscriptItem>) {
         let mut rollout_items = Vec::new();
         let mut live_history = ContextManager::new();
 
         let initial_context = session.build_initial_context(turn_context).await;
         for item in &initial_context {
-            rollout_items.push(RolloutItem::TranscriptItem(item.clone().into()));
+            rollout_items.push(RolloutItem::TranscriptItem(item.clone()));
         }
         live_history.record_items(initial_context.iter(), turn_context.truncation_policy);
 
-        let user1 = ConversationItem::Message {
+        let user1 = TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -7115,9 +7151,9 @@ model_context_window = 64_000
             end_turn: None,
         };
         live_history.record_items(std::iter::once(&user1), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::TranscriptItem(user1.clone().into()));
+        rollout_items.push(RolloutItem::TranscriptItem(user1.clone()));
 
-        let assistant1 = ConversationItem::Message {
+        let assistant1 = TranscriptItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -7126,7 +7162,7 @@ model_context_window = 64_000
             end_turn: None,
         };
         live_history.record_items(std::iter::once(&assistant1), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::TranscriptItem(assistant1.clone().into()));
+        rollout_items.push(RolloutItem::TranscriptItem(assistant1.clone()));
 
         let summary1 = "summary one";
         let snapshot1 = live_history.clone().for_prompt();
@@ -7146,7 +7182,7 @@ model_context_window = 64_000
             replacement_history_omits_initial_context: false,
         }));
 
-        let user2 = ConversationItem::Message {
+        let user2 = TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -7155,9 +7191,9 @@ model_context_window = 64_000
             end_turn: None,
         };
         live_history.record_items(std::iter::once(&user2), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::TranscriptItem(user2.clone().into()));
+        rollout_items.push(RolloutItem::TranscriptItem(user2.clone()));
 
-        let assistant2 = ConversationItem::Message {
+        let assistant2 = TranscriptItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -7166,7 +7202,7 @@ model_context_window = 64_000
             end_turn: None,
         };
         live_history.record_items(std::iter::once(&assistant2), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::TranscriptItem(assistant2.clone().into()));
+        rollout_items.push(RolloutItem::TranscriptItem(assistant2.clone()));
 
         let summary2 = "summary two";
         let snapshot2 = live_history.clone().for_prompt();
@@ -7186,7 +7222,7 @@ model_context_window = 64_000
             replacement_history_omits_initial_context: false,
         }));
 
-        let user3 = ConversationItem::Message {
+        let user3 = TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -7195,9 +7231,9 @@ model_context_window = 64_000
             end_turn: None,
         };
         live_history.record_items(std::iter::once(&user3), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::TranscriptItem(user3.into()));
+        rollout_items.push(RolloutItem::TranscriptItem(user3));
 
-        let assistant3 = ConversationItem::Message {
+        let assistant3 = TranscriptItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -7206,7 +7242,7 @@ model_context_window = 64_000
             end_turn: None,
         };
         live_history.record_items(std::iter::once(&assistant3), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::TranscriptItem(assistant3.into()));
+        rollout_items.push(RolloutItem::TranscriptItem(assistant3));
 
         (rollout_items, live_history.for_prompt())
     }

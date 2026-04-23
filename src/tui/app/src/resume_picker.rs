@@ -33,7 +33,7 @@ use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
-use codex_protocol::legacy_transcript::ConversationItem;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::protocol::SessionMetaLine;
 
 const PAGE_SIZE: usize = 25;
@@ -749,7 +749,7 @@ fn extract_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
 
 fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
     head.iter()
-        .filter_map(|value| serde_json::from_value::<ConversationItem>(value.clone()).ok())
+        .filter_map(|value| serde_json::from_value::<TranscriptItem>(value.clone()).ok())
         .find_map(|item| match codex_agent::parse_turn_item(&item) {
             Some(TurnItem::UserMessage(user)) => Some(user.message()),
             _ => None,
@@ -1105,8 +1105,8 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
 mod tests {
     use super::*;
     use chrono::Duration;
-    use codex_protocol::legacy_transcript::ConversationItem;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::TranscriptItem;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::GitInfo;
     use codex_protocol::protocol::RolloutItem;
@@ -1184,7 +1184,7 @@ mod tests {
                         cwd: PathBuf::from(cwd),
                         originator: "user".to_string(),
                         cli_version: "0.0.0".to_string(),
-                        rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V2,
+                        rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
                         source: SessionSource::Cli,
                         model_provider: Some(provider.to_string()),
                         base_instructions: None,
@@ -1200,7 +1200,7 @@ mod tests {
             RolloutLine {
                 timestamp: ts.to_rfc3339(),
                 item: RolloutItem::TranscriptItem(
-                    ConversationItem::Message {
+                    TranscriptItem::Message {
                         id: None,
                         role: "user".to_string(),
                         content: vec![ContentItem::InputText {

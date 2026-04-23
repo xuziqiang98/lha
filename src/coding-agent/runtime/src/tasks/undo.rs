@@ -10,7 +10,8 @@ use crate::tasks::SessionTaskContext;
 use async_trait::async_trait;
 use codex_git::RestoreGhostCommitOptions;
 use codex_git::restore_ghost_commit_with_options;
-use codex_protocol::legacy_transcript::ConversationItem;
+use codex_protocol::protocol::GhostSnapshotRecord;
+use codex_protocol::protocol::GhostSnapshotStatus;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -64,24 +65,22 @@ impl SessionTask for UndoTask {
             return None;
         }
 
-        let history = sess.clone_history().await;
-        let mut items = history.raw_items().to_vec();
         let mut completed = UndoCompletedEvent {
             success: false,
             message: None,
         };
 
-        let Some((idx, ghost_commit)) =
-            items
-                .iter()
-                .enumerate()
-                .rev()
-                .find_map(|(idx, item)| match item {
-                    ConversationItem::GhostSnapshot { ghost_commit } => {
-                        Some((idx, ghost_commit.clone()))
-                    }
-                    _ => None,
-                })
+        let Some((turn_id, ghost_commit)) = sess
+            .clone_ghost_snapshots()
+            .await
+            .into_iter()
+            .rev()
+            .find_map(|item| match item.status {
+                GhostSnapshotStatus::Captured { ghost_commit } => {
+                    Some((item.turn_id, ghost_commit))
+                }
+                GhostSnapshotStatus::Pending | GhostSnapshotStatus::Consumed => None,
+            })
         else {
             completed.message = Some("No ghost snapshot available to undo.".to_string());
             sess.send_event(ctx.as_ref(), EventMsg::UndoCompleted(completed))
@@ -100,8 +99,14 @@ impl SessionTask for UndoTask {
 
         match restore_result {
             Ok(Ok(())) => {
-                items.remove(idx);
-                sess.replace_history(items).await;
+                sess.record_ghost_snapshot(
+                    ctx.as_ref(),
+                    GhostSnapshotRecord {
+                        turn_id,
+                        status: GhostSnapshotStatus::Consumed,
+                    },
+                )
+                .await;
                 let short_id: String = commit_id.chars().take(7).collect();
                 info!(commit_id = commit_id, "Undo restored ghost snapshot");
                 completed.success = true;

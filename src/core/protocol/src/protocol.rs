@@ -34,6 +34,7 @@ use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
+use codex_git::GhostCommit;
 pub use codex_llm_types::CreditsSnapshot;
 pub use codex_llm_types::RateLimitSnapshot;
 pub use codex_llm_types::RateLimitWindow;
@@ -992,7 +993,6 @@ pub enum CodexErrorInfo {
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct RawTranscriptItemEvent {
-    #[serde(deserialize_with = "crate::legacy_transcript::deserialize_transcript_item_compat")]
     pub item: TranscriptItem,
 }
 
@@ -1629,24 +1629,31 @@ pub struct SessionMetaLine {
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
-    #[serde(alias = "conversation_item")]
-    TranscriptItem(
-        #[serde(deserialize_with = "crate::legacy_transcript::deserialize_transcript_item_compat")]
-        TranscriptItem,
-    ),
+    TranscriptItem(TranscriptItem),
+    GhostSnapshot(GhostSnapshotRecord),
     Compacted(CompactedItem),
     TurnContext(TurnContextItem),
     EventMsg(EventMsg),
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum GhostSnapshotStatus {
+    Pending,
+    Captured { ghost_commit: GhostCommit },
+    Consumed,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS, PartialEq, Eq)]
+pub struct GhostSnapshotRecord {
+    pub turn_id: String,
+    pub status: GhostSnapshotStatus,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct CompactedItem {
     pub message: String,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "crate::legacy_transcript::deserialize_optional_transcript_history_compat"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replacement_history: Option<Vec<TranscriptItem>>,
     #[serde(default)]
     pub replacement_history_omits_initial_context: bool,
@@ -1665,10 +1672,10 @@ impl From<CompactedItem> for TranscriptItem {
     }
 }
 
-pub const ROLLOUT_SCHEMA_VERSION_V2: u32 = 2;
+pub const ROLLOUT_SCHEMA_VERSION_V3: u32 = 3;
 
 fn default_rollout_schema_version() -> u32 {
-    ROLLOUT_SCHEMA_VERSION_V2
+    ROLLOUT_SCHEMA_VERSION_V3
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]

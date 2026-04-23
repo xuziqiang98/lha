@@ -11,7 +11,7 @@ pub use codex_llm::WEB_SEARCH_ELIGIBLE_HEADER;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::legacy_transcript::ConversationItem;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
@@ -320,15 +320,11 @@ impl TurnRuntime {
         self.state.runtime.estimated_input_tokens(request)
     }
 
-    pub async fn compact_turn_request(
-        &self,
-        request: &TurnRequest,
-    ) -> Result<Vec<ConversationItem>> {
+    pub async fn compact_turn_request(&self, request: &TurnRequest) -> Result<Vec<TranscriptItem>> {
         self.state
             .runtime
             .compact_conversation_history(request)
             .await
-            .map(|items| items.into_iter().map(Into::into).collect())
             .map_err(Into::into)
     }
 }

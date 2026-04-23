@@ -4,12 +4,11 @@ use crate::tools::TELEMETRY_PREVIEW_MAX_BYTES;
 use crate::tools::TELEMETRY_PREVIEW_MAX_LINES;
 use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
 use crate::turn_diff_tracker::TurnDiffTracker;
-use codex_protocol::legacy_transcript::FunctionCallOutputContentItem;
-use codex_protocol::legacy_transcript::FunctionCallOutputPayload;
-use codex_protocol::legacy_transcript::ResponseInputItem;
+use codex_llm::ToolResultContentItem;
+use codex_llm::ToolResultItem;
+use codex_llm::ToolResultPayload;
 use codex_protocol::models::ShellToolCallParams;
 use codex_utils_string::take_bytes_at_char_boundary;
-use mcp_types::CallToolResult;
 use std::borrow::Cow;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -61,11 +60,8 @@ pub enum ToolOutput {
         // Plain text representation of the tool output.
         content: String,
         // Some tool calls such as MCP calls may return structured content that can get parsed into an array of polymorphic content items.
-        content_items: Option<Vec<FunctionCallOutputContentItem>>,
+        content_items: Option<Vec<ToolResultContentItem>>,
         success: Option<bool>,
-    },
-    Mcp {
-        result: Result<CallToolResult, String>,
     },
 }
 
@@ -73,18 +69,16 @@ impl ToolOutput {
     pub fn log_preview(&self) -> String {
         match self {
             ToolOutput::Function { content, .. } => telemetry_preview(content),
-            ToolOutput::Mcp { result } => format!("{result:?}"),
         }
     }
 
     pub fn success_for_logging(&self) -> bool {
         match self {
             ToolOutput::Function { success, .. } => success.unwrap_or(true),
-            ToolOutput::Mcp { result } => result.is_ok(),
         }
     }
 
-    pub fn into_response(self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+    pub fn into_tool_result(self, call_id: &str, tool_name: &str, payload: &ToolPayload) -> ToolResultItem {
         match self {
             ToolOutput::Function {
                 content,
@@ -92,14 +86,16 @@ impl ToolOutput {
                 success,
             } => {
                 if matches!(payload, ToolPayload::Custom { .. }) {
-                    ResponseInputItem::CustomToolCallOutput {
+                    ToolResultItem {
                         call_id: call_id.to_string(),
-                        output: content,
+                        tool_name: tool_name.to_string(),
+                        payload: ToolResultPayload::Text { output: content },
                     }
                 } else {
-                    ResponseInputItem::FunctionCallOutput {
+                    ToolResultItem {
                         call_id: call_id.to_string(),
-                        output: FunctionCallOutputPayload {
+                        tool_name: tool_name.to_string(),
+                        payload: ToolResultPayload::Structured {
                             content,
                             content_items,
                             success,
@@ -107,10 +103,6 @@ impl ToolOutput {
                     }
                 }
             }
-            ToolOutput::Mcp { result } => ResponseInputItem::McpToolCallOutput {
-                call_id: call_id.to_string(),
-                result,
-            },
         }
     }
 }
@@ -170,14 +162,19 @@ mod tests {
             content_items: None,
             success: Some(true),
         }
-        .into_response("call-42", &payload);
+        .into_tool_result("call-42", "apply_patch", &payload);
 
         match response {
-            ResponseInputItem::CustomToolCallOutput { call_id, output } => {
+            ToolResultItem {
+                call_id,
+                tool_name,
+                payload: ToolResultPayload::Text { output },
+            } => {
                 assert_eq!(call_id, "call-42");
+                assert_eq!(tool_name, "apply_patch");
                 assert_eq!(output, "patched");
             }
-            other => panic!("expected CustomToolCallOutput, got {other:?}"),
+            other => panic!("expected text tool result, got {other:?}"),
         }
     }
 
@@ -191,16 +188,26 @@ mod tests {
             content_items: None,
             success: Some(true),
         }
-        .into_response("fn-1", &payload);
+        .into_tool_result("fn-1", "shell", &payload);
 
         match response {
-            ResponseInputItem::FunctionCallOutput { call_id, output } => {
+            ToolResultItem {
+                call_id,
+                tool_name,
+                payload:
+                    ToolResultPayload::Structured {
+                        content,
+                        content_items,
+                        success,
+                    },
+            } => {
                 assert_eq!(call_id, "fn-1");
-                assert_eq!(output.content, "ok");
-                assert!(output.content_items.is_none());
-                assert_eq!(output.success, Some(true));
+                assert_eq!(tool_name, "shell");
+                assert_eq!(content, "ok");
+                assert!(content_items.is_none());
+                assert_eq!(success, Some(true));
             }
-            other => panic!("expected FunctionCallOutput, got {other:?}"),
+            other => panic!("expected structured tool result, got {other:?}"),
         }
     }
 

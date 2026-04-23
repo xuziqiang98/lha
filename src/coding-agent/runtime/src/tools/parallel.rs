@@ -17,8 +17,8 @@ use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolRouter;
-use codex_protocol::legacy_transcript::FunctionCallOutputPayload;
-use codex_protocol::legacy_transcript::ResponseInputItem;
+use codex_llm::ToolResultItem;
+use codex_llm::ToolResultPayload;
 
 #[derive(Clone)]
 pub(crate) struct ToolCallRuntime {
@@ -50,7 +50,7 @@ impl ToolCallRuntime {
         self,
         call: ToolCall,
         cancellation_token: CancellationToken,
-    ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
+    ) -> impl std::future::Future<Output = Result<ToolResultItem, CodexErr>> {
         let supports_parallel = self.router.tool_supports_parallel(&call.tool_name);
 
         let router = Arc::clone(&self.router);
@@ -68,7 +68,7 @@ impl ToolCallRuntime {
             aborted = false,
         );
 
-        let handle: AbortOnDropHandle<Result<ResponseInputItem, FunctionCallError>> =
+        let handle: AbortOnDropHandle<Result<ToolResultItem, FunctionCallError>> =
             AbortOnDropHandle::new(tokio::spawn(async move {
                 tokio::select! {
                     _ = cancellation_token.cancelled() => {
@@ -106,21 +106,31 @@ impl ToolCallRuntime {
 }
 
 impl ToolCallRuntime {
-    fn aborted_response(call: &ToolCall, secs: f32) -> ResponseInputItem {
+    fn aborted_response(call: &ToolCall, secs: f32) -> ToolResultItem {
         match &call.payload {
-            ToolPayload::Custom { .. } => ResponseInputItem::CustomToolCallOutput {
+            ToolPayload::Custom { .. } => ToolResultItem {
                 call_id: call.call_id.clone(),
-                output: Self::abort_message(call, secs),
+                tool_name: call.tool_name.clone(),
+                payload: ToolResultPayload::Text {
+                    output: Self::abort_message(call, secs),
+                },
             },
-            ToolPayload::Mcp { .. } => ResponseInputItem::McpToolCallOutput {
+            ToolPayload::Mcp { .. } => ToolResultItem {
                 call_id: call.call_id.clone(),
-                result: Err(Self::abort_message(call, secs)),
-            },
-            _ => ResponseInputItem::FunctionCallOutput {
-                call_id: call.call_id.clone(),
-                output: FunctionCallOutputPayload {
+                tool_name: call.tool_name.clone(),
+                payload: ToolResultPayload::Structured {
                     content: Self::abort_message(call, secs),
-                    ..Default::default()
+                    content_items: None,
+                    success: Some(false),
+                },
+            },
+            _ => ToolResultItem {
+                call_id: call.call_id.clone(),
+                tool_name: call.tool_name.clone(),
+                payload: ToolResultPayload::Structured {
+                    content: Self::abort_message(call, secs),
+                    content_items: None,
+                    success: Some(false),
                 },
             },
         }

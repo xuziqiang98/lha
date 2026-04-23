@@ -13,7 +13,7 @@ use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::legacy_transcript::ConversationItem;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use core_test_support::load_default_config_for_test;
@@ -88,7 +88,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
 
     let turn = TurnRequest {
         conversation: vec![
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "user".into(),
                 content: vec![ContentItem::InputText {
@@ -180,7 +180,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
 
     let turn = TurnRequest {
         conversation: vec![
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "user".into(),
                 content: vec![ContentItem::InputText {
@@ -330,7 +330,7 @@ async fn responses_respects_model_info_overrides_from_config() {
 
     let turn = TurnRequest {
         conversation: vec![
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "user".into(),
                 content: vec![ContentItem::InputText {

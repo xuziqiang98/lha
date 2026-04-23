@@ -13,8 +13,9 @@ use crate::tools::spec::build_specs;
 use codex_llm::ToolCallPayload as LlmToolCallPayload;
 use codex_llm::ToolCallRequest as LlmToolCallRequest;
 use codex_llm::ToolDescriptor;
+use codex_llm::ToolResultItem;
+use codex_llm::ToolResultPayload;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_protocol::legacy_transcript::ResponseInputItem;
 use codex_protocol::models::ShellToolCallParams;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -129,7 +130,7 @@ impl ToolRouter {
         turn: Arc<TurnContext>,
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
-    ) -> Result<ResponseInputItem, FunctionCallError> {
+    ) -> Result<ToolResultItem, FunctionCallError> {
         let ToolCall {
             tool_name,
             call_id,
@@ -137,11 +138,13 @@ impl ToolRouter {
         } = call;
         let payload_outputs_custom = matches!(payload, ToolPayload::Custom { .. });
         let failure_call_id = call_id.clone();
+        let failure_tool_name = tool_name.clone();
 
         if self.enforce_declared_tool_names && !self.tool_is_declared(tool_name.as_str()) {
             let message = unsupported_tool_call_message(&payload, tool_name.as_str());
             return Ok(Self::failure_response(
                 failure_call_id,
+                failure_tool_name,
                 payload_outputs_custom,
                 FunctionCallError::RespondToModel(message),
             ));
@@ -161,6 +164,7 @@ impl ToolRouter {
             Err(FunctionCallError::Fatal(message)) => Err(FunctionCallError::Fatal(message)),
             Err(err) => Ok(Self::failure_response(
                 failure_call_id,
+                failure_tool_name,
                 payload_outputs_custom,
                 err,
             )),
@@ -169,22 +173,25 @@ impl ToolRouter {
 
     fn failure_response(
         call_id: String,
+        tool_name: String,
         payload_outputs_custom: bool,
         err: FunctionCallError,
-    ) -> ResponseInputItem {
+    ) -> ToolResultItem {
         let message = err.to_string();
         if payload_outputs_custom {
-            ResponseInputItem::CustomToolCallOutput {
+            ToolResultItem {
                 call_id,
-                output: message,
+                tool_name,
+                payload: ToolResultPayload::Text { output: message },
             }
         } else {
-            ResponseInputItem::FunctionCallOutput {
+            ToolResultItem {
                 call_id,
-                output: codex_protocol::legacy_transcript::FunctionCallOutputPayload {
+                tool_name,
+                payload: ToolResultPayload::Structured {
                     content: message,
+                    content_items: None,
                     success: Some(false),
-                    ..Default::default()
                 },
             }
         }
@@ -203,6 +210,8 @@ mod tests {
     use crate::turn_diff_tracker::TurnDiffTracker;
     use async_trait::async_trait;
     use codex_llm::FunctionToolDescriptor;
+    use codex_llm::ToolResultItem;
+    use codex_llm::ToolResultPayload;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeMap;
     use std::collections::HashMap;
@@ -296,9 +305,12 @@ mod tests {
         assert!(!called.load(Ordering::SeqCst));
         assert_eq!(
             response,
-            ResponseInputItem::CustomToolCallOutput {
+            ToolResultItem {
                 call_id: "call-1".to_string(),
-                output: "unsupported custom tool call: apply_patch".to_string(),
+                tool_name: "apply_patch".to_string(),
+                payload: ToolResultPayload::Text {
+                    output: "unsupported custom tool call: apply_patch".to_string(),
+                },
             }
         );
     }
@@ -339,12 +351,13 @@ mod tests {
         assert!(!called.load(Ordering::SeqCst));
         assert_eq!(
             response,
-            ResponseInputItem::FunctionCallOutput {
+            ToolResultItem {
                 call_id: "call-2".to_string(),
-                output: codex_protocol::legacy_transcript::FunctionCallOutputPayload {
+                tool_name: "container.exec".to_string(),
+                payload: ToolResultPayload::Structured {
                     content: "unsupported call: container.exec".to_string(),
+                    content_items: None,
                     success: Some(false),
-                    ..Default::default()
                 },
             }
         );
@@ -386,12 +399,13 @@ mod tests {
         assert!(called.load(Ordering::SeqCst));
         assert_eq!(
             response,
-            ResponseInputItem::FunctionCallOutput {
+            ToolResultItem {
                 call_id: "call-3".to_string(),
-                output: codex_protocol::legacy_transcript::FunctionCallOutputPayload {
+                tool_name: "container.exec".to_string(),
+                payload: ToolResultPayload::Structured {
                     content: "alias ok".to_string(),
+                    content_items: None,
                     success: Some(true),
-                    ..Default::default()
                 },
             }
         );

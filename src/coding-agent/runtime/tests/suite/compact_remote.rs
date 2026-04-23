@@ -16,8 +16,8 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::items::TurnItem;
-use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once;
@@ -69,16 +69,13 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     .await;
 
     let compacted_history = vec![
-        ConversationItem::Message {
+        TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
                 text: "REMOTE_COMPACTED_SUMMARY".to_string(),
             }],
             end_turn: None,
-        },
-        ConversationItem::Compaction {
-            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
         },
     ];
     let compact_mock = responses::mount_compact_json_once(
@@ -148,10 +145,6 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
         "expected follow-up request to use compacted history"
     );
     assert!(
-        follow_up_body.contains("ENCRYPTED_COMPACTION_SUMMARY"),
-        "expected follow-up request to include compaction summary item"
-    );
-    assert!(
         !follow_up_body.contains("FIRST_REMOTE_REPLY"),
         "expected follow-up request to drop pre-compaction assistant messages"
     );
@@ -191,16 +184,13 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     .await;
 
     let compacted_history = vec![
-        ConversationItem::Message {
+        TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
                 text: "REMOTE_COMPACTED_SUMMARY".to_string(),
             }],
             end_turn: None,
-        },
-        ConversationItem::Compaction {
-            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
         },
     ];
     let compact_mock = responses::mount_compact_json_once(
@@ -229,7 +219,6 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     assert_eq!(compact_mock.requests().len(), 1);
     let follow_up_body = responses_mock.single_request().body_json().to_string();
     assert!(follow_up_body.contains("REMOTE_COMPACTED_SUMMARY"));
-    assert!(follow_up_body.contains("ENCRYPTED_COMPACTION_SUMMARY"));
 
     Ok(())
 }
@@ -258,16 +247,13 @@ async fn remote_manual_compact_emits_context_compaction_items() -> Result<()> {
     .await;
 
     let compacted_history = vec![
-        ConversationItem::Message {
+        TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
                 text: "REMOTE_COMPACTED_SUMMARY".to_string(),
             }],
             end_turn: None,
-        },
-        ConversationItem::Compaction {
-            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
         },
     ];
     let compact_mock = responses::mount_compact_json_once(
@@ -359,7 +345,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
     .await;
 
     let compacted_history = vec![
-        ConversationItem::Message {
+        TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -367,10 +353,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
             }],
             end_turn: None,
         },
-        ConversationItem::Compaction {
-            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-        },
-        ConversationItem::Message {
+        TranscriptItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -472,16 +455,13 @@ async fn remote_compact_backfills_latest_plan_into_replacement_history() -> Resu
     .await;
 
     let compacted_history = vec![
-        ConversationItem::Message {
+        TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
                 text: "REMOTE_COMPACTED_SUMMARY".to_string(),
             }],
             end_turn: None,
-        },
-        ConversationItem::Compaction {
-            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
         },
     ];
     let compact_mock = responses::mount_compact_json_once(
@@ -596,16 +576,13 @@ async fn remote_compact_backfills_recent_skills_into_replacement_history() -> Re
     .await;
 
     let compacted_history = vec![
-        ConversationItem::Message {
+        TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
                 text: "REMOTE_COMPACTED_SUMMARY".to_string(),
             }],
             end_turn: None,
-        },
-        ConversationItem::Compaction {
-            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
         },
     ];
     responses::mount_compact_json_once(

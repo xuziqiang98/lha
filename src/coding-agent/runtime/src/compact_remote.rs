@@ -17,7 +17,6 @@ use crate::protocol::TurnStartedEvent;
 use codex_llm::TurnRequest;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
-use codex_protocol::legacy_transcript::ConversationItem;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
@@ -64,20 +63,8 @@ async fn run_remote_compact_task_inner_impl(
             (None, None, Vec::new())
         };
 
-    // Required to keep `/undo` available after compaction
-    let ghost_snapshots: Vec<ConversationItem> = history
-        .raw_items()
-        .iter()
-        .filter(|item| matches!(item, ConversationItem::GhostSnapshot { .. }))
-        .cloned()
-        .collect();
-
     let prompt = TurnRequest {
-        conversation: history
-            .for_compaction_prompt()
-            .into_iter()
-            .map(Into::into)
-            .collect(),
+        conversation: history.for_compaction_prompt().into_iter().collect(),
         base_instructions: sess.get_base_instructions().await,
         personality: turn_context.personality,
         ..Default::default()
@@ -94,15 +81,12 @@ async fn run_remote_compact_task_inner_impl(
     if !backfilled_skills.is_empty() {
         new_history.extend(backfilled_skill_items(&backfilled_skills));
     }
-    if !ghost_snapshots.is_empty() {
-        new_history.extend(ghost_snapshots);
-    }
     sess.replace_history(new_history.clone()).await;
     sess.recompute_token_usage(turn_context).await;
 
     let compacted_item = CompactedItem {
         message: String::new(),
-        replacement_history: Some(new_history.into_iter().map(Into::into).collect()),
+        replacement_history: Some(new_history.into_iter().collect()),
         replacement_history_omits_initial_context: false,
     };
     sess.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])

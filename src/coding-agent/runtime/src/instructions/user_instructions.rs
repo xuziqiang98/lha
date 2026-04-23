@@ -1,8 +1,8 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::TranscriptItem;
 
 pub const USER_INSTRUCTIONS_OPEN_TAG_LEGACY: &str = "<user_instructions>";
 pub const USER_INSTRUCTIONS_PREFIX: &str = "# AGENTS.md instructions for ";
@@ -32,9 +32,9 @@ impl UserInstructions {
     }
 }
 
-impl From<UserInstructions> for ConversationItem {
+impl From<UserInstructions> for TranscriptItem {
     fn from(ui: UserInstructions) -> Self {
-        ConversationItem::Message {
+        TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -104,17 +104,17 @@ impl SkillInstructions {
         ))
     }
 
-    pub fn into_backfilled_response_item(self) -> ConversationItem {
+    pub fn into_backfilled_response_item(self) -> TranscriptItem {
         self.into_response_item_with_source(SkillInstructionSource::CompactBackfill)
     }
 
-    fn into_response_item_with_source(self, source: SkillInstructionSource) -> ConversationItem {
+    fn into_response_item_with_source(self, source: SkillInstructionSource) -> TranscriptItem {
         let open_tag = match source {
             SkillInstructionSource::Direct => SKILL_OPEN_TAG,
             SkillInstructionSource::CompactBackfill => BACKFILLED_SKILL_OPEN_TAG,
         };
 
-        ConversationItem::Message {
+        TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -130,9 +130,9 @@ impl SkillInstructions {
     }
 }
 
-impl From<SkillInstructions> for ConversationItem {
-    fn from(si: SkillInstructions) -> Self {
-        si.into_response_item_with_source(SkillInstructionSource::Direct)
+impl From<SkillInstructions> for TranscriptItem {
+    fn from(skill_instructions: SkillInstructions) -> Self {
+        skill_instructions.into_response_item_with_source(SkillInstructionSource::Direct)
     }
 }
 
@@ -160,6 +160,7 @@ fn parse_skill_field<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::models::TranscriptItem;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -168,10 +169,10 @@ mod tests {
             directory: "test_directory".to_string(),
             text: "test_text".to_string(),
         };
-        let response_item: ConversationItem = user_instructions.into();
+        let response_item: TranscriptItem = user_instructions.into();
 
-        let ConversationItem::Message { role, content, .. } = response_item else {
-            panic!("expected ConversationItem::Message");
+        let TranscriptItem::Message { role, content, .. } = response_item else {
+            panic!("expected TranscriptItem::Message");
         };
 
         assert_eq!(role, "user");
@@ -212,10 +213,10 @@ mod tests {
             path: "skills/demo/SKILL.md".to_string(),
             contents: "body".to_string(),
         };
-        let response_item: ConversationItem = skill_instructions.into();
+        let response_item: TranscriptItem = skill_instructions.into();
 
-        let ConversationItem::Message { role, content, .. } = response_item else {
-            panic!("expected ConversationItem::Message");
+        let TranscriptItem::Message { role, content, .. } = response_item else {
+            panic!("expected TranscriptItem::Message");
         };
 
         assert_eq!(role, "user");
@@ -292,9 +293,9 @@ mod tests {
             path: "skills/demo/SKILL.md".to_string(),
             contents: "body\nwith more".to_string(),
         };
-        let response_item: ConversationItem = expected.clone().into();
-        let ConversationItem::Message { content, .. } = response_item else {
-            panic!("expected ConversationItem::Message");
+        let response_item: TranscriptItem = expected.clone().into();
+        let TranscriptItem::Message { content, .. } = response_item else {
+            panic!("expected TranscriptItem::Message");
         };
 
         let parsed = SkillInstructions::from_message(&content);
@@ -329,8 +330,8 @@ mod tests {
             contents: "body\nwith more".to_string(),
         };
         let response_item = expected.clone().into_backfilled_response_item();
-        let ConversationItem::Message { content, .. } = response_item else {
-            panic!("expected ConversationItem::Message");
+        let TranscriptItem::Message { content, .. } = response_item else {
+            panic!("expected TranscriptItem::Message");
         };
 
         let parsed = SkillInstructions::from_message_with_source(&content);

@@ -8,13 +8,13 @@ use crate::analytics_client::TrackEventsContext;
 use crate::instructions::SkillInstructions;
 use crate::skills::SkillMetadata;
 use codex_otel::OtelManager;
-use codex_protocol::legacy_transcript::ConversationItem;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::user_input::UserInput;
 use tokio::fs;
 
 #[derive(Debug, Default)]
 pub(crate) struct SkillInjections {
-    pub(crate) items: Vec<ConversationItem>,
+    pub(crate) items: Vec<TranscriptItem>,
     pub(crate) warnings: Vec<String>,
 }
 
@@ -43,7 +43,7 @@ pub(crate) async fn build_skill_injections(
                     skill_scope: skill.scope,
                     skill_path: skill.path.clone(),
                 });
-                result.items.push(ConversationItem::from(SkillInstructions {
+                result.items.push(TranscriptItem::from(SkillInstructions {
                     name: skill.name.clone(),
                     path: skill.path.to_string_lossy().into_owned(),
                     contents,

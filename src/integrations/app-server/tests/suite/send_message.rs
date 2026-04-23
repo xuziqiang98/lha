@@ -13,9 +13,9 @@ use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
 use codex_execpolicy::Policy;
 use codex_protocol::ThreadId;
-use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RawTranscriptItemEvent;
 use codex_protocol::protocol::SandboxPolicy;
@@ -294,7 +294,7 @@ stream_max_retries = 0
 async fn read_raw_transcript_item(
     mcp: &mut McpProcess,
     conversation_id: ThreadId,
-) -> ConversationItem {
+) -> TranscriptItem {
     loop {
         let raw_notification: JSONRPCNotification = timeout(
             DEFAULT_READ_TIMEOUT,
@@ -327,19 +327,15 @@ async fn read_raw_transcript_item(
             .cloned()
             .expect("raw response item should include msg payload");
 
-        // Ghost snapshots are produced concurrently and may arrive before the model reply.
         let event: RawTranscriptItemEvent =
             serde_json::from_value(msg_value).expect("deserialize raw response item");
-        let item: ConversationItem = event.item.into();
-        if !matches!(item, ConversationItem::GhostSnapshot { .. }) {
-            return item;
-        }
+        return event.item;
     }
 }
 
-fn assert_instructions_message(item: &ConversationItem) {
+fn assert_instructions_message(item: &TranscriptItem) {
     match item {
-        ConversationItem::Message { role, content, .. } => {
+        TranscriptItem::Message { role, content, .. } => {
             assert_eq!(role, "user");
             let texts = content_texts(content);
             let is_instructions = texts
@@ -354,9 +350,9 @@ fn assert_instructions_message(item: &ConversationItem) {
     }
 }
 
-fn assert_permissions_message(item: &ConversationItem) {
+fn assert_permissions_message(item: &TranscriptItem) {
     match item {
-        ConversationItem::Message { role, content, .. } => {
+        TranscriptItem::Message { role, content, .. } => {
             assert_eq!(role, "developer");
             let texts = content_texts(content);
             let expected = DeveloperInstructions::from_policy(
@@ -377,9 +373,9 @@ fn assert_permissions_message(item: &ConversationItem) {
     }
 }
 
-fn assert_developer_message(item: &ConversationItem, expected_text: &str) {
+fn assert_developer_message(item: &TranscriptItem, expected_text: &str) {
     match item {
-        ConversationItem::Message { role, content, .. } => {
+        TranscriptItem::Message { role, content, .. } => {
             assert_eq!(role, "developer");
             let texts = content_texts(content);
             assert_eq!(
@@ -392,9 +388,9 @@ fn assert_developer_message(item: &ConversationItem, expected_text: &str) {
     }
 }
 
-fn assert_environment_message(item: &ConversationItem) {
+fn assert_environment_message(item: &TranscriptItem) {
     match item {
-        ConversationItem::Message { role, content, .. } => {
+        TranscriptItem::Message { role, content, .. } => {
             assert_eq!(role, "user");
             let texts = content_texts(content);
             assert!(
@@ -408,9 +404,9 @@ fn assert_environment_message(item: &ConversationItem) {
     }
 }
 
-fn assert_user_message(item: &ConversationItem, expected_text: &str) {
+fn assert_user_message(item: &TranscriptItem, expected_text: &str) {
     match item {
-        ConversationItem::Message { role, content, .. } => {
+        TranscriptItem::Message { role, content, .. } => {
             assert_eq!(role, "user");
             let texts = content_texts(content);
             assert_eq!(texts, vec![expected_text]);
@@ -419,9 +415,9 @@ fn assert_user_message(item: &ConversationItem, expected_text: &str) {
     }
 }
 
-fn assert_assistant_message(item: &ConversationItem, expected_text: &str) {
+fn assert_assistant_message(item: &TranscriptItem, expected_text: &str) {
     match item {
-        ConversationItem::Message { role, content, .. } => {
+        TranscriptItem::Message { role, content, .. } => {
             assert_eq!(role, "assistant");
             let texts = content_texts(content);
             assert_eq!(texts, vec![expected_text]);

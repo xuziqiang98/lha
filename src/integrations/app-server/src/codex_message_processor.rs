@@ -38,6 +38,7 @@ use codex_agent::features::Feature;
 use codex_agent::find_archived_thread_path_by_id_str;
 use codex_agent::find_thread_path_by_id_str;
 use codex_agent::git_info::git_diff_to_remote;
+use codex_agent::is_unsupported_rollout_schema_error;
 use codex_agent::mcp::collect_mcp_snapshot;
 use codex_agent::mcp::group_tools_by_server;
 use codex_agent::parse_cursor;
@@ -192,7 +193,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
 use codex_protocol::items::TurnItem;
-use codex_protocol::legacy_transcript::ConversationItem;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
@@ -248,6 +249,18 @@ const THREAD_LIST_MAX_LIMIT: usize = 100;
 
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+fn is_unsupported_rollout_error(err: &std::io::Error) -> bool {
+    is_unsupported_rollout_schema_error(err)
+}
+
+fn unsupported_rollout_message(path: &Path) -> String {
+    format!(
+        "legacy rollout unsupported for `{}`; start a new thread instead",
+        path.display()
+    )
+}
+
 struct ActiveLogin {
     shutdown_handle: ShutdownHandle,
     login_id: Uuid,
@@ -2259,8 +2272,16 @@ impl CodexMessageProcessor {
                 read_summary_from_rollout(restored_path.as_path(), fallback_provider.as_str())
                     .await
                     .map_err(|err| JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!("failed to read unarchived thread: {err}"),
+                        code: if is_unsupported_rollout_error(&err) {
+                            INVALID_REQUEST_ERROR_CODE
+                        } else {
+                            INTERNAL_ERROR_CODE
+                        },
+                        message: if is_unsupported_rollout_error(&err) {
+                            unsupported_rollout_message(restored_path.as_path())
+                        } else {
+                            format!("failed to read unarchived thread: {err}")
+                        },
                         data: None,
                     })?;
             Ok(summary_to_thread(summary))
@@ -2455,6 +2476,14 @@ impl CodexMessageProcessor {
             match read_summary_from_rollout(rollout_path, fallback_provider).await {
                 Ok(summary) => summary_to_thread(summary),
                 Err(err) => {
+                    if is_unsupported_rollout_error(&err) {
+                        self.send_invalid_request_error(
+                            request_id,
+                            unsupported_rollout_message(rollout_path),
+                        )
+                        .await;
+                        return;
+                    }
                     self.send_internal_error(
                         request_id,
                         format!(
@@ -2578,6 +2607,14 @@ impl CodexMessageProcessor {
             match RolloutRecorder::get_rollout_history(&path).await {
                 Ok(initial_history) => initial_history,
                 Err(err) => {
+                    if is_unsupported_rollout_error(&err) {
+                        self.send_invalid_request_error(
+                            request_id,
+                            unsupported_rollout_message(&path),
+                        )
+                        .await;
+                        return;
+                    }
                     self.send_invalid_request_error(
                         request_id,
                         format!("failed to load rollout `{}`: {err}", path.display()),
@@ -2628,6 +2665,14 @@ impl CodexMessageProcessor {
             match RolloutRecorder::get_rollout_history(&path).await {
                 Ok(initial_history) => initial_history,
                 Err(err) => {
+                    if is_unsupported_rollout_error(&err) {
+                        self.send_invalid_request_error(
+                            request_id,
+                            unsupported_rollout_message(&path),
+                        )
+                        .await;
+                        return;
+                    }
                     self.send_invalid_request_error(
                         request_id,
                         format!("failed to load rollout `{}`: {err}", path.display()),
@@ -3033,13 +3078,21 @@ impl CodexMessageProcessor {
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
+                let (code, message) = if is_unsupported_rollout_error(&err) {
+                    (INVALID_REQUEST_ERROR_CODE, unsupported_rollout_message(&path))
+                } else {
+                    (
+                        INTERNAL_ERROR_CODE,
+                        format!(
+                            "failed to load conversation summary from {}: {}",
+                            path.display(),
+                            err
+                        ),
+                    )
+                };
                 let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!(
-                        "failed to load conversation summary from {}: {}",
-                        path.display(),
-                        err
-                    ),
+                    code,
+                    message,
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;
@@ -3558,6 +3611,14 @@ impl CodexMessageProcessor {
             match RolloutRecorder::get_rollout_history(&path).await {
                 Ok(initial_history) => initial_history,
                 Err(err) => {
+                    if is_unsupported_rollout_error(&err) {
+                        self.send_invalid_request_error(
+                            request_id,
+                            unsupported_rollout_message(&path),
+                        )
+                        .await;
+                        return;
+                    }
                     self.send_invalid_request_error(
                         request_id,
                         format!("failed to load rollout `{}`: {err}", path.display()),
@@ -3574,6 +3635,14 @@ impl CodexMessageProcessor {
                     match RolloutRecorder::get_rollout_history(&found_path).await {
                         Ok(initial_history) => initial_history,
                         Err(err) => {
+                            if is_unsupported_rollout_error(&err) {
+                                self.send_invalid_request_error(
+                                    request_id,
+                                    unsupported_rollout_message(&found_path),
+                                )
+                                .await;
+                                return;
+                            }
                             self.send_invalid_request_error(
                                 request_id,
                                 format!(
@@ -5289,7 +5358,7 @@ fn extract_conversation_summary(
 ) -> Option<ConversationSummary> {
     let preview = head
         .iter()
-        .filter_map(|value| serde_json::from_value::<ConversationItem>(value.clone()).ok())
+        .filter_map(|value| serde_json::from_value::<TranscriptItem>(value.clone()).ok())
         .find_map(|item| match codex_agent::parse_turn_item(&item) {
             Some(TurnItem::UserMessage(user)) => Some(user.message()),
             _ => None,

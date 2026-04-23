@@ -13,7 +13,7 @@ use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::legacy_transcript::ConversationItem;
+use codex_protocol::models::TranscriptItem;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::WebSocketTestServer;
@@ -204,8 +204,8 @@ async fn responses_websocket_creates_on_non_prefix() {
     server.shutdown().await;
 }
 
-fn message_item(text: &str) -> ConversationItem {
-    ConversationItem::Message {
+fn message_item(text: &str) -> TranscriptItem {
+    TranscriptItem::Message {
         id: None,
         role: "user".into(),
         content: vec![ContentItem::InputText { text: text.into() }],
@@ -213,9 +213,9 @@ fn message_item(text: &str) -> ConversationItem {
     }
 }
 
-fn turn_with_input(input: Vec<ConversationItem>) -> TurnRequest {
+fn turn_with_input(input: Vec<TranscriptItem>) -> TurnRequest {
     TurnRequest {
-        conversation: input.into_iter().map(Into::into).collect(),
+        conversation: input,
         ..Default::default()
     }
 }

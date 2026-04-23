@@ -986,7 +986,7 @@ mod tests {
                     cwd: cwd.to_path_buf(),
                     originator: "test".to_string(),
                     cli_version: "0.0.0".to_string(),
-                    rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V2,
+                    rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
                     source: codex_protocol::protocol::SessionSource::Cli,
                     model_provider: Some(provider.to_string()),
                     base_instructions: None,

@@ -102,6 +102,7 @@ pub use rollout::find_archived_thread_path_by_id_str;
 pub use rollout::find_conversation_path_by_id_str;
 pub use rollout::find_thread_path_by_id_str;
 pub use rollout::find_thread_path_by_name_str;
+pub use rollout::is_unsupported_rollout_schema_error;
 pub use rollout::list::Cursor;
 pub use rollout::list::ThreadItem;
 pub use rollout::list::ThreadSortKey;
@@ -136,9 +137,6 @@ pub use codex_protocol::protocol;
 pub use codex_protocol::config_types as protocol_config_types;
 
 pub use client_common::REVIEW_PROMPT;
-pub use codex_protocol::legacy_transcript::LocalShellAction;
-pub use codex_protocol::legacy_transcript::LocalShellExecAction;
-pub use codex_protocol::legacy_transcript::LocalShellStatus;
 pub use codex_protocol::models::ContentItem;
 pub use compact::content_items_to_text;
 pub use event_mapping::parse_turn_item;

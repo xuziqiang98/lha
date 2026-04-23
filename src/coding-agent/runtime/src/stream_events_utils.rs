@@ -18,9 +18,8 @@ use crate::tools::router::ToolRouter;
 use codex_llm::ToolCallPayload;
 use codex_llm::ToolCallRequest;
 use codex_llm::ToolResultItem;
-use codex_protocol::legacy_transcript::ConversationItem;
-use codex_protocol::legacy_transcript::FunctionCallOutputPayload;
-use codex_protocol::legacy_transcript::ResponseInputItem;
+use codex_llm::ToolResultPayload;
+use codex_llm::TranscriptItem;
 use futures::Future;
 use tracing::debug;
 use tracing::instrument;
@@ -48,7 +47,7 @@ pub(crate) struct HandleOutputCtx {
 #[instrument(level = "trace", skip_all)]
 pub(crate) async fn handle_output_item_done(
     ctx: &mut HandleOutputCtx,
-    item: ConversationItem,
+    item: TranscriptItem,
     previously_active_item: Option<TurnItem>,
 ) -> Result<OutputItemResult> {
     let mut output = OutputItemResult::default();
@@ -80,7 +79,8 @@ pub(crate) async fn handle_tool_call_request(
     request: ToolCallRequest,
 ) -> Result<OutputItemResult> {
     let mut output = OutputItemResult::default();
-    let source_item: ConversationItem = request.to_transcript_item().into();
+    let tool_name = request.tool_name.clone();
+    let source_item = request.to_transcript_item();
     let call_id = request.call_id.clone();
     let payload_outputs_custom = matches!(request.payload, ToolCallPayload::TextInput { .. });
 
@@ -101,41 +101,23 @@ pub(crate) async fn handle_tool_call_request(
             let cancellation_token = ctx.cancellation_token.child_token();
             let tool_runtime = ctx.tool_runtime.clone();
             output.tool_future = Some(Box::pin(async move {
-                let response = tool_runtime
-                    .handle_tool_call(call, cancellation_token)
-                    .await?;
-                response_input_to_tool_result_item(&response).ok_or_else(|| {
-                    CodexErr::Fatal("tool response was not a tool result".to_string())
-                })
+                tool_runtime.handle_tool_call(call, cancellation_token).await
             }));
             output.needs_follow_up = true;
         }
         Err(FunctionCallError::RespondToModel(message)) => {
-            let response = if payload_outputs_custom {
-                ResponseInputItem::CustomToolCallOutput {
-                    call_id: call_id.clone(),
-                    output: message,
-                }
-            } else {
-                ResponseInputItem::FunctionCallOutput {
-                    call_id,
-                    output: FunctionCallOutputPayload {
-                        content: message,
-                        ..Default::default()
-                    },
-                }
-            };
+            let response_item = response_error_to_transcript_item(
+                &call_id,
+                &tool_name,
+                payload_outputs_custom,
+                message,
+            );
             ctx.sess
                 .record_conversation_items(&ctx.turn_context, std::slice::from_ref(&source_item))
                 .await;
-            if let Some(response_item) = response_input_to_response_item(&response) {
-                ctx.sess
-                    .record_conversation_items(
-                        &ctx.turn_context,
-                        std::slice::from_ref(&response_item),
-                    )
-                    .await;
-            }
+            ctx.sess
+                .record_conversation_items(&ctx.turn_context, std::slice::from_ref(&response_item))
+                .await;
             output.needs_follow_up = true;
         }
         Err(FunctionCallError::Fatal(message)) => {
@@ -152,25 +134,21 @@ pub(crate) async fn handle_tool_call_request(
                 &message,
             );
 
-            let response = ResponseInputItem::FunctionCallOutput {
+            let response_item = TranscriptItem::ToolResult {
                 call_id,
-                output: FunctionCallOutputPayload {
+                tool_name: tool_name.clone(),
+                payload: ToolResultPayload::Structured {
                     content: message,
+                    content_items: None,
                     success: Some(false),
-                    ..Default::default()
                 },
             };
             ctx.sess
                 .record_conversation_items(&ctx.turn_context, std::slice::from_ref(&source_item))
                 .await;
-            if let Some(response_item) = response_input_to_response_item(&response) {
-                ctx.sess
-                    .record_conversation_items(
-                        &ctx.turn_context,
-                        std::slice::from_ref(&response_item),
-                    )
-                    .await;
-            }
+            ctx.sess
+                .record_conversation_items(&ctx.turn_context, std::slice::from_ref(&response_item))
+                .await;
             output.needs_follow_up = true;
         }
     }
@@ -179,15 +157,15 @@ pub(crate) async fn handle_tool_call_request(
 }
 
 pub(crate) async fn handle_non_tool_response_item(
-    item: &ConversationItem,
+    item: &TranscriptItem,
     plan_mode: bool,
 ) -> Option<TurnItem> {
     debug!(?item, "Output item");
 
     match item {
-        ConversationItem::Message { .. }
-        | ConversationItem::Reasoning { .. }
-        | ConversationItem::WebSearchCall { .. } => {
+        TranscriptItem::Message { .. }
+        | TranscriptItem::Reasoning { .. }
+        | TranscriptItem::HostedActivity { .. } => {
             let mut turn_item = parse_turn_item(item)?;
             if plan_mode && let TurnItem::AgentMessage(agent_message) = &mut turn_item {
                 let combined = agent_message
@@ -203,20 +181,19 @@ pub(crate) async fn handle_non_tool_response_item(
             }
             Some(turn_item)
         }
-        ConversationItem::FunctionCallOutput { .. }
-        | ConversationItem::CustomToolCallOutput { .. } => {
+        TranscriptItem::ToolResult { .. } => {
             debug!("unexpected tool output from stream");
             None
         }
-        _ => None,
+        TranscriptItem::ToolCall { .. } | TranscriptItem::Unknown { .. } => None,
     }
 }
 
 pub(crate) fn last_assistant_message_from_item(
-    item: &ConversationItem,
+    item: &TranscriptItem,
     plan_mode: bool,
 ) -> Option<String> {
-    if let ConversationItem::Message { role, content, .. } = item
+    if let TranscriptItem::Message { role, content, .. } = item
         && role == "assistant"
     {
         let combined = content
@@ -239,103 +216,49 @@ pub(crate) fn last_assistant_message_from_item(
     None
 }
 
-pub(crate) fn response_input_to_response_item(
-    input: &ResponseInputItem,
-) -> Option<ConversationItem> {
-    match input {
-        ResponseInputItem::FunctionCallOutput { call_id, output } => {
-            Some(ConversationItem::FunctionCallOutput {
-                call_id: call_id.clone(),
-                output: output.clone(),
-            })
+fn response_error_to_transcript_item(
+    call_id: &str,
+    tool_name: &str,
+    payload_outputs_custom: bool,
+    message: String,
+) -> TranscriptItem {
+    let tool_result = if payload_outputs_custom {
+        ToolResultItem {
+            call_id: call_id.to_string(),
+            tool_name: tool_name.to_string(),
+            payload: ToolResultPayload::Text { output: message },
         }
-        ResponseInputItem::CustomToolCallOutput { call_id, output } => {
-            Some(ConversationItem::CustomToolCallOutput {
-                call_id: call_id.clone(),
-                output: output.clone(),
-            })
+    } else {
+        ToolResultItem {
+            call_id: call_id.to_string(),
+            tool_name: tool_name.to_string(),
+            payload: ToolResultPayload::Structured {
+                content: message,
+                content_items: None,
+                success: Some(false),
+            },
         }
-        ResponseInputItem::McpToolCallOutput { call_id, result } => {
-            let output = match result {
-                Ok(call_tool_result) => FunctionCallOutputPayload::from(call_tool_result),
-                Err(err) => FunctionCallOutputPayload {
-                    content: err.clone(),
-                    success: Some(false),
-                    ..Default::default()
-                },
-            };
-            Some(ConversationItem::FunctionCallOutput {
-                call_id: call_id.clone(),
-                output,
-            })
-        }
-        _ => None,
-    }
+    };
+
+    tool_result.into()
 }
 
-fn response_input_to_tool_result_item(input: &ResponseInputItem) -> Option<ToolResultItem> {
-    match input {
-        ResponseInputItem::FunctionCallOutput { call_id, output } => Some(ToolResultItem {
-            call_id: call_id.clone(),
-            tool_name: String::new(),
-            payload: codex_llm::ToolResultPayload::Structured {
-                content: output.content.clone(),
-                content_items: output
-                    .content_items
-                    .as_deref()
-                    .map(legacy_content_items_to_tool_result_items),
-                success: output.success,
-            },
-        }),
-        ResponseInputItem::CustomToolCallOutput { call_id, output } => Some(ToolResultItem {
-            call_id: call_id.clone(),
-            tool_name: String::new(),
-            payload: codex_llm::ToolResultPayload::Text {
-                output: output.clone(),
-            },
-        }),
-        ResponseInputItem::McpToolCallOutput { call_id, result } => {
-            let output = match result {
-                Ok(call_tool_result) => FunctionCallOutputPayload::from(call_tool_result),
-                Err(err) => FunctionCallOutputPayload {
-                    content: err.clone(),
-                    success: Some(false),
-                    ..Default::default()
-                },
-            };
-            Some(ToolResultItem {
-                call_id: call_id.clone(),
-                tool_name: "mcp".to_string(),
-                payload: codex_llm::ToolResultPayload::Structured {
-                    content: output.content,
-                    content_items: output
-                        .content_items
-                        .as_deref()
-                        .map(legacy_content_items_to_tool_result_items),
-                    success: output.success,
-                },
-            })
-        }
-        ResponseInputItem::Message { .. } => None,
-    }
+#[cfg(test)]
+fn tool_result_to_response_item(input: &ToolResultItem) -> TranscriptItem {
+    input.clone().into()
 }
 
-fn legacy_content_items_to_tool_result_items(
-    items: &[codex_protocol::legacy_transcript::FunctionCallOutputContentItem],
-) -> Vec<codex_llm::ToolResultContentItem> {
-    items
-        .iter()
-        .map(|item| match item {
-            codex_protocol::legacy_transcript::FunctionCallOutputContentItem::InputText {
-                text,
-            } => codex_llm::ToolResultContentItem::InputText { text: text.clone() },
-            codex_protocol::legacy_transcript::FunctionCallOutputContentItem::InputImage {
-                image_url,
-            } => codex_llm::ToolResultContentItem::InputImage {
-                image_url: image_url.clone(),
-            },
-        })
-        .collect()
+#[cfg(test)]
+fn empty_structured_tool_result(call_id: &str, tool_name: &str) -> ToolResultItem {
+    ToolResultItem {
+        call_id: call_id.to_string(),
+        tool_name: tool_name.to_string(),
+        payload: ToolResultPayload::Structured {
+            content: String::new(),
+            content_items: None,
+            success: None,
+        },
+    }
 }
 
 #[cfg(test)]
@@ -344,42 +267,46 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn response_input_to_response_item_keeps_empty_function_call_output_id() {
-        let input = ResponseInputItem::FunctionCallOutput {
-            call_id: String::new(),
-            output: FunctionCallOutputPayload::default(),
-        };
+    fn tool_result_to_response_item_keeps_empty_function_call_output_id() {
+        let input = empty_structured_tool_result("", "local_shell");
 
         assert_eq!(
-            response_input_to_response_item(&input),
-            Some(ConversationItem::FunctionCallOutput {
+            tool_result_to_response_item(&input),
+            TranscriptItem::ToolResult {
                 call_id: String::new(),
-                output: FunctionCallOutputPayload::default(),
-            })
+                tool_name: "local_shell".to_string(),
+                payload: ToolResultPayload::Structured {
+                    content: String::new(),
+                    content_items: None,
+                    success: None,
+                },
+            }
         );
     }
 
     #[test]
-    fn response_input_to_response_item_keeps_function_call_output_with_id() {
-        let input = ResponseInputItem::FunctionCallOutput {
+    fn tool_result_to_response_item_keeps_function_call_output_with_id() {
+        let input = ToolResultItem {
             call_id: "call-1".to_string(),
-            output: FunctionCallOutputPayload {
+            tool_name: "apply_patch".to_string(),
+            payload: ToolResultPayload::Structured {
                 content: "done".to_string(),
+                content_items: None,
                 success: Some(true),
-                ..Default::default()
             },
         };
 
         assert_eq!(
-            response_input_to_response_item(&input),
-            Some(ConversationItem::FunctionCallOutput {
+            tool_result_to_response_item(&input),
+            TranscriptItem::ToolResult {
                 call_id: "call-1".to_string(),
-                output: FunctionCallOutputPayload {
+                tool_name: "apply_patch".to_string(),
+                payload: ToolResultPayload::Structured {
                     content: "done".to_string(),
+                    content_items: None,
                     success: Some(true),
-                    ..Default::default()
                 },
-            })
+            }
         );
     }
 }

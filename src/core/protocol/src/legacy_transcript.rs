@@ -238,10 +238,10 @@ impl ResponseInputItem {
                 content: content.clone(),
                 end_turn: None,
             },
-            _ => self
-                .to_tool_result_item()
-                .expect("non-message response input should produce tool result")
-                .into(),
+            _ => match self.to_tool_result_item() {
+                Some(item) => item.into(),
+                None => unreachable!("non-message response input should produce tool result"),
+            },
         }
     }
 }

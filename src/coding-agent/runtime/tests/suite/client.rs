@@ -1,9 +1,6 @@
 use codex_agent::AuthManager;
 use codex_agent::CodexAuth;
 use codex_agent::ContentItem;
-use codex_agent::LocalShellAction;
-use codex_agent::LocalShellExecAction;
-use codex_agent::LocalShellStatus;
 use codex_agent::NewThread;
 use codex_agent::ThreadManager;
 use codex_agent::auth::AuthCredentialsStoreMode;
@@ -16,6 +13,7 @@ use codex_agent::protocol::ItemStartedEvent;
 use codex_agent::protocol::Op;
 use codex_agent::protocol::SessionSource;
 use codex_llm::RuntimeEndpoint;
+use codex_llm::ToolCallPayload;
 use codex_llm::TurnEvent;
 use codex_llm::TurnRequest;
 use codex_llm::built_in_runtime_endpoints;
@@ -27,10 +25,10 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::items::TurnItem;
-use codex_protocol::legacy_transcript::ConversationItem;
-use codex_protocol::legacy_transcript::FunctionCallOutputPayload;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::models::ToolResultPayload;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::UserInput;
@@ -264,7 +262,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     .unwrap();
 
     // Prior item: user message (should be delivered)
-    let prior_user = codex_protocol::legacy_transcript::ConversationItem::Message {
+    let prior_user = TranscriptItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![codex_protocol::models::ContentItem::InputText {
@@ -285,7 +283,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     .unwrap();
 
     // Prior item: system message (excluded from API history)
-    let prior_system = codex_protocol::legacy_transcript::ConversationItem::Message {
+    let prior_system = TranscriptItem::Message {
         id: None,
         role: "system".to_string(),
         content: vec![codex_protocol::models::ContentItem::OutputText {
@@ -306,7 +304,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     .unwrap();
 
     // Prior item: assistant message
-    let prior_item = codex_protocol::legacy_transcript::ConversationItem::Message {
+    let prior_item = TranscriptItem::Message {
         id: None,
         role: "assistant".to_string(),
         content: vec![codex_protocol::models::ContentItem::OutputText {
@@ -1536,7 +1534,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
 
     let mut turn = TurnRequest::default();
     turn.conversation.push(
-        ConversationItem::Reasoning {
+        TranscriptItem::Reasoning {
             id: "reasoning-id".into(),
             summary: vec![ReasoningItemReasoningSummary::SummaryText {
                 text: "summary".into(),
@@ -1549,7 +1547,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         .into(),
     );
     turn.conversation.push(
-        ConversationItem::Message {
+        TranscriptItem::Message {
             id: Some("message-id".into()),
             role: "assistant".into(),
             content: vec![ContentItem::OutputText {
@@ -1560,64 +1558,71 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         .into(),
     );
     turn.conversation.push(
-        ConversationItem::WebSearchCall {
+        TranscriptItem::HostedActivity {
             id: Some("web-search-id".into()),
+            activity_type: "web_search".into(),
             status: Some("completed".into()),
-            action: Some(WebSearchAction::Search {
+            payload: serde_json::to_value(WebSearchAction::Search {
                 query: Some("weather".into()),
                 queries: None,
-            }),
+            })
+            .expect("serialize web search action"),
         }
         .into(),
     );
     turn.conversation.push(
-        ConversationItem::FunctionCall {
+        TranscriptItem::ToolCall {
             id: Some("function-id".into()),
-            name: "do_thing".into(),
-            arguments: "{}".into(),
             call_id: "function-call-id".into(),
-        }
-        .into(),
-    );
-    turn.conversation.push(
-        ConversationItem::FunctionCallOutput {
-            call_id: "function-call-id".into(),
-            output: FunctionCallOutputPayload {
-                content: "ok".into(),
-                ..Default::default()
+            tool_name: "do_thing".into(),
+            payload: ToolCallPayload::JsonArguments {
+                arguments: "{}".into(),
             },
         }
         .into(),
     );
     turn.conversation.push(
-        ConversationItem::LocalShellCall {
+        TranscriptItem::ToolResult {
+            call_id: "function-call-id".into(),
+            tool_name: "do_thing".into(),
+            payload: ToolResultPayload::Structured {
+                content: "ok".into(),
+                content_items: None,
+                success: None,
+            },
+        }
+        .into(),
+    );
+    turn.conversation.push(
+        TranscriptItem::ToolCall {
             id: Some("local-shell-id".into()),
-            call_id: Some("local-shell-call-id".into()),
-            status: LocalShellStatus::Completed,
-            action: LocalShellAction::Exec(LocalShellExecAction {
-                command: vec!["echo".into(), "hello".into()],
-                timeout_ms: None,
-                working_directory: None,
-                env: None,
-                user: None,
-            }),
+            call_id: "local-shell-call-id".into(),
+            tool_name: "local_shell".into(),
+            payload: ToolCallPayload::JsonArguments {
+                arguments: serde_json::json!({
+                    "command": ["echo", "hello"],
+                })
+                .to_string(),
+            },
         }
         .into(),
     );
     turn.conversation.push(
-        ConversationItem::CustomToolCall {
+        TranscriptItem::ToolCall {
             id: Some("custom-tool-id".into()),
-            status: Some("completed".into()),
             call_id: "custom-tool-call-id".into(),
-            name: "custom_tool".into(),
-            input: "{}".into(),
+            tool_name: "custom_tool".into(),
+            payload: ToolCallPayload::TextInput { input: "{}".into() },
         }
         .into(),
     );
     turn.conversation.push(
-        ConversationItem::CustomToolCallOutput {
+        TranscriptItem::ToolResult {
             call_id: "custom-tool-call-id".into(),
-            output: "ok".into(),
+            tool_name: "custom_tool".into(),
+            payload: ToolResultPayload::Text {
+                output: "ok".into(),
+            },
         }
         .into(),
     );

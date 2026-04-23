@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::TranscriptItem;
 
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
@@ -55,8 +55,8 @@ pub fn user_shell_command_record_item(
     command: &str,
     exec_output: &ExecToolCallOutput,
     turn_context: &TurnContext,
-) -> ConversationItem {
-    ConversationItem::Message {
+) -> TranscriptItem {
+    TranscriptItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -93,7 +93,7 @@ mod tests {
         };
         let (_, turn_context) = make_session_and_context().await;
         let item = user_shell_command_record_item("echo hi", &exec_output, &turn_context);
-        let ConversationItem::Message { content, .. } = item else {
+        let TranscriptItem::Message { content, .. } = item else {
             panic!("expected message");
         };
         let [ContentItem::InputText { text }] = content.as_slice() else {

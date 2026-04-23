@@ -90,8 +90,7 @@ async fn fork_thread_twice_drops_to_first_message() {
         let mut pos = Vec::new();
         for (i, it) in items.iter().enumerate() {
             if let RolloutItem::TranscriptItem(response_item) = it
-                && let Some(TurnItem::UserMessage(_)) =
-                    parse_turn_item(&response_item.clone().into())
+                && let Some(TurnItem::UserMessage(_)) = parse_turn_item(&response_item.clone())
             {
                 // Consider any user message as an input boundary; recorder stores both EventMsg and ConversationItem.
                 // We specifically look for input items, which are represented as ContentItem::InputText.

@@ -174,7 +174,7 @@ mod tests {
                 cwd: std::path::PathBuf::from("."),
                 originator: "test_originator".to_string(),
                 cli_version: "test_version".to_string(),
-                rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V2,
+                rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
                 source: SessionSource::Cli,
                 model_provider: None,
                 base_instructions: None,

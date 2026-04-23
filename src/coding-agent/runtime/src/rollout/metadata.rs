@@ -59,6 +59,7 @@ pub(crate) fn builder_from_items(
     if let Some(session_meta) = items.iter().find_map(|item| match item {
         RolloutItem::SessionMeta(meta_line) => Some(meta_line),
         RolloutItem::TranscriptItem(_)
+        | RolloutItem::GhostSnapshot(_)
         | RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::EventMsg(_) => None,
@@ -312,7 +313,7 @@ mod tests {
             cwd: dir.path().to_path_buf(),
             originator: "cli".to_string(),
             cli_version: "0.0.0".to_string(),
-            rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V2,
+            rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
             source: SessionSource::default(),
             model_provider: Some("openai".to_string()),
             base_instructions: None,

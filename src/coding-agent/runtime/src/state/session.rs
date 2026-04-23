@@ -3,7 +3,8 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use codex_protocol::legacy_transcript::ConversationItem;
+use codex_llm::TranscriptItem;
+use codex_protocol::protocol::GhostSnapshotRecord;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -26,6 +27,7 @@ pub(crate) struct SessionState {
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
+    pub(crate) ghost_snapshots: Vec<GhostSnapshotRecord>,
     /// Whether the session's initial context has been seeded into history.
     ///
     /// TODO(owen): This is a temporary solution to avoid updating a thread's updated_at
@@ -45,25 +47,38 @@ impl SessionState {
             server_reasoning_included: false,
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
+            ghost_snapshots: Vec::new(),
             initial_context_seeded: false,
         }
     }
 
     // History helpers
-    pub(crate) fn record_items<I>(&mut self, items: I, policy: TruncationPolicy)
-    where
-        I: IntoIterator,
-        I::Item: std::ops::Deref<Target = ConversationItem>,
-    {
-        self.history.record_items(items, policy);
+    pub(crate) fn record_items(&mut self, items: &[TranscriptItem], policy: TruncationPolicy) {
+        self.history.record_items(items.iter(), policy);
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {
         self.history.clone()
     }
 
-    pub(crate) fn replace_history(&mut self, items: Vec<ConversationItem>) {
+    pub(crate) fn replace_history(&mut self, items: Vec<TranscriptItem>) {
         self.history.replace(items);
+    }
+
+    pub(crate) fn clone_ghost_snapshots(&self) -> Vec<GhostSnapshotRecord> {
+        self.ghost_snapshots.clone()
+    }
+
+    pub(crate) fn record_ghost_snapshot(&mut self, item: GhostSnapshotRecord) {
+        if let Some(existing) = self
+            .ghost_snapshots
+            .iter_mut()
+            .find(|existing| existing.turn_id == item.turn_id)
+        {
+            *existing = item;
+        } else {
+            self.ghost_snapshots.push(item);
+        }
     }
 
     pub(crate) fn get_or_create_dynamic_context_window(

@@ -24,6 +24,7 @@ pub use list::find_thread_path_by_id_str as find_conversation_path_by_id_str;
 pub use list::rollout_date_parts;
 pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;
+pub use recorder::is_unsupported_rollout_schema_error;
 pub use session_index::find_thread_path_by_name_str;
 
 #[cfg(test)]

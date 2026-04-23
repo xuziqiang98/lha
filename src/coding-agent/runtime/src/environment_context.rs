@@ -1,7 +1,7 @@
 use crate::codex::TurnContext;
 use crate::shell::Shell;
-use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use serde::Deserialize;
@@ -89,9 +89,9 @@ impl EnvironmentContext {
     }
 }
 
-impl From<EnvironmentContext> for ConversationItem {
+impl From<EnvironmentContext> for TranscriptItem {
     fn from(ec: EnvironmentContext) -> Self {
-        ConversationItem::Message {
+        TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {

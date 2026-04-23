@@ -21,13 +21,12 @@ use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
 use codex_llm::RuntimeCapabilities;
+use codex_llm::ToolCallPayload;
+use codex_llm::ToolResultPayload;
 use codex_llm::TurnEvent;
 use codex_llm::TurnRequest;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
-use codex_protocol::legacy_transcript::ConversationItem;
-use codex_protocol::legacy_transcript::FunctionCallOutputPayload;
-use codex_protocol::legacy_transcript::ResponseInputItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::TranscriptItem;
 use codex_protocol::models::transcript_item_from_user_input;
@@ -46,15 +45,6 @@ const BACKFILLED_SKILL_TOTAL_MAX_TOKENS: usize = 20_000;
 const PROPOSED_PLAN_OPEN_TAG: &str = "<proposed_plan>\n";
 const PROPOSED_PLAN_CLOSE_TAG: &str = "</proposed_plan>";
 const BACKFILLED_UPDATE_PLAN_CALL_ID: &str = "compact_backfill_update_plan";
-
-fn legacy_response_input_from_user_input(input: Vec<UserInput>) -> ResponseInputItem {
-    match transcript_item_from_user_input(input) {
-        TranscriptItem::Message { role, content, .. } => {
-            ResponseInputItem::Message { role, content }
-        }
-        _ => unreachable!("user input always maps to a message transcript item"),
-    }
-}
 
 pub(crate) fn should_use_remote_compact_task(
     session: &Session,
@@ -98,7 +88,7 @@ async fn run_compact_task_inner(
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
         .await;
-    let initial_input_for_turn: ResponseInputItem = legacy_response_input_from_user_input(input);
+    let initial_input_for_turn = transcript_item_from_user_input(input);
 
     let mut history = sess.clone_history().await;
     let (backfilled_plan_text, backfilled_update_plan, backfilled_skills) =
@@ -111,10 +101,7 @@ async fn run_compact_task_inner(
         } else {
             (None, None, Vec::new())
         };
-    history.record_items(
-        &[initial_input_for_turn.into()],
-        turn_context.truncation_policy,
-    );
+    history.record_items([&initial_input_for_turn], turn_context.truncation_policy);
 
     let mut truncated_count = 0usize;
 
@@ -144,7 +131,7 @@ async fn run_compact_task_inner(
         let turn_input = history.clone().for_compaction_prompt();
         let turn_input_len = turn_input.len();
         let prompt = TurnRequest {
-            conversation: turn_input.into_iter().map(Into::into).collect(),
+            conversation: turn_input.into_iter().collect(),
             base_instructions: sess.get_base_instructions().await,
             personality: turn_context.personality,
             ..Default::default()
@@ -197,7 +184,7 @@ async fn run_compact_task_inner(
     let user_messages = collect_user_messages(history_items);
     let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
     let initial_context_len = initial_context.len();
-    let mut new_history = build_compacted_history(
+    let new_history = build_compacted_history(
         initial_context,
         &user_messages,
         backfilled_plan_text.as_deref(),
@@ -205,12 +192,6 @@ async fn run_compact_task_inner(
         &backfilled_skills,
         &summary_text,
     );
-    let ghost_snapshots: Vec<ConversationItem> = history_items
-        .iter()
-        .filter(|item| matches!(item, ConversationItem::GhostSnapshot { .. }))
-        .cloned()
-        .collect();
-    new_history.extend(ghost_snapshots);
     let replacement_history =
         replacement_history_without_initial_context(&new_history, initial_context_len);
     sess.replace_history(new_history).await;
@@ -218,7 +199,7 @@ async fn run_compact_task_inner(
 
     let rollout_item = RolloutItem::Compacted(CompactedItem {
         message: summary_text.clone(),
-        replacement_history: Some(replacement_history.into_iter().map(Into::into).collect()),
+        replacement_history: Some(replacement_history.into_iter().collect()),
         replacement_history_omits_initial_context: true,
     });
     sess.persist_rollout_items(&[rollout_item]).await;
@@ -250,7 +231,10 @@ pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
     }
 }
 
-pub(crate) fn collect_user_messages(items: &[ConversationItem]) -> Vec<String> {
+pub(crate) fn collect_user_messages<T>(items: &[T]) -> Vec<String>
+where
+    T: Clone + Into<TranscriptItem>,
+{
     items
         .iter()
         .filter_map(|item| match crate::event_mapping::parse_turn_item(item) {
@@ -266,15 +250,18 @@ pub(crate) fn collect_user_messages(items: &[ConversationItem]) -> Vec<String> {
         .collect()
 }
 
-fn collect_turn_aborted_marker(item: &ConversationItem) -> Option<String> {
-    let ConversationItem::Message { role, content, .. } = item else {
+fn collect_turn_aborted_marker<T>(item: &T) -> Option<String>
+where
+    T: Clone + Into<TranscriptItem>,
+{
+    let TranscriptItem::Message { role, content, .. } = item.clone().into() else {
         return None;
     };
     if role != "user" {
         return None;
     }
 
-    let text = content_items_to_text(content)?;
+    let text = content_items_to_text(&content)?;
     if text
         .trim_start()
         .to_ascii_lowercase()
@@ -291,13 +278,13 @@ pub(crate) fn is_summary_message(message: &str) -> bool {
 }
 
 pub(crate) fn build_compacted_history(
-    initial_context: Vec<ConversationItem>,
+    initial_context: Vec<TranscriptItem>,
     user_messages: &[String],
     backfilled_plan_text: Option<&str>,
     backfilled_update_plan: Option<&UpdatePlanArgs>,
     backfilled_skills: &[SkillInstructions],
     summary_text: &str,
-) -> Vec<ConversationItem> {
+) -> Vec<TranscriptItem> {
     build_compacted_history_with_limit(
         initial_context,
         user_messages,
@@ -310,21 +297,21 @@ pub(crate) fn build_compacted_history(
 }
 
 pub(crate) fn replacement_history_without_initial_context(
-    compacted_history: &[ConversationItem],
+    compacted_history: &[TranscriptItem],
     initial_context_len: usize,
-) -> Vec<ConversationItem> {
+) -> Vec<TranscriptItem> {
     compacted_history[initial_context_len..].to_vec()
 }
 
 fn build_compacted_history_with_limit(
-    mut history: Vec<ConversationItem>,
+    mut history: Vec<TranscriptItem>,
     user_messages: &[String],
     backfilled_plan_text: Option<&str>,
     backfilled_update_plan: Option<&UpdatePlanArgs>,
     backfilled_skills: &[SkillInstructions],
     summary_text: &str,
     max_tokens: usize,
-) -> Vec<ConversationItem> {
+) -> Vec<TranscriptItem> {
     let mut selected_messages: Vec<String> = Vec::new();
     if max_tokens > 0 {
         let mut remaining = max_tokens;
@@ -346,7 +333,7 @@ fn build_compacted_history_with_limit(
     }
 
     for message in &selected_messages {
-        history.push(ConversationItem::Message {
+        history.push(TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -362,7 +349,7 @@ fn build_compacted_history_with_limit(
         summary_text.to_string()
     };
 
-    history.push(ConversationItem::Message {
+    history.push(TranscriptItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText { text: summary_text }],
@@ -384,9 +371,12 @@ fn build_compacted_history_with_limit(
     history
 }
 
-pub(crate) fn last_completed_plan_from_history(items: &[ConversationItem]) -> Option<String> {
+pub(crate) fn last_completed_plan_from_history<T>(items: &[T]) -> Option<String>
+where
+    T: Clone + Into<TranscriptItem>,
+{
     items.iter().rev().find_map(|item| {
-        let ConversationItem::Message { role, content, .. } = item else {
+        let TranscriptItem::Message { role, content, .. } = item.clone().into() else {
             return None;
         };
         if role != "assistant" {
@@ -396,7 +386,7 @@ pub(crate) fn last_completed_plan_from_history(items: &[ConversationItem]) -> Op
         let mut text = String::new();
         for entry in content {
             if let ContentItem::OutputText { text: chunk } = entry {
-                text.push_str(chunk);
+                text.push_str(&chunk);
             }
         }
 
@@ -409,35 +399,41 @@ pub(crate) fn last_completed_plan_from_history(items: &[ConversationItem]) -> Op
 }
 
 pub(crate) fn last_backfillable_update_plan_from_history(
-    items: &[ConversationItem],
+    items: &[impl Clone + Into<TranscriptItem>],
 ) -> Option<UpdatePlanArgs> {
+    let items = items
+        .iter()
+        .cloned()
+        .map(Into::into)
+        .collect::<Vec<TranscriptItem>>();
     for (idx, item) in items.iter().enumerate().rev() {
-        let ConversationItem::FunctionCall {
-            name,
-            arguments,
+        let TranscriptItem::ToolCall {
+            tool_name,
+            payload: ToolCallPayload::JsonArguments { arguments },
             call_id,
             ..
         } = item
         else {
             continue;
         };
-        if name != "update_plan" {
+        if tool_name != "update_plan" {
             continue;
         }
 
         let Some(output) = items[idx + 1..]
             .iter()
             .find_map(|candidate| match candidate {
-                ConversationItem::FunctionCallOutput {
+                TranscriptItem::ToolResult {
                     call_id: existing,
-                    output,
-                } if existing == call_id => Some(output),
+                    payload: ToolResultPayload::Structured { content, .. },
+                    ..
+                } if existing == call_id => Some(content),
                 _ => None,
             })
         else {
             continue;
         };
-        if output.content != UPDATE_PLAN_SUCCESS_OUTPUT {
+        if output != UPDATE_PLAN_SUCCESS_OUTPUT {
             continue;
         }
 
@@ -458,7 +454,7 @@ pub(crate) fn last_backfillable_update_plan_from_history(
     None
 }
 
-pub(crate) fn backfilled_update_plan_items(args: &UpdatePlanArgs) -> Vec<ConversationItem> {
+pub(crate) fn backfilled_update_plan_items(args: &UpdatePlanArgs) -> Vec<TranscriptItem> {
     let arguments = match serde_json::to_string(args) {
         Ok(arguments) => arguments,
         Err(err) => {
@@ -467,59 +463,66 @@ pub(crate) fn backfilled_update_plan_items(args: &UpdatePlanArgs) -> Vec<Convers
         }
     };
     vec![
-        ConversationItem::FunctionCall {
+        TranscriptItem::ToolCall {
             id: None,
-            name: "update_plan".to_string(),
-            arguments,
             call_id: BACKFILLED_UPDATE_PLAN_CALL_ID.to_string(),
+            tool_name: "update_plan".to_string(),
+            payload: ToolCallPayload::JsonArguments { arguments },
         },
-        ConversationItem::FunctionCallOutput {
+        TranscriptItem::ToolResult {
             call_id: BACKFILLED_UPDATE_PLAN_CALL_ID.to_string(),
-            output: FunctionCallOutputPayload {
+            tool_name: "update_plan".to_string(),
+            payload: ToolResultPayload::Structured {
                 content: UPDATE_PLAN_SUCCESS_OUTPUT.to_string(),
+                content_items: None,
                 success: Some(true),
-                ..Default::default()
             },
         },
     ]
 }
 
 pub(crate) fn recent_backfillable_skills_from_history(
-    items: &[ConversationItem],
+    items: &[impl Clone + Into<TranscriptItem>],
 ) -> Vec<SkillInstructions> {
+    let items = items
+        .iter()
+        .cloned()
+        .map(Into::into)
+        .collect::<Vec<TranscriptItem>>();
     let compact_backfilled =
-        collect_backfillable_skills_from_history(items, SkillInstructionSource::CompactBackfill);
-    let direct = collect_backfillable_skills_from_history(items, SkillInstructionSource::Direct);
+        collect_backfillable_skills_from_history(&items, SkillInstructionSource::CompactBackfill);
+    let direct = collect_backfillable_skills_from_history(&items, SkillInstructionSource::Direct);
     let merged = merge_backfillable_skills(compact_backfilled, direct);
 
     apply_backfilled_skill_budget(merged)
 }
 
-pub(crate) fn backfilled_skill_items(skills: &[SkillInstructions]) -> Vec<ConversationItem> {
+pub(crate) fn backfilled_skill_items(skills: &[SkillInstructions]) -> Vec<TranscriptItem> {
     skills
         .iter()
         .cloned()
         .map(SkillInstructions::into_backfilled_response_item)
+        .map(Into::into)
         .collect()
 }
 
 fn rendered_skill_message_text(skill: &SkillInstructions) -> String {
     let item = skill.clone().into_backfilled_response_item();
-    let ConversationItem::Message { content, .. } = item else {
+    let TranscriptItem::Message { content, .. } = TranscriptItem::from(item) else {
         return String::new();
     };
     content_items_to_text(&content).unwrap_or_default()
 }
 
 fn collect_backfillable_skills_from_history(
-    items: &[ConversationItem],
+    items: &[TranscriptItem],
     expected_source: SkillInstructionSource,
 ) -> Vec<SkillInstructions> {
     let mut seen_paths = HashSet::new();
     let mut collected = Vec::new();
 
     for item in items.iter().rev() {
-        let ConversationItem::Message { role, content, .. } = item else {
+        let TranscriptItem::Message { role, content, .. } = item else {
             continue;
         };
         if role != "user" {
@@ -588,9 +591,9 @@ fn apply_backfilled_skill_budget(skills: Vec<SkillInstructions>) -> Vec<SkillIns
     selected
 }
 
-pub(crate) fn proposed_plan_message(plan_text: &str) -> ConversationItem {
+pub(crate) fn proposed_plan_message(plan_text: &str) -> TranscriptItem {
     let text = format!("{PROPOSED_PLAN_OPEN_TAG}{plan_text}{PROPOSED_PLAN_CLOSE_TAG}");
-    ConversationItem::Message {
+    TranscriptItem::Message {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText { text }],
@@ -624,12 +627,12 @@ async fn drain_to_completed(
                 sess.send_event(turn_context, warning).await;
             }
             Ok(TurnEvent::ItemCompleted { item, .. }) => {
-                let item: ConversationItem = item.into_item().into();
+                let item = item.into_item();
                 sess.record_into_history(std::slice::from_ref(&item), turn_context)
                     .await;
             }
             Ok(TurnEvent::ToolCall(request)) => {
-                let item: ConversationItem = request.to_transcript_item().into();
+                let item = request.to_transcript_item();
                 sess.record_into_history(std::slice::from_ref(&item), turn_context)
                     .await;
             }
@@ -656,8 +659,65 @@ mod tests {
     use super::*;
     use crate::instructions::SkillInstructions;
     use crate::session_prefix::TURN_ABORTED_OPEN_TAG;
-    use codex_protocol::legacy_transcript::ConversationItem;
+    use codex_llm::ToolCallPayload;
+    use codex_llm::ToolResultPayload;
     use pretty_assertions::assert_eq;
+
+    fn user_message(text: &str) -> TranscriptItem {
+        TranscriptItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: text.to_string(),
+            }],
+            end_turn: None,
+        }
+    }
+
+    fn assistant_message(text: &str) -> TranscriptItem {
+        TranscriptItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: text.to_string(),
+            }],
+            end_turn: None,
+        }
+    }
+
+    fn tool_call_json(tool_name: &str, call_id: &str, arguments: String) -> TranscriptItem {
+        TranscriptItem::ToolCall {
+            id: None,
+            call_id: call_id.to_string(),
+            tool_name: tool_name.to_string(),
+            payload: ToolCallPayload::JsonArguments { arguments },
+        }
+    }
+
+    fn tool_result_structured(
+        tool_name: &str,
+        call_id: &str,
+        content: &str,
+        success: Option<bool>,
+    ) -> TranscriptItem {
+        TranscriptItem::ToolResult {
+            call_id: call_id.to_string(),
+            tool_name: tool_name.to_string(),
+            payload: ToolResultPayload::Structured {
+                content: content.to_string(),
+                content_items: None,
+                success,
+            },
+        }
+    }
+
+    fn backfilled_skill_item(skill: SkillInstructions) -> TranscriptItem {
+        skill.into_backfilled_response_item().into()
+    }
+
+    fn direct_skill_item(skill: SkillInstructions) -> TranscriptItem {
+        skill.into()
+    }
 
     #[test]
     fn content_items_to_text_joins_non_empty_segments() {
@@ -692,23 +752,11 @@ mod tests {
     #[test]
     fn collect_user_messages_extracts_user_text_only() {
         let items = vec![
-            ConversationItem::Message {
-                id: Some("assistant".to_string()),
-                role: "assistant".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: "ignored".to_string(),
-                }],
-                end_turn: None,
+            assistant_message("ignored"),
+            user_message("first"),
+            TranscriptItem::Unknown {
+                raw: serde_json::Value::Null,
             },
-            ConversationItem::Message {
-                id: Some("user".to_string()),
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "first".to_string(),
-                }],
-                end_turn: None,
-            },
-            ConversationItem::Other,
         ];
 
         let collected = collect_user_messages(&items);
@@ -719,31 +767,11 @@ mod tests {
     #[test]
     fn collect_user_messages_filters_session_prefix_entries() {
         let items = vec![
-            ConversationItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\ndo things\n</INSTRUCTIONS>"
-                        .to_string(),
-                }],
-                end_turn: None,
-            },
-            ConversationItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "<ENVIRONMENT_CONTEXT>cwd=/tmp</ENVIRONMENT_CONTEXT>".to_string(),
-                }],
-                end_turn: None,
-            },
-            ConversationItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "real user message".to_string(),
-                }],
-                end_turn: None,
-            },
+            user_message(
+                "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\ndo things\n</INSTRUCTIONS>",
+            ),
+            user_message("<ENVIRONMENT_CONTEXT>cwd=/tmp</ENVIRONMENT_CONTEXT>"),
+            user_message("real user message"),
         ];
 
         let collected = collect_user_messages(&items);
@@ -772,7 +800,7 @@ mod tests {
         let summary_message = &history[1];
 
         let truncated_text = match truncated_message {
-            ConversationItem::Message { role, content, .. } if role == "user" => {
+            TranscriptItem::Message { role, content, .. } if role == "user" => {
                 content_items_to_text(content).unwrap_or_default()
             }
             other => panic!("unexpected item in history: {other:?}"),
@@ -788,7 +816,7 @@ mod tests {
         );
 
         let summary_text = match summary_message {
-            ConversationItem::Message { role, content, .. } if role == "user" => {
+            TranscriptItem::Message { role, content, .. } if role == "user" => {
                 content_items_to_text(content).unwrap_or_default()
             }
             other => panic!("unexpected item in history: {other:?}"),
@@ -799,7 +827,7 @@ mod tests {
     #[test]
     fn replacement_history_without_initial_context_omits_prefix_items() {
         let initial_context = vec![
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
@@ -807,15 +835,7 @@ mod tests {
                 }],
                 end_turn: None,
             },
-            ConversationItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "<environment_context>\n  <cwd>/source</cwd>\n</environment_context>"
-                        .to_string(),
-                }],
-                end_turn: None,
-            },
+            user_message("<environment_context>\n  <cwd>/source</cwd>\n</environment_context>"),
         ];
         let history = build_compacted_history(
             initial_context.clone(),
@@ -834,7 +854,7 @@ mod tests {
 
     #[test]
     fn build_token_limited_compacted_history_appends_summary_message() {
-        let initial_context: Vec<ConversationItem> = Vec::new();
+        let initial_context: Vec<TranscriptItem> = Vec::new();
         let user_messages = vec!["first user message".to_string()];
         let summary_text = "summary text";
 
@@ -853,7 +873,7 @@ mod tests {
 
         let last = history.last().expect("history should have a summary entry");
         let summary = match last {
-            ConversationItem::Message { role, content, .. } if role == "user" => {
+            TranscriptItem::Message { role, content, .. } if role == "user" => {
                 content_items_to_text(content).unwrap_or_default()
             }
             other => panic!("expected summary message, found {other:?}"),
@@ -866,31 +886,14 @@ mod tests {
         let marker = format!(
             "{TURN_ABORTED_OPEN_TAG}\n  <turn_id>turn-1</turn_id>\n  <reason>interrupted</reason>\n</turn_aborted>"
         );
-        let items = vec![
-            ConversationItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: marker.clone(),
-                }],
-                end_turn: None,
-            },
-            ConversationItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "real user message".to_string(),
-                }],
-                end_turn: None,
-            },
-        ];
+        let items = vec![user_message(&marker), user_message("real user message")];
 
         let user_messages = collect_user_messages(&items);
         let history =
             build_compacted_history(Vec::new(), &user_messages, None, None, &[], "SUMMARY");
 
         let found_marker = history.iter().any(|item| match item {
-            ConversationItem::Message { role, content, .. } if role == "user" => {
+            TranscriptItem::Message { role, content, .. } if role == "user" => {
                 content_items_to_text(content).is_some_and(|text| text == marker)
             }
             _ => false,
@@ -905,14 +908,7 @@ mod tests {
     fn last_completed_plan_from_history_extracts_latest_plan() {
         let items = vec![
             proposed_plan_message("- Step 1\n"),
-            ConversationItem::Message {
-                id: None,
-                role: "assistant".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: "Intro\n<proposed_plan>\n- Step 2\n</proposed_plan>\nOutro".to_string(),
-                }],
-                end_turn: None,
-            },
+            assistant_message("Intro\n<proposed_plan>\n- Step 2\n</proposed_plan>\nOutro"),
         ];
 
         let plan = last_completed_plan_from_history(&items);
@@ -922,14 +918,7 @@ mod tests {
 
     #[test]
     fn last_completed_plan_from_history_returns_none_when_missing() {
-        let items = vec![ConversationItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: "No plan here".to_string(),
-            }],
-            end_turn: None,
-        }];
+        let items = vec![assistant_message("No plan here")];
 
         let plan = last_completed_plan_from_history(&items);
 
@@ -977,34 +966,20 @@ mod tests {
         let newer_args_json =
             serde_json::to_string(&latest_completed_args).expect("serialize args");
         let items = vec![
-            ConversationItem::FunctionCall {
-                id: None,
-                name: "update_plan".to_string(),
-                arguments: older_args_json,
-                call_id: "call-1".to_string(),
-            },
-            ConversationItem::FunctionCallOutput {
-                call_id: "call-1".to_string(),
-                output: FunctionCallOutputPayload {
-                    content: UPDATE_PLAN_SUCCESS_OUTPUT.to_string(),
-                    success: Some(true),
-                    ..Default::default()
-                },
-            },
-            ConversationItem::FunctionCall {
-                id: None,
-                name: "update_plan".to_string(),
-                arguments: newer_args_json,
-                call_id: "call-2".to_string(),
-            },
-            ConversationItem::FunctionCallOutput {
-                call_id: "call-2".to_string(),
-                output: FunctionCallOutputPayload {
-                    content: UPDATE_PLAN_SUCCESS_OUTPUT.to_string(),
-                    success: Some(true),
-                    ..Default::default()
-                },
-            },
+            tool_call_json("update_plan", "call-1", older_args_json),
+            tool_result_structured(
+                "update_plan",
+                "call-1",
+                UPDATE_PLAN_SUCCESS_OUTPUT,
+                Some(true),
+            ),
+            tool_call_json("update_plan", "call-2", newer_args_json),
+            tool_result_structured(
+                "update_plan",
+                "call-2",
+                UPDATE_PLAN_SUCCESS_OUTPUT,
+                Some(true),
+            ),
         ];
 
         assert!(last_backfillable_update_plan_from_history(&items).is_none());
@@ -1029,34 +1004,20 @@ mod tests {
         let older_args_json = serde_json::to_string(&older_args).expect("serialize args");
         let latest_args_json = serde_json::to_string(&latest_args).expect("serialize args");
         let items = vec![
-            ConversationItem::FunctionCall {
-                id: None,
-                name: "update_plan".to_string(),
-                arguments: older_args_json,
-                call_id: "call-1".to_string(),
-            },
-            ConversationItem::FunctionCallOutput {
-                call_id: "call-1".to_string(),
-                output: FunctionCallOutputPayload {
-                    content: UPDATE_PLAN_SUCCESS_OUTPUT.to_string(),
-                    success: Some(true),
-                    ..Default::default()
-                },
-            },
-            ConversationItem::FunctionCall {
-                id: None,
-                name: "update_plan".to_string(),
-                arguments: latest_args_json,
-                call_id: "call-2".to_string(),
-            },
-            ConversationItem::FunctionCallOutput {
-                call_id: "call-2".to_string(),
-                output: FunctionCallOutputPayload {
-                    content: UPDATE_PLAN_SUCCESS_OUTPUT.to_string(),
-                    success: Some(true),
-                    ..Default::default()
-                },
-            },
+            tool_call_json("update_plan", "call-1", older_args_json),
+            tool_result_structured(
+                "update_plan",
+                "call-1",
+                UPDATE_PLAN_SUCCESS_OUTPUT,
+                Some(true),
+            ),
+            tool_call_json("update_plan", "call-2", latest_args_json),
+            tool_result_structured(
+                "update_plan",
+                "call-2",
+                UPDATE_PLAN_SUCCESS_OUTPUT,
+                Some(true),
+            ),
         ];
 
         let backfilled = last_backfillable_update_plan_from_history(&items)
@@ -1079,38 +1040,24 @@ mod tests {
         };
         let valid_args_json = serde_json::to_string(&valid_args).expect("serialize args");
         let items = vec![
-            ConversationItem::FunctionCall {
-                id: None,
-                name: "update_plan".to_string(),
-                arguments: valid_args_json,
-                call_id: "call-1".to_string(),
-            },
-            ConversationItem::FunctionCallOutput {
-                call_id: "call-1".to_string(),
-                output: FunctionCallOutputPayload {
-                    content: UPDATE_PLAN_SUCCESS_OUTPUT.to_string(),
-                    success: Some(true),
-                    ..Default::default()
-                },
-            },
-            ConversationItem::FunctionCall {
-                id: None,
-                name: "update_plan".to_string(),
-                arguments: "{".to_string(),
-                call_id: "call-2".to_string(),
-            },
-            ConversationItem::FunctionCallOutput {
-                call_id: "call-2".to_string(),
-                output: FunctionCallOutputPayload {
-                    content: UPDATE_PLAN_SUCCESS_OUTPUT.to_string(),
-                    success: Some(true),
-                    ..Default::default()
-                },
-            },
-            ConversationItem::FunctionCall {
-                id: None,
-                name: "update_plan".to_string(),
-                arguments: serde_json::json!({
+            tool_call_json("update_plan", "call-1", valid_args_json),
+            tool_result_structured(
+                "update_plan",
+                "call-1",
+                UPDATE_PLAN_SUCCESS_OUTPUT,
+                Some(true),
+            ),
+            tool_call_json("update_plan", "call-2", "{".to_string()),
+            tool_result_structured(
+                "update_plan",
+                "call-2",
+                UPDATE_PLAN_SUCCESS_OUTPUT,
+                Some(true),
+            ),
+            tool_call_json(
+                "update_plan",
+                "call-3",
+                serde_json::json!({
                     "explanation": "Bad latest",
                     "plan": [
                         {
@@ -1120,16 +1067,13 @@ mod tests {
                     ]
                 })
                 .to_string(),
-                call_id: "call-3".to_string(),
-            },
-            ConversationItem::FunctionCallOutput {
-                call_id: "call-3".to_string(),
-                output: FunctionCallOutputPayload {
-                    content: "update_plan is a TODO/checklist tool and is not allowed in Plan mode"
-                        .to_string(),
-                    ..Default::default()
-                },
-            },
+            ),
+            tool_result_structured(
+                "update_plan",
+                "call-3",
+                "update_plan is a TODO/checklist tool and is not allowed in Plan mode",
+                None,
+            ),
         ];
 
         let backfilled = last_backfillable_update_plan_from_history(&items)
@@ -1152,20 +1096,8 @@ mod tests {
         };
         let args_json = serde_json::to_string(&args).expect("serialize args");
         let items = vec![
-            ConversationItem::FunctionCall {
-                id: None,
-                name: "update_plan".to_string(),
-                arguments: args_json,
-                call_id: "call-1".to_string(),
-            },
-            ConversationItem::FunctionCallOutput {
-                call_id: "call-1".to_string(),
-                output: FunctionCallOutputPayload {
-                    content: UPDATE_PLAN_SUCCESS_OUTPUT.to_string(),
-                    success: None,
-                    ..Default::default()
-                },
-            },
+            tool_call_json("update_plan", "call-1", args_json),
+            tool_result_structured("update_plan", "call-1", UPDATE_PLAN_SUCCESS_OUTPUT, None),
         ];
 
         let backfilled = last_backfillable_update_plan_from_history(&items)
@@ -1202,17 +1134,17 @@ mod tests {
 
     #[test]
     fn recent_backfillable_skills_from_history_returns_latest_unique_skills() {
-        let older = ConversationItem::from(SkillInstructions {
+        let older = direct_skill_item(SkillInstructions {
             name: "demo".to_string(),
             path: "skills/demo/SKILL.md".to_string(),
             contents: "older".to_string(),
         });
-        let newer = ConversationItem::from(SkillInstructions {
+        let newer = direct_skill_item(SkillInstructions {
             name: "demo".to_string(),
             path: "skills/demo/SKILL.md".to_string(),
             contents: "newer".to_string(),
         });
-        let second = ConversationItem::from(SkillInstructions {
+        let second = direct_skill_item(SkillInstructions {
             name: "verify".to_string(),
             path: "skills/verify/SKILL.md".to_string(),
             contents: "verify".to_string(),
@@ -1240,15 +1172,8 @@ mod tests {
     #[test]
     fn recent_backfillable_skills_from_history_skips_invalid_messages() {
         let items = vec![
-            ConversationItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "<skill>\n<name>demo</name>\nmissing path\n</skill>".to_string(),
-                }],
-                end_turn: None,
-            },
-            ConversationItem::from(SkillInstructions {
+            user_message("<skill>\n<name>demo</name>\nmissing path\n</skill>"),
+            direct_skill_item(SkillInstructions {
                 name: "valid".to_string(),
                 path: "skills/valid/SKILL.md".to_string(),
                 contents: "body".to_string(),
@@ -1269,12 +1194,11 @@ mod tests {
 
     #[test]
     fn recent_backfillable_skills_from_history_preserves_compact_backfilled_skills() {
-        let backfilled = SkillInstructions {
+        let backfilled = backfilled_skill_item(SkillInstructions {
             name: "demo".to_string(),
             path: "skills/demo/SKILL.md".to_string(),
             contents: "backfilled".to_string(),
-        }
-        .into_backfilled_response_item();
+        });
 
         let backfilled = recent_backfillable_skills_from_history(&[backfilled]);
 
@@ -1290,13 +1214,12 @@ mod tests {
 
     #[test]
     fn recent_backfillable_skills_from_history_direct_skill_overrides_older_compact_backfill() {
-        let backfilled = SkillInstructions {
+        let backfilled = backfilled_skill_item(SkillInstructions {
             name: "demo".to_string(),
             path: "skills/demo/SKILL.md".to_string(),
             contents: "backfilled".to_string(),
-        }
-        .into_backfilled_response_item();
-        let direct = ConversationItem::from(SkillInstructions {
+        });
+        let direct = direct_skill_item(SkillInstructions {
             name: "demo".to_string(),
             path: "skills/demo/SKILL.md".to_string(),
             contents: "direct".to_string(),
@@ -1316,24 +1239,22 @@ mod tests {
 
     #[test]
     fn recent_backfillable_skills_from_history_keeps_persisted_then_newer_direct_order() {
-        let persisted_alpha = SkillInstructions {
+        let persisted_alpha = backfilled_skill_item(SkillInstructions {
             name: "alpha".to_string(),
             path: "skills/alpha/SKILL.md".to_string(),
             contents: "persisted alpha".to_string(),
-        }
-        .into_backfilled_response_item();
-        let persisted_beta = SkillInstructions {
+        });
+        let persisted_beta = backfilled_skill_item(SkillInstructions {
             name: "beta".to_string(),
             path: "skills/beta/SKILL.md".to_string(),
             contents: "persisted beta".to_string(),
-        }
-        .into_backfilled_response_item();
-        let direct_gamma = ConversationItem::from(SkillInstructions {
+        });
+        let direct_gamma = direct_skill_item(SkillInstructions {
             name: "gamma".to_string(),
             path: "skills/gamma/SKILL.md".to_string(),
             contents: "direct gamma".to_string(),
         });
-        let direct_delta = ConversationItem::from(SkillInstructions {
+        let direct_delta = direct_skill_item(SkillInstructions {
             name: "delta".to_string(),
             path: "skills/delta/SKILL.md".to_string(),
             contents: "direct delta".to_string(),
@@ -1359,7 +1280,7 @@ mod tests {
     fn recent_backfillable_skills_from_history_truncates_large_skills() {
         let big_contents = "word ".repeat(6_000);
         let backfilled =
-            recent_backfillable_skills_from_history(&[ConversationItem::from(SkillInstructions {
+            recent_backfillable_skills_from_history(&[direct_skill_item(SkillInstructions {
                 name: "big".to_string(),
                 path: "skills/big/SKILL.md".to_string(),
                 contents: big_contents,
@@ -1376,19 +1297,18 @@ mod tests {
     #[test]
     fn recent_backfillable_skills_from_history_stops_at_first_over_budget_skill_after_merge() {
         let make_large_skill = |name: &str, path: &str| {
-            ConversationItem::from(SkillInstructions {
+            direct_skill_item(SkillInstructions {
                 name: name.to_string(),
                 path: path.to_string(),
                 contents: "word ".repeat(6_000),
             })
         };
         let items = vec![
-            SkillInstructions {
+            backfilled_skill_item(SkillInstructions {
                 name: "alpha".to_string(),
                 path: "skills/alpha/SKILL.md".to_string(),
                 contents: "persisted alpha".to_string(),
-            }
-            .into_backfilled_response_item(),
+            }),
             make_large_skill("beta", "skills/beta/SKILL.md"),
             make_large_skill("gamma", "skills/gamma/SKILL.md"),
             make_large_skill("delta", "skills/delta/SKILL.md"),
@@ -1438,9 +1358,6 @@ mod tests {
 
         assert_eq!(history[2], proposed_plan_message("- Step 1\n"));
         assert_eq!(history[3..5], backfilled_update_plan_items(&args));
-        assert_eq!(
-            history[5],
-            skills[0].clone().into_backfilled_response_item()
-        );
+        assert_eq!(history[5], backfilled_skill_item(skills[0].clone()));
     }
 }

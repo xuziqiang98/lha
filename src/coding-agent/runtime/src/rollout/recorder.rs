@@ -3,6 +3,7 @@
 use std::fs::File;
 use std::fs::{self};
 use std::io::Error as IoError;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -37,7 +38,7 @@ use crate::git_info::collect_git_info;
 use crate::state_db;
 use crate::state_db::StateDbHandle;
 use codex_protocol::protocol::InitialHistory;
-use codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V2;
+use codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
@@ -45,9 +46,34 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_state::ThreadMetadataBuilder;
+use thiserror::Error;
 
-/// Records all [`codex_protocol::legacy_transcript::ConversationItem`]s for a session and flushes them to disk after
-/// every update.
+#[derive(Debug, Error)]
+#[error(
+    "unsupported rollout schema version {found}; expected {expected}. Please start a new thread."
+)]
+pub(crate) struct UnsupportedRolloutSchema {
+    found: u32,
+    expected: u32,
+}
+
+pub(crate) fn unsupported_rollout_schema_error(found: u32) -> IoError {
+    IoError::new(
+        ErrorKind::InvalidData,
+        UnsupportedRolloutSchema {
+            found,
+            expected: ROLLOUT_SCHEMA_VERSION_V3,
+        },
+    )
+}
+
+pub fn is_unsupported_rollout_schema_error(err: &IoError) -> bool {
+    err.get_ref()
+        .and_then(|inner| inner.downcast_ref::<UnsupportedRolloutSchema>())
+        .is_some()
+}
+
+/// Records persisted rollout items for a session and flushes them to disk after every update.
 ///
 /// Rollouts are recorded as JSONL and can be inspected with tools such as:
 ///
@@ -299,7 +325,7 @@ impl RolloutRecorder {
                         cwd: config.cwd.clone(),
                         originator: originator().value,
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
-                        rollout_schema_version: ROLLOUT_SCHEMA_VERSION_V2,
+                        rollout_schema_version: ROLLOUT_SCHEMA_VERSION_V3,
                         source,
                         model_provider: Some(config.model_provider_id.clone()),
                         base_instructions: Some(base_instructions),
@@ -418,13 +444,11 @@ impl RolloutRecorder {
                 Ok(rollout_line) => match rollout_line.item {
                     RolloutItem::SessionMeta(session_meta_line) => {
                         if session_meta_line.meta.rollout_schema_version
-                            != ROLLOUT_SCHEMA_VERSION_V2
+                            != ROLLOUT_SCHEMA_VERSION_V3
                         {
-                            return Err(IoError::other(format!(
-                                "unsupported rollout schema version {}; expected {}. Please start a new thread or use a migration tool.",
+                            return Err(unsupported_rollout_schema_error(
                                 session_meta_line.meta.rollout_schema_version,
-                                ROLLOUT_SCHEMA_VERSION_V2
-                            )));
+                            ));
                         }
                         // Use the FIRST SessionMeta encountered in the file as the canonical
                         // thread id and main session information. Keep all items intact.
@@ -435,6 +459,9 @@ impl RolloutRecorder {
                     }
                     RolloutItem::TranscriptItem(item) => {
                         items.push(RolloutItem::TranscriptItem(item));
+                    }
+                    RolloutItem::GhostSnapshot(item) => {
+                        items.push(RolloutItem::GhostSnapshot(item));
                     }
                     RolloutItem::Compacted(item) => {
                         items.push(RolloutItem::Compacted(item));

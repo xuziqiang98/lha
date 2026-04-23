@@ -2,7 +2,7 @@
 //! and suffix on UTF-8 boundaries, and helpers for line/token‑based truncation
 //! used across the core crate.
 
-use codex_protocol::legacy_transcript::FunctionCallOutputContentItem;
+use codex_llm::ToolResultContentItem;
 use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::protocol::TruncationPolicy as ProtocolTruncationPolicy;
@@ -98,10 +98,10 @@ pub(crate) fn truncate_text(content: &str, policy: TruncationPolicy) -> String {
 /// truncation policy's budget, preserving as many text/image items as
 /// possible and appending a summary for any omitted text items.
 pub(crate) fn truncate_function_output_items_with_policy(
-    items: &[FunctionCallOutputContentItem],
+    items: &[ToolResultContentItem],
     policy: TruncationPolicy,
-) -> Vec<FunctionCallOutputContentItem> {
-    let mut out: Vec<FunctionCallOutputContentItem> = Vec::with_capacity(items.len());
+) -> Vec<ToolResultContentItem> {
+    let mut out: Vec<ToolResultContentItem> = Vec::with_capacity(items.len());
     let mut remaining_budget = match policy {
         TruncationPolicy::Bytes(_) => policy.byte_budget(),
         TruncationPolicy::Tokens(_) => policy.token_budget(),
@@ -110,7 +110,7 @@ pub(crate) fn truncate_function_output_items_with_policy(
 
     for it in items {
         match it {
-            FunctionCallOutputContentItem::InputText { text } => {
+            ToolResultContentItem::InputText { text } => {
                 if remaining_budget == 0 {
                     omitted_text_items += 1;
                     continue;
@@ -122,7 +122,7 @@ pub(crate) fn truncate_function_output_items_with_policy(
                 };
 
                 if cost <= remaining_budget {
-                    out.push(FunctionCallOutputContentItem::InputText { text: text.clone() });
+                    out.push(ToolResultContentItem::InputText { text: text.clone() });
                     remaining_budget = remaining_budget.saturating_sub(cost);
                 } else {
                     let snippet_policy = match policy {
@@ -133,13 +133,13 @@ pub(crate) fn truncate_function_output_items_with_policy(
                     if snippet.is_empty() {
                         omitted_text_items += 1;
                     } else {
-                        out.push(FunctionCallOutputContentItem::InputText { text: snippet });
+                        out.push(ToolResultContentItem::InputText { text: snippet });
                     }
                     remaining_budget = 0;
                 }
             }
-            FunctionCallOutputContentItem::InputImage { image_url } => {
-                out.push(FunctionCallOutputContentItem::InputImage {
+            ToolResultContentItem::InputImage { image_url } => {
+                out.push(ToolResultContentItem::InputImage {
                     image_url: image_url.clone(),
                 });
             }
@@ -147,7 +147,7 @@ pub(crate) fn truncate_function_output_items_with_policy(
     }
 
     if omitted_text_items > 0 {
-        out.push(FunctionCallOutputContentItem::InputText {
+        out.push(ToolResultContentItem::InputText {
             text: format!("[omitted {omitted_text_items} text items ...]"),
         });
     }
@@ -314,7 +314,7 @@ mod tests {
     use super::truncate_function_output_items_with_policy;
     use super::truncate_text;
     use super::truncate_with_token_budget;
-    use codex_protocol::legacy_transcript::FunctionCallOutputContentItem;
+    use codex_llm::ToolResultContentItem;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -479,14 +479,14 @@ mod tests {
         let t5 = chunk.to_string();
 
         let items = vec![
-            FunctionCallOutputContentItem::InputText { text: t1.clone() },
-            FunctionCallOutputContentItem::InputText { text: t2.clone() },
-            FunctionCallOutputContentItem::InputImage {
+            ToolResultContentItem::InputText { text: t1.clone() },
+            ToolResultContentItem::InputText { text: t2.clone() },
+            ToolResultContentItem::InputImage {
                 image_url: "img:mid".to_string(),
             },
-            FunctionCallOutputContentItem::InputText { text: t3 },
-            FunctionCallOutputContentItem::InputText { text: t4 },
-            FunctionCallOutputContentItem::InputText { text: t5 },
+            ToolResultContentItem::InputText { text: t3 },
+            ToolResultContentItem::InputText { text: t4 },
+            ToolResultContentItem::InputText { text: t5 },
         ];
 
         let output =
@@ -496,26 +496,26 @@ mod tests {
         assert_eq!(output.len(), 5);
 
         let first_text = match &output[0] {
-            FunctionCallOutputContentItem::InputText { text } => text,
+            ToolResultContentItem::InputText { text } => text,
             other => panic!("unexpected first item: {other:?}"),
         };
         assert_eq!(first_text, &t1);
 
         let second_text = match &output[1] {
-            FunctionCallOutputContentItem::InputText { text } => text,
+            ToolResultContentItem::InputText { text } => text,
             other => panic!("unexpected second item: {other:?}"),
         };
         assert_eq!(second_text, &t2);
 
         assert_eq!(
             output[2],
-            FunctionCallOutputContentItem::InputImage {
+            ToolResultContentItem::InputImage {
                 image_url: "img:mid".to_string()
             }
         );
 
         let fourth_text = match &output[3] {
-            FunctionCallOutputContentItem::InputText { text } => text,
+            ToolResultContentItem::InputText { text } => text,
             other => panic!("unexpected fourth item: {other:?}"),
         };
         assert!(
@@ -524,7 +524,7 @@ mod tests {
         );
 
         let summary_text = match &output[4] {
-            FunctionCallOutputContentItem::InputText { text } => text,
+            ToolResultContentItem::InputText { text } => text,
             other => panic!("unexpected summary item: {other:?}"),
         };
         assert!(summary_text.contains("omitted 2 text items"));

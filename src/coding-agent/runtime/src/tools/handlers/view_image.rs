@@ -11,8 +11,8 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use codex_protocol::legacy_transcript::ResponseInputItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::models::local_image_content_items_with_label_number;
 
 pub struct ViewImageHandler;
@@ -67,13 +67,15 @@ impl ToolHandler for ViewImageHandler {
 
         let content: Vec<ContentItem> =
             local_image_content_items_with_label_number(&abs_path, None);
-        let input = ResponseInputItem::Message {
+        let input = TranscriptItem::Message {
+            id: None,
             role: "user".to_string(),
             content,
+            end_turn: None,
         };
 
         session
-            .inject_response_items(vec![input])
+            .inject_transcript_items(vec![input])
             .await
             .map_err(|_| {
                 FunctionCallError::RespondToModel(

@@ -2,24 +2,22 @@ use super::*;
 use crate::instructions::SkillInstructions;
 use crate::truncate;
 use crate::truncate::TruncationPolicy;
-use codex_git::GhostCommit;
-use codex_protocol::legacy_transcript::ConversationItem;
-use codex_protocol::legacy_transcript::FunctionCallOutputContentItem;
-use codex_protocol::legacy_transcript::FunctionCallOutputPayload;
-use codex_protocol::legacy_transcript::LocalShellAction;
-use codex_protocol::legacy_transcript::LocalShellExecAction;
-use codex_protocol::legacy_transcript::LocalShellStatus;
+use codex_llm::ToolCallPayload;
+use codex_llm::ToolResultContentItem;
+use codex_llm::ToolResultPayload;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::models::TranscriptItem;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
+use serde_json::Value;
 
 const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
 
-fn assistant_msg(text: &str) -> ConversationItem {
-    ConversationItem::Message {
+fn assistant_msg(text: &str) -> TranscriptItem {
+    TranscriptItem::Message {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
@@ -29,7 +27,7 @@ fn assistant_msg(text: &str) -> ConversationItem {
     }
 }
 
-fn create_history_with_items(items: Vec<ConversationItem>) -> ContextManager {
+fn create_history_with_items(items: Vec<TranscriptItem>) -> ContextManager {
     let mut h = ContextManager::new();
     // Use a generous but fixed token budget; tests only rely on truncation
     // behavior, not on a specific model's token limit.
@@ -37,8 +35,8 @@ fn create_history_with_items(items: Vec<ConversationItem>) -> ContextManager {
     h
 }
 
-fn user_msg(text: &str) -> ConversationItem {
-    ConversationItem::Message {
+fn user_msg(text: &str) -> TranscriptItem {
+    TranscriptItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::OutputText {
@@ -48,8 +46,8 @@ fn user_msg(text: &str) -> ConversationItem {
     }
 }
 
-fn user_input_text_msg(text: &str) -> ConversationItem {
-    ConversationItem::Message {
+fn user_input_text_msg(text: &str) -> TranscriptItem {
+    TranscriptItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -59,8 +57,8 @@ fn user_input_text_msg(text: &str) -> ConversationItem {
     }
 }
 
-fn reasoning_msg(text: &str) -> ConversationItem {
-    ConversationItem::Reasoning {
+fn reasoning_msg(text: &str) -> TranscriptItem {
+    TranscriptItem::Reasoning {
         id: String::new(),
         summary: vec![ReasoningItemReasoningSummary::SummaryText {
             text: "summary".to_string(),
@@ -72,8 +70,8 @@ fn reasoning_msg(text: &str) -> ConversationItem {
     }
 }
 
-fn reasoning_with_encrypted_content(len: usize) -> ConversationItem {
-    ConversationItem::Reasoning {
+fn reasoning_with_encrypted_content(len: usize) -> TranscriptItem {
+    TranscriptItem::Reasoning {
         id: String::new(),
         summary: vec![ReasoningItemReasoningSummary::SummaryText {
             text: "summary".to_string(),
@@ -81,6 +79,64 @@ fn reasoning_with_encrypted_content(len: usize) -> ConversationItem {
         content: None,
         encrypted_content: Some("a".repeat(len)),
     }
+}
+
+fn tool_call_json(tool_name: &str, call_id: &str, arguments: &str) -> TranscriptItem {
+    TranscriptItem::ToolCall {
+        id: None,
+        call_id: call_id.to_string(),
+        tool_name: tool_name.to_string(),
+        payload: ToolCallPayload::JsonArguments {
+            arguments: arguments.to_string(),
+        },
+    }
+}
+
+fn tool_call_text(tool_name: &str, call_id: &str, input: &str) -> TranscriptItem {
+    TranscriptItem::ToolCall {
+        id: None,
+        call_id: call_id.to_string(),
+        tool_name: tool_name.to_string(),
+        payload: ToolCallPayload::TextInput {
+            input: input.to_string(),
+        },
+    }
+}
+
+fn tool_result_structured(
+    tool_name: &str,
+    call_id: &str,
+    content: &str,
+    content_items: Option<Vec<ToolResultContentItem>>,
+    success: Option<bool>,
+) -> TranscriptItem {
+    TranscriptItem::ToolResult {
+        call_id: call_id.to_string(),
+        tool_name: tool_name.to_string(),
+        payload: ToolResultPayload::Structured {
+            content: content.to_string(),
+            content_items,
+            success,
+        },
+    }
+}
+
+fn tool_result_text(tool_name: &str, call_id: &str, output: &str) -> TranscriptItem {
+    TranscriptItem::ToolResult {
+        call_id: call_id.to_string(),
+        tool_name: tool_name.to_string(),
+        payload: ToolResultPayload::Text {
+            output: output.to_string(),
+        },
+    }
+}
+
+fn backfilled_skill_item(skill: SkillInstructions) -> TranscriptItem {
+    skill.into_backfilled_response_item().into()
+}
+
+fn direct_skill_item(skill: SkillInstructions) -> TranscriptItem {
+    skill.into()
 }
 
 fn truncate_exec_output(content: &str) -> String {
@@ -91,8 +147,7 @@ fn truncate_exec_output(content: &str) -> String {
 fn filters_non_api_messages() {
     let mut h = ContextManager::default();
     let policy = TruncationPolicy::Tokens(10_000);
-    // System message is not API messages; Other is ignored.
-    let system = ConversationItem::Message {
+    let system = TranscriptItem::Message {
         id: None,
         role: "system".to_string(),
         content: vec![ContentItem::OutputText {
@@ -101,9 +156,9 @@ fn filters_non_api_messages() {
         end_turn: None,
     };
     let reasoning = reasoning_msg("thinking...");
-    h.record_items([&system, &reasoning, &ConversationItem::Other], policy);
+    let unknown = TranscriptItem::Unknown { raw: Value::Null };
+    h.record_items([&system, &reasoning, &unknown], policy);
 
-    // User and assistant should be retained.
     let u = user_msg("hi");
     let a = assistant_msg("hello");
     h.record_items([&u, &a], policy);
@@ -112,7 +167,7 @@ fn filters_non_api_messages() {
     assert_eq!(
         items,
         vec![
-            ConversationItem::Reasoning {
+            TranscriptItem::Reasoning {
                 id: String::new(),
                 summary: vec![ReasoningItemReasoningSummary::SummaryText {
                     text: "summary".to_string(),
@@ -122,22 +177,22 @@ fn filters_non_api_messages() {
                 }]),
                 encrypted_content: None,
             },
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::OutputText {
-                    text: "hi".to_string()
+                    text: "hi".to_string(),
                 }],
                 end_turn: None,
             },
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: None,
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
-                    text: "hello".to_string()
+                    text: "hello".to_string(),
                 }],
                 end_turn: None,
-            }
+            },
         ]
     );
 }
@@ -158,31 +213,17 @@ fn non_last_reasoning_tokens_ignore_entries_after_last_user() {
         user_msg("second"),
         reasoning_with_encrypted_content(2_000),
     ]);
-    // first: (900 * 0.75 - 650) / 4 = 6.25 tokens
-    // second: (1000 * 0.75 - 650) / 4 = 25 tokens
-    // first + second = 62.5
     assert_eq!(history.get_non_last_reasoning_items_tokens(), 32);
-}
-
-#[test]
-fn get_history_for_prompt_drops_ghost_commits() {
-    let items = vec![ConversationItem::GhostSnapshot {
-        ghost_commit: GhostCommit::new("ghost-1".to_string(), None, Vec::new(), Vec::new()),
-    }];
-    let history = create_history_with_items(items);
-    let filtered = history.for_prompt();
-    assert_eq!(filtered, vec![]);
 }
 
 #[test]
 fn get_history_for_compaction_prompt_drops_compact_backfilled_skills() {
     let items = vec![
-        SkillInstructions {
+        backfilled_skill_item(SkillInstructions {
             name: "demo".to_string(),
             path: "skills/demo/SKILL.md".to_string(),
             contents: "body".to_string(),
-        }
-        .into_backfilled_response_item(),
+        }),
         assistant_msg("summary"),
     ];
     let history = create_history_with_items(items);
@@ -195,12 +236,11 @@ fn get_history_for_compaction_prompt_drops_compact_backfilled_skills() {
 
 #[test]
 fn get_history_for_compaction_prompt_keeps_direct_skills() {
-    let direct: ConversationItem = SkillInstructions {
+    let direct = direct_skill_item(SkillInstructions {
         name: "demo".to_string(),
         path: "skills/demo/SKILL.md".to_string(),
         contents: "body".to_string(),
-    }
-    .into();
+    });
     let history = create_history_with_items(vec![direct.clone()]);
 
     assert_eq!(history.for_compaction_prompt(), vec![direct]);
@@ -208,12 +248,11 @@ fn get_history_for_compaction_prompt_keeps_direct_skills() {
 
 #[test]
 fn get_history_for_prompt_keeps_compact_backfilled_skills() {
-    let backfilled = SkillInstructions {
+    let backfilled = backfilled_skill_item(SkillInstructions {
         name: "demo".to_string(),
         path: "skills/demo/SKILL.md".to_string(),
         contents: "body".to_string(),
-    }
-    .into_backfilled_response_item();
+    });
     let history = create_history_with_items(vec![backfilled.clone()]);
 
     assert_eq!(history.for_prompt(), vec![backfilled]);
@@ -222,19 +261,8 @@ fn get_history_for_prompt_keeps_compact_backfilled_skills() {
 #[test]
 fn remove_first_item_removes_matching_output_for_function_call() {
     let items = vec![
-        ConversationItem::FunctionCall {
-            id: None,
-            name: "do_it".to_string(),
-            arguments: "{}".to_string(),
-            call_id: "call-1".to_string(),
-        },
-        ConversationItem::FunctionCallOutput {
-            call_id: "call-1".to_string(),
-            output: FunctionCallOutputPayload {
-                content: "ok".to_string(),
-                ..Default::default()
-            },
-        },
+        tool_call_json("do_it", "call-1", "{}"),
+        tool_result_structured("do_it", "call-1", "ok", None, None),
     ];
     let mut h = create_history_with_items(items);
     h.remove_first_item();
@@ -244,19 +272,8 @@ fn remove_first_item_removes_matching_output_for_function_call() {
 #[test]
 fn remove_first_item_removes_matching_call_for_output() {
     let items = vec![
-        ConversationItem::FunctionCallOutput {
-            call_id: "call-2".to_string(),
-            output: FunctionCallOutputPayload {
-                content: "ok".to_string(),
-                ..Default::default()
-            },
-        },
-        ConversationItem::FunctionCall {
-            id: None,
-            name: "do_it".to_string(),
-            arguments: "{}".to_string(),
-            call_id: "call-2".to_string(),
-        },
+        tool_result_structured("do_it", "call-2", "ok", None, None),
+        tool_call_json("do_it", "call-2", "{}"),
     ];
     let mut h = create_history_with_items(items);
     h.remove_first_item();
@@ -267,16 +284,15 @@ fn remove_first_item_removes_matching_call_for_output() {
 fn replace_last_turn_images_replaces_tool_output_images() {
     let items = vec![
         user_input_text_msg("hi"),
-        ConversationItem::FunctionCallOutput {
-            call_id: "call-1".to_string(),
-            output: FunctionCallOutputPayload {
-                content: "ok".to_string(),
-                content_items: Some(vec![FunctionCallOutputContentItem::InputImage {
-                    image_url: "data:image/png;base64,AAA".to_string(),
-                }]),
-                success: Some(true),
-            },
-        },
+        tool_result_structured(
+            "view_image",
+            "call-1",
+            "ok",
+            Some(vec![ToolResultContentItem::InputImage {
+                image_url: "data:image/png;base64,AAA".to_string(),
+            }]),
+            Some(true),
+        ),
     ];
     let mut history = create_history_with_items(items);
 
@@ -286,23 +302,22 @@ fn replace_last_turn_images_replaces_tool_output_images() {
         history.raw_items(),
         vec![
             user_input_text_msg("hi"),
-            ConversationItem::FunctionCallOutput {
-                call_id: "call-1".to_string(),
-                output: FunctionCallOutputPayload {
-                    content: "ok".to_string(),
-                    content_items: Some(vec![FunctionCallOutputContentItem::InputText {
-                        text: "Invalid image".to_string(),
-                    }]),
-                    success: Some(true),
-                },
-            },
+            tool_result_structured(
+                "view_image",
+                "call-1",
+                "ok",
+                Some(vec![ToolResultContentItem::InputText {
+                    text: "Invalid image".to_string(),
+                }]),
+                Some(true),
+            ),
         ]
     );
 }
 
 #[test]
 fn replace_last_turn_images_does_not_touch_user_images() {
-    let items = vec![ConversationItem::Message {
+    let items = vec![TranscriptItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputImage {
@@ -318,26 +333,13 @@ fn replace_last_turn_images_does_not_touch_user_images() {
 
 #[test]
 fn remove_first_item_handles_local_shell_pair() {
+    let arguments = serde_json::json!({
+        "command": ["echo", "hi"],
+    })
+    .to_string();
     let items = vec![
-        ConversationItem::LocalShellCall {
-            id: None,
-            call_id: Some("call-3".to_string()),
-            status: LocalShellStatus::Completed,
-            action: LocalShellAction::Exec(LocalShellExecAction {
-                command: vec!["echo".to_string(), "hi".to_string()],
-                timeout_ms: None,
-                working_directory: None,
-                env: None,
-                user: None,
-            }),
-        },
-        ConversationItem::FunctionCallOutput {
-            call_id: "call-3".to_string(),
-            output: FunctionCallOutputPayload {
-                content: "ok".to_string(),
-                ..Default::default()
-            },
-        },
+        tool_call_json("local_shell", "call-3", &arguments),
+        tool_result_structured("local_shell", "call-3", "ok", None, None),
     ];
     let mut h = create_history_with_items(items);
     h.remove_first_item();
@@ -468,17 +470,8 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
 #[test]
 fn remove_first_item_handles_custom_tool_pair() {
     let items = vec![
-        ConversationItem::CustomToolCall {
-            id: None,
-            status: None,
-            call_id: "tool-1".to_string(),
-            name: "my_tool".to_string(),
-            input: "{}".to_string(),
-        },
-        ConversationItem::CustomToolCallOutput {
-            call_id: "tool-1".to_string(),
-            output: "ok".to_string(),
-        },
+        tool_call_text("my_tool", "tool-1", "{}"),
+        tool_result_text("my_tool", "tool-1", "ok"),
     ];
     let mut h = create_history_with_items(items);
     h.remove_first_item();
@@ -487,26 +480,19 @@ fn remove_first_item_handles_custom_tool_pair() {
 
 #[test]
 fn normalization_retains_local_shell_outputs() {
+    let arguments = serde_json::json!({
+        "command": ["echo", "hi"],
+    })
+    .to_string();
     let items = vec![
-        ConversationItem::LocalShellCall {
-            id: None,
-            call_id: Some("shell-1".to_string()),
-            status: LocalShellStatus::Completed,
-            action: LocalShellAction::Exec(LocalShellExecAction {
-                command: vec!["echo".to_string(), "hi".to_string()],
-                timeout_ms: None,
-                working_directory: None,
-                env: None,
-                user: None,
-            }),
-        },
-        ConversationItem::FunctionCallOutput {
-            call_id: "shell-1".to_string(),
-            output: FunctionCallOutputPayload {
-                content: "Total output lines: 1\n\nok".to_string(),
-                ..Default::default()
-            },
-        },
+        tool_call_json("local_shell", "shell-1", &arguments),
+        tool_result_structured(
+            "local_shell",
+            "shell-1",
+            "Total output lines: 1\n\nok",
+            None,
+            None,
+        ),
     ];
 
     let history = create_history_with_items(items.clone());
@@ -515,37 +501,25 @@ fn normalization_retains_local_shell_outputs() {
 }
 
 #[test]
-fn record_items_truncates_function_call_output_content() {
+fn record_items_truncates_structured_tool_result_content() {
     let mut history = ContextManager::new();
-    // Any reasonably small token budget works; the test only cares that
-    // truncation happens and the marker is present.
     let policy = TruncationPolicy::Tokens(1_000);
     let long_line = "a very long line to trigger truncation\n";
     let long_output = long_line.repeat(2_500);
-    let item = ConversationItem::FunctionCallOutput {
-        call_id: "call-100".to_string(),
-        output: FunctionCallOutputPayload {
-            content: long_output.clone(),
-            success: Some(true),
-            ..Default::default()
-        },
-    };
+    let item = tool_result_structured("do_it", "call-100", &long_output, None, Some(true));
 
     history.record_items([&item], policy);
 
     assert_eq!(history.items.len(), 1);
     match &history.items[0] {
-        ConversationItem::FunctionCallOutput { output, .. } => {
-            assert_ne!(output.content, long_output);
+        TranscriptItem::ToolResult {
+            payload: ToolResultPayload::Structured { content, .. },
+            ..
+        } => {
+            assert_ne!(content, &long_output);
             assert!(
-                output.content.contains("tokens truncated"),
-                "expected token-based truncation marker, got {}",
-                output.content
-            );
-            assert!(
-                output.content.contains("tokens truncated"),
-                "expected truncation marker, got {}",
-                output.content
+                content.contains("tokens truncated"),
+                "expected token-based truncation marker, got {content}",
             );
         }
         other => panic!("unexpected history item: {other:?}"),
@@ -553,29 +527,29 @@ fn record_items_truncates_function_call_output_content() {
 }
 
 #[test]
-fn record_items_truncates_custom_tool_call_output_content() {
+fn record_items_truncates_text_tool_result_content() {
     let mut history = ContextManager::new();
     let policy = TruncationPolicy::Tokens(1_000);
     let line = "custom output that is very long\n";
     let long_output = line.repeat(2_500);
-    let item = ConversationItem::CustomToolCallOutput {
-        call_id: "tool-200".to_string(),
-        output: long_output.clone(),
-    };
+    let item = tool_result_text("my_tool", "tool-200", &long_output);
 
     history.record_items([&item], policy);
 
     assert_eq!(history.items.len(), 1);
     match &history.items[0] {
-        ConversationItem::CustomToolCallOutput { output, .. } => {
+        TranscriptItem::ToolResult {
+            payload: ToolResultPayload::Text { output },
+            ..
+        } => {
             assert_ne!(output, &long_output);
             assert!(
                 output.contains("tokens truncated"),
-                "expected token-based truncation marker, got {output}"
+                "expected token-based truncation marker, got {output}",
             );
             assert!(
                 output.contains("tokens truncated") || output.contains("bytes truncated"),
-                "expected truncation marker, got {output}"
+                "expected truncation marker, got {output}",
             );
         }
         other => panic!("unexpected history item: {other:?}"),
@@ -587,22 +561,18 @@ fn record_items_respects_custom_token_limit() {
     let mut history = ContextManager::new();
     let policy = TruncationPolicy::Tokens(10);
     let long_output = "tokenized content repeated many times ".repeat(200);
-    let item = ConversationItem::FunctionCallOutput {
-        call_id: "call-custom-limit".to_string(),
-        output: FunctionCallOutputPayload {
-            content: long_output,
-            success: Some(true),
-            ..Default::default()
-        },
-    };
+    let item = tool_result_structured("do_it", "call-custom-limit", &long_output, None, Some(true));
 
     history.record_items([&item], policy);
 
     let stored = match &history.items[0] {
-        ConversationItem::FunctionCallOutput { output, .. } => output,
+        TranscriptItem::ToolResult {
+            payload: ToolResultPayload::Structured { content, .. },
+            ..
+        } => content,
         other => panic!("unexpected history item: {other:?}"),
     };
-    assert!(stored.content.contains("tokens truncated"));
+    assert!(stored.contains("tokens truncated"));
 }
 
 fn assert_truncated_message_matches(message: &str, line: &str, expected_removed: usize) {
@@ -639,7 +609,7 @@ fn truncated_message_pattern(line: &str) -> String {
 #[test]
 fn format_exec_output_truncates_large_error() {
     let line = "very long execution error line that should trigger truncation\n";
-    let large_error = line.repeat(2_500); // way beyond both byte and line limits
+    let large_error = line.repeat(2_500);
 
     let truncated = truncate_exec_output(&large_error);
 
@@ -703,12 +673,7 @@ fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
 #[cfg(not(debug_assertions))]
 #[test]
 fn normalize_adds_missing_output_for_function_call() {
-    let items = vec![ConversationItem::FunctionCall {
-        id: None,
-        name: "do_it".to_string(),
-        arguments: "{}".to_string(),
-        call_id: "call-x".to_string(),
-    }];
+    let items = vec![tool_call_json("do_it", "call-x", "{}")];
     let mut h = create_history_with_items(items);
 
     h.normalize_history();
@@ -716,19 +681,8 @@ fn normalize_adds_missing_output_for_function_call() {
     assert_eq!(
         h.raw_items(),
         vec![
-            ConversationItem::FunctionCall {
-                id: None,
-                name: "do_it".to_string(),
-                arguments: "{}".to_string(),
-                call_id: "call-x".to_string(),
-            },
-            ConversationItem::FunctionCallOutput {
-                call_id: "call-x".to_string(),
-                output: FunctionCallOutputPayload {
-                    content: "aborted".to_string(),
-                    ..Default::default()
-                },
-            },
+            tool_call_json("do_it", "call-x", "{}"),
+            tool_result_structured("do_it", "call-x", "aborted", None, None),
         ]
     );
 }
@@ -736,13 +690,7 @@ fn normalize_adds_missing_output_for_function_call() {
 #[cfg(not(debug_assertions))]
 #[test]
 fn normalize_adds_missing_output_for_custom_tool_call() {
-    let items = vec![ConversationItem::CustomToolCall {
-        id: None,
-        status: None,
-        call_id: "tool-x".to_string(),
-        name: "custom".to_string(),
-        input: "{}".to_string(),
-    }];
+    let items = vec![tool_call_text("custom", "tool-x", "{}")];
     let mut h = create_history_with_items(items);
 
     h.normalize_history();
@@ -750,17 +698,8 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
     assert_eq!(
         h.raw_items(),
         vec![
-            ConversationItem::CustomToolCall {
-                id: None,
-                status: None,
-                call_id: "tool-x".to_string(),
-                name: "custom".to_string(),
-                input: "{}".to_string(),
-            },
-            ConversationItem::CustomToolCallOutput {
-                call_id: "tool-x".to_string(),
-                output: "aborted".to_string(),
-            },
+            tool_call_text("custom", "tool-x", "{}"),
+            tool_result_text("custom", "tool-x", "aborted"),
         ]
     );
 }
@@ -768,18 +707,11 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
 #[cfg(not(debug_assertions))]
 #[test]
 fn normalize_adds_missing_output_for_local_shell_call_with_id() {
-    let items = vec![ConversationItem::LocalShellCall {
-        id: None,
-        call_id: Some("shell-1".to_string()),
-        status: LocalShellStatus::Completed,
-        action: LocalShellAction::Exec(LocalShellExecAction {
-            command: vec!["echo".to_string(), "hi".to_string()],
-            timeout_ms: None,
-            working_directory: None,
-            env: None,
-            user: None,
-        }),
-    }];
+    let arguments = serde_json::json!({
+        "command": ["echo", "hi"],
+    })
+    .to_string();
+    let items = vec![tool_call_json("local_shell", "shell-1", &arguments)];
     let mut h = create_history_with_items(items);
 
     h.normalize_history();
@@ -787,85 +719,57 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id() {
     assert_eq!(
         h.raw_items(),
         vec![
-            ConversationItem::LocalShellCall {
-                id: None,
-                call_id: Some("shell-1".to_string()),
-                status: LocalShellStatus::Completed,
-                action: LocalShellAction::Exec(LocalShellExecAction {
-                    command: vec!["echo".to_string(), "hi".to_string()],
-                    timeout_ms: None,
-                    working_directory: None,
-                    env: None,
-                    user: None,
-                }),
-            },
-            ConversationItem::FunctionCallOutput {
-                call_id: "shell-1".to_string(),
-                output: FunctionCallOutputPayload {
-                    content: "aborted".to_string(),
-                    ..Default::default()
-                },
-            },
+            tool_call_json("local_shell", "shell-1", &arguments),
+            tool_result_structured("local_shell", "shell-1", "aborted", None, None),
+        ]
+    );
+}
+
+#[cfg(debug_assertions)]
+#[test]
+fn normalize_adds_missing_output_for_local_shell_call_with_id_inserts_output_in_debug() {
+    let arguments = serde_json::json!({
+        "command": ["echo", "hi"],
+    })
+    .to_string();
+    let items = vec![tool_call_json("local_shell", "shell-1", &arguments)];
+    let mut h = create_history_with_items(items);
+
+    h.normalize_history();
+
+    assert_eq!(
+        h.raw_items(),
+        vec![
+            tool_call_json("local_shell", "shell-1", &arguments),
+            tool_result_structured("local_shell", "shell-1", "aborted", None, None),
         ]
     );
 }
 
 #[test]
 fn normalize_drops_empty_call_id_output_but_keeps_raw_history_until_normalized() {
-    let items = vec![
-        ConversationItem::LocalShellCall {
-            id: None,
-            call_id: None,
-            status: LocalShellStatus::Completed,
-            action: LocalShellAction::Exec(LocalShellExecAction {
-                command: vec!["echo".to_string(), "hi".to_string()],
-                timeout_ms: None,
-                working_directory: None,
-                env: None,
-                user: None,
-            }),
-        },
-        ConversationItem::FunctionCallOutput {
-            call_id: String::new(),
-            output: FunctionCallOutputPayload {
-                content: "LocalShellCall without call_id or id".to_string(),
-                ..Default::default()
-            },
-        },
-    ];
+    let items = vec![tool_result_structured(
+        "local_shell",
+        "",
+        "LocalShellCall without call_id or id",
+        None,
+        None,
+    )];
     let mut h = create_history_with_items(items.clone());
 
     assert_eq!(h.raw_items(), items);
 
     h.normalize_history();
 
-    assert_eq!(
-        h.raw_items(),
-        vec![ConversationItem::LocalShellCall {
-            id: None,
-            call_id: None,
-            status: LocalShellStatus::Completed,
-            action: LocalShellAction::Exec(LocalShellExecAction {
-                command: vec!["echo".to_string(), "hi".to_string()],
-                timeout_ms: None,
-                working_directory: None,
-                env: None,
-                user: None,
-            }),
-        }]
-    );
+    assert_eq!(h.raw_items(), vec![]);
 }
 
 #[cfg(not(debug_assertions))]
 #[test]
 fn normalize_removes_orphan_function_call_output() {
-    let items = vec![ConversationItem::FunctionCallOutput {
-        call_id: "orphan-1".to_string(),
-        output: FunctionCallOutputPayload {
-            content: "ok".to_string(),
-            ..Default::default()
-        },
-    }];
+    let items = vec![tool_result_structured(
+        "do_it", "orphan-1", "ok", None, None,
+    )];
     let mut h = create_history_with_items(items);
 
     h.normalize_history();
@@ -876,10 +780,7 @@ fn normalize_removes_orphan_function_call_output() {
 #[cfg(not(debug_assertions))]
 #[test]
 fn normalize_removes_orphan_custom_tool_call_output() {
-    let items = vec![ConversationItem::CustomToolCallOutput {
-        call_id: "orphan-2".to_string(),
-        output: "ok".to_string(),
-    }];
+    let items = vec![tool_result_text("custom", "orphan-2", "ok")];
     let mut h = create_history_with_items(items);
 
     h.normalize_history();
@@ -890,43 +791,15 @@ fn normalize_removes_orphan_custom_tool_call_output() {
 #[cfg(not(debug_assertions))]
 #[test]
 fn normalize_mixed_inserts_and_removals() {
+    let local_shell_arguments = serde_json::json!({
+        "command": ["echo"],
+    })
+    .to_string();
     let items = vec![
-        // Will get an inserted output
-        ConversationItem::FunctionCall {
-            id: None,
-            name: "f1".to_string(),
-            arguments: "{}".to_string(),
-            call_id: "c1".to_string(),
-        },
-        // Orphan output that should be removed
-        ConversationItem::FunctionCallOutput {
-            call_id: "c2".to_string(),
-            output: FunctionCallOutputPayload {
-                content: "ok".to_string(),
-                ..Default::default()
-            },
-        },
-        // Will get an inserted custom tool output
-        ConversationItem::CustomToolCall {
-            id: None,
-            status: None,
-            call_id: "t1".to_string(),
-            name: "tool".to_string(),
-            input: "{}".to_string(),
-        },
-        // Local shell call also gets an inserted function call output
-        ConversationItem::LocalShellCall {
-            id: None,
-            call_id: Some("s1".to_string()),
-            status: LocalShellStatus::Completed,
-            action: LocalShellAction::Exec(LocalShellExecAction {
-                command: vec!["echo".to_string()],
-                timeout_ms: None,
-                working_directory: None,
-                env: None,
-                user: None,
-            }),
-        },
+        tool_call_json("f1", "c1", "{}"),
+        tool_result_structured("orphan", "c2", "ok", None, None),
+        tool_call_text("tool", "t1", "{}"),
+        tool_call_json("local_shell", "s1", &local_shell_arguments),
     ];
     let mut h = create_history_with_items(items);
 
@@ -935,79 +808,26 @@ fn normalize_mixed_inserts_and_removals() {
     assert_eq!(
         h.raw_items(),
         vec![
-            ConversationItem::FunctionCall {
-                id: None,
-                name: "f1".to_string(),
-                arguments: "{}".to_string(),
-                call_id: "c1".to_string(),
-            },
-            ConversationItem::FunctionCallOutput {
-                call_id: "c1".to_string(),
-                output: FunctionCallOutputPayload {
-                    content: "aborted".to_string(),
-                    ..Default::default()
-                },
-            },
-            ConversationItem::CustomToolCall {
-                id: None,
-                status: None,
-                call_id: "t1".to_string(),
-                name: "tool".to_string(),
-                input: "{}".to_string(),
-            },
-            ConversationItem::CustomToolCallOutput {
-                call_id: "t1".to_string(),
-                output: "aborted".to_string(),
-            },
-            ConversationItem::LocalShellCall {
-                id: None,
-                call_id: Some("s1".to_string()),
-                status: LocalShellStatus::Completed,
-                action: LocalShellAction::Exec(LocalShellExecAction {
-                    command: vec!["echo".to_string()],
-                    timeout_ms: None,
-                    working_directory: None,
-                    env: None,
-                    user: None,
-                }),
-            },
-            ConversationItem::FunctionCallOutput {
-                call_id: "s1".to_string(),
-                output: FunctionCallOutputPayload {
-                    content: "aborted".to_string(),
-                    ..Default::default()
-                },
-            },
+            tool_call_json("f1", "c1", "{}"),
+            tool_result_structured("f1", "c1", "aborted", None, None),
+            tool_call_text("tool", "t1", "{}"),
+            tool_result_text("tool", "t1", "aborted"),
+            tool_call_json("local_shell", "s1", &local_shell_arguments),
+            tool_result_structured("local_shell", "s1", "aborted", None, None),
         ]
     );
 }
 
 #[test]
 fn normalize_adds_missing_output_for_function_call_inserts_output() {
-    let items = vec![ConversationItem::FunctionCall {
-        id: None,
-        name: "do_it".to_string(),
-        arguments: "{}".to_string(),
-        call_id: "call-x".to_string(),
-    }];
+    let items = vec![tool_call_json("do_it", "call-x", "{}")];
     let mut h = create_history_with_items(items);
     h.normalize_history();
     assert_eq!(
         h.raw_items(),
         vec![
-            ConversationItem::FunctionCall {
-                id: None,
-                name: "do_it".to_string(),
-                arguments: "{}".to_string(),
-                call_id: "call-x".to_string(),
-            },
-            ConversationItem::FunctionCallOutput {
-                call_id: "call-x".to_string(),
-                output: FunctionCallOutputPayload {
-                    content: "aborted".to_string(),
-                    ..Default::default()
-                },
-            },
+            tool_call_json("do_it", "call-x", "{}"),
+            tool_result_structured("do_it", "call-x", "aborted", None, None),
         ]
     );
 }
@@ -1016,33 +836,7 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
 #[test]
 #[should_panic]
 fn normalize_adds_missing_output_for_custom_tool_call_panics_in_debug() {
-    let items = vec![ConversationItem::CustomToolCall {
-        id: None,
-        status: None,
-        call_id: "tool-x".to_string(),
-        name: "custom".to_string(),
-        input: "{}".to_string(),
-    }];
-    let mut h = create_history_with_items(items);
-    h.normalize_history();
-}
-
-#[cfg(debug_assertions)]
-#[test]
-#[should_panic]
-fn normalize_adds_missing_output_for_local_shell_call_with_id_panics_in_debug() {
-    let items = vec![ConversationItem::LocalShellCall {
-        id: None,
-        call_id: Some("shell-1".to_string()),
-        status: LocalShellStatus::Completed,
-        action: LocalShellAction::Exec(LocalShellExecAction {
-            command: vec!["echo".to_string(), "hi".to_string()],
-            timeout_ms: None,
-            working_directory: None,
-            env: None,
-            user: None,
-        }),
-    }];
+    let items = vec![tool_call_text("custom", "tool-x", "{}")];
     let mut h = create_history_with_items(items);
     h.normalize_history();
 }
@@ -1051,13 +845,9 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id_panics_in_debug() 
 #[test]
 #[should_panic]
 fn normalize_removes_orphan_function_call_output_panics_in_debug() {
-    let items = vec![ConversationItem::FunctionCallOutput {
-        call_id: "orphan-1".to_string(),
-        output: FunctionCallOutputPayload {
-            content: "ok".to_string(),
-            ..Default::default()
-        },
-    }];
+    let items = vec![tool_result_structured(
+        "do_it", "orphan-1", "ok", None, None,
+    )];
     let mut h = create_history_with_items(items);
     h.normalize_history();
 }
@@ -1066,10 +856,7 @@ fn normalize_removes_orphan_function_call_output_panics_in_debug() {
 #[test]
 #[should_panic]
 fn normalize_removes_orphan_custom_tool_call_output_panics_in_debug() {
-    let items = vec![ConversationItem::CustomToolCallOutput {
-        call_id: "orphan-2".to_string(),
-        output: "ok".to_string(),
-    }];
+    let items = vec![tool_result_text("custom", "orphan-2", "ok")];
     let mut h = create_history_with_items(items);
     h.normalize_history();
 }
@@ -1078,39 +865,15 @@ fn normalize_removes_orphan_custom_tool_call_output_panics_in_debug() {
 #[test]
 #[should_panic]
 fn normalize_mixed_inserts_and_removals_panics_in_debug() {
+    let local_shell_arguments = serde_json::json!({
+        "command": ["echo"],
+    })
+    .to_string();
     let items = vec![
-        ConversationItem::FunctionCall {
-            id: None,
-            name: "f1".to_string(),
-            arguments: "{}".to_string(),
-            call_id: "c1".to_string(),
-        },
-        ConversationItem::FunctionCallOutput {
-            call_id: "c2".to_string(),
-            output: FunctionCallOutputPayload {
-                content: "ok".to_string(),
-                ..Default::default()
-            },
-        },
-        ConversationItem::CustomToolCall {
-            id: None,
-            status: None,
-            call_id: "t1".to_string(),
-            name: "tool".to_string(),
-            input: "{}".to_string(),
-        },
-        ConversationItem::LocalShellCall {
-            id: None,
-            call_id: Some("s1".to_string()),
-            status: LocalShellStatus::Completed,
-            action: LocalShellAction::Exec(LocalShellExecAction {
-                command: vec!["echo".to_string()],
-                timeout_ms: None,
-                working_directory: None,
-                env: None,
-                user: None,
-            }),
-        },
+        tool_call_json("f1", "c1", "{}"),
+        tool_result_structured("orphan", "c2", "ok", None, None),
+        tool_call_text("tool", "t1", "{}"),
+        tool_call_json("local_shell", "s1", &local_shell_arguments),
     ];
     let mut h = create_history_with_items(items);
     h.normalize_history();

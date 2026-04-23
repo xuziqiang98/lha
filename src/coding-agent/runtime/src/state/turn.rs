@@ -8,8 +8,8 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
+use codex_llm::TranscriptItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
-use codex_protocol::legacy_transcript::ResponseInputItem;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use tokio::sync::oneshot;
 
@@ -72,7 +72,7 @@ pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
-    pending_input: Vec<ResponseInputItem>,
+    pending_input: Vec<TranscriptItem>,
 }
 
 impl TurnState {
@@ -128,11 +128,11 @@ impl TurnState {
         self.pending_dynamic_tools.remove(key)
     }
 
-    pub(crate) fn push_pending_input(&mut self, input: ResponseInputItem) {
+    pub(crate) fn push_pending_input(&mut self, input: TranscriptItem) {
         self.pending_input.push(input);
     }
 
-    pub(crate) fn take_pending_input(&mut self) -> Vec<ResponseInputItem> {
+    pub(crate) fn take_pending_input(&mut self) -> Vec<TranscriptItem> {
         if self.pending_input.is_empty() {
             Vec::with_capacity(0)
         } else {

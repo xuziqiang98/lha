@@ -5,17 +5,15 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use codex_agent::ContentItem;
-use codex_agent::LocalShellAction;
-use codex_agent::LocalShellExecAction;
-use codex_agent::LocalShellStatus;
 use codex_agent::models_manager::manager::ModelsManager;
 use codex_app_server_protocol::AuthMode;
 use codex_llm::RuntimeEndpoint;
+use codex_llm::ToolCallPayload;
 use codex_llm::TurnRequest;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
-use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ReasoningItemContent;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::protocol::SessionSource;
 use core_test_support::load_default_config_for_test;
 use core_test_support::runtime_client::TestRuntimeClient;
@@ -46,7 +44,7 @@ impl Respond for ChatSeqResponder {
     }
 }
 
-async fn run_request(input: Vec<ConversationItem>) -> Value {
+async fn run_request(input: Vec<TranscriptItem>) -> Value {
     let server = MockServer::start().await;
 
     let template = ResponseTemplate::new(200)
@@ -109,7 +107,7 @@ async fn run_request(input: Vec<ConversationItem>) -> Value {
     .new_session();
 
     let turn = TurnRequest {
-        conversation: input.into_iter().map(Into::into).collect(),
+        conversation: input,
         ..Default::default()
     };
 
@@ -178,10 +176,10 @@ async fn build_client(provider: RuntimeEndpoint) -> TestRuntimeClient {
     )
 }
 
-async fn run_turn(client: &TestRuntimeClient, input: Vec<ConversationItem>) -> Result<(), String> {
+async fn run_turn(client: &TestRuntimeClient, input: Vec<TranscriptItem>) -> Result<(), String> {
     let mut client_session = client.new_session();
     let turn = TurnRequest {
-        conversation: input.into_iter().map(Into::into).collect(),
+        conversation: input,
         ..Default::default()
     };
 
@@ -211,8 +209,8 @@ fn chat_provider(server: &MockServer, name: &str) -> RuntimeEndpoint {
         .with_stream_idle_timeout_ms(Some(5_000))
 }
 
-fn user_message(text: &str) -> ConversationItem {
-    ConversationItem::Message {
+fn user_message(text: &str) -> TranscriptItem {
+    TranscriptItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -222,8 +220,8 @@ fn user_message(text: &str) -> ConversationItem {
     }
 }
 
-fn developer_message(text: &str) -> ConversationItem {
-    ConversationItem::Message {
+fn developer_message(text: &str) -> TranscriptItem {
+    TranscriptItem::Message {
         id: None,
         role: "developer".to_string(),
         content: vec![ContentItem::InputText {
@@ -233,8 +231,8 @@ fn developer_message(text: &str) -> ConversationItem {
     }
 }
 
-fn assistant_message(text: &str) -> ConversationItem {
-    ConversationItem::Message {
+fn assistant_message(text: &str) -> TranscriptItem {
+    TranscriptItem::Message {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
@@ -244,8 +242,8 @@ fn assistant_message(text: &str) -> ConversationItem {
     }
 }
 
-fn reasoning_item(text: &str) -> ConversationItem {
-    ConversationItem::Reasoning {
+fn reasoning_item(text: &str) -> TranscriptItem {
+    TranscriptItem::Reasoning {
         id: String::new(),
         summary: Vec::new(),
         content: Some(vec![ReasoningItemContent::ReasoningText {
@@ -255,27 +253,29 @@ fn reasoning_item(text: &str) -> ConversationItem {
     }
 }
 
-fn function_call() -> ConversationItem {
-    ConversationItem::FunctionCall {
+fn function_call() -> TranscriptItem {
+    TranscriptItem::ToolCall {
         id: None,
-        name: "f".to_string(),
-        arguments: "{}".to_string(),
         call_id: "c1".to_string(),
+        tool_name: "f".to_string(),
+        payload: ToolCallPayload::JsonArguments {
+            arguments: "{}".to_string(),
+        },
     }
 }
 
-fn local_shell_call() -> ConversationItem {
-    ConversationItem::LocalShellCall {
+fn local_shell_call() -> TranscriptItem {
+    TranscriptItem::ToolCall {
         id: Some("id1".to_string()),
-        call_id: None,
-        status: LocalShellStatus::InProgress,
-        action: LocalShellAction::Exec(LocalShellExecAction {
-            command: vec!["echo".to_string()],
-            timeout_ms: Some(1_000),
-            working_directory: None,
-            env: None,
-            user: None,
-        }),
+        call_id: "local-shell-call-id".to_string(),
+        tool_name: "local_shell".to_string(),
+        payload: ToolCallPayload::JsonArguments {
+            arguments: serde_json::json!({
+                "command": ["echo"],
+                "timeout_ms": 1000,
+            })
+            .to_string(),
+        },
     }
 }
 

@@ -3,8 +3,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::TurnItem;
-use codex_protocol::legacy_transcript::ConversationItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentMessageDeltaEvent;
 use codex_protocol::protocol::Event;
@@ -217,7 +217,7 @@ pub(crate) async fn exit_review_mode(
     session
         .record_conversation_items(
             &ctx,
-            &[ConversationItem::Message {
+            &[TranscriptItem::Message {
                 id: Some(REVIEW_USER_MESSAGE_ID.to_string()),
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText { text: user_message }],
@@ -234,7 +234,7 @@ pub(crate) async fn exit_review_mode(
     session
         .record_response_item_and_emit_turn_item(
             ctx.as_ref(),
-            ConversationItem::Message {
+            TranscriptItem::Message {
                 id: Some(REVIEW_ASSISTANT_MESSAGE_ID.to_string()),
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
