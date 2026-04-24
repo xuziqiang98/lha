@@ -157,8 +157,8 @@ impl AgentControl {
                         RolloutRecorder::get_rollout_history(&rollout_path)
                             .await?
                             .get_rollout_items();
-                    forked_rollout_items.push(RolloutItem::TranscriptItem(
-                        TranscriptItem::from(ToolResultItem {
+                    forked_rollout_items.push(RolloutItem::TranscriptItem(TranscriptItem::from(
+                        ToolResultItem {
                             call_id: call_id.clone(),
                             tool_name: "spawn_agent".to_string(),
                             payload: ToolResultPayload::Structured {
@@ -166,8 +166,8 @@ impl AgentControl {
                                 content_items: None,
                                 success: Some(true),
                             },
-                        }),
-                    ));
+                        },
+                    )));
                     state
                         .spawn_thread_with_initial_history_and_source(
                             config,

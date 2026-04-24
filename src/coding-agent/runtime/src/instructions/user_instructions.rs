@@ -104,11 +104,11 @@ impl SkillInstructions {
         ))
     }
 
-    pub fn into_backfilled_response_item(self) -> TranscriptItem {
-        self.into_response_item_with_source(SkillInstructionSource::CompactBackfill)
+    pub fn into_backfilled_transcript_item(self) -> TranscriptItem {
+        self.into_transcript_item_with_source(SkillInstructionSource::CompactBackfill)
     }
 
-    fn into_response_item_with_source(self, source: SkillInstructionSource) -> TranscriptItem {
+    fn into_transcript_item_with_source(self, source: SkillInstructionSource) -> TranscriptItem {
         let open_tag = match source {
             SkillInstructionSource::Direct => SKILL_OPEN_TAG,
             SkillInstructionSource::CompactBackfill => BACKFILLED_SKILL_OPEN_TAG,
@@ -132,7 +132,7 @@ impl SkillInstructions {
 
 impl From<SkillInstructions> for TranscriptItem {
     fn from(skill_instructions: SkillInstructions) -> Self {
-        skill_instructions.into_response_item_with_source(SkillInstructionSource::Direct)
+        skill_instructions.into_transcript_item_with_source(SkillInstructionSource::Direct)
     }
 }
 
@@ -329,7 +329,7 @@ mod tests {
             path: "skills/demo/SKILL.md".to_string(),
             contents: "body\nwith more".to_string(),
         };
-        let response_item = expected.clone().into_backfilled_response_item();
+        let response_item = expected.clone().into_backfilled_transcript_item();
         let TranscriptItem::Message { content, .. } = response_item else {
             panic!("expected TranscriptItem::Message");
         };

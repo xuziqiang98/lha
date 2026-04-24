@@ -92,7 +92,7 @@ async fn fork_thread_twice_drops_to_first_message() {
             if let RolloutItem::TranscriptItem(response_item) = it
                 && let Some(TurnItem::UserMessage(_)) = parse_turn_item(&response_item.clone())
             {
-                // Consider any user message as an input boundary; recorder stores both EventMsg and ConversationItem.
+                // Consider any user message as an input boundary; recorder stores both EventMsg and transcript items.
                 // We specifically look for input items, which are represented as ContentItem::InputText.
                 pos.push(i);
             }

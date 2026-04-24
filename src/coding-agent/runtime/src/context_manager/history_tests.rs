@@ -132,7 +132,7 @@ fn tool_result_text(tool_name: &str, call_id: &str, output: &str) -> TranscriptI
 }
 
 fn backfilled_skill_item(skill: SkillInstructions) -> TranscriptItem {
-    skill.into_backfilled_response_item().into()
+    skill.into_backfilled_transcript_item()
 }
 
 fn direct_skill_item(skill: SkillInstructions) -> TranscriptItem {

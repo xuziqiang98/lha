@@ -1250,10 +1250,7 @@ mod tests {
             .expect("wait should succeed");
         let ToolOutput::Function {
             content, success, ..
-        } = output
-        else {
-            panic!("expected function output");
-        };
+        } = output;
         let result: WaitResult =
             serde_json::from_str(&content).expect("wait result should be json");
         assert_eq!(
@@ -1292,10 +1289,7 @@ mod tests {
             .expect("wait should succeed");
         let ToolOutput::Function {
             content, success, ..
-        } = output
-        else {
-            panic!("expected function output");
-        };
+        } = output;
         let result: WaitResult =
             serde_json::from_str(&content).expect("wait result should be json");
         assert_eq!(
@@ -1375,10 +1369,7 @@ mod tests {
             .expect("wait should succeed");
         let ToolOutput::Function {
             content, success, ..
-        } = output
-        else {
-            panic!("expected function output");
-        };
+        } = output;
         let result: WaitResult =
             serde_json::from_str(&content).expect("wait result should be json");
         assert_eq!(
@@ -1441,10 +1432,7 @@ mod tests {
             .expect("wait should succeed");
         let ToolOutput::Function {
             content, success, ..
-        } = output
-        else {
-            panic!("expected function output");
-        };
+        } = output;
         let result: WaitResult =
             serde_json::from_str(&content).expect("wait result should be json");
         assert_eq!(
@@ -1531,10 +1519,7 @@ mod tests {
             .expect("close_agent should succeed");
         let ToolOutput::Function {
             content, success, ..
-        } = output
-        else {
-            panic!("expected function output");
-        };
+        } = output;
         let result: close_agent::CloseAgentResult =
             serde_json::from_str(&content).expect("close_agent result should be json");
         assert_eq!(result.status, status_before);

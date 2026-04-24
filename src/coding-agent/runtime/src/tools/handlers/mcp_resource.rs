@@ -301,10 +301,7 @@ async fn handle_list_resources(
             Ok(output) => {
                 let ToolOutput::Function {
                     content, success, ..
-                } = &output
-                else {
-                    unreachable!("MCP resource handler should return function output");
-                };
+                } = &output;
                 let duration = start.elapsed();
                 emit_tool_call_end(
                     &session,
@@ -412,10 +409,7 @@ async fn handle_list_resource_templates(
             Ok(output) => {
                 let ToolOutput::Function {
                     content, success, ..
-                } = &output
-                else {
-                    unreachable!("MCP resource handler should return function output");
-                };
+                } = &output;
                 let duration = start.elapsed();
                 emit_tool_call_end(
                     &session,
@@ -501,10 +495,7 @@ async fn handle_read_resource(
             Ok(output) => {
                 let ToolOutput::Function {
                     content, success, ..
-                } = &output
-                else {
-                    unreachable!("MCP resource handler should return function output");
-                };
+                } = &output;
                 let duration = start.elapsed();
                 emit_tool_call_end(
                     &session,

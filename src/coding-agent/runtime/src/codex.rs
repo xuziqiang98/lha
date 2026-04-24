@@ -2079,26 +2079,20 @@ impl Session {
             }
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
-            items.push(
-                TranscriptItem::from(UserInstructions {
-                    text: user_instructions.to_string(),
-                    directory: turn_context.cwd.to_string_lossy().into_owned(),
-                })
-                .into(),
-            );
+            items.push(TranscriptItem::from(UserInstructions {
+                text: user_instructions.to_string(),
+                directory: turn_context.cwd.to_string_lossy().into_owned(),
+            }));
         }
         let subagents = self
             .services
             .agent_control
             .format_environment_context_subagents(self.conversation_id)
             .await;
-        items.push(
-            TranscriptItem::from(
-                EnvironmentContext::new(Some(turn_context.cwd.clone()), shell.as_ref().clone())
-                    .with_subagents(subagents),
-            )
-            .into(),
-        );
+        items.push(TranscriptItem::from(
+            EnvironmentContext::new(Some(turn_context.cwd.clone()), shell.as_ref().clone())
+                .with_subagents(subagents),
+        ));
         items
     }
 
@@ -5476,8 +5470,8 @@ mod tests {
             }],
             end_turn: None,
         };
-        rollout_items.push(RolloutItem::TranscriptItem(user_one.clone().into()));
-        rollout_items.push(RolloutItem::TranscriptItem(first_plan.into()));
+        rollout_items.push(RolloutItem::TranscriptItem(user_one.clone()));
+        rollout_items.push(RolloutItem::TranscriptItem(first_plan));
         rollout_items.push(RolloutItem::Compacted(CompactedItem {
             message: "summary one".to_string(),
             replacement_history: None,
@@ -5500,8 +5494,8 @@ mod tests {
             }],
             end_turn: None,
         };
-        rollout_items.push(RolloutItem::TranscriptItem(user_two.into()));
-        rollout_items.push(RolloutItem::TranscriptItem(second_plan.into()));
+        rollout_items.push(RolloutItem::TranscriptItem(user_two));
+        rollout_items.push(RolloutItem::TranscriptItem(second_plan));
         rollout_items.push(RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
             ThreadRolledBackEvent { num_turns: 1 },
         )));
@@ -5899,7 +5893,7 @@ mod tests {
 
         let mut expected = Vec::new();
         expected.extend(initial_context);
-        expected.extend(turn_1.into_iter().map(Into::into));
+        expected.extend(turn_1.into_iter());
 
         let history = sess.clone_history().await;
         assert_eq!(expected, history.raw_items());
@@ -7105,7 +7099,7 @@ model_context_window = 64_000
             },
         };
 
-        let request = codex_llm::ToolCallRequest::from_transcript_item(item.clone().into())
+        let request = codex_llm::ToolCallRequest::from_transcript_item(item.clone())
             .expect("tool call request");
         let call = ToolRouter::build_tool_call(session.as_ref(), request)
             .await
@@ -7361,10 +7355,9 @@ model_context_window = 64_000
             })
             .await;
 
-        let output = match resp2.expect("expected Ok result") {
-            ToolOutput::Function { content, .. } => content,
-            _ => panic!("unexpected tool output"),
-        };
+        let ToolOutput::Function {
+            content: output, ..
+        } = resp2.expect("expected Ok result");
 
         #[derive(Deserialize, PartialEq, Eq, Debug)]
         struct ResponseExecMetadata {

@@ -842,7 +842,7 @@ pub enum EventMsg {
     /// Exited review mode with an optional final result to apply.
     ExitedReviewMode(ExitedReviewModeEvent),
 
-    #[serde(rename = "raw_transcript_item", alias = "raw_conversation_item")]
+    #[serde(rename = "raw_transcript_item")]
     RawTranscriptItem(RawTranscriptItemEvent),
 
     ItemStarted(ItemStartedEvent),
@@ -1586,7 +1586,6 @@ pub struct SessionMeta {
     pub cwd: PathBuf,
     pub originator: String,
     pub cli_version: String,
-    #[serde(default = "default_rollout_schema_version")]
     pub rollout_schema_version: u32,
     #[serde(default)]
     pub source: SessionSource,
@@ -1674,8 +1673,12 @@ impl From<CompactedItem> for TranscriptItem {
 
 pub const ROLLOUT_SCHEMA_VERSION_V3: u32 = 3;
 
-fn default_rollout_schema_version() -> u32 {
+pub fn current_rollout_schema_version() -> u32 {
     ROLLOUT_SCHEMA_VERSION_V3
+}
+
+fn default_rollout_schema_version() -> u32 {
+    current_rollout_schema_version()
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
@@ -2498,6 +2501,37 @@ mod tests {
     use serde_json::json;
     use std::collections::HashMap;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn current_rollout_schema_version_is_v3() {
+        assert_eq!(current_rollout_schema_version(), ROLLOUT_SCHEMA_VERSION_V3);
+        assert_eq!(current_rollout_schema_version(), 3);
+    }
+
+    #[test]
+    fn session_meta_requires_explicit_rollout_schema_version() {
+        let value = json!({
+            "id": ThreadId::new(),
+            "timestamp": "2025-01-01T00:00:00Z",
+            "cwd": "/tmp",
+            "originator": "codex",
+            "cli_version": "0.0.0",
+            "model_provider": null,
+            "base_instructions": null
+        });
+
+        assert!(serde_json::from_value::<SessionMetaLine>(value).is_err());
+    }
+
+    #[test]
+    fn session_meta_serializes_rollout_schema_version() -> Result<()> {
+        let value = serde_json::to_value(SessionMeta::default())?;
+        assert_eq!(
+            value.get("rollout_schema_version"),
+            Some(&json!(ROLLOUT_SCHEMA_VERSION_V3))
+        );
+        Ok(())
+    }
 
     #[test]
     fn external_sandbox_reports_full_access_flags() {

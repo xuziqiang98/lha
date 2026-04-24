@@ -492,7 +492,9 @@ pub fn transcript_item_from_user_input(items: Vec<UserInput>) -> TranscriptItem 
     }
 }
 
-pub fn tool_result_payload_from_call_tool_result(call_tool_result: &CallToolResult) -> ToolResultPayload {
+pub fn tool_result_payload_from_call_tool_result(
+    call_tool_result: &CallToolResult,
+) -> ToolResultPayload {
     let CallToolResult {
         content,
         structured_content,
@@ -834,7 +836,13 @@ mod tests {
         else {
             panic!("expected structured payload");
         };
-        assert_eq!(content, r#"{"count":2,"summary":"structured wins"}"#);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&content)?,
+            serde_json::json!({
+                "summary": "structured wins",
+                "count": 2,
+            })
+        );
         assert_eq!(content_items, None);
         assert_eq!(success, Some(false));
         Ok(())

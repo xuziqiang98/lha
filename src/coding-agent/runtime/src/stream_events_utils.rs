@@ -101,7 +101,9 @@ pub(crate) async fn handle_tool_call_request(
             let cancellation_token = ctx.cancellation_token.child_token();
             let tool_runtime = ctx.tool_runtime.clone();
             output.tool_future = Some(Box::pin(async move {
-                tool_runtime.handle_tool_call(call, cancellation_token).await
+                tool_runtime
+                    .handle_tool_call(call, cancellation_token)
+                    .await
             }));
             output.needs_follow_up = true;
         }

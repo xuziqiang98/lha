@@ -1533,99 +1533,75 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     .new_session();
 
     let mut turn = TurnRequest::default();
-    turn.conversation.push(
-        TranscriptItem::Reasoning {
-            id: "reasoning-id".into(),
-            summary: vec![ReasoningItemReasoningSummary::SummaryText {
-                text: "summary".into(),
-            }],
-            content: Some(vec![ReasoningItemContent::ReasoningText {
-                text: "content".into(),
-            }]),
-            encrypted_content: None,
-        }
-        .into(),
-    );
-    turn.conversation.push(
-        TranscriptItem::Message {
-            id: Some("message-id".into()),
-            role: "assistant".into(),
-            content: vec![ContentItem::OutputText {
-                text: "message".into(),
-            }],
-            end_turn: None,
-        }
-        .into(),
-    );
-    turn.conversation.push(
-        TranscriptItem::HostedActivity {
-            id: Some("web-search-id".into()),
-            activity_type: "web_search".into(),
-            status: Some("completed".into()),
-            payload: serde_json::to_value(WebSearchAction::Search {
-                query: Some("weather".into()),
-                queries: None,
+    turn.conversation.push(TranscriptItem::Reasoning {
+        id: "reasoning-id".into(),
+        summary: vec![ReasoningItemReasoningSummary::SummaryText {
+            text: "summary".into(),
+        }],
+        content: Some(vec![ReasoningItemContent::ReasoningText {
+            text: "content".into(),
+        }]),
+        encrypted_content: None,
+    });
+    turn.conversation.push(TranscriptItem::Message {
+        id: Some("message-id".into()),
+        role: "assistant".into(),
+        content: vec![ContentItem::OutputText {
+            text: "message".into(),
+        }],
+        end_turn: None,
+    });
+    turn.conversation.push(TranscriptItem::HostedActivity {
+        id: Some("web-search-id".into()),
+        activity_type: "web_search".into(),
+        status: Some("completed".into()),
+        payload: serde_json::to_value(WebSearchAction::Search {
+            query: Some("weather".into()),
+            queries: None,
+        })
+        .expect("serialize web search action"),
+    });
+    turn.conversation.push(TranscriptItem::ToolCall {
+        id: Some("function-id".into()),
+        call_id: "function-call-id".into(),
+        tool_name: "do_thing".into(),
+        payload: ToolCallPayload::JsonArguments {
+            arguments: "{}".into(),
+        },
+    });
+    turn.conversation.push(TranscriptItem::ToolResult {
+        call_id: "function-call-id".into(),
+        tool_name: "do_thing".into(),
+        payload: ToolResultPayload::Structured {
+            content: "ok".into(),
+            content_items: None,
+            success: None,
+        },
+    });
+    turn.conversation.push(TranscriptItem::ToolCall {
+        id: Some("local-shell-id".into()),
+        call_id: "local-shell-call-id".into(),
+        tool_name: "local_shell".into(),
+        payload: ToolCallPayload::JsonArguments {
+            arguments: serde_json::json!({
+                "command": ["echo", "hello"],
             })
-            .expect("serialize web search action"),
-        }
-        .into(),
-    );
-    turn.conversation.push(
-        TranscriptItem::ToolCall {
-            id: Some("function-id".into()),
-            call_id: "function-call-id".into(),
-            tool_name: "do_thing".into(),
-            payload: ToolCallPayload::JsonArguments {
-                arguments: "{}".into(),
-            },
-        }
-        .into(),
-    );
-    turn.conversation.push(
-        TranscriptItem::ToolResult {
-            call_id: "function-call-id".into(),
-            tool_name: "do_thing".into(),
-            payload: ToolResultPayload::Structured {
-                content: "ok".into(),
-                content_items: None,
-                success: None,
-            },
-        }
-        .into(),
-    );
-    turn.conversation.push(
-        TranscriptItem::ToolCall {
-            id: Some("local-shell-id".into()),
-            call_id: "local-shell-call-id".into(),
-            tool_name: "local_shell".into(),
-            payload: ToolCallPayload::JsonArguments {
-                arguments: serde_json::json!({
-                    "command": ["echo", "hello"],
-                })
-                .to_string(),
-            },
-        }
-        .into(),
-    );
-    turn.conversation.push(
-        TranscriptItem::ToolCall {
-            id: Some("custom-tool-id".into()),
-            call_id: "custom-tool-call-id".into(),
-            tool_name: "custom_tool".into(),
-            payload: ToolCallPayload::TextInput { input: "{}".into() },
-        }
-        .into(),
-    );
-    turn.conversation.push(
-        TranscriptItem::ToolResult {
-            call_id: "custom-tool-call-id".into(),
-            tool_name: "custom_tool".into(),
-            payload: ToolResultPayload::Text {
-                output: "ok".into(),
-            },
-        }
-        .into(),
-    );
+            .to_string(),
+        },
+    });
+    turn.conversation.push(TranscriptItem::ToolCall {
+        id: Some("custom-tool-id".into()),
+        call_id: "custom-tool-call-id".into(),
+        tool_name: "custom_tool".into(),
+        payload: ToolCallPayload::TextInput { input: "{}".into() },
+    });
+    turn.conversation.push(TranscriptItem::ToolResult {
+        call_id: "custom-tool-call-id".into(),
+        tool_name: "custom_tool".into(),
+        payload: ToolResultPayload::Text {
+            output: "ok".into(),
+        },
+    });
 
     let mut stream = client
         .run_turn(&turn)

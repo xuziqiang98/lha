@@ -118,16 +118,14 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
     ]);
     let responses_log = responses::mount_sse_sequence(&server, vec![sse1, sse2, sse3]).await;
 
-    let compacted_history = vec![
-        TranscriptItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: "REMOTE_COMPACT_SUMMARY".to_string(),
-            }],
-            end_turn: None,
-        },
-    ];
+    let compacted_history = vec![TranscriptItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "REMOTE_COMPACT_SUMMARY".to_string(),
+        }],
+        end_turn: None,
+    }];
     let compact_mock = responses::mount_compact_json_once(
         &server,
         serde_json::json!({ "output": compacted_history }),

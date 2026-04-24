@@ -4,6 +4,7 @@ use crate::path_utils;
 use crate::rollout::list::Cursor;
 use crate::rollout::list::ThreadSortKey;
 use crate::rollout::metadata;
+use crate::rollout::recorder::is_unsupported_rollout_schema_anyhow;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Timelike;
@@ -296,6 +297,13 @@ pub async fn reconcile_rollout(
         match metadata::extract_metadata_from_rollout(rollout_path, default_provider, None).await {
             Ok(outcome) => outcome,
             Err(err) => {
+                if is_unsupported_rollout_schema_anyhow(&err) {
+                    warn!(
+                        "skipping unsupported legacy rollout {}",
+                        rollout_path.display()
+                    );
+                    return;
+                }
                 warn!(
                     "state db reconcile_rollout extraction failed {}: {err}",
                     rollout_path.display()

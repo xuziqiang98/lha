@@ -2,6 +2,7 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
 use app_test_support::create_fake_rollout_with_cwds;
+use app_test_support::create_fake_rollout_with_schema_version;
 use app_test_support::create_fake_rollout_with_source;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
@@ -159,6 +160,55 @@ model = "mock-model"
 approval_policy = "never"
 "#,
     )
+}
+
+#[tokio::test]
+async fn thread_list_skips_unsupported_rollouts() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let valid_id = create_fake_rollout_with_schema_version(
+        codex_home.path(),
+        "2025-01-01T12-00-00",
+        "2025-01-01T12:00:00Z",
+        "valid",
+        Some("mock_provider"),
+        Some(codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3),
+    )?;
+    create_fake_rollout_with_schema_version(
+        codex_home.path(),
+        "2025-01-02T12-00-00",
+        "2025-01-02T12:00:00Z",
+        "v2",
+        Some("mock_provider"),
+        Some(2),
+    )?;
+    create_fake_rollout_with_schema_version(
+        codex_home.path(),
+        "2025-01-03T12-00-00",
+        "2025-01-03T12:00:00Z",
+        "missing",
+        Some("mock_provider"),
+        None,
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+    let ThreadListResponse { data, next_cursor } = list_threads(
+        &mut mcp,
+        None,
+        Some(10),
+        Some(vec!["mock_provider".to_string()]),
+        None,
+        None,
+    )
+    .await?;
+
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].id, valid_id);
+    assert_eq!(data[0].preview, "valid");
+    assert_eq!(next_cursor, None);
+
+    Ok(())
 }
 
 #[tokio::test]

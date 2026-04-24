@@ -15,12 +15,16 @@ use codex_agent::protocol::RolloutLine;
 use codex_agent::protocol::SandboxPolicy;
 use codex_agent::protocol::WarningEvent;
 use codex_llm::RuntimeEndpoint;
+use codex_llm::ToolCallPayload;
+use codex_llm::ToolResultPayload;
 use codex_llm::built_in_runtime_endpoints;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::TranscriptItem;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -843,16 +847,14 @@ async fn local_compact_persists_replacement_history_in_rollout() {
                 .as_ref()
                 .is_some_and(|history| {
                     history.iter().any(|item| {
-                        let item: codex_protocol::legacy_transcript::ConversationItem =
-                            item.clone().into();
                         matches!(
-                            &item,
-                            codex_protocol::legacy_transcript::ConversationItem::Message { role, content, .. }
+                            item,
+                            TranscriptItem::Message { role, content, .. }
                                 if role == "assistant"
                                     && content.iter().any(|content_item| {
                                         matches!(
                                             content_item,
-                                            codex_protocol::models::ContentItem::OutputText { text }
+                                            ContentItem::OutputText { text }
                                                 if text == expected_plan
                                         )
                                     })
@@ -1373,26 +1375,22 @@ async fn local_compact_persists_backfilled_update_plan_in_rollout() {
                 .as_ref()
                 .is_some_and(|history| {
                     history.iter().any(|item| {
-                        let item: codex_protocol::legacy_transcript::ConversationItem =
-                            item.clone().into();
                         matches!(
-                            &item,
-                            codex_protocol::legacy_transcript::ConversationItem::FunctionCall {
-                                name,
-                                arguments,
+                            item,
+                            TranscriptItem::ToolCall {
+                                tool_name,
+                                payload: ToolCallPayload::JsonArguments { arguments },
                                 ..
-                            } if name == "update_plan" && arguments == &update_plan_args_json
+                            } if tool_name == "update_plan" && arguments == &update_plan_args_json
                         )
                     }) && history.iter().any(|item| {
-                        let item: codex_protocol::legacy_transcript::ConversationItem =
-                            item.clone().into();
                         matches!(
-                            &item,
-                            codex_protocol::legacy_transcript::ConversationItem::FunctionCallOutput {
+                            item,
+                            TranscriptItem::ToolResult {
                                 call_id,
-                                output,
-                            } if call_id == "compact_backfill_update_plan"
-                                && output.content == "Plan updated"
+                                payload: ToolResultPayload::Structured { content, .. },
+                                ..
+                            } if call_id == "compact_backfill_update_plan" && content == "Plan updated"
                         )
                     })
                 })
@@ -2534,16 +2532,19 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
     let remote_summary = "REMOTE_COMPACT_SUMMARY";
 
     let compacted_history = vec![
-        codex_protocol::legacy_transcript::ConversationItem::Message {
+        TranscriptItem::Message {
             id: None,
             role: "assistant".to_string(),
-            content: vec![codex_protocol::models::ContentItem::OutputText {
+            content: vec![ContentItem::OutputText {
                 text: remote_summary.to_string(),
             }],
             end_turn: None,
         },
-        codex_protocol::legacy_transcript::ConversationItem::Compaction {
-            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        TranscriptItem::Reasoning {
+            id: "compact-summary".to_string(),
+            summary: Vec::new(),
+            content: None,
+            encrypted_content: Some("ENCRYPTED_COMPACTION_SUMMARY".to_string()),
         },
     ];
     let compact_mock =
@@ -3614,16 +3615,19 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
     .await;
 
     let compacted_history = vec![
-        codex_protocol::legacy_transcript::ConversationItem::Message {
+        TranscriptItem::Message {
             id: None,
             role: "assistant".to_string(),
-            content: vec![codex_protocol::models::ContentItem::OutputText {
+            content: vec![ContentItem::OutputText {
                 text: "REMOTE_COMPACT_SUMMARY".to_string(),
             }],
             end_turn: None,
         },
-        codex_protocol::legacy_transcript::ConversationItem::Compaction {
-            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        TranscriptItem::Reasoning {
+            id: "compact-summary".to_string(),
+            summary: Vec::new(),
+            content: None,
+            encrypted_content: Some("ENCRYPTED_COMPACTION_SUMMARY".to_string()),
         },
     ];
     let compact_mock =
@@ -3734,16 +3738,19 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
     mount_response_sequence(&server, responses).await;
 
     let compacted_history = vec![
-        codex_protocol::legacy_transcript::ConversationItem::Message {
+        TranscriptItem::Message {
             id: None,
             role: "assistant".to_string(),
-            content: vec![codex_protocol::models::ContentItem::OutputText {
+            content: vec![ContentItem::OutputText {
                 text: "REMOTE_COMPACT_SUMMARY".to_string(),
             }],
             end_turn: None,
         },
-        codex_protocol::legacy_transcript::ConversationItem::Compaction {
-            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        TranscriptItem::Reasoning {
+            id: "compact-summary".to_string(),
+            summary: Vec::new(),
+            content: None,
+            encrypted_content: Some("ENCRYPTED_COMPACTION_SUMMARY".to_string()),
         },
     ];
     let compact_mock =

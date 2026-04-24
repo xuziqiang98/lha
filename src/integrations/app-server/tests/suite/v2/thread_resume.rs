@@ -1,10 +1,12 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
+use app_test_support::create_fake_rollout_with_schema_version;
 use app_test_support::create_fake_rollout_with_text_elements;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
 use chrono::Utc;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
@@ -74,6 +76,85 @@ async fn thread_resume_returns_original_thread() -> Result<()> {
     let mut expected = thread;
     expected.updated_at = resumed.updated_at;
     assert_eq!(resumed, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_path_rejects_v2_rollout() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let filename_ts = "2025-01-06T12-00-00";
+    let conversation_id = create_fake_rollout_with_schema_version(
+        codex_home.path(),
+        filename_ts,
+        "2025-01-06T12:00:00Z",
+        "legacy message",
+        Some("mock_provider"),
+        Some(2),
+    )?;
+    let path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: "ignored-when-path-is-set".to_string(),
+            path: Some(path),
+            ..Default::default()
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+
+    assert!(
+        error.error.message.contains("legacy rollout unsupported"),
+        "unexpected error message: {}",
+        error.error.message
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_thread_id_rejects_missing_schema_version_rollout() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let conversation_id = create_fake_rollout_with_schema_version(
+        codex_home.path(),
+        "2025-01-07T12-00-00",
+        "2025-01-07T12:00:00Z",
+        "legacy message",
+        Some("mock_provider"),
+        None,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id,
+            ..Default::default()
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+
+    assert!(
+        error.error.message.contains("legacy rollout unsupported"),
+        "unexpected error message: {}",
+        error.error.message
+    );
 
     Ok(())
 }
@@ -344,7 +425,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id,
-            history: Some(history.into_iter().map(Into::into).collect()),
+            history: Some(history.into_iter().collect()),
             model: Some("mock-model".to_string()),
             model_provider: Some("mock_provider".to_string()),
             ..Default::default()

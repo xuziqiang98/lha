@@ -78,7 +78,12 @@ impl ToolOutput {
         }
     }
 
-    pub fn into_tool_result(self, call_id: &str, tool_name: &str, payload: &ToolPayload) -> ToolResultItem {
+    pub fn into_tool_result(
+        self,
+        call_id: &str,
+        tool_name: &str,
+        payload: &ToolPayload,
+    ) -> ToolResultItem {
         match self {
             ToolOutput::Function {
                 content,

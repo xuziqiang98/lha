@@ -232,6 +232,84 @@ pub fn create_fake_rollout_with_source(
     Ok(uuid_str)
 }
 
+pub fn create_fake_rollout_with_schema_version(
+    codex_home: &Path,
+    filename_ts: &str,
+    meta_rfc3339: &str,
+    preview: &str,
+    model_provider: Option<&str>,
+    schema_version: Option<u32>,
+) -> Result<String> {
+    let uuid = Uuid::new_v4();
+    let uuid_str = uuid.to_string();
+    let conversation_id = ThreadId::from_string(&uuid_str)?;
+
+    let file_path = rollout_path(codex_home, filename_ts, &uuid_str);
+    let dir = file_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("missing rollout parent directory"))?;
+    fs::create_dir_all(dir)?;
+
+    let meta = SessionMeta {
+        id: conversation_id,
+        forked_from_id: None,
+        timestamp: meta_rfc3339.to_string(),
+        cwd: PathBuf::from("/"),
+        originator: "codex".to_string(),
+        cli_version: "0.0.0".to_string(),
+        rollout_schema_version: schema_version
+            .unwrap_or(codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3),
+        source: SessionSource::Cli,
+        model_provider: model_provider.map(str::to_string),
+        base_instructions: None,
+        dynamic_tools: None,
+    };
+    let mut payload = serde_json::to_value(SessionMetaLine { meta, git: None })?;
+    if schema_version.is_none()
+        && let Some(payload) = payload.as_object_mut()
+    {
+        payload.remove("rollout_schema_version");
+    }
+
+    let lines = [
+        json!({
+            "timestamp": meta_rfc3339,
+            "type": "session_meta",
+            "payload": payload
+        })
+        .to_string(),
+        json!({
+            "timestamp": meta_rfc3339,
+            "type":"transcript_item",
+            "payload": {
+                "type":"message",
+                "role":"user",
+                "content":[{"type":"input_text","text": preview}]
+            }
+        })
+        .to_string(),
+        json!({
+            "timestamp": meta_rfc3339,
+            "type":"event_msg",
+            "payload": {
+                "type":"user_message",
+                "message": preview,
+                "kind": "plain"
+            }
+        })
+        .to_string(),
+    ];
+
+    fs::write(&file_path, lines.join("\n") + "\n")?;
+    let parsed = chrono::DateTime::parse_from_rfc3339(meta_rfc3339)?.with_timezone(&chrono::Utc);
+    let times = FileTimes::new().set_modified(parsed.into());
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&file_path)?
+        .set_times(times)?;
+    Ok(uuid_str)
+}
+
 pub fn create_fake_rollout_with_text_elements(
     codex_home: &Path,
     filename_ts: &str,

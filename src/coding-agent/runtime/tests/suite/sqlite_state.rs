@@ -1,4 +1,5 @@
 use anyhow::Result;
+use anyhow::anyhow;
 use codex_agent::features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
@@ -20,12 +21,73 @@ use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::fs;
+use std::path::Path;
 use tokio::time::Duration;
 use tracing_subscriber::prelude::*;
 use uuid::Uuid;
 
 fn sse_completed(id: &str) -> String {
     load_sse_fixture_with_id("../fixtures/completed_template.json", id)
+}
+
+fn write_rollout_with_schema_version(
+    codex_home: &Path,
+    uuid: Uuid,
+    schema_version: Option<u32>,
+) -> Result<std::path::PathBuf> {
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_path = codex_home.join(format!(
+        "sessions/2026/01/27/rollout-2026-01-27T12-00-00-{uuid}.jsonl"
+    ));
+    let parent = rollout_path
+        .parent()
+        .ok_or_else(|| anyhow!("rollout path should have parent"))?;
+    fs::create_dir_all(parent)?;
+
+    let mut payload = serde_json::to_value(SessionMetaLine {
+        meta: SessionMeta {
+            id: thread_id,
+            forked_from_id: None,
+            timestamp: "2026-01-27T12:00:00Z".to_string(),
+            cwd: codex_home.to_path_buf(),
+            originator: "test".to_string(),
+            cli_version: "test".to_string(),
+            rollout_schema_version: schema_version
+                .unwrap_or(codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3),
+            source: SessionSource::default(),
+            model_provider: None,
+            base_instructions: None,
+            dynamic_tools: None,
+        },
+        git: None,
+    })?;
+    if schema_version.is_none()
+        && let Some(payload) = payload.as_object_mut()
+    {
+        payload.remove("rollout_schema_version");
+    }
+
+    let lines = [
+        json!({
+            "timestamp": "2026-01-27T12:00:00Z",
+            "type": "session_meta",
+            "payload": payload,
+        })
+        .to_string(),
+        json!({
+            "timestamp": "2026-01-27T12:00:01Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "user_message",
+                "message": "hello from backfill",
+                "kind": "plain",
+            },
+        })
+        .to_string(),
+    ];
+
+    fs::write(&rollout_path, format!("{}\n", lines.join("\n")))?;
+    Ok(rollout_path)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -160,6 +222,72 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
     assert_eq!(metadata.model_provider, default_provider);
     assert!(metadata.has_user_event);
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn backfill_skips_unsupported_rollouts() -> Result<()> {
+    core_test_support::skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let v2_uuid = Uuid::now_v7();
+    let missing_uuid = Uuid::now_v7();
+    let v2_thread_id = ThreadId::from_string(&v2_uuid.to_string())?;
+    let missing_thread_id = ThreadId::from_string(&missing_uuid.to_string())?;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(move |codex_home| {
+            write_rollout_with_schema_version(codex_home, v2_uuid, Some(2))
+                .expect("should write v2 rollout");
+            write_rollout_with_schema_version(codex_home, missing_uuid, None)
+                .expect("should write missing-schema rollout");
+        })
+        .with_config(|config| {
+            config.features.enable(Feature::Sqlite);
+        });
+
+    let test = builder.build(&server).await?;
+    let db_path = test.config.codex_home.join(STATE_DB_FILENAME);
+    for _ in 0..20 {
+        if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let db = test.codex.state_db().expect("state db enabled");
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    assert_eq!(db.get_thread(v2_thread_id).await?, None);
+    assert_eq!(db.get_thread(missing_thread_id).await?, None);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reconcile_skips_unsupported_rollout() -> Result<()> {
+    core_test_support::skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let uuid = Uuid::now_v7();
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::Sqlite);
+    });
+    let test = builder.build(&server).await?;
+    let db = test.codex.state_db().expect("state db enabled");
+    let rollout_path = write_rollout_with_schema_version(&test.config.codex_home, uuid, Some(2))?;
+
+    codex_agent::state_db::reconcile_rollout(
+        Some(db.as_ref()),
+        &rollout_path,
+        test.config.model_provider_id.as_str(),
+        None,
+        &[],
+    )
+    .await;
+
+    assert_eq!(db.get_thread(thread_id).await?, None);
     Ok(())
 }
 

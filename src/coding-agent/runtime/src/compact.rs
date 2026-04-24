@@ -501,14 +501,13 @@ pub(crate) fn backfilled_skill_items(skills: &[SkillInstructions]) -> Vec<Transc
     skills
         .iter()
         .cloned()
-        .map(SkillInstructions::into_backfilled_response_item)
-        .map(Into::into)
+        .map(SkillInstructions::into_backfilled_transcript_item)
         .collect()
 }
 
 fn rendered_skill_message_text(skill: &SkillInstructions) -> String {
-    let item = skill.clone().into_backfilled_response_item();
-    let TranscriptItem::Message { content, .. } = TranscriptItem::from(item) else {
+    let item = skill.clone().into_backfilled_transcript_item();
+    let TranscriptItem::Message { content, .. } = item else {
         return String::new();
     };
     content_items_to_text(&content).unwrap_or_default()
@@ -712,7 +711,7 @@ mod tests {
     }
 
     fn backfilled_skill_item(skill: SkillInstructions) -> TranscriptItem {
-        skill.into_backfilled_response_item().into()
+        skill.into_backfilled_transcript_item()
     }
 
     fn direct_skill_item(skill: SkillInstructions) -> TranscriptItem {

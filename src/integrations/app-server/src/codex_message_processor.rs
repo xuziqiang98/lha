@@ -3079,7 +3079,10 @@ impl CodexMessageProcessor {
             }
             Err(err) => {
                 let (code, message) = if is_unsupported_rollout_error(&err) {
-                    (INVALID_REQUEST_ERROR_CODE, unsupported_rollout_message(&path))
+                    (
+                        INVALID_REQUEST_ERROR_CODE,
+                        unsupported_rollout_message(&path),
+                    )
                 } else {
                     (
                         INTERNAL_ERROR_CODE,
@@ -5524,6 +5527,7 @@ mod tests {
                 "cwd": "/",
                 "originator": "codex",
                 "cli_version": "0.0.0",
+                "rollout_schema_version": codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
                 "model_provider": "test-provider"
             }),
             json!({

@@ -17,12 +17,15 @@ use time::macros::format_description;
 use uuid::Uuid;
 
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
+use crate::rollout::RolloutRecorder;
+use crate::rollout::is_unsupported_rollout_schema_error;
 use crate::rollout::list::Cursor;
 use crate::rollout::list::ThreadItem;
 use crate::rollout::list::ThreadSortKey;
 use crate::rollout::list::ThreadsPage;
 use crate::rollout::list::get_threads;
 use crate::rollout::list::read_effective_thread_cwd;
+use crate::rollout::list::read_head_for_summary;
 use crate::rollout::rollout_date_parts;
 use anyhow::Result;
 use codex_protocol::ThreadId;
@@ -298,6 +301,23 @@ fn write_session_file_with_meta_payload(
     uuid: Uuid,
     payload: serde_json::Value,
 ) -> std::io::Result<()> {
+    write_session_file_with_meta_payload_and_schema_version(
+        root,
+        ts_str,
+        uuid,
+        payload,
+        Some(ROLLOUT_SCHEMA_VERSION_V3),
+    )
+    .map(|_| ())
+}
+
+fn write_session_file_with_meta_payload_and_schema_version(
+    root: &Path,
+    ts_str: &str,
+    uuid: Uuid,
+    mut payload: serde_json::Value,
+    schema_version: Option<u32>,
+) -> std::io::Result<std::path::PathBuf> {
     let format: &[FormatItem] =
         format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
     let dt = PrimitiveDateTime::parse(ts_str, format)
@@ -313,11 +333,14 @@ fn write_session_file_with_meta_payload(
     let filename = format!("rollout-{ts_str}-{uuid}.jsonl");
     let file_path = dir.join(filename);
     let mut file = File::create(file_path)?;
+    if let Some(schema_version) = schema_version {
+        payload["rollout_schema_version"] = serde_json::Value::from(schema_version);
+    }
 
     let meta = serde_json::json!({
         "timestamp": ts_str,
         "type": "session_meta",
-        "payload": session_meta_payload(payload),
+        "payload": payload,
     });
     writeln!(file, "{meta}")?;
 
@@ -331,7 +354,190 @@ fn write_session_file_with_meta_payload(
     let times = FileTimes::new().set_modified(dt.into());
     file.set_times(times)?;
 
-    Ok(())
+    Ok(dir.join(format!("rollout-{ts_str}-{uuid}.jsonl")))
+}
+
+fn minimal_meta_payload(uuid: Uuid, ts_str: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": uuid,
+        "timestamp": ts_str,
+        "cwd": ".",
+        "originator": "test_originator",
+        "cli_version": "test_version",
+        "source": "vscode",
+        "model_provider": "test-provider",
+        "base_instructions": null,
+    })
+}
+
+#[tokio::test]
+async fn load_rollout_items_accepts_v3_schema_version() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let ts = "2025-04-03T10-30-00";
+    let uuid = Uuid::from_u128(102);
+    let path = write_session_file_with_meta_payload_and_schema_version(
+        home,
+        ts,
+        uuid,
+        minimal_meta_payload(uuid, ts),
+        Some(ROLLOUT_SCHEMA_VERSION_V3),
+    )
+    .unwrap();
+
+    let history = RolloutRecorder::get_rollout_history(&path)
+        .await
+        .expect("v3 rollout should load");
+
+    assert!(matches!(
+        history,
+        codex_protocol::protocol::InitialHistory::Resumed(_)
+    ));
+}
+
+#[tokio::test]
+async fn load_rollout_items_rejects_v2_schema_version() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let ts = "2025-04-04T10-30-00";
+    let uuid = Uuid::from_u128(103);
+    let path = write_session_file_with_meta_payload_and_schema_version(
+        home,
+        ts,
+        uuid,
+        minimal_meta_payload(uuid, ts),
+        Some(2),
+    )
+    .unwrap();
+
+    let err = RolloutRecorder::get_rollout_history(&path)
+        .await
+        .expect_err("v2 rollout should be unsupported");
+
+    assert!(is_unsupported_rollout_schema_error(&err));
+}
+
+#[tokio::test]
+async fn load_rollout_items_rejects_missing_schema_version() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let ts = "2025-04-05T10-30-00";
+    let uuid = Uuid::from_u128(104);
+    let path = write_session_file_with_meta_payload_and_schema_version(
+        home,
+        ts,
+        uuid,
+        minimal_meta_payload(uuid, ts),
+        None,
+    )
+    .unwrap();
+
+    let err = RolloutRecorder::get_rollout_history(&path)
+        .await
+        .expect_err("missing rollout schema should be unsupported");
+
+    assert!(is_unsupported_rollout_schema_error(&err));
+}
+
+#[tokio::test]
+async fn read_head_for_summary_rejects_v2_schema_version() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let ts = "2025-04-06T10-30-00";
+    let uuid = Uuid::from_u128(105);
+    let path = write_session_file_with_meta_payload_and_schema_version(
+        home,
+        ts,
+        uuid,
+        minimal_meta_payload(uuid, ts),
+        Some(2),
+    )
+    .unwrap();
+
+    let err = read_head_for_summary(&path)
+        .await
+        .expect_err("v2 rollout should be unsupported");
+
+    assert!(is_unsupported_rollout_schema_error(&err));
+}
+
+#[tokio::test]
+async fn read_head_for_summary_rejects_missing_schema_version() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let ts = "2025-04-07T10-30-00";
+    let uuid = Uuid::from_u128(106);
+    let path = write_session_file_with_meta_payload_and_schema_version(
+        home,
+        ts,
+        uuid,
+        minimal_meta_payload(uuid, ts),
+        None,
+    )
+    .unwrap();
+
+    let err = read_head_for_summary(&path)
+        .await
+        .expect_err("missing rollout schema should be unsupported");
+
+    assert!(is_unsupported_rollout_schema_error(&err));
+}
+
+#[tokio::test]
+async fn thread_list_skips_unsupported_rollout_schema_versions() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let valid_uuid = Uuid::from_u128(107);
+    let v2_uuid = Uuid::from_u128(108);
+    let missing_uuid = Uuid::from_u128(109);
+
+    write_session_file_with_meta_payload_and_schema_version(
+        home,
+        "2025-04-08T10-30-00",
+        valid_uuid,
+        minimal_meta_payload(valid_uuid, "2025-04-08T10-30-00"),
+        Some(ROLLOUT_SCHEMA_VERSION_V3),
+    )
+    .unwrap();
+    write_session_file_with_meta_payload_and_schema_version(
+        home,
+        "2025-04-09T10-30-00",
+        v2_uuid,
+        minimal_meta_payload(v2_uuid, "2025-04-09T10-30-00"),
+        Some(2),
+    )
+    .unwrap();
+    write_session_file_with_meta_payload_and_schema_version(
+        home,
+        "2025-04-10T10-30-00",
+        missing_uuid,
+        minimal_meta_payload(missing_uuid, "2025-04-10T10-30-00"),
+        None,
+    )
+    .unwrap();
+
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_threads(
+        home,
+        10,
+        None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
+        None,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(page.items.len(), 1);
+    assert!(
+        page.items[0]
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains(&valid_uuid.to_string()))
+    );
 }
 
 #[tokio::test]
@@ -413,7 +619,7 @@ async fn test_list_conversations_latest_first() {
         "source": "vscode",
         "model_provider": "test-provider",
         "base_instructions": null,
-        "rollout_schema_version": 2,
+        "rollout_schema_version": ROLLOUT_SCHEMA_VERSION_V3,
     })];
     let head_2 = vec![serde_json::json!({
         "id": u2,
@@ -424,7 +630,7 @@ async fn test_list_conversations_latest_first() {
         "source": "vscode",
         "model_provider": "test-provider",
         "base_instructions": null,
-        "rollout_schema_version": 2,
+        "rollout_schema_version": ROLLOUT_SCHEMA_VERSION_V3,
     })];
     let head_1 = vec![serde_json::json!({
         "id": u1,
@@ -435,7 +641,7 @@ async fn test_list_conversations_latest_first() {
         "source": "vscode",
         "model_provider": "test-provider",
         "base_instructions": null,
-        "rollout_schema_version": 2,
+        "rollout_schema_version": ROLLOUT_SCHEMA_VERSION_V3,
     })];
 
     let updated_times: Vec<Option<String>> =
@@ -561,7 +767,7 @@ async fn test_pagination_cursor() {
         "source": "vscode",
         "model_provider": "test-provider",
         "base_instructions": null,
-        "rollout_schema_version": 2,
+        "rollout_schema_version": ROLLOUT_SCHEMA_VERSION_V3,
     })];
     let head_4 = vec![serde_json::json!({
         "id": u4,
@@ -572,7 +778,7 @@ async fn test_pagination_cursor() {
         "source": "vscode",
         "model_provider": "test-provider",
         "base_instructions": null,
-        "rollout_schema_version": 2,
+        "rollout_schema_version": ROLLOUT_SCHEMA_VERSION_V3,
     })];
     let updated_page1: Vec<Option<String>> =
         page1.items.iter().map(|i| i.updated_at.clone()).collect();
@@ -634,7 +840,7 @@ async fn test_pagination_cursor() {
         "source": "vscode",
         "model_provider": "test-provider",
         "base_instructions": null,
-        "rollout_schema_version": 2,
+        "rollout_schema_version": ROLLOUT_SCHEMA_VERSION_V3,
     })];
     let head_2 = vec![serde_json::json!({
         "id": u2,
@@ -645,7 +851,7 @@ async fn test_pagination_cursor() {
         "source": "vscode",
         "model_provider": "test-provider",
         "base_instructions": null,
-        "rollout_schema_version": 2,
+        "rollout_schema_version": ROLLOUT_SCHEMA_VERSION_V3,
     })];
     let updated_page2: Vec<Option<String>> =
         page2.items.iter().map(|i| i.updated_at.clone()).collect();
@@ -701,7 +907,7 @@ async fn test_pagination_cursor() {
         "source": "vscode",
         "model_provider": "test-provider",
         "base_instructions": null,
-        "rollout_schema_version": 2,
+        "rollout_schema_version": ROLLOUT_SCHEMA_VERSION_V3,
     })];
     let updated_page3: Vec<Option<String>> =
         page3.items.iter().map(|i| i.updated_at.clone()).collect();
@@ -788,7 +994,7 @@ async fn test_get_thread_contents() {
         "source": "vscode",
         "model_provider": "test-provider",
         "base_instructions": null,
-        "rollout_schema_version": 2,
+        "rollout_schema_version": ROLLOUT_SCHEMA_VERSION_V3,
     })];
     let expected_page = ThreadsPage {
         items: vec![ThreadItem {
@@ -817,7 +1023,7 @@ async fn test_get_thread_contents() {
             "base_instructions": null,
             "source": "vscode",
             "model_provider": "test-provider",
-            "rollout_schema_version": 2,
+            "rollout_schema_version": ROLLOUT_SCHEMA_VERSION_V3,
         }
     });
     let user_event = serde_json::json!({
@@ -1016,17 +1222,14 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
     for idx in 0..total_messages {
         let response_line = RolloutLine {
             timestamp: format!("{ts}-{idx:02}"),
-            item: RolloutItem::TranscriptItem(
-                TranscriptItem::Message {
-                    id: None,
-                    role: "assistant".into(),
-                    content: vec![ContentItem::OutputText {
-                        text: format!("reply-{idx}"),
-                    }],
-                    end_turn: None,
-                }
-                .into(),
-            ),
+            item: RolloutItem::TranscriptItem(TranscriptItem::Message {
+                id: None,
+                role: "assistant".into(),
+                content: vec![ContentItem::OutputText {
+                    text: format!("reply-{idx}"),
+                }],
+                end_turn: None,
+            }),
         };
         writeln!(file, "{}", serde_json::to_string(&response_line)?)?;
     }
@@ -1109,7 +1312,7 @@ async fn test_stable_ordering_same_second_pagination() {
             "source": "vscode",
             "model_provider": "test-provider",
             "base_instructions": null,
-            "rollout_schema_version": 2,
+            "rollout_schema_version": ROLLOUT_SCHEMA_VERSION_V3,
         })]
     };
     let updated_page1: Vec<Option<String>> =

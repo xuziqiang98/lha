@@ -46,22 +46,47 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_state::ThreadMetadataBuilder;
-use thiserror::Error;
 
-#[derive(Debug, Error)]
-#[error(
-    "unsupported rollout schema version {found}; expected {expected}. Please start a new thread."
-)]
+#[derive(Debug)]
 pub(crate) struct UnsupportedRolloutSchema {
-    found: u32,
+    found: Option<u32>,
     expected: u32,
 }
+
+impl std::fmt::Display for UnsupportedRolloutSchema {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.found {
+            Some(found) => write!(
+                f,
+                "unsupported rollout schema version {found}; expected {}. Please start a new thread.",
+                self.expected
+            ),
+            None => write!(
+                f,
+                "unsupported rollout schema version missing or invalid; expected {}. Please start a new thread.",
+                self.expected
+            ),
+        }
+    }
+}
+
+impl std::error::Error for UnsupportedRolloutSchema {}
 
 pub(crate) fn unsupported_rollout_schema_error(found: u32) -> IoError {
     IoError::new(
         ErrorKind::InvalidData,
         UnsupportedRolloutSchema {
-            found,
+            found: Some(found),
+            expected: ROLLOUT_SCHEMA_VERSION_V3,
+        },
+    )
+}
+
+pub(crate) fn unsupported_rollout_schema_missing_error() -> IoError {
+    IoError::new(
+        ErrorKind::InvalidData,
+        UnsupportedRolloutSchema {
+            found: None,
             expected: ROLLOUT_SCHEMA_VERSION_V3,
         },
     )
@@ -71,6 +96,38 @@ pub fn is_unsupported_rollout_schema_error(err: &IoError) -> bool {
     err.get_ref()
         .and_then(|inner| inner.downcast_ref::<UnsupportedRolloutSchema>())
         .is_some()
+}
+
+pub(crate) fn is_unsupported_rollout_schema_anyhow(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<IoError>()
+            .is_some_and(is_unsupported_rollout_schema_error)
+    })
+}
+
+pub(crate) fn validate_rollout_line_schema_version(value: &Value) -> std::io::Result<()> {
+    if value.get("type").and_then(Value::as_str) != Some("session_meta") {
+        return Err(IoError::new(
+            ErrorKind::InvalidData,
+            "rollout does not start with session metadata",
+        ));
+    }
+
+    let Some(version) = value
+        .get("payload")
+        .and_then(|payload| payload.get("rollout_schema_version"))
+        .and_then(Value::as_u64)
+        .and_then(|version| u32::try_from(version).ok())
+    else {
+        return Err(unsupported_rollout_schema_missing_error());
+    };
+
+    if version != ROLLOUT_SCHEMA_VERSION_V3 {
+        return Err(unsupported_rollout_schema_error(version));
+    }
+
+    Ok(())
 }
 
 /// Records persisted rollout items for a session and flushes them to disk after every update.
@@ -426,6 +483,7 @@ impl RolloutRecorder {
         let mut items: Vec<RolloutItem> = Vec::new();
         let mut thread_id: Option<ThreadId> = None;
         let mut parse_errors = 0usize;
+        let mut checked_schema_version = false;
         for line in text.lines() {
             if line.trim().is_empty() {
                 continue;
@@ -438,6 +496,10 @@ impl RolloutRecorder {
                     continue;
                 }
             };
+            if !checked_schema_version {
+                validate_rollout_line_schema_version(&v)?;
+                checked_schema_version = true;
+            }
 
             // Parse the rollout line structure
             match serde_json::from_value::<RolloutLine>(v.clone()) {

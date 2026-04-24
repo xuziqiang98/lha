@@ -68,16 +68,14 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     )
     .await;
 
-    let compacted_history = vec![
-        TranscriptItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "REMOTE_COMPACTED_SUMMARY".to_string(),
-            }],
-            end_turn: None,
-        },
-    ];
+    let compacted_history = vec![TranscriptItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "REMOTE_COMPACTED_SUMMARY".to_string(),
+        }],
+        end_turn: None,
+    }];
     let compact_mock = responses::mount_compact_json_once(
         harness.server(),
         serde_json::json!({ "output": compacted_history.clone() }),
@@ -183,16 +181,14 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     )
     .await;
 
-    let compacted_history = vec![
-        TranscriptItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "REMOTE_COMPACTED_SUMMARY".to_string(),
-            }],
-            end_turn: None,
-        },
-    ];
+    let compacted_history = vec![TranscriptItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "REMOTE_COMPACTED_SUMMARY".to_string(),
+        }],
+        end_turn: None,
+    }];
     let compact_mock = responses::mount_compact_json_once(
         harness.server(),
         serde_json::json!({ "output": compacted_history.clone() }),
@@ -246,16 +242,14 @@ async fn remote_manual_compact_emits_context_compaction_items() -> Result<()> {
     )
     .await;
 
-    let compacted_history = vec![
-        TranscriptItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "REMOTE_COMPACTED_SUMMARY".to_string(),
-            }],
-            end_turn: None,
-        },
-    ];
+    let compacted_history = vec![TranscriptItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "REMOTE_COMPACTED_SUMMARY".to_string(),
+        }],
+        end_turn: None,
+    }];
     let compact_mock = responses::mount_compact_json_once(
         harness.server(),
         serde_json::json!({ "output": compacted_history.clone() }),
@@ -400,14 +394,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
         };
         if let RolloutItem::Compacted(compacted) = entry.item
             && compacted.message.is_empty()
-            && compacted.replacement_history.as_ref()
-                == Some(
-                    &compacted_history
-                        .iter()
-                        .cloned()
-                        .map(Into::into)
-                        .collect::<Vec<_>>(),
-                )
+            && compacted.replacement_history.as_ref() == Some(&compacted_history.to_vec())
         {
             saw_compacted_history = true;
             break;
@@ -454,16 +441,14 @@ async fn remote_compact_backfills_latest_plan_into_replacement_history() -> Resu
     )
     .await;
 
-    let compacted_history = vec![
-        TranscriptItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "REMOTE_COMPACTED_SUMMARY".to_string(),
-            }],
-            end_turn: None,
-        },
-    ];
+    let compacted_history = vec![TranscriptItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "REMOTE_COMPACTED_SUMMARY".to_string(),
+        }],
+        end_turn: None,
+    }];
     let compact_mock = responses::mount_compact_json_once(
         harness.server(),
         serde_json::json!({ "output": compacted_history }),
@@ -575,16 +560,14 @@ async fn remote_compact_backfills_recent_skills_into_replacement_history() -> Re
     )
     .await;
 
-    let compacted_history = vec![
-        TranscriptItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "REMOTE_COMPACTED_SUMMARY".to_string(),
-            }],
-            end_turn: None,
-        },
-    ];
+    let compacted_history = vec![TranscriptItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "REMOTE_COMPACTED_SUMMARY".to_string(),
+        }],
+        end_turn: None,
+    }];
     responses::mount_compact_json_once(
         harness.server(),
         serde_json::json!({ "output": compacted_history.clone() }),
@@ -708,7 +691,7 @@ async fn remote_compact_backfills_latest_unfinished_update_plan() -> Result<()> 
     )
     .await;
 
-    let compacted_history = vec![ConversationItem::Message {
+    let compacted_history = vec![TranscriptItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {

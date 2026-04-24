@@ -58,13 +58,11 @@ impl ToolHandler for McpHandler {
                 content,
                 content_items,
                 success,
-            } => {
-                Ok(ToolOutput::Function {
-                    content,
-                    content_items,
-                    success,
-                })
-            }
+            } => Ok(ToolOutput::Function {
+                content,
+                content_items,
+                success,
+            }),
             ToolResultPayload::Text { output } => Ok(ToolOutput::Function {
                 content: output,
                 content_items: None,

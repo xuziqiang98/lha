@@ -1,8 +1,10 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
+use app_test_support::create_fake_rollout_with_schema_version;
 use app_test_support::create_fake_rollout_with_text_elements;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
@@ -130,6 +132,54 @@ async fn thread_read_can_include_turns() -> Result<()> {
         }
         other => panic!("expected user message item, got {other:?}"),
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_read_rejects_v2_rollout() -> Result<()> {
+    thread_read_rejects_unsupported_rollout(Some(2)).await
+}
+
+#[tokio::test]
+async fn thread_read_rejects_missing_schema_version_rollout() -> Result<()> {
+    thread_read_rejects_unsupported_rollout(None).await
+}
+
+async fn thread_read_rejects_unsupported_rollout(schema_version: Option<u32>) -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let conversation_id = create_fake_rollout_with_schema_version(
+        codex_home.path(),
+        "2025-01-06T12-00-00",
+        "2025-01-06T12:00:00Z",
+        "legacy message",
+        Some("mock_provider"),
+        schema_version,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: conversation_id,
+            include_turns: false,
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+
+    assert!(
+        error.error.message.contains("legacy rollout unsupported"),
+        "unexpected error message: {}",
+        error.error.message
+    );
 
     Ok(())
 }

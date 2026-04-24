@@ -18,14 +18,15 @@ use uuid::Uuid;
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
 use super::is_unsupported_rollout_schema_error;
+use super::recorder::validate_rollout_line_schema_version;
 use crate::path_utils;
 use crate::protocol::EventMsg;
 use crate::state_db;
 use codex_file_search as file_search;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use tracing::warn;
@@ -60,13 +61,6 @@ pub struct ThreadItem {
     /// updated_at is truncated to second precision to match created_at.
     pub updated_at: Option<String>,
 }
-
-#[allow(dead_code)]
-#[deprecated(note = "use ThreadItem")]
-pub type ConversationItem = ThreadItem;
-#[allow(dead_code)]
-#[deprecated(note = "use ThreadsPage")]
-pub type ConversationsPage = ThreadsPage;
 
 #[derive(Default)]
 struct HeadTailSummary {
@@ -1017,6 +1011,7 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
     let mut lines = reader.lines();
     let mut summary = HeadTailSummary::default();
     let mut lines_scanned = 0usize;
+    let mut checked_schema_version = false;
 
     while lines_scanned < head_limit
         || (summary.saw_session_meta
@@ -1031,7 +1026,13 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
         }
         lines_scanned += 1;
 
-        let parsed: Result<RolloutLine, _> = serde_json::from_str(trimmed);
+        let parsed: Result<serde_json::Value, _> = serde_json::from_str(trimmed);
+        let Ok(value) = parsed else { continue };
+        if !checked_schema_version {
+            validate_rollout_line_schema_version(&value)?;
+            checked_schema_version = true;
+        }
+        let parsed: Result<RolloutLine, _> = serde_json::from_value(value);
         let Ok(rollout_line) = parsed else { continue };
 
         match rollout_line.item {

@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::rollout;
 use crate::rollout::list::parse_timestamp_uuid_from_filename;
 use crate::rollout::recorder::RolloutRecorder;
+use crate::rollout::recorder::is_unsupported_rollout_schema_anyhow;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Timelike;
@@ -191,6 +192,10 @@ pub(crate) async fn backfill_sessions(
                 }
             }
             Err(err) => {
+                if is_unsupported_rollout_schema_anyhow(&err) {
+                    warn!("skipping unsupported legacy rollout {}", path.display());
+                    continue;
+                }
                 stats.failed = stats.failed.saturating_add(1);
                 warn!("failed to extract rollout {}: {err}", path.display());
             }

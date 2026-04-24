@@ -313,7 +313,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
         .send_resume_conversation_request(ResumeConversationParams {
             path: None,
             conversation_id: None,
-            history: Some(history.into_iter().map(Into::into).collect()),
+            history: Some(history.into_iter().collect()),
             overrides: Some(NewConversationParams {
                 model: Some("o3".to_string()),
                 ..Default::default()
