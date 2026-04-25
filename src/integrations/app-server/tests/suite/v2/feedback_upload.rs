@@ -18,10 +18,10 @@ const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn feedback_upload_persists_local_bundle() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let codex_home_path = codex_home.path().canonicalize()?;
+    let adam_home = TempDir::new()?;
+    let adam_home_path = adam_home.path().canonicalize()?;
     let thread_id = create_fake_rollout(
-        codex_home.path(),
+        adam_home.path(),
         "2025-02-01T10-00-00",
         "2025-02-01T10:00:00Z",
         "hello",
@@ -29,7 +29,7 @@ async fn feedback_upload_persists_local_bundle() -> Result<()> {
         None,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
@@ -63,17 +63,13 @@ async fn feedback_upload_persists_local_bundle() -> Result<()> {
     assert!(
         response
             .saved_path
-            .starts_with(codex_home_path.join("feedback"))
+            .starts_with(adam_home_path.join("feedback"))
     );
     assert!(response.saved_path.exists());
     assert!(response.saved_path.join("metadata.json").exists());
     assert!(response.saved_path.join("codex-logs.log").exists());
 
-    let rollout_file = rollout_path(
-        codex_home.path(),
-        "2025-02-01T10-00-00",
-        &response.thread_id,
-    );
+    let rollout_file = rollout_path(adam_home.path(), "2025-02-01T10-00-00", &response.thread_id);
     let rollout_name = rollout_file
         .file_name()
         .expect("rollout file name should exist");
@@ -96,13 +92,13 @@ async fn feedback_upload_persists_local_bundle() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn feedback_upload_respects_disabled_config() -> Result<()> {
-    let codex_home = TempDir::new()?;
+    let adam_home = TempDir::new()?;
     std::fs::write(
-        codex_home.path().join("config.toml"),
+        adam_home.path().join("config.toml"),
         "[feedback]\nenabled = false\n",
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp

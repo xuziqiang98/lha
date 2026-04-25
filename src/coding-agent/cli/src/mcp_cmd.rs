@@ -7,7 +7,7 @@ use anyhow::bail;
 use clap::ArgGroup;
 use codex_agent::config::Config;
 use codex_agent::config::edit::ConfigEditsBuilder;
-use codex_agent::config::find_codex_home;
+use codex_agent::config::find_adam_home;
 use codex_agent::config::load_global_mcp_servers;
 use codex_agent::config::types::McpServerConfig;
 use codex_agent::config::types::McpServerTransportConfig;
@@ -23,7 +23,7 @@ use codex_rmcp_client::perform_oauth_login;
 /// Subcommands:
 /// - `list`   — list configured servers (with `--json`)
 /// - `get`    — show a single server (with `--json`)
-/// - `add`    — add a server launcher entry to `~/.codey/config.toml`
+/// - `add`    — add a server launcher entry to `~/.adam/config.toml`
 /// - `remove` — delete a server entry
 /// - `login`  — authenticate with MCP server using OAuth
 /// - `logout` — remove OAuth credentials for MCP server
@@ -196,10 +196,10 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
 
     validate_server_name(&name)?;
 
-    let codex_home = find_codex_home().context("failed to resolve CODEY_HOME")?;
-    let mut servers = load_global_mcp_servers(&codex_home)
+    let adam_home = find_adam_home().context("failed to resolve ADAM_HOME")?;
+    let mut servers = load_global_mcp_servers(&adam_home)
         .await
-        .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
+        .with_context(|| format!("failed to load MCP servers from {}", adam_home.display()))?;
 
     let transport = match transport_args {
         AddMcpTransportArgs {
@@ -253,11 +253,11 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
 
     servers.insert(name.clone(), new_entry);
 
-    ConfigEditsBuilder::new(&codex_home)
+    ConfigEditsBuilder::new(&adam_home)
         .replace_mcp_servers(&servers)
         .apply()
         .await
-        .with_context(|| format!("failed to write MCP servers to {}", codex_home.display()))?;
+        .with_context(|| format!("failed to write MCP servers to {}", adam_home.display()))?;
 
     println!("Added global MCP server '{name}'.");
 
@@ -294,19 +294,19 @@ async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveAr
 
     validate_server_name(&name)?;
 
-    let codex_home = find_codex_home().context("failed to resolve CODEY_HOME")?;
-    let mut servers = load_global_mcp_servers(&codex_home)
+    let adam_home = find_adam_home().context("failed to resolve ADAM_HOME")?;
+    let mut servers = load_global_mcp_servers(&adam_home)
         .await
-        .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
+        .with_context(|| format!("failed to load MCP servers from {}", adam_home.display()))?;
 
     let removed = servers.remove(&name).is_some();
 
     if removed {
-        ConfigEditsBuilder::new(&codex_home)
+        ConfigEditsBuilder::new(&adam_home)
             .replace_mcp_servers(&servers)
             .apply()
             .await
-            .with_context(|| format!("failed to write MCP servers to {}", codex_home.display()))?;
+            .with_context(|| format!("failed to write MCP servers to {}", adam_home.display()))?;
     }
 
     if removed {

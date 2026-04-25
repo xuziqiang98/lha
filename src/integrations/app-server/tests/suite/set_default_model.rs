@@ -1,7 +1,6 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
-use codex_agent::config::ConfigToml;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -50,18 +49,9 @@ async fn set_default_model_persists_overrides() -> Result<()> {
 
     let _: SetDefaultModelResponse = to_response(resp)?;
 
-    let config_path = codex_home.path().join("config.toml");
-    let config_contents = tokio::fs::read_to_string(&config_path).await?;
-    let config_toml: ConfigToml = toml::from_str(&config_contents)?;
-
     assert_eq!(
-        ConfigToml {
-            model: Some("gpt-4.1".to_string()),
-            model_provider: Some("openai".to_string()),
-            model_reasoning_effort: None,
-            ..Default::default()
-        },
-        config_toml,
+        state_model_ref(codex_home.path()).await?,
+        "openai.main:gpt-4.1"
     );
     Ok(())
 }
@@ -90,23 +80,10 @@ async fn set_default_model_persists_explicit_provider() -> Result<()> {
 
     let _: SetDefaultModelResponse = to_response(resp)?;
 
-    let config_path = codex_home.path().join("config.toml");
-    let config_contents = tokio::fs::read_to_string(&config_path).await?;
-    let config_toml: ConfigToml = toml::from_str(&config_contents)?;
-    let expected: ConfigToml = toml::from_str(
-        r#"
-model = "deepseek-v3"
-model_provider = "iie"
-
-[model_providers.iie]
-name = "iie"
-base_url = "https://example.com/iie"
-dialect = "responses"
-experimental_bearer_token = "sk-test"
-"#,
-    )?;
-
-    assert_eq!(expected, config_toml);
+    assert_eq!(
+        state_model_ref(codex_home.path()).await?,
+        "iie.main:deepseek-v3"
+    );
     Ok(())
 }
 
@@ -134,12 +111,10 @@ async fn set_default_model_infers_provider_from_saved_profiles() -> Result<()> {
 
     let _: SetDefaultModelResponse = to_response(resp)?;
 
-    let config_path = codex_home.path().join("config.toml");
-    let config_contents = tokio::fs::read_to_string(&config_path).await?;
-    let config_toml: ConfigToml = toml::from_str(&config_contents)?;
-
-    assert_eq!(config_toml.model.as_deref(), Some("deepseek-v3"));
-    assert_eq!(config_toml.model_provider.as_deref(), Some("provider_b"));
+    assert_eq!(
+        state_model_ref(codex_home.path()).await?,
+        "provider_b.main:deepseek-v3"
+    );
     Ok(())
 }
 
@@ -167,22 +142,10 @@ async fn set_default_model_rejects_unknown_explicit_provider() -> Result<()> {
 
     assert_eq!(
         error.error.message,
-        "failed to persist model selection: model provider `missing-provider` was not found"
+        "model provider `missing-provider` was not found"
     );
 
-    let config_path = codex_home.path().join("config.toml");
-    let config_contents = tokio::fs::read_to_string(&config_path).await?;
-    let config_toml: ConfigToml = toml::from_str(&config_contents)?;
-
-    assert_eq!(
-        ConfigToml {
-            model: Some("gpt-5.1-codex-max".to_string()),
-            model_provider: None,
-            model_reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium,),
-            ..Default::default()
-        },
-        config_toml,
-    );
+    assert!(!tokio::fs::try_exists(codex_home.path().join("state.json")).await?);
     Ok(())
 }
 
@@ -307,7 +270,7 @@ async fn set_default_model_switches_loaded_default_thread_for_provider_only_upda
     let request_id = mcp
         .send_set_default_model_request(SetDefaultModelParams {
             model: None,
-            model_provider: Some("i9vc#messages".to_string()),
+            model_provider: Some("i9vc.messages".to_string()),
             reasoning_effort: None,
         })
         .await?;
@@ -423,58 +386,61 @@ async fn set_default_model_does_not_switch_loaded_threads_with_explicit_provider
     Ok(())
 }
 
+async fn state_model_ref(codex_home: &Path) -> Result<String> {
+    let state_path = codex_home.join("state.json");
+    let state: serde_json::Value =
+        serde_json::from_str(&tokio::fs::read_to_string(state_path).await?)?;
+    state["last_selected_model"]["model_ref"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("state should include model ref"))
+}
+
 // Helper to create a config.toml; mirrors create_conversation.rs
 fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
         config_toml,
         r#"
-model = "gpt-5.1-codex-max"
 model_reasoning_effort = "medium"
 "#,
     )
 }
 
 fn create_profile_mapped_config_toml(codex_home: &Path) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
     std::fs::write(
-        config_toml,
+        codex_home.join("models.json"),
+        r#"{
+  "providers": {
+    "provider_a": { "endpoints": { "main": { "base_url": "https://example.com/a", "dialect": "chat", "experimental_bearer_token": "sk-a", "models": { "glm-5": {} } } } },
+    "provider_b": { "endpoints": { "main": { "base_url": "https://example.com/b", "dialect": "chat", "experimental_bearer_token": "sk-b", "models": { "deepseek-v3": {} } } } }
+  }
+}
+"#,
+    )?;
+    std::fs::write(
+        codex_home.join("config.toml"),
         r#"
-model = "glm-5"
-model_provider = "provider_a"
-
-[model_providers.provider_a]
-name = "provider_a"
-base_url = "https://example.com/a"
-dialect = "chat"
-experimental_bearer_token = "sk-a"
-
-[model_providers.provider_b]
-name = "provider_b"
-base_url = "https://example.com/b"
-dialect = "chat"
-experimental_bearer_token = "sk-b"
-
 [profiles.deepseek]
-model = "deepseek-v3"
-model_provider = "provider_b"
+model = "provider_b.main:deepseek-v3"
 "#,
     )
 }
 
 fn create_config_toml_with_custom_provider(codex_home: &Path) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
     std::fs::write(
-        config_toml,
+        codex_home.join("models.json"),
+        r#"{
+  "providers": {
+    "iie": { "endpoints": { "main": { "base_url": "https://example.com/iie", "dialect": "responses", "experimental_bearer_token": "sk-test", "models": { "deepseek-v3": {} } } } }
+  }
+}
+"#,
+    )?;
+    std::fs::write(
+        codex_home.join("config.toml"),
         r#"
-model = "gpt-5.1-codex-max"
 model_reasoning_effort = "medium"
-
-[model_providers.iie]
-name = "iie"
-base_url = "https://example.com/iie"
-dialect = "responses"
-experimental_bearer_token = "sk-test"
 "#,
     )
 }
@@ -483,45 +449,71 @@ fn create_variant_switching_config_toml(
     codex_home: &Path,
     server_uri: &str,
 ) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
     std::fs::write(
-        config_toml,
+        codex_home.join("models.json"),
         format!(
-            r#"
-model = "gpt-5.4"
-model_provider = "i9vc#responses"
+            r#"{{
+  "providers": {{
+    "i9vc": {{
+      "name": "i9vc",
+      "endpoints": {{
+        "responses": {{
+          "name": "i9vc",
+          "base_url": "{server_uri}/v1",
+          "dialect": "responses",
+          "experimental_bearer_token": "sk-responses",
+          "request_max_retries": 0,
+          "stream_max_retries": 0,
+          "models": {{ "gpt-5.4": {{}} }}
+        }},
+        "messages": {{
+          "name": "i9vc",
+          "base_url": "{server_uri}/v1",
+          "dialect": "messages",
+          "experimental_bearer_token": "sk-messages",
+          "request_max_retries": 0,
+          "stream_max_retries": 0,
+          "models": {{ "glm-5.1": {{}} }}
+        }}
+      }}
+    }},
+    "other_provider": {{
+      "name": "other_provider",
+      "endpoints": {{
+        "main": {{
+          "name": "other_provider",
+          "base_url": "{server_uri}/v1",
+          "dialect": "responses",
+          "experimental_bearer_token": "sk-other",
+          "request_max_retries": 0,
+          "stream_max_retries": 0,
+          "models": {{ "gpt-4.1": {{}} }}
+        }}
+      }}
+    }}
+  }}
+}}
+"#,
+        ),
+    )?;
+    std::fs::write(
+        codex_home.join("state.json"),
+        r#"{
+  "last_selected_model": { "model_ref": "i9vc.responses:gpt-5.4", "selected_at": null },
+  "last_reasoning_effort": null,
+  "last_model_verbosity": null
+}
+"#,
+    )?;
+    std::fs::write(
+        codex_home.join("config.toml"),
+        r#"
 approval_policy = "never"
 sandbox_mode = "read-only"
 
-[model_providers.i9vc.variants.responses]
-name = "i9vc"
-base_url = "{server_uri}/v1"
-dialect = "responses"
-experimental_bearer_token = "sk-responses"
-request_max_retries = 0
-stream_max_retries = 0
-
-[model_providers.i9vc.variants.messages]
-name = "i9vc"
-base_url = "{server_uri}/v1"
-dialect = "messages"
-experimental_bearer_token = "sk-messages"
-request_max_retries = 0
-stream_max_retries = 0
-
-[model_providers.other_provider]
-name = "other_provider"
-base_url = "{server_uri}/v1"
-dialect = "responses"
-experimental_bearer_token = "sk-other"
-request_max_retries = 0
-stream_max_retries = 0
-
-[profiles."_provider.i9vc#messages.glm-5.1"]
-model = "glm-5.1"
-model_provider = "i9vc#messages"
+[profiles."_provider.i9vc.messages.glm-5.1"]
+model = "i9vc.messages:glm-5.1"
 "#,
-        ),
     )
 }
 
@@ -529,36 +521,48 @@ fn create_implicit_default_variant_switching_config_toml(
     codex_home: &Path,
     server_uri: &str,
 ) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
     std::fs::write(
-        config_toml,
+        codex_home.join("models.json"),
         format!(
-            r#"
-model_provider = "i9vc#responses"
+            r#"{{
+  "providers": {{
+    "i9vc": {{
+      "name": "i9vc",
+      "endpoints": {{
+        "responses": {{
+          "name": "i9vc",
+          "base_url": "{server_uri}/v1",
+          "dialect": "responses",
+          "experimental_bearer_token": "sk-responses",
+          "request_max_retries": 0,
+          "stream_max_retries": 0,
+          "models": {{ "gpt-5.4": {{}} }}
+        }},
+        "messages": {{
+          "name": "i9vc",
+          "base_url": "{server_uri}/v1",
+          "dialect": "messages",
+          "experimental_bearer_token": "sk-messages",
+          "request_max_retries": 0,
+          "stream_max_retries": 0,
+          "models": {{ "glm-5.1": {{}} }}
+        }}
+      }}
+    }}
+  }}
+}}
+"#,
+        ),
+    )?;
+    std::fs::write(
+        codex_home.join("config.toml"),
+        r#"
 approval_policy = "never"
 sandbox_mode = "read-only"
 
-[model_providers.i9vc.variants.responses]
-name = "i9vc"
-base_url = "{server_uri}/v1"
-dialect = "responses"
-experimental_bearer_token = "sk-responses"
-request_max_retries = 0
-stream_max_retries = 0
-
-[model_providers.i9vc.variants.messages]
-name = "i9vc"
-base_url = "{server_uri}/v1"
-dialect = "messages"
-experimental_bearer_token = "sk-messages"
-request_max_retries = 0
-stream_max_retries = 0
-
-[profiles."_provider.i9vc#messages.glm-5.1"]
-model = "glm-5.1"
-model_provider = "i9vc#messages"
+[profiles."_provider.i9vc.messages.glm-5.1"]
+model = "i9vc.messages:glm-5.1"
 "#,
-        ),
     )
 }
 

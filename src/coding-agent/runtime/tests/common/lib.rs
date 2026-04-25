@@ -74,10 +74,10 @@ pub fn test_tmp_path_buf() -> PathBuf {
 
 /// Returns a default `Config` whose on-disk state is confined to the provided
 /// temporary directory. Using a per-test directory keeps tests hermetic and
-/// avoids clobbering a developer’s real `~/.codey`.
-pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
+/// avoids clobbering a developer’s real `~/.adam`.
+pub async fn load_default_config_for_test(adam_home: &TempDir) -> Config {
     ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
+        .adam_home(adam_home.path().to_path_buf())
         .harness_overrides(default_test_overrides())
         .build()
         .await

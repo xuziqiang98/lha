@@ -3,7 +3,6 @@ use anyhow::anyhow;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::to_response;
-use codex_agent::features::FEATURES;
 use codex_agent::features::Feature;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -47,10 +46,10 @@ async fn plan_mode_uses_proposed_plan_block_for_plan_item() -> Result<()> {
     ])];
     let server = create_mock_responses_server_sequence(responses).await;
 
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let turn = start_plan_mode_turn(&mut mcp).await?;
@@ -104,10 +103,10 @@ async fn plan_mode_without_proposed_plan_does_not_emit_plan_item() -> Result<()>
     ])];
     let server = create_mock_responses_server_sequence(responses).await;
 
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let _turn = start_plan_mode_turn(&mut mcp).await?;
@@ -214,44 +213,21 @@ async fn collect_turn_notifications(
     }
 }
 
-fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
+fn create_config_toml(adam_home: &Path, server_uri: &str) -> std::io::Result<()> {
     let features = BTreeMap::from([
         (Feature::RemoteModels, false),
         (Feature::CollaborationModes, true),
     ]);
-    let feature_entries = features
-        .into_iter()
-        .map(|(feature, enabled)| {
-            let key = FEATURES
-                .iter()
-                .find(|spec| spec.id == feature)
-                .map(|spec| spec.key)
-                .unwrap_or_else(|| panic!("missing feature key for {feature:?}"));
-            format!("{key} = {enabled}")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "read-only"
-
-model_provider = "mock_provider"
-
-[features]
-{feature_entries}
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-dialect = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
+    app_test_support::write_mock_responses_config_toml_with_options(
+        adam_home,
+        server_uri,
+        &features,
+        20_000,
+        Some(false),
+        "mock_provider",
+        "mock-model",
+        "",
+        "never",
+        "read-only",
     )
 }

@@ -219,7 +219,7 @@ pub async fn run_main(
             match effective_toml.try_into() {
                 Ok(config_toml) => {
                     if let Err(err) = codex_agent::personality_migration::maybe_migrate_personality(
-                        &config.codex_home,
+                        &config.adam_home,
                         &config_toml,
                     )
                     .await
@@ -233,7 +233,7 @@ pub async fn run_main(
             }
 
             let auth_manager = AuthManager::shared(
-                config.codex_home.clone(),
+                config.adam_home.clone(),
                 false,
                 config.cli_auth_credentials_store_mode,
             );

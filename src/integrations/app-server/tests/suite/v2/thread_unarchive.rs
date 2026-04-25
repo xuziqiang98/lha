@@ -23,10 +23,10 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test]
 async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path())?;
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -42,7 +42,7 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
-    let rollout_path = find_thread_path_by_id_str(codex_home.path(), &thread.id)
+    let rollout_path = find_thread_path_by_id_str(adam_home.path(), &thread.id)
         .await?
         .expect("expected rollout path for thread id to exist");
 
@@ -58,7 +58,7 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
     .await??;
     let _: ThreadArchiveResponse = to_response::<ThreadArchiveResponse>(archive_resp)?;
 
-    let archived_path = find_archived_thread_path_by_id_str(codex_home.path(), &thread.id)
+    let archived_path = find_archived_thread_path_by_id_str(adam_home.path(), &thread.id)
         .await?
         .expect("expected archived rollout path for thread id to exist");
     let archived_path_display = archived_path.display();
@@ -108,8 +108,8 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
     Ok(())
 }
 
-fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
+fn create_config_toml(adam_home: &Path) -> std::io::Result<()> {
+    let config_toml = adam_home.join("config.toml");
     std::fs::write(config_toml, config_contents())
 }
 

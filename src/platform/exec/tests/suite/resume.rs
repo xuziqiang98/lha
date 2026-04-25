@@ -116,7 +116,7 @@ fn last_user_image_count(path: &std::path::Path) -> usize {
 }
 
 fn write_fake_rollout(
-    codex_home: &Path,
+    adam_home: &Path,
     filename_ts: &str,
     meta_rfc3339: &str,
     preview: &str,
@@ -128,7 +128,7 @@ fn write_fake_rollout(
     let year = &filename_ts[0..4];
     let month = &filename_ts[5..7];
     let day = &filename_ts[8..10];
-    let dir = codex_home.join("sessions").join(year).join(month).join(day);
+    let dir = adam_home.join("sessions").join(year).join(month).join(day);
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("rollout-{filename_ts}-{uuid}.jsonl"));
     let meta = SessionMeta {

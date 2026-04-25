@@ -15,9 +15,9 @@ use owo_colors::OwoColorize;
 #[command(name = "codex-state-logs")]
 #[command(about = "Tail Codex logs from state.sqlite with simple filters")]
 struct Args {
-    /// Path to CODEY_HOME. Defaults to $CODEY_HOME or ~/.codey.
-    #[arg(long, env = "CODEY_HOME")]
-    codex_home: Option<PathBuf>,
+    /// Path to ADAM_HOME. Defaults to $ADAM_HOME or ~/.adam.
+    #[arg(long, env = "ADAM_HOME")]
+    adam_home: Option<PathBuf>,
 
     /// Direct path to the SQLite database. Overrides --codex-home.
     #[arg(long)]
@@ -76,11 +76,11 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let db_path = resolve_db_path(&args)?;
     let filter = build_filter(&args)?;
-    let codex_home = db_path
+    let adam_home = db_path
         .parent()
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| PathBuf::from("."));
-    let runtime = StateRuntime::init(codex_home, "logs-client".to_string(), None).await?;
+    let runtime = StateRuntime::init(adam_home, "logs-client".to_string(), None).await?;
 
     let mut last_id = print_backfill(runtime.as_ref(), &filter, args.backfill).await?;
     if last_id == 0 {
@@ -103,15 +103,15 @@ fn resolve_db_path(args: &Args) -> anyhow::Result<PathBuf> {
         return Ok(db.clone());
     }
 
-    let codex_home = args.codex_home.clone().unwrap_or_else(default_codex_home);
-    Ok(codex_home.join(STATE_DB_FILENAME))
+    let adam_home = args.adam_home.clone().unwrap_or_else(default_adam_home);
+    Ok(adam_home.join(STATE_DB_FILENAME))
 }
 
-fn default_codex_home() -> PathBuf {
+fn default_adam_home() -> PathBuf {
     if let Some(home) = home_dir() {
-        return home.join(".codey");
+        return home.join(".adam");
     }
-    PathBuf::from(".codey")
+    PathBuf::from(".adam")
 }
 
 fn build_filter(args: &Args) -> anyhow::Result<LogFilter> {

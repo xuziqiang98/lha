@@ -20,7 +20,7 @@ use codex_agent::auth::enforce_login_restrictions;
 use codex_agent::config::Config;
 use codex_agent::config::ConfigBuilder;
 use codex_agent::config::ConfigOverrides;
-use codex_agent::config::find_codex_home;
+use codex_agent::config::find_adam_home;
 use codex_agent::config::load_config_as_toml_with_cli_overrides;
 use codex_agent::config_loader::ConfigLoadError;
 use codex_agent::config_loader::format_config_error_with_source;
@@ -153,8 +153,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]
-    let codex_home = match find_codex_home() {
-        Ok(codex_home) => codex_home,
+    let adam_home = match find_adam_home() {
+        Ok(adam_home) => adam_home,
         Err(err) => {
             eprintln!("Error finding codex home: {err}");
             std::process::exit(1);
@@ -163,7 +163,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     #[allow(clippy::print_stderr)]
     let config_toml = match load_config_as_toml_with_cli_overrides(
-        &codex_home,
+        &adam_home,
         &config_cwd,
         cli_kv_overrides.clone(),
     )
@@ -188,7 +188,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let cloud_auth_manager = AuthManager::shared(
-        codex_home.clone(),
+        adam_home.clone(),
         false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
     );
@@ -285,12 +285,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     }
 
     let auth_manager = AuthManager::shared(
-        config.codex_home.clone(),
+        config.adam_home.clone(),
         true,
         config.cli_auth_credentials_store_mode,
     );
     let thread_manager = Arc::new(ThreadManager::new(
-        config.codex_home.clone(),
+        config.adam_home.clone(),
         auth_manager.clone(),
         config.model_provider_id.as_str(),
         config.model_provider.clone(),
@@ -557,7 +557,7 @@ async fn resolve_resume_path(
             Some(config.cwd.as_path())
         };
         match codex_agent::RolloutRecorder::find_latest_thread_path(
-            &config.codex_home,
+            &config.adam_home,
             1,
             None,
             codex_agent::ThreadSortKey::UpdatedAt,
@@ -576,10 +576,10 @@ async fn resolve_resume_path(
         }
     } else if let Some(id_str) = args.session_id.as_deref() {
         if Uuid::parse_str(id_str).is_ok() {
-            let path = find_thread_path_by_id_str(&config.codex_home, id_str).await?;
+            let path = find_thread_path_by_id_str(&config.adam_home, id_str).await?;
             Ok(path)
         } else {
-            let path = find_thread_path_by_name_str(&config.codex_home, id_str).await?;
+            let path = find_thread_path_by_name_str(&config.adam_home, id_str).await?;
             Ok(path)
         }
     } else {

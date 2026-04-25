@@ -56,8 +56,7 @@ pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>
     if !config.features.enabled(Feature::Apps) {
         return Ok(Vec::new());
     }
-    init_chatgpt_token_from_auth(&config.codex_home, config.cli_auth_credentials_store_mode)
-        .await?;
+    init_chatgpt_token_from_auth(&config.adam_home, config.cli_auth_credentials_store_mode).await?;
 
     let token_data =
         get_chatgpt_token_data().ok_or_else(|| anyhow::anyhow!("ChatGPT token not available"))?;

@@ -9,7 +9,7 @@ use std::path::Path;
 /// Write a models_cache.json file to the codex home directory.
 /// This prevents ModelsManager from making network requests to refresh models.
 /// The cache will be treated as fresh (within TTL) and used instead of fetching from the network.
-pub fn write_models_cache(codex_home: &Path) -> std::io::Result<()> {
+pub fn write_models_cache(adam_home: &Path) -> std::io::Result<()> {
     let response: ModelsResponse =
         serde_json::from_str(include_str!("../../../../coding-agent/runtime/models.json"))
             .map_err(std::io::Error::other)?;
@@ -19,16 +19,16 @@ pub fn write_models_cache(codex_home: &Path) -> std::io::Result<()> {
         .filter(|model| model.visibility == ModelVisibility::List)
         .collect();
 
-    write_models_cache_with_models(codex_home, models)
+    write_models_cache_with_models(adam_home, models)
 }
 
 /// Write a models_cache.json file with specific models.
 /// Useful when tests need specific models to be available.
 pub fn write_models_cache_with_models(
-    codex_home: &Path,
+    adam_home: &Path,
     models: Vec<ModelInfo>,
 ) -> std::io::Result<()> {
-    let cache_path = codex_home.join("models_cache.json");
+    let cache_path = adam_home.join("models_cache.json");
     // DateTime<Utc> serializes to RFC3339 format by default with serde
     let fetched_at: DateTime<Utc> = Utc::now();
     let cache = json!({

@@ -1,6 +1,6 @@
 //! Persistence layer for the global, append-only *message history* file.
 //!
-//! The history is stored at `~/.codey/history.jsonl` with **one JSON object per
+//! The history is stored at `~/.adam/history.jsonl` with **one JSON object per
 //! line** so that it can be efficiently appended to and parsed with standard
 //! JSON-Lines tooling. Each record has the following schema:
 //!
@@ -44,7 +44,7 @@ use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-/// Filename that stores the message history inside `~/.codey`.
+/// Filename that stores the message history inside `~/.adam`.
 const HISTORY_FILENAME: &str = "history.jsonl";
 
 /// When history exceeds the hard cap, trim it down to this fraction of `max_bytes`.
@@ -61,7 +61,7 @@ pub struct HistoryEntry {
 }
 
 fn history_filepath(config: &Config) -> PathBuf {
-    let mut path = config.codex_home.clone();
+    let mut path = config.adam_home.clone();
     path.push(HISTORY_FILENAME);
     path
 }
@@ -86,7 +86,7 @@ pub(crate) async fn append_entry(
 
     // TODO: check `text` for sensitive patterns
 
-    // Resolve `~/.codey/history.jsonl` and ensure the parent directory exists.
+    // Resolve `~/.adam/history.jsonl` and ensure the parent directory exists.
     let path = history_filepath(config);
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
@@ -491,10 +491,10 @@ mod tests {
 
     #[tokio::test]
     async fn append_entry_trims_history_when_beyond_max_bytes() {
-        let codex_home = TempDir::new().expect("create temp dir");
+        let adam_home = TempDir::new().expect("create temp dir");
 
         let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
+            .adam_home(adam_home.path().to_path_buf())
             .build()
             .await
             .expect("load config");
@@ -504,7 +504,7 @@ mod tests {
         let entry_one = "a".repeat(200);
         let entry_two = "b".repeat(200);
 
-        let history_path = codex_home.path().join("history.jsonl");
+        let history_path = adam_home.path().join("history.jsonl");
 
         append_entry(&entry_one, &conversation_id, &config)
             .await
@@ -538,10 +538,10 @@ mod tests {
 
     #[tokio::test]
     async fn append_entry_trims_history_to_soft_cap() {
-        let codex_home = TempDir::new().expect("create temp dir");
+        let adam_home = TempDir::new().expect("create temp dir");
 
         let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
+            .adam_home(adam_home.path().to_path_buf())
             .build()
             .await
             .expect("load config");
@@ -551,7 +551,7 @@ mod tests {
         let short_entry = "a".repeat(200);
         let long_entry = "b".repeat(400);
 
-        let history_path = codex_home.path().join("history.jsonl");
+        let history_path = adam_home.path().join("history.jsonl");
 
         append_entry(&short_entry, &conversation_id, &config)
             .await

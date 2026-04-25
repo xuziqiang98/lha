@@ -40,7 +40,7 @@ use crate::mcp_cmd::McpCli;
 use codex_agent::config::Config;
 use codex_agent::config::ConfigOverrides;
 use codex_agent::config::edit::ConfigEditsBuilder;
-use codex_agent::config::find_codex_home;
+use codex_agent::config::find_adam_home;
 use codex_agent::features::Stage;
 use codex_agent::features::is_known_feature_key;
 use codex_agent::terminal::TerminalName;
@@ -740,21 +740,21 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
 
 async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
     FeatureToggles::validate_feature(feature)?;
-    let codex_home = find_codex_home()?;
-    ConfigEditsBuilder::new(&codex_home)
+    let adam_home = find_adam_home()?;
+    ConfigEditsBuilder::new(&adam_home)
         .with_profile(interactive.config_profile.as_deref())
         .set_feature_enabled(feature, true)
         .apply()
         .await?;
     println!("Enabled feature `{feature}` in config.toml.");
-    maybe_print_under_development_feature_warning(&codex_home, interactive, feature);
+    maybe_print_under_development_feature_warning(&adam_home, interactive, feature);
     Ok(())
 }
 
 async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
     FeatureToggles::validate_feature(feature)?;
-    let codex_home = find_codex_home()?;
-    ConfigEditsBuilder::new(&codex_home)
+    let adam_home = find_adam_home()?;
+    ConfigEditsBuilder::new(&adam_home)
         .with_profile(interactive.config_profile.as_deref())
         .set_feature_enabled(feature, false)
         .apply()
@@ -764,7 +764,7 @@ async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyho
 }
 
 fn maybe_print_under_development_feature_warning(
-    codex_home: &std::path::Path,
+    adam_home: &std::path::Path,
     interactive: &TuiCli,
     feature: &str,
 ) {
@@ -782,7 +782,7 @@ fn maybe_print_under_development_feature_warning(
         return;
     }
 
-    let config_path = codex_home.join(codex_agent::config::CONFIG_TOML_FILE);
+    let config_path = adam_home.join(codex_agent::config::CONFIG_TOML_FILE);
     eprintln!(
         "Under-development features enabled: {feature}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {}.",
         config_path.display()

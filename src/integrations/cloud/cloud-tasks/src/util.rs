@@ -63,7 +63,7 @@ pub async fn load_auth_manager() -> Option<AuthManager> {
     // TODO: pass in cli overrides once cloud tasks properly support them.
     let config = Config::load_with_cli_overrides(Vec::new()).await.ok()?;
     Some(AuthManager::new(
-        config.codex_home,
+        config.adam_home,
         false,
         config.cli_auth_credentials_store_mode,
     ))

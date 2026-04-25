@@ -16,7 +16,7 @@ use codex_agent::auth::enforce_login_restrictions;
 use codex_agent::config::Config;
 use codex_agent::config::ConfigBuilder;
 use codex_agent::config::ConfigOverrides;
-use codex_agent::config::find_codex_home;
+use codex_agent::config::find_adam_home;
 use codex_agent::config::load_config_as_toml_with_cli_overrides;
 use codex_agent::config_loader::CloudRequirementsLoader;
 use codex_agent::config_loader::ConfigLoadError;
@@ -162,8 +162,8 @@ pub async fn run_main(
 
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]
-    let codex_home = match find_codex_home() {
-        Ok(codex_home) => codex_home.to_path_buf(),
+    let adam_home = match find_adam_home() {
+        Ok(adam_home) => adam_home.to_path_buf(),
         Err(err) => {
             eprintln!("Error finding codex home: {err}");
             std::process::exit(1);
@@ -178,7 +178,7 @@ pub async fn run_main(
 
     #[allow(clippy::print_stderr)]
     let config_toml = match load_config_as_toml_with_cli_overrides(
-        &codex_home,
+        &adam_home,
         &config_cwd,
         cli_kv_overrides.clone(),
     )
@@ -203,14 +203,14 @@ pub async fn run_main(
     };
 
     if let Err(err) =
-        codex_agent::personality_migration::maybe_migrate_personality(&codex_home, &config_toml)
+        codex_agent::personality_migration::maybe_migrate_personality(&adam_home, &config_toml)
             .await
     {
         tracing::warn!(error = %err, "failed to run personality migration");
     }
 
     let cloud_auth_manager = AuthManager::shared(
-        codex_home.to_path_buf(),
+        adam_home.to_path_buf(),
         false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
     );
@@ -405,7 +405,7 @@ async fn run_ratatui_app(
     session_log::maybe_init(&initial_config);
 
     let auth_manager = AuthManager::shared(
-        initial_config.codex_home.clone(),
+        initial_config.adam_home.clone(),
         false,
         initial_config.cli_auth_credentials_store_mode,
     );
@@ -480,9 +480,9 @@ async fn run_ratatui_app(
         if let Some(id_str) = cli.fork_session_id.as_deref() {
             let is_uuid = Uuid::parse_str(id_str).is_ok();
             let path = if is_uuid {
-                find_thread_path_by_id_str(&config.codex_home, id_str).await?
+                find_thread_path_by_id_str(&config.adam_home, id_str).await?
             } else {
-                find_thread_path_by_name_str(&config.codex_home, id_str).await?
+                find_thread_path_by_name_str(&config.adam_home, id_str).await?
             };
             match path {
                 Some(path) => resume_picker::SessionSelection::Fork(path),
@@ -495,7 +495,7 @@ async fn run_ratatui_app(
                 Some(config.cwd.as_path())
             };
             match RolloutRecorder::find_latest_thread_path(
-                &config.codex_home,
+                &config.adam_home,
                 1,
                 None,
                 ThreadSortKey::UpdatedAt,
@@ -512,7 +512,7 @@ async fn run_ratatui_app(
         } else if cli.fork_picker {
             match resume_picker::run_fork_picker(
                 &mut tui,
-                &config.codex_home,
+                &config.adam_home,
                 &config.model_provider_id,
                 Some(config.cwd.as_path()),
                 cli.fork_show_all,
@@ -538,9 +538,9 @@ async fn run_ratatui_app(
     } else if let Some(id_str) = cli.resume_session_id.as_deref() {
         let is_uuid = Uuid::parse_str(id_str).is_ok();
         let path = if is_uuid {
-            find_thread_path_by_id_str(&config.codex_home, id_str).await?
+            find_thread_path_by_id_str(&config.adam_home, id_str).await?
         } else {
-            find_thread_path_by_name_str(&config.codex_home, id_str).await?
+            find_thread_path_by_name_str(&config.adam_home, id_str).await?
         };
         match path {
             Some(path) => resume_picker::SessionSelection::Resume(path),
@@ -553,7 +553,7 @@ async fn run_ratatui_app(
             Some(config.cwd.as_path())
         };
         match RolloutRecorder::find_latest_thread_path(
-            &config.codex_home,
+            &config.adam_home,
             1,
             None,
             ThreadSortKey::UpdatedAt,
@@ -570,7 +570,7 @@ async fn run_ratatui_app(
     } else if cli.resume_picker {
         match resume_picker::run_resume_picker(
             &mut tui,
-            &config.codex_home,
+            &config.adam_home,
             &config.model_provider_id,
             Some(config.cwd.as_path()),
             cli.resume_show_all,
@@ -756,8 +756,8 @@ fn get_login_status(config: &Config) -> LoginStatus {
     if config.model_provider.requires_openai_auth {
         // Reading the OpenAI API key is an async operation because it may need
         // to refresh the token. Block on it.
-        let codex_home = config.codex_home.clone();
-        match CodexAuth::from_auth_storage(&codex_home, config.cli_auth_credentials_store_mode) {
+        let adam_home = config.adam_home.clone();
+        match CodexAuth::from_auth_storage(&adam_home, config.cli_auth_credentials_store_mode) {
             Ok(Some(auth)) => LoginStatus::AuthMode(auth.api_auth_mode()),
             Ok(None) => LoginStatus::NotAuthenticated,
             Err(err) => {
@@ -865,7 +865,7 @@ mod tests {
 
     async fn build_config(temp_dir: &TempDir) -> std::io::Result<Config> {
         ConfigBuilder::default()
-            .codex_home(temp_dir.path().to_path_buf())
+            .adam_home(temp_dir.path().to_path_buf())
             .build()
             .await
     }
@@ -956,13 +956,13 @@ mod tests {
     }
 
     fn write_rollout(
-        codex_home: &std::path::Path,
+        adam_home: &std::path::Path,
         file_ts: &str,
         cwd: &std::path::Path,
         provider: &str,
         preview: &str,
     ) -> std::io::Result<PathBuf> {
-        let sessions_root = codex_home.join("sessions");
+        let sessions_root = adam_home.join("sessions");
         let date = &file_ts[..10];
         let year = &date[..4];
         let month = &date[5..7];
@@ -1127,7 +1127,7 @@ mod tests {
         )?;
 
         let latest = RolloutRecorder::find_latest_thread_path(
-            &config.codex_home,
+            &config.adam_home,
             1,
             None,
             ThreadSortKey::UpdatedAt,
@@ -1145,7 +1145,7 @@ mod tests {
     #[tokio::test]
     async fn config_rebuild_changes_trust_defaults_with_cwd() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
-        let codex_home = temp_dir.path().to_path_buf();
+        let adam_home = temp_dir.path().to_path_buf();
         let trusted = temp_dir.path().join("trusted");
         let untrusted = temp_dir.path().join("untrusted");
         std::fs::create_dir_all(&trusted)?;
@@ -1169,7 +1169,7 @@ trust_level = "untrusted"
             ..Default::default()
         };
         let trusted_config = ConfigBuilder::default()
-            .codex_home(codex_home.clone())
+            .adam_home(adam_home.clone())
             .harness_overrides(trusted_overrides.clone())
             .build()
             .await?;
@@ -1183,7 +1183,7 @@ trust_level = "untrusted"
             ..trusted_overrides
         };
         let untrusted_config = ConfigBuilder::default()
-            .codex_home(codex_home)
+            .adam_home(adam_home)
             .harness_overrides(untrusted_overrides)
             .build()
             .await?;

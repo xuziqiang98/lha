@@ -15,8 +15,8 @@ pub struct CapSids {
     pub readonly: String,
 }
 
-pub fn cap_sid_file(codex_home: &Path) -> PathBuf {
-    codex_home.join("cap_sid")
+pub fn cap_sid_file(adam_home: &Path) -> PathBuf {
+    adam_home.join("cap_sid")
 }
 
 fn make_random_cap_sid_string() -> String {
@@ -38,8 +38,8 @@ fn persist_caps(path: &Path, caps: &CapSids) -> Result<()> {
     Ok(())
 }
 
-pub fn load_or_create_cap_sids(codex_home: &Path) -> Result<CapSids> {
-    let path = cap_sid_file(codex_home);
+pub fn load_or_create_cap_sids(adam_home: &Path) -> Result<CapSids> {
+    let path = cap_sid_file(adam_home);
     if path.exists() {
         let txt = fs::read_to_string(&path)
             .with_context(|| format!("read cap sid file {}", path.display()))?;

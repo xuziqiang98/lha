@@ -71,7 +71,7 @@ pub async fn list_accessible_connectors_from_mcp_tools(
 
 fn auth_manager_from_config(config: &Config) -> std::sync::Arc<AuthManager> {
     AuthManager::shared(
-        config.codex_home.clone(),
+        config.adam_home.clone(),
         false,
         config.cli_auth_credentials_store_mode,
     )

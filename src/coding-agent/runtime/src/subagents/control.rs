@@ -144,7 +144,7 @@ impl AgentControl {
                         .as_ref()
                         .and_then(|parent_thread| parent_thread.rollout_path())
                         .or(find_thread_path_by_id_str(
-                            config.codex_home.as_path(),
+                            config.adam_home.as_path(),
                             &parent_thread_id.to_string(),
                         )
                         .await?)
@@ -213,7 +213,7 @@ impl AgentControl {
         })?;
         let notification_source = Some(session_source.clone());
         let rollout_path =
-            find_thread_path_by_id_str(config.codex_home.as_path(), &thread_id.to_string())
+            find_thread_path_by_id_str(config.adam_home.as_path(), &thread_id.to_string())
                 .await?
                 .ok_or(CodexErr::ThreadNotFound(thread_id))?;
 
@@ -525,7 +525,7 @@ mod tests {
     ) -> (TempDir, Config) {
         let home = TempDir::new().expect("create temp dir");
         let config = ConfigBuilder::default()
-            .codex_home(home.path().to_path_buf())
+            .adam_home(home.path().to_path_buf())
             .cli_overrides(cli_overrides)
             .build()
             .await
@@ -551,7 +551,7 @@ mod tests {
                 CodexAuth::from_api_key("dummy"),
                 config.model_provider_id.as_str(),
                 config.model_provider.clone(),
-                config.codex_home.clone(),
+                config.adam_home.clone(),
             );
             let control = manager.agent_control();
             Self {
@@ -859,7 +859,7 @@ mod tests {
             CodexAuth::from_api_key("dummy"),
             config.model_provider_id.as_str(),
             config.model_provider.clone(),
-            config.codex_home.clone(),
+            config.adam_home.clone(),
         );
         let control = manager.agent_control();
         let harness = AgentControlHarness {
@@ -1004,7 +1004,7 @@ mod tests {
             CodexAuth::from_api_key("dummy"),
             config.model_provider_id.as_str(),
             config.model_provider.clone(),
-            config.codex_home.clone(),
+            config.adam_home.clone(),
         );
         let control = manager.agent_control();
 
@@ -1057,7 +1057,7 @@ mod tests {
             CodexAuth::from_api_key("dummy"),
             config.model_provider_id.as_str(),
             config.model_provider.clone(),
-            config.codex_home.clone(),
+            config.adam_home.clone(),
         );
         let control = manager.agent_control();
 
@@ -1106,7 +1106,7 @@ mod tests {
             CodexAuth::from_api_key("dummy"),
             config.model_provider_id.as_str(),
             config.model_provider.clone(),
-            config.codex_home.clone(),
+            config.adam_home.clone(),
         );
         let control = manager.agent_control();
         let cloned = control.clone();

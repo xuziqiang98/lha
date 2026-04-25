@@ -19,25 +19,21 @@ const SYSTEM_SKILLS_MARKER_SALT: &str = "v1";
 
 /// Returns the on-disk cache location for embedded system skills.
 ///
-/// This is typically located at `CODEY_HOME/skills/.system`.
-pub(crate) fn system_cache_root_dir(codex_home: &Path) -> PathBuf {
-    AbsolutePathBuf::try_from(codex_home)
-        .and_then(|codex_home| system_cache_root_dir_abs(&codex_home))
+/// This is typically located at `ADAM_HOME/skills/.system`.
+pub(crate) fn system_cache_root_dir(adam_home: &Path) -> PathBuf {
+    AbsolutePathBuf::try_from(adam_home)
+        .and_then(|adam_home| system_cache_root_dir_abs(&adam_home))
         .map(AbsolutePathBuf::into_path_buf)
-        .unwrap_or_else(|_| {
-            codex_home
-                .join(SKILLS_DIR_NAME)
-                .join(SYSTEM_SKILLS_DIR_NAME)
-        })
+        .unwrap_or_else(|_| adam_home.join(SKILLS_DIR_NAME).join(SYSTEM_SKILLS_DIR_NAME))
 }
 
-fn system_cache_root_dir_abs(codex_home: &AbsolutePathBuf) -> std::io::Result<AbsolutePathBuf> {
-    codex_home
+fn system_cache_root_dir_abs(adam_home: &AbsolutePathBuf) -> std::io::Result<AbsolutePathBuf> {
+    adam_home
         .join(SKILLS_DIR_NAME)?
         .join(SYSTEM_SKILLS_DIR_NAME)
 }
 
-/// Installs embedded system skills into `CODEY_HOME/skills/.system`.
+/// Installs embedded system skills into `ADAM_HOME/skills/.system`.
 ///
 /// Clears any existing system skills directory first and then writes the embedded
 /// skills directory into place.
@@ -45,16 +41,16 @@ fn system_cache_root_dir_abs(codex_home: &AbsolutePathBuf) -> std::io::Result<Ab
 /// To avoid doing unnecessary work on every startup, a marker file is written
 /// with a fingerprint of the embedded directory. When the marker matches, the
 /// install is skipped.
-pub(crate) fn install_system_skills(codex_home: &Path) -> Result<(), SystemSkillsError> {
-    let codex_home = AbsolutePathBuf::try_from(codex_home)
+pub(crate) fn install_system_skills(adam_home: &Path) -> Result<(), SystemSkillsError> {
+    let adam_home = AbsolutePathBuf::try_from(adam_home)
         .map_err(|source| SystemSkillsError::io("normalize codex home dir", source))?;
-    let skills_root_dir = codex_home
+    let skills_root_dir = adam_home
         .join(SKILLS_DIR_NAME)
         .map_err(|source| SystemSkillsError::io("resolve skills root dir", source))?;
     fs::create_dir_all(skills_root_dir.as_path())
         .map_err(|source| SystemSkillsError::io("create skills root dir", source))?;
 
-    let dest_system = system_cache_root_dir_abs(&codex_home)
+    let dest_system = system_cache_root_dir_abs(&adam_home)
         .map_err(|source| SystemSkillsError::io("resolve system skills cache root dir", source))?;
 
     let marker_path = dest_system

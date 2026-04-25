@@ -34,23 +34,23 @@ pub struct SandboxCreds {
 /// setup version.
 ///
 /// This reuses the same marker/users validation used by `require_logon_sandbox_creds`.
-pub fn sandbox_setup_is_complete(codex_home: &Path) -> bool {
-    let marker_ok = matches!(load_marker(codex_home), Ok(Some(marker)) if marker.version_matches());
+pub fn sandbox_setup_is_complete(adam_home: &Path) -> bool {
+    let marker_ok = matches!(load_marker(adam_home), Ok(Some(marker)) if marker.version_matches());
     if !marker_ok {
         return false;
     }
-    matches!(load_users(codex_home), Ok(Some(users)) if users.version_matches())
+    matches!(load_users(adam_home), Ok(Some(users)) if users.version_matches())
 }
 
-fn load_marker(codex_home: &Path) -> Result<Option<SetupMarker>> {
-    let path = setup_marker_path(codex_home);
+fn load_marker(adam_home: &Path) -> Result<Option<SetupMarker>> {
+    let path = setup_marker_path(adam_home);
     let marker = match fs::read_to_string(&path) {
         Ok(contents) => match serde_json::from_str::<SetupMarker>(&contents) {
             Ok(m) => Some(m),
             Err(err) => {
                 debug_log(
                     &format!("sandbox setup marker parse failed: {err}"),
-                    Some(codex_home),
+                    Some(adam_home),
                 );
                 None
             }
@@ -59,7 +59,7 @@ fn load_marker(codex_home: &Path) -> Result<Option<SetupMarker>> {
         Err(err) => {
             debug_log(
                 &format!("sandbox setup marker read failed: {err}"),
-                Some(codex_home),
+                Some(adam_home),
             );
             None
         }
@@ -67,15 +67,15 @@ fn load_marker(codex_home: &Path) -> Result<Option<SetupMarker>> {
     Ok(marker)
 }
 
-fn load_users(codex_home: &Path) -> Result<Option<SandboxUsersFile>> {
-    let path = sandbox_users_path(codex_home);
+fn load_users(adam_home: &Path) -> Result<Option<SandboxUsersFile>> {
+    let path = sandbox_users_path(adam_home);
     let file = match fs::read_to_string(&path) {
         Ok(contents) => contents,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
             debug_log(
                 &format!("sandbox users read failed: {err}"),
-                Some(codex_home),
+                Some(adam_home),
             );
             return Ok(None);
         }
@@ -85,7 +85,7 @@ fn load_users(codex_home: &Path) -> Result<Option<SandboxUsersFile>> {
         Err(err) => {
             debug_log(
                 &format!("sandbox users parse failed: {err}"),
-                Some(codex_home),
+                Some(adam_home),
             );
             Ok(None)
         }
@@ -101,12 +101,12 @@ fn decode_password(record: &SandboxUserRecord) -> Result<String> {
     Ok(pwd)
 }
 
-fn select_identity(policy: &SandboxPolicy, codex_home: &Path) -> Result<Option<SandboxIdentity>> {
-    let _marker = match load_marker(codex_home)? {
+fn select_identity(policy: &SandboxPolicy, adam_home: &Path) -> Result<Option<SandboxIdentity>> {
+    let _marker = match load_marker(adam_home)? {
         Some(m) if m.version_matches() => m,
         _ => return Ok(None),
     };
-    let users = match load_users(codex_home)? {
+    let users = match load_users(adam_home)? {
         Some(u) if u.version_matches() => u,
         _ => return Ok(None),
     };
@@ -127,21 +127,21 @@ pub fn require_logon_sandbox_creds(
     policy_cwd: &Path,
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
-    codex_home: &Path,
+    adam_home: &Path,
 ) -> Result<SandboxCreds> {
-    let sandbox_dir = crate::setup::sandbox_dir(codex_home);
+    let sandbox_dir = crate::setup::sandbox_dir(adam_home);
     let needed_read = gather_read_roots(command_cwd, policy);
     let needed_write = gather_write_roots(policy, policy_cwd, command_cwd, env_map);
-    // NOTE: Do not add CODEY_HOME/.sandbox to `needed_write`; it must remain non-writable by the
+    // NOTE: Do not add ADAM_HOME/.sandbox to `needed_write`; it must remain non-writable by the
     // restricted capability token. The setup helper's `lock_sandbox_dir` is responsible for
     // granting the sandbox group access to this directory without granting the capability SID.
     let mut setup_reason: Option<String> = None;
     let mut _existing_marker: Option<SetupMarker> = None;
 
-    let mut identity = match load_marker(codex_home)? {
+    let mut identity = match load_marker(adam_home)? {
         Some(marker) if marker.version_matches() => {
             _existing_marker = Some(marker.clone());
-            let selected = select_identity(policy, codex_home)?;
+            let selected = select_identity(policy, adam_home)?;
             if selected.is_none() {
                 setup_reason =
                     Some("sandbox users missing or incompatible with marker version".to_string());
@@ -168,14 +168,14 @@ pub fn require_logon_sandbox_creds(
             policy_cwd,
             command_cwd,
             env_map,
-            codex_home,
+            adam_home,
             Some(needed_read.clone()),
             Some(needed_write.clone()),
         )?;
-        identity = select_identity(policy, codex_home)?;
+        identity = select_identity(policy, adam_home)?;
     }
     // Always refresh ACLs (non-elevated) for current roots via the setup binary.
-    crate::setup::run_setup_refresh(policy, policy_cwd, command_cwd, env_map, codex_home)?;
+    crate::setup::run_setup_refresh(policy, policy_cwd, command_cwd, env_map, adam_home)?;
     let identity = identity.ok_or_else(|| {
         anyhow!(
             "Windows sandbox setup is missing or out of date; rerun the sandbox setup with elevation"

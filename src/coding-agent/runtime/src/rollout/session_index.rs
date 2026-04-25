@@ -23,7 +23,7 @@ pub struct SessionIndexEntry {
 /// Append a thread name update to the session index.
 /// The index is append-only; the most recent entry wins when resolving names or ids.
 pub async fn append_thread_name(
-    codex_home: &Path,
+    adam_home: &Path,
     thread_id: ThreadId,
     name: &str,
 ) -> std::io::Result<()> {
@@ -38,16 +38,16 @@ pub async fn append_thread_name(
         thread_name: name.to_string(),
         updated_at,
     };
-    append_session_index_entry(codex_home, &entry).await
+    append_session_index_entry(adam_home, &entry).await
 }
 
 /// Append a raw session index entry to `session_index.jsonl`.
 /// The file is append-only; consumers scan from the end to find the newest match.
 pub async fn append_session_index_entry(
-    codex_home: &Path,
+    adam_home: &Path,
     entry: &SessionIndexEntry,
 ) -> std::io::Result<()> {
-    let path = session_index_path(codex_home);
+    let path = session_index_path(adam_home);
     let mut file = tokio::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -62,10 +62,10 @@ pub async fn append_session_index_entry(
 
 /// Find the latest thread name for a thread id, if any.
 pub async fn find_thread_name_by_id(
-    codex_home: &Path,
+    adam_home: &Path,
     thread_id: &ThreadId,
 ) -> std::io::Result<Option<String>> {
-    let path = session_index_path(codex_home);
+    let path = session_index_path(adam_home);
     if !path.exists() {
         return Ok(None);
     }
@@ -78,13 +78,13 @@ pub async fn find_thread_name_by_id(
 
 /// Find the most recently updated thread id for a thread name, if any.
 pub async fn find_thread_id_by_name(
-    codex_home: &Path,
+    adam_home: &Path,
     name: &str,
 ) -> std::io::Result<Option<ThreadId>> {
     if name.trim().is_empty() {
         return Ok(None);
     }
-    let path = session_index_path(codex_home);
+    let path = session_index_path(adam_home);
     if !path.exists() {
         return Ok(None);
     }
@@ -98,17 +98,17 @@ pub async fn find_thread_id_by_name(
 /// Locate a recorded thread rollout file by thread name using newest-first ordering.
 /// Returns `Ok(Some(path))` if found, `Ok(None)` if not present.
 pub async fn find_thread_path_by_name_str(
-    codex_home: &Path,
+    adam_home: &Path,
     name: &str,
 ) -> std::io::Result<Option<PathBuf>> {
-    let Some(thread_id) = find_thread_id_by_name(codex_home, name).await? else {
+    let Some(thread_id) = find_thread_id_by_name(adam_home, name).await? else {
         return Ok(None);
     };
-    super::list::find_thread_path_by_id_str(codex_home, &thread_id.to_string()).await
+    super::list::find_thread_path_by_id_str(adam_home, &thread_id.to_string()).await
 }
 
-fn session_index_path(codex_home: &Path) -> PathBuf {
-    codex_home.join(SESSION_INDEX_FILE)
+fn session_index_path(adam_home: &Path) -> PathBuf {
+    adam_home.join(SESSION_INDEX_FILE)
 }
 
 fn scan_index_from_end_by_id(

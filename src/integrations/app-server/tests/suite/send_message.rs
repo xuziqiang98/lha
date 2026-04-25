@@ -46,12 +46,12 @@ async fn test_send_message_success() -> Result<()> {
     let _response_mock1 = responses::mount_sse_once(&server, body1).await;
     let _response_mock2 = responses::mount_sse_once(&server, body2).await;
 
-    // Create a temporary Codex home with config pointing at the mock server.
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    // Create a temporary Adam home with config pointing at the mock server.
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path(), &server.uri())?;
 
     // Start MCP server process and initialize.
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Start a conversation using the new wire API.
@@ -156,10 +156,10 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
     ]);
     let _response_mock = responses::mount_sse_once(&server, body).await;
 
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let new_conv_id = mcp
@@ -238,8 +238,8 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
 #[tokio::test]
 async fn test_send_message_session_not_found() -> Result<()> {
     // Start MCP without creating a Codex session
-    let codex_home = TempDir::new()?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let adam_home = TempDir::new()?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let unknown = ThreadId::new();
@@ -267,26 +267,18 @@ async fn test_send_message_session_not_found() -> Result<()> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "danger-full-access"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-dialect = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
+fn create_config_toml(adam_home: &Path, server_uri: &str) -> std::io::Result<()> {
+    app_test_support::write_mock_responses_config_toml_with_options(
+        adam_home,
+        server_uri,
+        &std::collections::BTreeMap::new(),
+        20_000,
+        Some(false),
+        "mock_provider",
+        "mock-model",
+        "",
+        "never",
+        "danger-full-access",
     )
 }
 

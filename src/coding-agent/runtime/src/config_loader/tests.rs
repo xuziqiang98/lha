@@ -34,13 +34,13 @@ fn config_error_from_io(err: &std::io::Error) -> &super::ConfigError {
 }
 
 async fn make_config_for_test(
-    codex_home: &Path,
+    adam_home: &Path,
     project_path: &Path,
     trust_level: TrustLevel,
     project_root_markers: Option<Vec<String>>,
 ) -> std::io::Result<()> {
     tokio::fs::write(
-        codex_home.join(CONFIG_TOML_FILE),
+        adam_home.join(CONFIG_TOML_FILE),
         toml::to_string(&ConfigToml {
             projects: Some(HashMap::from([(
                 project_path.to_string_lossy().to_string(),
@@ -114,12 +114,12 @@ async fn returns_config_error_for_invalid_managed_config_toml() {
 #[tokio::test]
 async fn returns_config_error_for_schema_error_in_user_config() {
     let tmp = tempdir().expect("tempdir");
-    let contents = "model_context_window = \"not_a_number\"";
+    let contents = "model_reasoning_effort = \"not_an_effort\"";
     let config_path = tmp.path().join(CONFIG_TOML_FILE);
     std::fs::write(&config_path, contents).expect("write config");
 
     let err = ConfigBuilder::default()
-        .codex_home(tmp.path().to_path_buf())
+        .adam_home(tmp.path().to_path_buf())
         .fallback_cwd(Some(tmp.path().to_path_buf()))
         .build()
         .await
@@ -231,7 +231,7 @@ async fn returns_empty_when_all_layers_missing() {
     .expect("load layers");
     let user_layer = layers
         .get_user_layer()
-        .expect("expected a user layer even when CODEY_HOME/config.toml does not exist");
+        .expect("expected a user layer even when ADAM_HOME/config.toml does not exist");
     assert_eq!(
         &ConfigLayerEntry {
             name: super::ConfigLayerSource::User {
@@ -533,8 +533,8 @@ allowed_approval_policies = ["on-request"]
 #[tokio::test]
 async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> {
     let tmp = tempdir()?;
-    let codex_home = tmp.path().join("home");
-    tokio::fs::create_dir_all(&codex_home).await?;
+    let adam_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&adam_home).await?;
     let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
 
     let requirements = ConfigRequirementsToml {
@@ -548,7 +548,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
     let cloud_requirements = CloudRequirementsLoader::new(async move { Some(requirements) });
 
     let layers = load_config_layers_state(
-        &codex_home,
+        &adam_home,
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
@@ -596,12 +596,12 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
     )
     .await?;
 
-    let codex_home = tmp.path().join("home");
-    tokio::fs::create_dir_all(&codex_home).await?;
-    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+    let adam_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&adam_home).await?;
+    make_config_for_test(&adam_home, &project_root, TrustLevel::Trusted, None).await?;
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let layers = load_config_layers_state(
-        &codex_home,
+        &adam_home,
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
@@ -662,12 +662,12 @@ model_instructions_file = "child.txt"
     )
     .await?;
 
-    let codex_home = tmp.path().join("home");
-    tokio::fs::create_dir_all(&codex_home).await?;
-    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+    let adam_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&adam_home).await?;
+    make_config_for_test(&adam_home, &project_root, TrustLevel::Trusted, None).await?;
 
     let config = ConfigBuilder::default()
-        .codex_home(codex_home)
+        .adam_home(adam_home)
         .harness_overrides(ConfigOverrides {
             cwd: Some(nested.clone()),
             ..ConfigOverrides::default()
@@ -686,9 +686,9 @@ model_instructions_file = "child.txt"
 #[tokio::test]
 async fn cli_override_model_instructions_file_sets_base_instructions() -> std::io::Result<()> {
     let tmp = tempdir()?;
-    let codex_home = tmp.path().join("home");
-    tokio::fs::create_dir_all(&codex_home).await?;
-    tokio::fs::write(codex_home.join(CONFIG_TOML_FILE), "").await?;
+    let adam_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&adam_home).await?;
+    tokio::fs::write(adam_home.join(CONFIG_TOML_FILE), "").await?;
 
     let cwd = tmp.path().join("work");
     tokio::fs::create_dir_all(&cwd).await?;
@@ -702,7 +702,7 @@ async fn cli_override_model_instructions_file_sets_base_instructions() -> std::i
     )];
 
     let config = ConfigBuilder::default()
-        .codex_home(codex_home)
+        .adam_home(adam_home)
         .cli_overrides(cli_overrides)
         .harness_overrides(ConfigOverrides {
             cwd: Some(cwd),
@@ -728,12 +728,12 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
     tokio::fs::create_dir_all(project_root.join(".codex")).await?;
     tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
 
-    let codex_home = tmp.path().join("home");
-    tokio::fs::create_dir_all(&codex_home).await?;
-    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+    let adam_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&adam_home).await?;
+    make_config_for_test(&adam_home, &project_root, TrustLevel::Trusted, None).await?;
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let layers = load_config_layers_state(
-        &codex_home,
+        &adam_home,
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
@@ -762,16 +762,16 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
 }
 
 #[tokio::test]
-async fn codex_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::Result<()> {
+async fn adam_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::Result<()> {
     let tmp = tempdir()?;
     let home_dir = tmp.path().join("home");
-    let codex_home = home_dir.join(".codey");
-    tokio::fs::create_dir_all(&codex_home).await?;
-    tokio::fs::write(codex_home.join(CONFIG_TOML_FILE), "foo = \"user\"\n").await?;
+    let adam_home = home_dir.join(".adam");
+    tokio::fs::create_dir_all(&adam_home).await?;
+    tokio::fs::write(adam_home.join(CONFIG_TOML_FILE), "foo = \"user\"\n").await?;
 
     let cwd = AbsolutePathBuf::from_absolute_path(&home_dir)?;
     let layers = load_config_layers_state(
-        &codex_home,
+        &adam_home,
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
@@ -798,7 +798,7 @@ async fn codex_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::R
 }
 
 #[tokio::test]
-async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Result<()> {
+async fn adam_home_within_project_tree_is_not_double_loaded() -> std::io::Result<()> {
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");
     let nested = project_root.join("child");
@@ -872,16 +872,16 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
 
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
 
-    let codex_home_untrusted = tmp.path().join("home_untrusted");
-    tokio::fs::create_dir_all(&codex_home_untrusted).await?;
+    let adam_home_untrusted = tmp.path().join("home_untrusted");
+    tokio::fs::create_dir_all(&adam_home_untrusted).await?;
     make_config_for_test(
-        &codex_home_untrusted,
+        &adam_home_untrusted,
         &project_root,
         TrustLevel::Untrusted,
         None,
     )
     .await?;
-    let untrusted_config_path = codex_home_untrusted.join(CONFIG_TOML_FILE);
+    let untrusted_config_path = adam_home_untrusted.join(CONFIG_TOML_FILE);
     let untrusted_config_contents = tokio::fs::read_to_string(&untrusted_config_path).await?;
     tokio::fs::write(
         &untrusted_config_path,
@@ -890,7 +890,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     .await?;
 
     let layers_untrusted = load_config_layers_state(
-        &codex_home_untrusted,
+        &adam_home_untrusted,
         Some(cwd.clone()),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
@@ -919,16 +919,12 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
         Some(&TomlValue::String("user".to_string()))
     );
 
-    let codex_home_unknown = tmp.path().join("home_unknown");
-    tokio::fs::create_dir_all(&codex_home_unknown).await?;
-    tokio::fs::write(
-        codex_home_unknown.join(CONFIG_TOML_FILE),
-        "foo = \"user\"\n",
-    )
-    .await?;
+    let adam_home_unknown = tmp.path().join("home_unknown");
+    tokio::fs::create_dir_all(&adam_home_unknown).await?;
+    tokio::fs::write(adam_home_unknown.join(CONFIG_TOML_FILE), "foo = \"user\"\n").await?;
 
     let layers_unknown = load_config_layers_state(
-        &codex_home_unknown,
+        &adam_home_unknown,
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
@@ -976,12 +972,12 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
     ];
 
     for (name, trust_level) in cases {
-        let codex_home = tmp.path().join(format!("home_{name}"));
-        tokio::fs::create_dir_all(&codex_home).await?;
-        let config_path = codex_home.join(CONFIG_TOML_FILE);
+        let adam_home = tmp.path().join(format!("home_{name}"));
+        tokio::fs::create_dir_all(&adam_home).await?;
+        let config_path = adam_home.join(CONFIG_TOML_FILE);
 
         if let Some(trust_level) = trust_level {
-            make_config_for_test(&codex_home, &project_root, trust_level, None).await?;
+            make_config_for_test(&adam_home, &project_root, trust_level, None).await?;
             let config_contents = tokio::fs::read_to_string(&config_path).await?;
             tokio::fs::write(&config_path, format!("foo = \"user\"\n{config_contents}")).await?;
         } else {
@@ -989,7 +985,7 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
         }
 
         let layers = load_config_layers_state(
-            &codex_home,
+            &adam_home,
             Some(cwd.clone()),
             &[] as &[(String, TomlValue)],
             LoaderOverrides::default(),
@@ -1034,9 +1030,9 @@ async fn cli_overrides_with_relative_paths_do_not_break_trust_check() -> std::io
     tokio::fs::create_dir_all(&nested).await?;
     tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
 
-    let codex_home = tmp.path().join("home");
-    tokio::fs::create_dir_all(&codex_home).await?;
-    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+    let adam_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&adam_home).await?;
+    make_config_for_test(&adam_home, &project_root, TrustLevel::Trusted, None).await?;
 
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let cli_overrides = vec![(
@@ -1045,7 +1041,7 @@ async fn cli_overrides_with_relative_paths_do_not_break_trust_check() -> std::io
     )];
 
     load_config_layers_state(
-        &codex_home,
+        &adam_home,
         Some(cwd),
         &cli_overrides,
         LoaderOverrides::default(),
@@ -1075,10 +1071,10 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
     )
     .await?;
 
-    let codex_home = tmp.path().join("home");
-    tokio::fs::create_dir_all(&codex_home).await?;
+    let adam_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&adam_home).await?;
     make_config_for_test(
-        &codex_home,
+        &adam_home,
         &project_root,
         TrustLevel::Trusted,
         Some(vec![".hg".to_string()]),
@@ -1087,7 +1083,7 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
 
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let layers = load_config_layers_state(
-        &codex_home,
+        &adam_home,
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),

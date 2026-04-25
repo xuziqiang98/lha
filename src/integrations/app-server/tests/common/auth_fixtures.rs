@@ -143,7 +143,7 @@ pub fn encode_id_token(claims: &ChatGptIdTokenClaims) -> Result<String> {
 }
 
 pub fn write_chatgpt_auth(
-    codex_home: &Path,
+    adam_home: &Path,
     fixture: ChatGptAuthFixture,
     cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> Result<()> {
@@ -165,5 +165,5 @@ pub fn write_chatgpt_auth(
         last_refresh,
     };
 
-    save_auth(codex_home, &auth, cli_auth_credentials_store_mode).context("write auth.json")
+    save_auth(adam_home, &auth, cli_auth_credentials_store_mode).context("write auth.json")
 }

@@ -3,7 +3,6 @@ use codex_agent::CodexAuth;
 use codex_agent::compact::SUMMARIZATION_PROMPT;
 use codex_agent::compact::SUMMARY_PREFIX;
 use codex_agent::config::Config;
-use codex_agent::config::generated_provider_profile_name;
 use codex_agent::features::Feature;
 use codex_agent::protocol::AskForApproval;
 use codex_agent::protocol::EventMsg;
@@ -991,7 +990,7 @@ async fn local_compact_backfills_recent_skills_into_follow_up_history() {
         .await
         .unwrap();
     let codex = test.codex.clone();
-    let skill_path = std::fs::canonicalize(test.codex_home_path().join("skills/demo/SKILL.md"))
+    let skill_path = std::fs::canonicalize(test.adam_home_path().join("skills/demo/SKILL.md"))
         .expect("canonicalize skill path");
 
     let request_log = mount_sse_sequence(
@@ -4053,20 +4052,11 @@ async fn unknown_chat_model_adjacent_probe_failure_persists_learned_window() {
         "post-preflight retry should include the compacted summary"
     );
 
-    let raw_config = tokio::fs::read_to_string(test.codex_home_path().join("config.toml"))
+    let raw_models = tokio::fs::read_to_string(test.adam_home_path().join("models.json"))
         .await
-        .expect("read config.toml");
-    let config_toml: codex_agent::config::ConfigToml =
-        toml::from_str(&raw_config).expect("parse config.toml");
-    let profile_name = test.config.active_profile.clone().unwrap_or_else(|| {
-        generated_provider_profile_name(
-            test.config.model_provider_id.as_str(),
-            "unknown-chat-model",
-        )
-    });
-    let profile = config_toml
-        .profiles
-        .get(&profile_name)
-        .expect("persisted profile");
-    assert_eq!(profile.model_context_window, Some(32_000));
+        .expect("read models.json");
+    assert!(
+        raw_models.contains("32000"),
+        "learned context window should be persisted to models.json"
+    );
 }

@@ -17,9 +17,9 @@ async fn malformed_rules_should_not_panic() -> anyhow::Result<()> {
     }
 
     let tmp = tempfile::tempdir()?;
-    let codex_home = tmp.path();
+    let adam_home = tmp.path();
     std::fs::write(
-        codex_home.join("rules"),
+        adam_home.join("rules"),
         "rules should be a directory not a file",
     )?;
 
@@ -42,9 +42,9 @@ experimental_bearer_token = "sk-test"
 "#,
         cwd = cwd.display()
     );
-    std::fs::write(codex_home.join("config.toml"), config_contents)?;
+    std::fs::write(adam_home.join("config.toml"), config_contents)?;
 
-    let CodexCliOutput { exit_code, output } = run_codex_cli(codex_home, cwd).await?;
+    let CodexCliOutput { exit_code, output } = run_codex_cli(adam_home, cwd).await?;
     assert_ne!(0, exit_code, "Codex CLI should exit nonzero.");
     assert!(
         output.contains("ERROR: Failed to initialize codex:"),
@@ -63,7 +63,7 @@ struct CodexCliOutput {
 }
 
 async fn run_codex_cli(
-    codex_home: impl AsRef<Path>,
+    adam_home: impl AsRef<Path>,
     cwd: impl AsRef<Path>,
 ) -> anyhow::Result<CodexCliOutput> {
     let (program, args, timeout_secs) = match codex_utils_cargo_bin::cargo_bin("codey") {
@@ -86,8 +86,8 @@ async fn run_codex_cli(
 
     let mut env = HashMap::new();
     env.insert(
-        "CODEY_HOME".to_string(),
-        codex_home.as_ref().display().to_string(),
+        "ADAM_HOME".to_string(),
+        adam_home.as_ref().display().to_string(),
     );
 
     let spawned =

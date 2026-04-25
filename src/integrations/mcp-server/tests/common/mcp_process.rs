@@ -40,8 +40,8 @@ pub struct McpProcess {
 }
 
 impl McpProcess {
-    pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
-        Self::new_with_env(codex_home, &[]).await
+    pub async fn new(adam_home: &Path) -> anyhow::Result<Self> {
+        Self::new_with_env(adam_home, &[]).await
     }
 
     /// Creates a new MCP process, allowing tests to override or remove
@@ -50,7 +50,7 @@ impl McpProcess {
     /// Pass a tuple of (key, Some(value)) to set/override, or (key, None) to
     /// remove a variable from the child's environment.
     pub async fn new_with_env(
-        codex_home: &Path,
+        adam_home: &Path,
         env_overrides: &[(&str, Option<&str>)],
     ) -> anyhow::Result<Self> {
         let program = codex_utils_cargo_bin::cargo_bin("codex-mcp-server")
@@ -60,7 +60,7 @@ impl McpProcess {
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
-        cmd.env("CODEY_HOME", codex_home);
+        cmd.env("ADAM_HOME", adam_home);
         cmd.env("RUST_LOG", "debug");
 
         for (k, v) in env_overrides {

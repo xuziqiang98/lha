@@ -23,10 +23,10 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_list_and_resume_conversations() -> Result<()> {
-    // Prepare a temporary CODEY_HOME with a few fake rollout files.
-    let codex_home = TempDir::new()?;
+    // Prepare a temporary ADAM_HOME with a few fake rollout files.
+    let adam_home = TempDir::new()?;
     create_fake_rollout(
-        codex_home.path(),
+        adam_home.path(),
         "2025-01-02T12-00-00",
         "2025-01-02T12:00:00Z",
         "Hello A",
@@ -34,7 +34,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
         None,
     )?;
     create_fake_rollout(
-        codex_home.path(),
+        adam_home.path(),
         "2025-01-01T13-00-00",
         "2025-01-01T13:00:00Z",
         "Hello B",
@@ -42,7 +42,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
         None,
     )?;
     create_fake_rollout(
-        codex_home.path(),
+        adam_home.path(),
         "2025-01-01T12-00-00",
         "2025-01-01T12:00:00Z",
         "Hello C",
@@ -50,7 +50,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
         None,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Request first page with size 2
@@ -103,7 +103,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
 
     // Add a conversation with an explicit non-OpenAI provider for filter tests.
     create_fake_rollout(
-        codex_home.path(),
+        adam_home.path(),
         "2025-01-01T11-30-00",
         "2025-01-01T11:30:00Z",
         "Hello TP",
@@ -362,7 +362,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn list_conversations_fetches_through_filtered_pages() -> Result<()> {
-    let codex_home = TempDir::new()?;
+    let adam_home = TempDir::new()?;
 
     // Only the last 3 conversations match the provider filter; request 3 and
     // ensure pagination keeps fetching past non-matching pages.
@@ -396,7 +396,7 @@ async fn list_conversations_fetches_through_filtered_pages() -> Result<()> {
 
     for (ts_file, ts_rfc, provider) in cases {
         create_fake_rollout(
-            codex_home.path(),
+            adam_home.path(),
             ts_file,
             ts_rfc,
             "Hello",
@@ -405,7 +405,7 @@ async fn list_conversations_fetches_through_filtered_pages() -> Result<()> {
         )?;
     }
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp

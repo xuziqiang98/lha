@@ -47,22 +47,22 @@ const METRIC_DB_INIT: &str = "codex.db.init";
 
 #[derive(Clone)]
 pub struct StateRuntime {
-    codex_home: PathBuf,
+    adam_home: PathBuf,
     default_provider: String,
     pool: Arc<sqlx::SqlitePool>,
 }
 
 impl StateRuntime {
-    /// Initialize the state runtime using the provided Codex home and default provider.
+    /// Initialize the state runtime using the provided Adam home and default provider.
     ///
-    /// This opens (and migrates) the SQLite database at `codex_home/state.sqlite`.
+    /// This opens (and migrates) the SQLite database at `adam_home/state.sqlite`.
     pub async fn init(
-        codex_home: PathBuf,
+        adam_home: PathBuf,
         default_provider: String,
         otel: Option<OtelManager>,
     ) -> anyhow::Result<Arc<Self>> {
-        tokio::fs::create_dir_all(&codex_home).await?;
-        let state_path = codex_home.join(STATE_DB_FILENAME);
+        tokio::fs::create_dir_all(&adam_home).await?;
+        let state_path = adam_home.join(STATE_DB_FILENAME);
         let existed = tokio::fs::try_exists(&state_path).await.unwrap_or(false);
         let pool = match open_sqlite(&state_path).await {
             Ok(db) => Arc::new(db),
@@ -79,7 +79,7 @@ impl StateRuntime {
         }
         let runtime = Arc::new(Self {
             pool,
-            codex_home,
+            adam_home,
             default_provider,
         });
         if !existed && let Some(otel) = otel.as_ref() {
@@ -88,9 +88,9 @@ impl StateRuntime {
         Ok(runtime)
     }
 
-    /// Return the configured Codex home directory for this runtime.
-    pub fn codex_home(&self) -> &Path {
-        self.codex_home.as_path()
+    /// Return the configured Adam home directory for this runtime.
+    pub fn adam_home(&self) -> &Path {
+        self.adam_home.as_path()
     }
 
     /// Load thread metadata by id using the underlying database.

@@ -107,7 +107,7 @@ impl ConfigServiceError {
 
 #[derive(Clone)]
 pub struct ConfigService {
-    codex_home: PathBuf,
+    adam_home: PathBuf,
     cli_overrides: Vec<(String, TomlValue)>,
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
@@ -115,22 +115,22 @@ pub struct ConfigService {
 
 impl ConfigService {
     pub fn new(
-        codex_home: PathBuf,
+        adam_home: PathBuf,
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
         cloud_requirements: CloudRequirementsLoader,
     ) -> Self {
         Self {
-            codex_home,
+            adam_home,
             cli_overrides,
             loader_overrides,
             cloud_requirements,
         }
     }
 
-    pub fn new_with_defaults(codex_home: PathBuf) -> Self {
+    pub fn new_with_defaults(adam_home: PathBuf) -> Self {
         Self {
-            codex_home,
+            adam_home,
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
@@ -147,7 +147,7 @@ impl ConfigService {
                     ConfigServiceError::io("failed to resolve config cwd to an absolute path", err)
                 })?;
                 crate::config::ConfigBuilder::default()
-                    .codex_home(self.codex_home.clone())
+                    .adam_home(self.adam_home.clone())
                     .cli_overrides(self.cli_overrides.clone())
                     .loader_overrides(self.loader_overrides.clone())
                     .fallback_cwd(Some(cwd.to_path_buf()))
@@ -247,7 +247,7 @@ impl ConfigService {
         edits: Vec<(String, JsonValue, MergeStrategy)>,
     ) -> Result<ConfigWriteResponse, ConfigServiceError> {
         let allowed_path =
-            AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, &self.codex_home)
+            AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, &self.adam_home)
                 .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err))?;
         let provided_path = match file_path {
             Some(path) => AbsolutePathBuf::from_absolute_path(PathBuf::from(path))
@@ -342,7 +342,7 @@ impl ConfigService {
         })?;
 
         if !config_edits.is_empty() {
-            ConfigEditsBuilder::new(&self.codex_home)
+            ConfigEditsBuilder::new(&self.adam_home)
                 .with_edits(config_edits)
                 .apply()
                 .await
@@ -378,7 +378,7 @@ impl ConfigService {
     async fn load_thread_agnostic_config(&self) -> std::io::Result<ConfigLayerStack> {
         let cwd: Option<AbsolutePathBuf> = None;
         load_config_layers_state(
-            &self.codex_home,
+            &self.adam_home,
             cwd,
             &self.cli_overrides,
             self.loader_overrides.clone(),

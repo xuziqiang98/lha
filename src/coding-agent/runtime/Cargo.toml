@@ -14,6 +14,14 @@ path = "src/lib.rs"
 name = "codex-write-config-schema"
 path = "src/bin/config_schema.rs"
 
+[[bin]]
+name = "codex-write-models-schema"
+path = "src/bin/models_schema.rs"
+
+[[bin]]
+name = "codex-write-state-schema"
+path = "src/bin/state_schema.rs"
+
 [lints]
 workspace = true
 
@@ -50,6 +58,7 @@ codex-utils-string = { workspace = true }
 codex-windows-sandbox = { package = "codex-windows-sandbox", path = "../../platform/sandbox/windows" }
 csv = { workspace = true }
 dunce = { workspace = true }
+dirs = { workspace = true }
 encoding_rs = { workspace = true }
 env-flags = { workspace = true }
 eventsource-stream = { workspace = true }

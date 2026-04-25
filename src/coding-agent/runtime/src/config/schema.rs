@@ -1,5 +1,6 @@
 use crate::config::ConfigToml;
-use crate::config::RawModelProviderEntryToml;
+use crate::config::models_json::ModelsJson;
+use crate::config::state_json::AdamStateJson;
 use crate::config::types::RawMcpServerConfig;
 use crate::features::FEATURES;
 use schemars::r#gen::SchemaGenerator;
@@ -53,24 +54,6 @@ pub(crate) fn mcp_servers_schema(schema_gen: &mut SchemaGenerator) -> Schema {
     Schema::Object(object)
 }
 
-/// Schema for the `[model_providers]` map using the raw input shape.
-pub(crate) fn model_providers_schema(schema_gen: &mut SchemaGenerator) -> Schema {
-    let mut object = SchemaObject {
-        instance_type: Some(InstanceType::Object.into()),
-        ..Default::default()
-    };
-
-    let validation = ObjectValidation {
-        additional_properties: Some(Box::new(
-            schema_gen.subschema_for::<RawModelProviderEntryToml>(),
-        )),
-        ..Default::default()
-    };
-    object.object = Some(Box::new(validation));
-
-    Schema::Object(object)
-}
-
 /// Build the config schema for `config.toml`.
 pub fn config_schema() -> RootSchema {
     SchemaSettings::draft07()
@@ -105,6 +88,30 @@ pub fn config_schema_json() -> anyhow::Result<Vec<u8>> {
     let value = canonicalize(&value);
     let json = serde_json::to_vec_pretty(&value)?;
     Ok(json)
+}
+
+fn schema_json_for<T: schemars::JsonSchema>() -> anyhow::Result<Vec<u8>> {
+    let schema = SchemaSettings::draft07()
+        .with(|settings| {
+            settings.option_add_null_type = false;
+        })
+        .into_generator()
+        .into_root_schema_for::<T>();
+    let value = serde_json::to_value(schema)?;
+    let value = canonicalize(&value);
+    Ok(serde_json::to_vec_pretty(&value)?)
+}
+
+pub fn write_models_schema(out_path: &Path) -> anyhow::Result<()> {
+    let json = schema_json_for::<ModelsJson>()?;
+    std::fs::write(out_path, json)?;
+    Ok(())
+}
+
+pub fn write_state_schema(out_path: &Path) -> anyhow::Result<()> {
+    let json = schema_json_for::<AdamStateJson>()?;
+    std::fs::write(out_path, json)?;
+    Ok(())
 }
 
 /// Write the config schema fixture to disk.

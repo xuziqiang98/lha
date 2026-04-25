@@ -83,7 +83,7 @@ impl OnboardingScreen {
         let cwd = config.cwd.clone();
         let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
         let forced_login_method = config.forced_login_method;
-        let codex_home = config.codex_home;
+        let adam_home = config.adam_home;
         let cli_auth_credentials_store_mode = config.cli_auth_credentials_store_mode;
         let mut steps: Vec<Step> = Vec::new();
         steps.push(Step::Welcome(WelcomeWidget::new(
@@ -101,7 +101,7 @@ impl OnboardingScreen {
                 highlighted_mode,
                 error: None,
                 sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
-                codex_home: codex_home.clone(),
+                adam_home: adam_home.clone(),
                 cli_auth_credentials_store_mode,
                 login_status,
                 auth_manager,
@@ -120,7 +120,7 @@ impl OnboardingScreen {
         if show_trust_screen {
             steps.push(Step::TrustDirectory(TrustDirectoryWidget {
                 cwd,
-                codex_home,
+                adam_home,
                 is_git_repo,
                 selection: None,
                 highlighted,
@@ -499,8 +499,8 @@ mod tests {
     use tempfile::TempDir;
 
     fn custom_provider_auth_widget() -> (AuthModeWidget, TempDir) {
-        let codex_home = TempDir::new().expect("tempdir");
-        let codex_home_path = codex_home.path().to_path_buf();
+        let adam_home = TempDir::new().expect("tempdir");
+        let adam_home_path = adam_home.path().to_path_buf();
         let widget = AuthModeWidget {
             request_frame: FrameRequester::test_dummy(),
             highlighted_mode: SignInOption::ApiKey,
@@ -508,11 +508,11 @@ mod tests {
             sign_in_state: Arc::new(RwLock::new(SignInState::ApiKeyEntry(
                 ApiKeyInputState::default(),
             ))),
-            codex_home: codex_home_path.clone(),
+            adam_home: adam_home_path.clone(),
             cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             login_status: LoginStatus::NotAuthenticated,
             auth_manager: AuthManager::shared(
-                codex_home_path,
+                adam_home_path,
                 false,
                 AuthCredentialsStoreMode::File,
             ),
@@ -520,7 +520,7 @@ mod tests {
             forced_login_method: None,
             animations_enabled: true,
         };
-        (widget, codex_home)
+        (widget, adam_home)
     }
 
     fn row_text(buf: &Buffer, row: u16, width: u16) -> String {

@@ -28,7 +28,7 @@ pub(super) struct LoadedConfigLayers {
 }
 
 pub(super) async fn load_config_layers_internal(
-    codex_home: &Path,
+    adam_home: &Path,
     overrides: LoaderOverrides,
 ) -> io::Result<LoadedConfigLayers> {
     #[cfg(target_os = "macos")]
@@ -45,7 +45,7 @@ pub(super) async fn load_config_layers_internal(
     } = overrides;
 
     let managed_config_path = AbsolutePathBuf::from_absolute_path(
-        managed_config_path.unwrap_or_else(|| managed_config_default_path(codex_home)),
+        managed_config_path.unwrap_or_else(|| managed_config_default_path(adam_home)),
     )?;
 
     let managed_config = read_config_from_path(&managed_config_path, false)
@@ -101,15 +101,15 @@ pub(super) async fn read_config_from_path(
 }
 
 /// Return the default managed config path.
-pub(super) fn managed_config_default_path(codex_home: &Path) -> PathBuf {
+pub(super) fn managed_config_default_path(adam_home: &Path) -> PathBuf {
     #[cfg(unix)]
     {
-        let _ = codex_home;
+        let _ = adam_home;
         PathBuf::from(CODEX_MANAGED_CONFIG_SYSTEM_PATH)
     }
 
     #[cfg(not(unix))]
     {
-        codex_home.join("managed_config.toml")
+        adam_home.join("managed_config.toml")
     }
 }

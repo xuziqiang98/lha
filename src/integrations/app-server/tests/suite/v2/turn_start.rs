@@ -8,7 +8,6 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
-use codex_agent::features::FEATURES;
 use codex_agent::features::Feature;
 use codex_agent::protocol_config_types::ReasoningSummary;
 use codex_app_server_protocol::ByteRange;
@@ -58,15 +57,15 @@ async fn turn_start_sends_originator_header() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
-    let codex_home = TempDir::new()?;
+    let adam_home = TempDir::new()?;
     create_config_toml(
-        codex_home.path(),
+        adam_home.path(),
         &server.uri(),
         "never",
         &BTreeMap::from([(Feature::Personality, true)]),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.initialize_with_client_info(ClientInfo {
@@ -133,15 +132,15 @@ async fn turn_start_emits_user_message_item_with_text_elements() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
-    let codex_home = TempDir::new()?;
+    let adam_home = TempDir::new()?;
     create_config_toml(
-        codex_home.path(),
+        adam_home.path(),
         &server.uri(),
         "never",
         &BTreeMap::from([(Feature::Personality, true)]),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -225,15 +224,15 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     ];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
-    let codex_home = TempDir::new()?;
+    let adam_home = TempDir::new()?;
     create_config_toml(
-        codex_home.path(),
+        adam_home.path(),
         &server.uri(),
         "never",
         &BTreeMap::from([(Feature::Personality, true)]),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Start a thread (v2) and capture its id.
@@ -340,15 +339,15 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
     ]);
     let response_mock = responses::mount_sse_once(&server, body).await;
 
-    let codex_home = TempDir::new()?;
+    let adam_home = TempDir::new()?;
     create_config_toml(
-        codex_home.path(),
+        adam_home.path(),
         &server.uri(),
         "never",
         &BTreeMap::default(),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -420,15 +419,15 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
     ]);
     let response_mock = responses::mount_sse_once(&server, body).await;
 
-    let codex_home = TempDir::new()?;
+    let adam_home = TempDir::new()?;
     create_config_toml(
-        codex_home.path(),
+        adam_home.path(),
         &server.uri(),
         "never",
         &BTreeMap::from([(Feature::Personality, true)]),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -501,15 +500,15 @@ async fn turn_start_change_personality_mid_thread_v2() -> Result<()> {
     ]);
     let response_mock = responses::mount_sse_sequence(&server, vec![sse1, sse2]).await;
 
-    let codex_home = TempDir::new()?;
+    let adam_home = TempDir::new()?;
     create_config_toml(
-        codex_home.path(),
+        adam_home.path(),
         &server.uri(),
         "never",
         &BTreeMap::from([(Feature::Personality, true)]),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -606,15 +605,15 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
     // which the strict matcher does not currently cover.
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
-    let codex_home = TempDir::new()?;
+    let adam_home = TempDir::new()?;
     create_config_toml(
-        codex_home.path(),
+        adam_home.path(),
         &server.uri(),
         "never",
         &BTreeMap::default(),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -630,7 +629,7 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
 
-    let image_path = codex_home.path().join("image.png");
+    let image_path = adam_home.path().join("image.png");
     // No need to actually write the file; we just exercise the input path.
 
     let turn_req = mcp
@@ -657,7 +656,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
-    let codex_home = tmp.path().to_path_buf();
+    let adam_home = tmp.path().to_path_buf();
 
     // Mock server: first turn requests a shell call (elicitation), then completes.
     // Second turn same, but we'll set approval_policy=never to avoid elicitation.
@@ -688,13 +687,13 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     let server = create_mock_responses_server_sequence(responses).await;
     // Default approval is untrusted to force elicitation on first turn.
     create_config_toml(
-        codex_home.as_path(),
+        adam_home.as_path(),
         &server.uri(),
         "untrusted",
         &BTreeMap::default(),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.as_path()).await?;
+    let mut mcp = McpProcess::new(adam_home.as_path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // thread/start
@@ -799,7 +798,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
-    let codex_home = tmp.path().to_path_buf();
+    let adam_home = tmp.path().to_path_buf();
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
 
@@ -818,13 +817,13 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     create_config_toml(
-        codex_home.as_path(),
+        adam_home.as_path(),
         &server.uri(),
         "untrusted",
         &BTreeMap::default(),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.as_path()).await?;
+    let mut mcp = McpProcess::new(adam_home.as_path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -943,8 +942,8 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
-    let codex_home = tmp.path().join("codex_home");
-    std::fs::create_dir(&codex_home)?;
+    let adam_home = tmp.path().join("adam_home");
+    std::fs::create_dir(&adam_home)?;
     let workspace_root = tmp.path().join("workspace");
     std::fs::create_dir(&workspace_root)?;
     let first_cwd = workspace_root.join("turn1");
@@ -969,14 +968,9 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
         create_final_assistant_message_sse_response("done second")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(
-        &codex_home,
-        &server.uri(),
-        "untrusted",
-        &BTreeMap::default(),
-    )?;
+    create_config_toml(&adam_home, &server.uri(), "untrusted", &BTreeMap::default())?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = McpProcess::new(&adam_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // thread/start
@@ -1099,8 +1093,8 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
-    let codex_home = tmp.path().join("codex_home");
-    std::fs::create_dir(&codex_home)?;
+    let adam_home = tmp.path().join("adam_home");
+    std::fs::create_dir(&adam_home)?;
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
 
@@ -1114,14 +1108,9 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
         create_final_assistant_message_sse_response("patch applied")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(
-        &codex_home,
-        &server.uri(),
-        "untrusted",
-        &BTreeMap::default(),
-    )?;
+    create_config_toml(&adam_home, &server.uri(), "untrusted", &BTreeMap::default())?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = McpProcess::new(&adam_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_req = mcp
@@ -1271,8 +1260,8 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
-    let codex_home = tmp.path().join("codex_home");
-    std::fs::create_dir(&codex_home)?;
+    let adam_home = tmp.path().join("adam_home");
+    std::fs::create_dir(&adam_home)?;
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
 
@@ -1296,14 +1285,9 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
         create_final_assistant_message_sse_response("patch 2 applied")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(
-        &codex_home,
-        &server.uri(),
-        "untrusted",
-        &BTreeMap::default(),
-    )?;
+    create_config_toml(&adam_home, &server.uri(), "untrusted", &BTreeMap::default())?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = McpProcess::new(&adam_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_req = mcp
@@ -1462,8 +1446,8 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
-    let codex_home = tmp.path().join("codex_home");
-    std::fs::create_dir(&codex_home)?;
+    let adam_home = tmp.path().join("adam_home");
+    std::fs::create_dir(&adam_home)?;
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
 
@@ -1477,14 +1461,9 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
         create_final_assistant_message_sse_response("patch declined")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(
-        &codex_home,
-        &server.uri(),
-        "untrusted",
-        &BTreeMap::default(),
-    )?;
+    create_config_toml(&adam_home, &server.uri(), "untrusted", &BTreeMap::default())?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = McpProcess::new(&adam_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_req = mcp
@@ -1621,15 +1600,15 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
         create_final_assistant_message_sse_response("done")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    let codex_home = TempDir::new()?;
+    let adam_home = TempDir::new()?;
     create_config_toml(
-        codex_home.path(),
+        adam_home.path(),
         &server.uri(),
         "never",
         &BTreeMap::from([(Feature::UnifiedExec, true)]),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -1748,7 +1727,7 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
 
 // Helper to create a config.toml pointing at the mock model server.
 fn create_config_toml(
-    codex_home: &Path,
+    adam_home: &Path,
     server_uri: &str,
     approval_policy: &str,
     feature_flags: &BTreeMap<Feature, bool>,
@@ -1757,39 +1736,16 @@ fn create_config_toml(
     for (feature, enabled) in feature_flags {
         features.insert(*feature, *enabled);
     }
-    let feature_entries = features
-        .into_iter()
-        .map(|(feature, enabled)| {
-            let key = FEATURES
-                .iter()
-                .find(|spec| spec.id == feature)
-                .map(|spec| spec.key)
-                .unwrap_or_else(|| panic!("missing feature key for {feature:?}"));
-            format!("{key} = {enabled}")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "{approval_policy}"
-sandbox_mode = "read-only"
-
-model_provider = "mock_provider"
-
-[features]
-{feature_entries}
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-dialect = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
+    app_test_support::write_mock_responses_config_toml_with_options(
+        adam_home,
+        server_uri,
+        &features,
+        20_000,
+        Some(false),
+        "mock_provider",
+        "mock-model",
+        "",
+        approval_policy,
+        "read-only",
     )
 }

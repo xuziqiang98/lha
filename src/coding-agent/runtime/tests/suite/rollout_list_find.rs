@@ -18,8 +18,8 @@ use uuid::Uuid;
 
 /// Create <subdir>/YYYY/MM/DD and write a minimal rollout file containing the
 /// provided conversation id in the SessionMeta line. Returns the absolute path.
-fn write_minimal_rollout_with_id_in_subdir(codex_home: &Path, subdir: &str, id: Uuid) -> PathBuf {
-    let sessions = codex_home.join(subdir).join("2024/01/01");
+fn write_minimal_rollout_with_id_in_subdir(adam_home: &Path, subdir: &str, id: Uuid) -> PathBuf {
+    let sessions = adam_home.join(subdir).join("2024/01/01");
     std::fs::create_dir_all(&sessions).unwrap();
 
     let file = sessions.join(format!("rollout-2024-01-01T00-00-00-{id}.jsonl"));
@@ -48,8 +48,8 @@ fn write_minimal_rollout_with_id_in_subdir(codex_home: &Path, subdir: &str, id: 
 
 /// Create sessions/YYYY/MM/DD and write a minimal rollout file containing the
 /// provided conversation id in the SessionMeta line. Returns the absolute path.
-fn write_minimal_rollout_with_id(codex_home: &Path, id: Uuid) -> PathBuf {
-    write_minimal_rollout_with_id_in_subdir(codex_home, "sessions", id)
+fn write_minimal_rollout_with_id(adam_home: &Path, id: Uuid) -> PathBuf {
+    write_minimal_rollout_with_id_in_subdir(adam_home, "sessions", id)
 }
 
 #[tokio::test]
@@ -66,15 +66,15 @@ async fn find_locates_rollout_file_by_id() {
 }
 
 #[tokio::test]
-async fn find_handles_gitignore_covering_codex_home_directory() {
+async fn find_handles_gitignore_covering_adam_home_directory() {
     let repo = TempDir::new().unwrap();
-    let codex_home = repo.path().join(".codey");
-    std::fs::create_dir_all(&codex_home).unwrap();
+    let adam_home = repo.path().join(".adam");
+    std::fs::create_dir_all(&adam_home).unwrap();
     std::fs::write(repo.path().join(".gitignore"), ".codey/**\n").unwrap();
     let id = Uuid::new_v4();
-    let expected = write_minimal_rollout_with_id(&codex_home, id);
+    let expected = write_minimal_rollout_with_id(&adam_home, id);
 
-    let found = find_thread_path_by_id_str(&codex_home, &id.to_string())
+    let found = find_thread_path_by_id_str(&adam_home, &id.to_string())
         .await
         .unwrap();
 
@@ -100,7 +100,7 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
     // Ensures the name-based finder locates a rollout produced by the real recorder.
     let home = TempDir::new().unwrap();
     let config = ConfigBuilder::default()
-        .codex_home(home.path().to_path_buf())
+        .adam_home(home.path().to_path_buf())
         .build()
         .await?;
     let thread_id = ThreadId::new();

@@ -27,12 +27,12 @@ async fn test_conversation_create_and_send_message_ok() -> Result<()> {
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(&server, vec![response_body]).await;
 
-    // Temporary Codex home with config pointing at the mock server.
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    // Temporary Adam home with config pointing at the mock server.
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path(), &server.uri())?;
 
     // Start MCP server process and initialize.
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Create a conversation via the new JSON-RPC API.
@@ -118,25 +118,17 @@ async fn test_conversation_create_and_send_message_ok() -> Result<()> {
 }
 
 // Helper to create a config.toml pointing at the mock model server.
-fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "danger-full-access"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-dialect = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
+fn create_config_toml(adam_home: &Path, server_uri: &str) -> std::io::Result<()> {
+    app_test_support::write_mock_responses_config_toml_with_options(
+        adam_home,
+        server_uri,
+        &std::collections::BTreeMap::new(),
+        20_000,
+        Some(false),
+        "mock_provider",
+        "mock-model",
+        "",
+        "never",
+        "danger-full-access",
     )
 }

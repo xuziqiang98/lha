@@ -55,7 +55,7 @@ pub struct NewThread {
 pub struct ThreadManager {
     state: Arc<ThreadManagerState>,
     #[cfg(any(test, feature = "test-support"))]
-    _test_codex_home_guard: Option<TempDir>,
+    _test_adam_home_guard: Option<TempDir>,
 }
 
 /// Shared, `Arc`-owned state for [`ThreadManager`]. This `Arc` is required to have a single
@@ -91,7 +91,7 @@ pub(crate) enum RetainedAgentStatus {
 
 impl ThreadManager {
     pub fn new(
-        codex_home: PathBuf,
+        adam_home: PathBuf,
         auth_manager: Arc<AuthManager>,
         model_provider_id: &str,
         provider: RuntimeEndpoint,
@@ -105,19 +105,19 @@ impl ThreadManager {
                 thread_generations: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::new(
-                    codex_home.clone(),
+                    adam_home.clone(),
                     auth_manager.clone(),
                     model_provider_id,
                     provider,
                 )),
-                skills_manager: Arc::new(SkillsManager::new(codex_home)),
+                skills_manager: Arc::new(SkillsManager::new(adam_home)),
                 auth_manager,
                 session_source,
                 #[cfg(any(test, feature = "test-support"))]
                 ops_log: Arc::new(std::sync::Mutex::new(Vec::new())),
             }),
             #[cfg(any(test, feature = "test-support"))]
-            _test_codex_home_guard: None,
+            _test_adam_home_guard: None,
         }
     }
 
@@ -126,10 +126,10 @@ impl ThreadManager {
     /// Used for integration tests: should not be used by ordinary business logic.
     pub fn with_models_provider(auth: CodexAuth, provider: RuntimeEndpoint) -> Self {
         let temp_dir = tempfile::tempdir().unwrap_or_else(|err| panic!("temp codex home: {err}"));
-        let codex_home = temp_dir.path().to_path_buf();
+        let adam_home = temp_dir.path().to_path_buf();
         let mut manager =
-            Self::with_models_provider_and_home(auth, "test-provider", provider, codex_home);
-        manager._test_codex_home_guard = Some(temp_dir);
+            Self::with_models_provider_and_home(auth, "test-provider", provider, adam_home);
+        manager._test_adam_home_guard = Some(temp_dir);
         manager
     }
 
@@ -140,7 +140,7 @@ impl ThreadManager {
         auth: CodexAuth,
         model_provider_id: &str,
         provider: RuntimeEndpoint,
-        codex_home: PathBuf,
+        adam_home: PathBuf,
     ) -> Self {
         let auth_manager = AuthManager::from_auth_for_testing(auth);
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
@@ -151,18 +151,18 @@ impl ThreadManager {
                 thread_generations: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::with_provider(
-                    codex_home.clone(),
+                    adam_home.clone(),
                     auth_manager.clone(),
                     model_provider_id,
                     provider,
                 )),
-                skills_manager: Arc::new(SkillsManager::new(codex_home)),
+                skills_manager: Arc::new(SkillsManager::new(adam_home)),
                 auth_manager,
                 session_source: SessionSource::Exec,
                 #[cfg(any(test, feature = "test-support"))]
                 ops_log: Arc::new(std::sync::Mutex::new(Vec::new())),
             }),
-            _test_codex_home_guard: None,
+            _test_adam_home_guard: None,
         }
     }
 

@@ -33,13 +33,13 @@ pub(crate) async fn init_if_enabled(
     config: &Config,
     otel: Option<&OtelManager>,
 ) -> Option<StateDbHandle> {
-    let state_path = config.codex_home.join(STATE_DB_FILENAME);
+    let state_path = config.adam_home.join(STATE_DB_FILENAME);
     if !config.features.enabled(Feature::Sqlite) {
         return None;
     }
     let existed = tokio::fs::try_exists(&state_path).await.unwrap_or(false);
     let runtime = match codex_state::StateRuntime::init(
-        config.codex_home.clone(),
+        config.adam_home.clone(),
         config.model_provider_id.clone(),
         otel.cloned(),
     )
@@ -49,7 +49,7 @@ pub(crate) async fn init_if_enabled(
         Err(err) => {
             warn!(
                 "failed to initialize state runtime at {}: {err}",
-                config.codex_home.display()
+                config.adam_home.display()
             );
             if let Some(otel) = otel {
                 otel.counter("codex.db.init", 1, &[("status", "init_error")]);
@@ -75,14 +75,14 @@ pub(crate) async fn init_if_enabled(
 
 /// Get the DB if the feature is enabled and the DB exists.
 pub async fn get_state_db(config: &Config, otel: Option<&OtelManager>) -> Option<StateDbHandle> {
-    let state_path = config.codex_home.join(STATE_DB_FILENAME);
+    let state_path = config.adam_home.join(STATE_DB_FILENAME);
     if !config.features.enabled(Feature::Sqlite)
         || !tokio::fs::try_exists(&state_path).await.unwrap_or(false)
     {
         return None;
     }
     codex_state::StateRuntime::init(
-        config.codex_home.clone(),
+        config.adam_home.clone(),
         config.model_provider_id.clone(),
         otel.cloned(),
     )
@@ -93,13 +93,13 @@ pub async fn get_state_db(config: &Config, otel: Option<&OtelManager>) -> Option
 /// Open the state runtime when the SQLite file exists, without feature gating.
 ///
 /// This is used for parity checks during the SQLite migration phase.
-pub async fn open_if_present(codex_home: &Path, default_provider: &str) -> Option<StateDbHandle> {
-    let db_path = codex_home.join(STATE_DB_FILENAME);
+pub async fn open_if_present(adam_home: &Path, default_provider: &str) -> Option<StateDbHandle> {
+    let db_path = adam_home.join(STATE_DB_FILENAME);
     if !tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
         return None;
     }
     let runtime = codex_state::StateRuntime::init(
-        codex_home.to_path_buf(),
+        adam_home.to_path_buf(),
         default_provider.to_string(),
         None,
     )
@@ -132,7 +132,7 @@ fn cursor_to_anchor(cursor: Option<&Cursor>) -> Option<codex_state::Anchor> {
 #[allow(clippy::too_many_arguments)]
 pub async fn list_thread_ids_db(
     context: Option<&codex_state::StateRuntime>,
-    codex_home: &Path,
+    adam_home: &Path,
     page_size: usize,
     cursor: Option<&Cursor>,
     sort_key: ThreadSortKey,
@@ -143,11 +143,11 @@ pub async fn list_thread_ids_db(
     stage: &str,
 ) -> Option<Vec<ThreadId>> {
     let ctx = context?;
-    if ctx.codex_home() != codex_home {
+    if ctx.adam_home() != adam_home {
         warn!(
-            "state db codex_home mismatch: expected {}, got {}",
-            ctx.codex_home().display(),
-            codex_home.display()
+            "state db adam_home mismatch: expected {}, got {}",
+            ctx.adam_home().display(),
+            adam_home.display()
         );
     }
 

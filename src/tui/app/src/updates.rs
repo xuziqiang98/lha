@@ -75,7 +75,7 @@ struct ReleaseInfo {
 }
 
 fn version_filepath(config: &Config) -> PathBuf {
-    config.codex_home.join(VERSION_FILENAME)
+    config.adam_home.join(VERSION_FILENAME)
 }
 
 fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
@@ -249,9 +249,9 @@ mod tests {
 
     #[tokio::test]
     async fn update_notifications_are_suppressed_even_when_newer_version_is_cached() {
-        let codex_home = tempdir().expect("tempdir");
+        let adam_home = tempdir().expect("tempdir");
         let config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
+            .adam_home(adam_home.path().to_path_buf())
             .build()
             .await
             .expect("config");
@@ -261,7 +261,7 @@ mod tests {
             last_checked_at: Utc::now(),
             dismissed_version: None,
         };
-        let version_file = codex_home.path().join(VERSION_FILENAME);
+        let version_file = adam_home.path().join(VERSION_FILENAME);
         std::fs::write(
             &version_file,
             format!(

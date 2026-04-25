@@ -31,7 +31,7 @@ use super::textarea::TextAreaState;
 /// logs and rollout locally with classification + metadata.
 pub(crate) struct FeedbackNoteView {
     category: FeedbackCategory,
-    codex_home: PathBuf,
+    adam_home: PathBuf,
     snapshot: codex_feedback::CodexLogSnapshot,
     rollout_path: Option<PathBuf>,
     app_event_tx: AppEventSender,
@@ -46,7 +46,7 @@ pub(crate) struct FeedbackNoteView {
 impl FeedbackNoteView {
     pub(crate) fn new(
         category: FeedbackCategory,
-        codex_home: PathBuf,
+        adam_home: PathBuf,
         snapshot: codex_feedback::CodexLogSnapshot,
         rollout_path: Option<PathBuf>,
         app_event_tx: AppEventSender,
@@ -54,7 +54,7 @@ impl FeedbackNoteView {
     ) -> Self {
         Self {
             category,
-            codex_home,
+            adam_home,
             snapshot,
             rollout_path,
             app_event_tx,
@@ -74,7 +74,7 @@ impl FeedbackNoteView {
         };
         let classification = feedback_classification(self.category);
         let result = self.snapshot.persist_feedback(
-            self.codex_home.as_path(),
+            self.adam_home.as_path(),
             classification,
             reason_opt,
             self.include_logs,
@@ -418,7 +418,7 @@ pub(crate) fn feedback_upload_consent_params(
     let mut header_lines: Vec<Box<dyn crate::render::renderable::Renderable>> = vec![
         Line::from("Save logs locally?".bold()).into(),
         Line::from("").into(),
-        Line::from("The following files will be saved under CODEY_HOME/feedback:".dim()).into(),
+        Line::from("The following files will be saved under ADAM_HOME/feedback:".dim()).into(),
         Line::from(vec!["  • ".into(), "codex-logs.log".into()]).into(),
     ];
     if let Some(path) = rollout_path.as_deref()
@@ -527,13 +527,13 @@ mod tests {
 
     #[test]
     fn submit_feedback_emits_local_save_details_without_follow_up_instructions() {
-        let codex_home = tempfile::TempDir::new().expect("tempdir");
+        let adam_home = tempfile::TempDir::new().expect("tempdir");
         let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
         let mut view = FeedbackNoteView::new(
             FeedbackCategory::Bug,
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             snapshot,
             None,
             tx,

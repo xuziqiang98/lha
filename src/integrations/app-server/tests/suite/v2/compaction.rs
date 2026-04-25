@@ -63,9 +63,9 @@ async fn auto_compaction_local_emits_started_and_completed_items() -> Result<()>
     ]);
     responses::mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
 
-    let codex_home = TempDir::new()?;
+    let adam_home = TempDir::new()?;
     write_mock_responses_config_toml(
-        codex_home.path(),
+        adam_home.path(),
         &server.uri(),
         &BTreeMap::default(),
         AUTO_COMPACT_LIMIT,
@@ -74,7 +74,7 @@ async fn auto_compaction_local_emits_started_and_completed_items() -> Result<()>
         COMPACT_PROMPT,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_thread(&mut mcp).await?;
@@ -132,11 +132,11 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
     )
     .await;
 
-    let codex_home = TempDir::new()?;
+    let adam_home = TempDir::new()?;
     let mut features = BTreeMap::default();
     features.insert(Feature::RemoteCompaction, true);
     write_mock_responses_config_toml(
-        codex_home.path(),
+        adam_home.path(),
         &server.uri(),
         &features,
         AUTO_COMPACT_LIMIT,
@@ -145,14 +145,14 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
         COMPACT_PROMPT,
     )?;
     write_chatgpt_auth(
-        codex_home.path(),
+        adam_home.path(),
         ChatGptAuthFixture::new("access-chatgpt").plan_type("pro"),
         AuthCredentialsStoreMode::File,
     )?;
 
     let server_base_url = format!("{}/v1", server.uri());
     let mut mcp = McpProcess::new_with_env(
-        codex_home.path(),
+        adam_home.path(),
         &[
             ("OPENAI_BASE_URL", Some(server_base_url.as_str())),
             ("OPENAI_API_KEY", None),

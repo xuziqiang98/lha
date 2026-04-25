@@ -80,8 +80,8 @@ mod windows_impl {
         }
     }
 
-    /// Creates the sandbox user's Codex home directory if it does not already exist.
-    fn ensure_codex_home_exists(p: &Path) -> Result<()> {
+    /// Creates the sandbox user's Adam home directory if it does not already exist.
+    fn ensure_adam_home_exists(p: &Path) -> Result<()> {
         std::fs::create_dir_all(p)?;
         Ok(())
     }
@@ -193,9 +193,9 @@ mod windows_impl {
         policy_json_or_preset: String,
         sandbox_policy_cwd: PathBuf,
         // Writable log dir for sandbox user (.codey in sandbox profile).
-        codex_home: PathBuf,
-        // Real user's CODEY_HOME for shared data (caps, config).
-        real_codex_home: PathBuf,
+        adam_home: PathBuf,
+        // Real user's ADAM_HOME for shared data (caps, config).
+        real_adam_home: PathBuf,
         cap_sid: String,
         request_file: Option<PathBuf>,
         command: Vec<String>,
@@ -211,7 +211,7 @@ mod windows_impl {
     pub fn run_windows_sandbox_capture(
         policy_json_or_preset: &str,
         sandbox_policy_cwd: &Path,
-        codex_home: &Path,
+        adam_home: &Path,
         command: Vec<String>,
         cwd: &Path,
         mut env_map: HashMap<String, String>,
@@ -224,13 +224,13 @@ mod windows_impl {
         inject_git_safe_directory(&mut env_map, cwd, None);
         let current_dir = cwd.to_path_buf();
         // Use a temp-based log dir that the sandbox user can write.
-        let sandbox_base = codex_home.join(".sandbox");
-        ensure_codex_home_exists(&sandbox_base)?;
+        let sandbox_base = adam_home.join(".sandbox");
+        ensure_adam_home_exists(&sandbox_base)?;
 
         let logs_base_dir: Option<&Path> = Some(sandbox_base.as_path());
         log_start(&command, logs_base_dir);
         let sandbox_creds =
-            require_logon_sandbox_creds(&policy, sandbox_policy_cwd, cwd, &env_map, codex_home)?;
+            require_logon_sandbox_creds(&policy, sandbox_policy_cwd, cwd, &env_map, adam_home)?;
         // Build capability SID for ACL grants.
         if matches!(
             &policy,
@@ -238,7 +238,7 @@ mod windows_impl {
         ) {
             anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
         }
-        let caps = load_or_create_cap_sids(codex_home)?;
+        let caps = load_or_create_cap_sids(adam_home)?;
         let (psid_to_use, cap_sid_str) = match &policy {
             SandboxPolicy::ReadOnly => (
                 unsafe { convert_string_sid_to_sid(&caps.readonly).unwrap() },
@@ -292,8 +292,8 @@ mod windows_impl {
         let payload = RunnerPayload {
             policy_json_or_preset: policy_json_or_preset.to_string(),
             sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
-            codex_home: sandbox_base.clone(),
-            real_codex_home: codex_home.to_path_buf(),
+            adam_home: sandbox_base.clone(),
+            real_adam_home: adam_home.to_path_buf(),
             cap_sid: cap_sid_str.clone(),
             request_file: Some(req_file.clone()),
             command: command.clone(),
@@ -512,7 +512,7 @@ mod stub {
     pub fn run_windows_sandbox_capture(
         _policy_json_or_preset: &str,
         _sandbox_policy_cwd: &Path,
-        _codex_home: &Path,
+        _adam_home: &Path,
         _command: Vec<String>,
         _cwd: &Path,
         _env_map: HashMap<String, String>,

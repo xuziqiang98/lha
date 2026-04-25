@@ -132,8 +132,8 @@ pub(crate) async fn backfill_sessions(
     otel: Option<&OtelManager>,
 ) {
     let timer = otel.and_then(|otel| otel.start_timer(DB_METRIC_BACKFILL_DURATION_MS, &[]).ok());
-    let sessions_root = config.codex_home.join(rollout::SESSIONS_SUBDIR);
-    let archived_root = config.codex_home.join(rollout::ARCHIVED_SESSIONS_SUBDIR);
+    let sessions_root = config.adam_home.join(rollout::SESSIONS_SUBDIR);
+    let archived_root = config.adam_home.join(rollout::ARCHIVED_SESSIONS_SUBDIR);
     let mut rollout_paths: Vec<(PathBuf, bool)> = Vec::new();
     for (root, archived) in [(sessions_root, false), (archived_root, true)] {
         if !tokio::fs::try_exists(&root).await.unwrap_or(false) {

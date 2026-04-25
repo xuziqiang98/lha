@@ -6,6 +6,9 @@ use crate::config::ConfigToml;
 use crate::config::display_model_provider_ref;
 use crate::config::generated_provider_profile_name;
 use crate::config::model_provider_cache_key;
+use crate::config::model_provider_id_from_ref;
+use crate::config::model_ref::ModelRef;
+use crate::config::models_json::ModelsJson;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result as CoreResult;
@@ -49,7 +52,7 @@ static BUNDLED_REMOTE_MODEL_SLUGS: Lazy<HashSet<String>> = Lazy::new(|| {
 /// Coordinates remote model discovery plus cached metadata on disk.
 #[derive(Debug)]
 pub struct ModelsManager {
-    codex_home: PathBuf,
+    adam_home: PathBuf,
     local_models: Vec<ModelPreset>,
     remote_models: RwLock<Vec<ModelInfo>>,
     auth_manager: Arc<AuthManager>,
@@ -62,15 +65,15 @@ pub struct ModelsManager {
 impl ModelsManager {
     /// Construct a manager scoped to the provided `AuthManager` and model provider.
     ///
-    /// Uses `codex_home` to store provider-scoped cached model metadata and initializes with
+    /// Uses `adam_home` to store provider-scoped cached model metadata and initializes with
     /// built-in presets.
     pub fn new(
-        codex_home: PathBuf,
+        adam_home: PathBuf,
         auth_manager: Arc<AuthManager>,
         model_provider_id: &str,
         provider: RuntimeEndpoint,
     ) -> Self {
-        let cache_path = models_cache_path(&codex_home, model_provider_id);
+        let cache_path = models_cache_path(&adam_home, model_provider_id);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         let remote_models = if Self::provider_uses_model_catalog(&provider) {
             Self::load_remote_models_from_file().unwrap_or_default()
@@ -79,7 +82,7 @@ impl ModelsManager {
         };
 
         Self {
-            codex_home,
+            adam_home,
             local_models: builtin_model_presets(auth_manager.get_internal_auth_mode()),
             remote_models: RwLock::new(remote_models),
             auth_manager,
@@ -103,7 +106,7 @@ impl ModelsManager {
             .cache_manager
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = ModelsCacheManager::new(
-            models_cache_path(&self.codex_home, model_provider_id),
+            models_cache_path(&self.adam_home, model_provider_id),
             DEFAULT_MODEL_CACHE_TTL,
         );
         *self
@@ -589,7 +592,7 @@ impl ModelsManager {
         };
 
         let mut presets: Vec<ModelPreset> = self
-            .configured_model_entries(&config_toml)
+            .configured_model_entries(&config_toml, config)
             .into_iter()
             .map(|(model, provider_id)| {
                 self.configured_model_switcher_preset_from_config_toml(
@@ -622,7 +625,7 @@ impl ModelsManager {
         };
 
         let mut presets: Vec<ModelPreset> = self
-            .configured_model_entries(&config_toml)
+            .configured_model_entries(&config_toml, config)
             .into_iter()
             .map(|(model, provider_id)| {
                 self.configured_model_preset_from_config_toml(
@@ -668,22 +671,24 @@ impl ModelsManager {
         )
     }
 
-    fn configured_model_entries(&self, config_toml: &ConfigToml) -> Vec<(String, Option<String>)> {
+    fn configured_model_entries(
+        &self,
+        config_toml: &ConfigToml,
+        config: &Config,
+    ) -> Vec<(String, Option<String>)> {
         let mut seen_models = HashSet::new();
         let mut configured_models = Vec::new();
 
-        let top_level_model = config_toml
+        if let Some(model) = config
             .model
             .as_deref()
             .map(str::trim)
-            .filter(|model| !model.is_empty());
-        let top_level_provider_id =
-            Self::explicit_configured_model_provider_id(config_toml.model_provider.as_deref());
-
-        if let Some(model) = top_level_model {
-            let key = (model.to_string(), top_level_provider_id.clone());
+            .filter(|model| !model.is_empty())
+        {
+            let provider_id = Some(config.model_provider_id.clone());
+            let key = (model.to_string(), provider_id.clone());
             if seen_models.insert(key) {
-                configured_models.push((model.to_string(), top_level_provider_id));
+                configured_models.push((model.to_string(), provider_id));
             }
         }
 
@@ -691,15 +696,18 @@ impl ModelsManager {
             .profiles
             .values()
             .filter_map(|profile| {
-                let model = profile.model.as_deref()?.trim().to_string();
-                if model.is_empty() {
+                let profile_model = profile.model.as_deref()?.trim();
+                if profile_model.is_empty() {
                     return None;
                 }
-                let provider_id =
-                    Self::explicit_configured_model_provider_id(profile.model_provider.as_deref());
-                let provider_id =
-                    Self::inferred_configured_model_provider_id(config_toml, &model, provider_id);
-                Some((model, provider_id))
+                if let Ok(model_ref) = ModelRef::parse(profile_model) {
+                    Some((
+                        model_ref.model_id.clone(),
+                        Some(model_provider_id_from_ref(&model_ref)),
+                    ))
+                } else {
+                    Some((profile_model.to_string(), None))
+                }
             })
             .collect();
         profile_models
@@ -709,6 +717,16 @@ impl ModelsManager {
             let key = (model.clone(), provider_id.clone());
             if seen_models.insert(key) {
                 configured_models.push((model, provider_id));
+            }
+        }
+
+        if let Ok(models_json) = ModelsJson::load_from_adam_home(&config.adam_home) {
+            for (model, provider_id) in models_json.model_entries() {
+                let provider_id = Some(provider_id);
+                let key = (model.clone(), provider_id.clone());
+                if seen_models.insert(key) {
+                    configured_models.push((model, provider_id));
+                }
             }
         }
 
@@ -763,25 +781,20 @@ impl ModelsManager {
             return None;
         }
 
-        let configured_model = if let Some(config_toml) = self.config_toml(config) {
-            let model_provider_id =
-                Self::explicit_configured_model_provider_id(config_toml.model_provider.as_deref());
-
-            if let Some(preset) = self.official_openai_switcher_model(
+        let configured_model = if let Some(preset) = self.official_openai_switcher_model(
+            model,
+            Some(config.model_provider_id.as_str()),
+            available_models,
+        ) {
+            preset
+        } else if let Some(config_toml) = self.config_toml(config) {
+            self.configured_model_preset_from_config_toml(
                 model,
-                model_provider_id.as_deref(),
+                Some(config.model_provider_id.as_str()),
+                &config_toml,
+                config,
                 available_models,
-            ) {
-                preset
-            } else {
-                self.configured_model_preset_from_config_toml(
-                    model,
-                    model_provider_id.as_deref(),
-                    &config_toml,
-                    config,
-                    available_models,
-                )
-            }
+            )
         } else {
             self.configured_model_from_config_toml(model, config, available_models)
         };
@@ -791,26 +804,6 @@ impl ModelsManager {
         }
 
         Some(configured_model)
-    }
-
-    fn explicit_configured_model_provider_id(provider_id: Option<&str>) -> Option<String> {
-        provider_id
-            .map(str::trim)
-            .filter(|provider_id| !provider_id.is_empty())
-            .map(str::to_string)
-    }
-
-    fn inferred_configured_model_provider_id(
-        config_toml: &ConfigToml,
-        model: &str,
-        provider_id: Option<String>,
-    ) -> Option<String> {
-        provider_id.or_else(|| {
-            config_toml
-                .resolve_model_provider_for_model(model)
-                .ok()
-                .flatten()
-        })
     }
 
     fn is_current_provider_openai(&self) -> bool {
@@ -881,12 +874,21 @@ impl ModelsManager {
         &self,
         model: &str,
         provider_id: &str,
-        config_toml: &ConfigToml,
+        _config_toml: &ConfigToml,
         config: &Config,
         available_models: &[ModelPreset],
     ) -> ModelPreset {
         let id = generated_provider_profile_name(provider_id, model);
-        let description = if config_toml.model_providers.contains_key(provider_id) {
+        let is_user_defined_provider = provider_id != OPENAI_PROVIDER_ID
+            && ModelsJson::load_from_adam_home(&config.adam_home)
+                .ok()
+                .is_some_and(|models_json| {
+                    models_json
+                        .model_entries()
+                        .into_iter()
+                        .any(|(_, configured_provider_id)| configured_provider_id == provider_id)
+                });
+        let description = if is_user_defined_provider {
             format!(
                 "User-defined model from {} provider.",
                 display_model_provider_ref(provider_id)
@@ -1102,12 +1104,12 @@ impl ModelsManager {
     #[cfg(any(test, feature = "test-support"))]
     /// Construct a manager with a specific provider for testing.
     pub fn with_provider(
-        codex_home: PathBuf,
+        adam_home: PathBuf,
         auth_manager: Arc<AuthManager>,
         model_provider_id: &str,
         provider: RuntimeEndpoint,
     ) -> Self {
-        Self::new(codex_home, auth_manager, model_provider_id, provider)
+        Self::new(adam_home, auth_manager, model_provider_id, provider)
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -1132,8 +1134,8 @@ impl ModelsManager {
     }
 }
 
-fn models_cache_path(codex_home: &std::path::Path, model_provider_id: &str) -> PathBuf {
-    codex_home
+fn models_cache_path(adam_home: &std::path::Path, model_provider_id: &str) -> PathBuf {
+    adam_home
         .join("remote_models")
         .join(model_provider_cache_key(model_provider_id))
         .join(MODEL_CACHE_FILE)
@@ -1223,15 +1225,189 @@ mod tests {
         provider
     }
 
-    async fn load_config_from_toml(codex_home: &tempfile::TempDir, config_toml: &str) -> Config {
-        tokio::fs::write(codex_home.path().join("config.toml"), config_toml)
+    async fn load_config_from_toml(adam_home: &tempfile::TempDir, config_toml: &str) -> Config {
+        let config_toml = prepare_legacy_model_fixture(adam_home.path(), config_toml);
+        tokio::fs::write(adam_home.path().join("config.toml"), config_toml)
             .await
             .expect("write config.toml");
         ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
+            .adam_home(adam_home.path().to_path_buf())
             .build()
             .await
             .expect("load test config")
+    }
+
+    fn prepare_legacy_model_fixture(adam_home: &std::path::Path, config_toml: &str) -> String {
+        let mut doc = config_toml
+            .parse::<toml_edit::DocumentMut>()
+            .expect("test config should parse");
+        let original = config_toml
+            .parse::<toml::Table>()
+            .expect("test config should parse as value");
+        let mut models_json = json!({ "providers": {} });
+
+        if let Some(model_providers) = original
+            .get("model_providers")
+            .and_then(toml::Value::as_table)
+        {
+            for (provider_id, provider) in model_providers {
+                if let Some(variants) = provider.get("variants").and_then(toml::Value::as_table) {
+                    for (endpoint_id, endpoint) in variants {
+                        insert_models_endpoint(
+                            &mut models_json,
+                            provider_id,
+                            endpoint_id,
+                            endpoint,
+                        );
+                    }
+                } else {
+                    insert_models_endpoint(&mut models_json, provider_id, "main", provider);
+                }
+            }
+        }
+
+        let top_model = original
+            .get("model")
+            .and_then(toml::Value::as_str)
+            .map(str::to_string);
+        let top_provider = original
+            .get("model_provider")
+            .and_then(toml::Value::as_str)
+            .unwrap_or(OPENAI_PROVIDER_ID)
+            .to_string();
+        if let Some(model) = top_model.as_deref() {
+            insert_models_entry(&mut models_json, &top_provider, model, None);
+            write_test_state_json(adam_home, &top_provider, model);
+        }
+
+        if let Some(profiles) = doc["profiles"].as_table_mut() {
+            for (_, profile) in profiles.iter_mut() {
+                let Some(profile_table) = profile.as_table_mut() else {
+                    continue;
+                };
+                let model = profile_table
+                    .get("model")
+                    .and_then(toml_edit::Item::as_str)
+                    .map(str::to_string);
+                let provider = profile_table
+                    .get("model_provider")
+                    .and_then(toml_edit::Item::as_str)
+                    .map(str::to_string);
+                let context_window = profile_table
+                    .get("model_context_window")
+                    .and_then(toml_edit::Item::as_integer);
+                if let Some(model) = model
+                    && let Some(provider) = provider.as_deref()
+                {
+                    profile_table["model"] = toml_edit::value(model_ref_string(provider, &model));
+                    insert_models_entry(&mut models_json, provider, &model, context_window);
+                }
+                profile_table.remove("model_provider");
+                profile_table.remove("model_context_window");
+            }
+        }
+
+        doc.as_table_mut().remove("model");
+        doc.as_table_mut().remove("model_provider");
+        doc.as_table_mut().remove("model_providers");
+
+        if models_json["providers"]
+            .as_object()
+            .is_some_and(|providers| !providers.is_empty())
+        {
+            std::fs::write(
+                adam_home.join("models.json"),
+                serde_json::to_string_pretty(&models_json).expect("serialize models fixture"),
+            )
+            .expect("write models.json");
+        }
+
+        doc.to_string()
+    }
+
+    fn insert_models_endpoint(
+        models_json: &mut serde_json::Value,
+        provider_id: &str,
+        endpoint_id: &str,
+        endpoint: &toml::Value,
+    ) {
+        let provider = &mut models_json["providers"][provider_id];
+        if provider.is_null() {
+            *provider = json!({ "name": provider_id, "endpoints": {} });
+        }
+        let base_url = endpoint.get("base_url").and_then(toml::Value::as_str);
+        let dialect = endpoint
+            .get("dialect")
+            .and_then(toml::Value::as_str)
+            .unwrap_or("chat");
+        let bearer = endpoint
+            .get("experimental_bearer_token")
+            .and_then(toml::Value::as_str);
+        let env_key = endpoint.get("env_key").and_then(toml::Value::as_str);
+        let endpoint_value = &mut provider["endpoints"][endpoint_id];
+        if endpoint_value.is_null() {
+            *endpoint_value = json!({ "name": provider_id, "dialect": dialect, "models": {} });
+        }
+        endpoint_value["dialect"] = json!(dialect);
+        if let Some(base_url) = base_url {
+            endpoint_value["base_url"] = json!(base_url);
+        }
+        if let Some(bearer) = bearer {
+            endpoint_value["experimental_bearer_token"] = json!(bearer);
+        }
+        if let Some(env_key) = env_key {
+            endpoint_value["env_key"] = json!(env_key);
+        }
+    }
+
+    fn insert_models_entry(
+        models_json: &mut serde_json::Value,
+        provider_ref: &str,
+        model: &str,
+        context_window: Option<i64>,
+    ) {
+        let (provider_id, endpoint_id) = provider_ref
+            .rsplit_once('.')
+            .unwrap_or((provider_ref, "main"));
+        let provider = &mut models_json["providers"][provider_id];
+        if provider.is_null() {
+            *provider = json!({ "name": provider_id, "endpoints": {} });
+        }
+        let endpoint = &mut provider["endpoints"][endpoint_id];
+        if endpoint.is_null() {
+            *endpoint = json!({ "name": provider_id, "dialect": "chat", "models": {} });
+        }
+        endpoint["models"][model] = if let Some(context_window) = context_window {
+            json!({ "context_window": context_window })
+        } else if endpoint["models"][model].is_null() {
+            json!({})
+        } else {
+            endpoint["models"][model].clone()
+        };
+    }
+
+    fn write_test_state_json(adam_home: &std::path::Path, provider_ref: &str, model: &str) {
+        std::fs::write(
+            adam_home.join("state.json"),
+            serde_json::to_string_pretty(&json!({
+                "last_selected_model": {
+                    "model_ref": model_ref_string(provider_ref, model),
+                    "selected_at": null,
+                },
+                "last_reasoning_effort": null,
+                "last_model_verbosity": null,
+            }))
+            .expect("serialize state fixture"),
+        )
+        .expect("write state.json");
+    }
+
+    fn model_ref_string(provider_ref: &str, model: &str) -> String {
+        if provider_ref.contains('.') {
+            format!("{provider_ref}:{model}")
+        } else {
+            format!("{provider_ref}.main:{model}")
+        }
     }
 
     #[tokio::test]
@@ -1251,9 +1427,9 @@ mod tests {
         )
         .await;
 
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
+            .adam_home(adam_home.path().to_path_buf())
             .build()
             .await
             .expect("load default test config");
@@ -1262,7 +1438,7 @@ mod tests {
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
         let manager = ModelsManager::with_provider(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             provider,
@@ -1311,9 +1487,9 @@ mod tests {
         )
         .await;
 
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
+            .adam_home(adam_home.path().to_path_buf())
             .build()
             .await
             .expect("load default test config");
@@ -1322,7 +1498,7 @@ mod tests {
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "custom-provider",
             provider,
@@ -1354,21 +1530,21 @@ mod tests {
         )
         .await;
 
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
+            .adam_home(adam_home.path().to_path_buf())
             .build()
             .await
             .expect("load default test config");
         config.features.enable(Feature::RemoteModels);
         let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let provider = provider_for(server.uri());
         let manager = ModelsManager::with_provider(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             provider,
@@ -1417,21 +1593,21 @@ mod tests {
         )
         .await;
 
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
+            .adam_home(adam_home.path().to_path_buf())
             .build()
             .await
             .expect("load default test config");
         config.features.enable(Feature::RemoteModels);
         let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
 
         let manager_a = ModelsManager::with_provider(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             Arc::clone(&auth_manager),
             "mock-provider-a",
             provider_for(server_a.uri()),
@@ -1443,7 +1619,7 @@ mod tests {
         assert_models_contain(&manager_a.get_remote_models(&config).await, &models_a);
 
         let manager_b = ModelsManager::with_provider(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "mock-provider-b",
             provider_for(server_b.uri()),
@@ -1485,21 +1661,21 @@ mod tests {
         )
         .await;
 
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
+            .adam_home(adam_home.path().to_path_buf())
             .build()
             .await
             .expect("load default test config");
         config.features.enable(Feature::RemoteModels);
         let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let provider = provider_for(server.uri());
         let manager = ModelsManager::with_provider(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             provider,
@@ -1564,9 +1740,9 @@ mod tests {
         )
         .await;
 
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
+            .adam_home(adam_home.path().to_path_buf())
             .build()
             .await
             .expect("load default test config");
@@ -1575,7 +1751,7 @@ mod tests {
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
         let manager = ModelsManager::with_provider(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             provider,
@@ -1631,12 +1807,12 @@ mod tests {
 
     #[test]
     fn build_available_models_picks_default_after_hiding_hidden_models() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let provider = provider_for("http://example.test".to_string());
         let mut manager = ModelsManager::with_provider(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             provider,
@@ -1693,27 +1869,27 @@ mod tests {
     fn models_cache_path_avoids_variant_collisions() {
         let base = std::path::Path::new("/tmp/codey");
         let plain = models_cache_path(base, "acme_chat");
-        let variant = models_cache_path(base, "acme#chat");
+        let variant = models_cache_path(base, "acme.chat");
 
         assert_ne!(plain, variant);
     }
 
     #[tokio::test]
     async fn list_model_switcher_models_without_auth_returns_only_configured_custom_model() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "mock-model"
 "#,
@@ -1729,7 +1905,7 @@ model = "mock-model"
         assert_eq!(picker_models[0].display_name, "mock-model");
         assert_eq!(
             picker_models[0].description,
-            "Configured model from config.toml."
+            "Configured model from openai provider."
         );
         assert_eq!(
             picker_models[0].default_reasoning_effort,
@@ -1742,20 +1918,20 @@ model = "mock-model"
 
     #[tokio::test]
     async fn list_model_switcher_models_without_chatgpt_auth_returns_all_models_in_config_toml() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "mock-model"
 
@@ -1795,20 +1971,20 @@ model = "deepseek-r1"
     #[tokio::test]
     async fn list_model_switcher_models_without_chatgpt_auth_keeps_same_model_for_custom_providers()
     {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "gpt-5.2"
 model_provider = "provider_a"
@@ -1877,23 +2053,23 @@ model_provider = "provider_b"
 
     #[tokio::test]
     async fn list_model_switcher_models_keeps_same_model_for_provider_variants() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "claude-sonnet-4-5"
-model_provider = "anthropic#messages"
+model_provider = "anthropic.messages"
 
 [model_providers.anthropic.variants.messages]
 name = "anthropic"
@@ -1909,7 +2085,7 @@ experimental_bearer_token = "sk-chat"
 
 [profiles.chat]
 model = "claude-sonnet-4-5"
-model_provider = "anthropic#chat"
+model_provider = "anthropic.chat"
 "#,
         )
         .await;
@@ -1931,11 +2107,11 @@ model_provider = "anthropic#chat"
                 .collect::<Vec<_>>(),
             vec![
                 (
-                    Some("anthropic#messages"),
+                    Some("anthropic.messages"),
                     "User-defined model from anthropic (messages) provider.",
                 ),
                 (
-                    Some("anthropic#chat"),
+                    Some("anthropic.chat"),
                     "User-defined model from anthropic (chat) provider.",
                 ),
             ]
@@ -1944,20 +2120,20 @@ model_provider = "anthropic#chat"
 
     #[tokio::test]
     async fn list_model_switcher_models_without_chatgpt_auth_preserves_configured_provider_ids() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "gpt-5.2"
 model_provider = "openai"
@@ -1976,15 +2152,15 @@ experimental_bearer_token = "sk-chat"
 
 [profiles.messages]
 model = "gpt-5.2"
-model_provider = "anthropic#messages"
+model_provider = "anthropic.messages"
 
 [profiles.chat]
 model = "gpt-5.2"
-model_provider = "anthropic#chat"
+model_provider = "anthropic.chat"
 
 [profiles.duplicate]
 model = "gpt-5.2"
-model_provider = "anthropic#messages"
+model_provider = "anthropic.messages"
 "#,
         )
         .await;
@@ -2012,15 +2188,15 @@ model_provider = "anthropic#messages"
                     "Configured model from openai provider.".to_string(),
                 ),
                 (
-                    generated_provider_profile_name("anthropic#chat", "gpt-5.2"),
+                    generated_provider_profile_name("anthropic.chat", "gpt-5.2"),
                     "gpt-5.2".to_string(),
-                    Some("anthropic#chat".to_string()),
+                    Some("anthropic.chat".to_string()),
                     "User-defined model from anthropic (chat) provider.".to_string(),
                 ),
                 (
-                    generated_provider_profile_name("anthropic#messages", "gpt-5.2"),
+                    generated_provider_profile_name("anthropic.messages", "gpt-5.2"),
                     "gpt-5.2".to_string(),
-                    Some("anthropic#messages".to_string()),
+                    Some("anthropic.messages".to_string()),
                     "User-defined model from anthropic (messages) provider.".to_string(),
                 ),
             ]
@@ -2033,17 +2209,17 @@ model_provider = "anthropic#messages"
 
     #[tokio::test]
     async fn list_model_switcher_models_with_auth_appends_configured_models() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "mock-model"
 
@@ -2087,23 +2263,23 @@ model = "deepseek-r1"
                 .iter()
                 .find(|preset| preset.model == "mock-model")
                 .map(|preset| preset.description.as_str()),
-            Some("Configured model from config.toml.")
+            Some("Configured model from openai provider.")
         );
     }
 
     #[tokio::test]
     async fn list_model_switcher_models_with_chatgpt_auth_keeps_same_model_for_custom_provider() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "gpt-5.2"
 model_provider = "provider_a"
@@ -2152,17 +2328,17 @@ experimental_bearer_token = "sk-a"
 
     #[tokio::test]
     async fn list_model_switcher_models_with_chatgpt_auth_keeps_custom_same_slug_when_active() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "gpt-5.2"
 model_provider = "provider_a"
@@ -2219,17 +2395,17 @@ experimental_bearer_token = "sk-a"
     #[tokio::test]
     async fn list_model_switcher_models_with_chatgpt_auth_keeps_remote_official_and_custom_same_slug_when_active()
      {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "gpt-5.4"
 model_provider = "provider_a"
@@ -2286,17 +2462,17 @@ experimental_bearer_token = "sk-a"
     #[tokio::test]
     async fn list_model_switcher_models_with_chatgpt_auth_maps_providerless_official_models_to_openai()
      {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "gpt-5.4"
 
@@ -2348,17 +2524,17 @@ experimental_bearer_token = "sk-a"
 
     #[tokio::test]
     async fn list_model_switcher_models_with_chatgpt_auth_keeps_unknown_openai_models_configured() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "custom-openai-model"
 model_provider = "openai"
@@ -2391,17 +2567,17 @@ model_provider = "openai"
 
     #[tokio::test]
     async fn try_is_official_openai_model_returns_true_for_official_openai_model() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "gpt-5.2"
 model_provider = "openai"
@@ -2418,17 +2594,17 @@ model_provider = "openai"
 
     #[tokio::test]
     async fn try_is_official_openai_model_returns_false_for_custom_provider_variant() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "gpt-5.2"
 model_provider = "provider_a"
@@ -2451,17 +2627,17 @@ experimental_bearer_token = "sk-a"
 
     #[tokio::test]
     async fn try_is_official_openai_model_returns_false_for_unknown_openai_model() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "custom-openai-model"
 model_provider = "openai"
@@ -2478,17 +2654,17 @@ model_provider = "openai"
 
     #[tokio::test]
     async fn list_picker_models_with_chatgpt_auth_normalizes_visible_official_openai_model() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "gpt-5.4"
 
@@ -2533,17 +2709,17 @@ experimental_bearer_token = "sk-a"
 
     #[tokio::test]
     async fn list_picker_models_with_chatgpt_auth_keeps_unknown_openai_models_configured() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "custom-openai-model"
 model_provider = "openai"
@@ -2576,17 +2752,17 @@ model_provider = "openai"
 
     #[tokio::test]
     async fn list_picker_models_with_chatgpt_auth_keeps_same_slug_custom_provider() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "gpt-5.2"
 model_provider = "provider_a"
@@ -2635,17 +2811,17 @@ experimental_bearer_token = "sk-a"
 
     #[tokio::test]
     async fn list_picker_models_without_remote_models_uses_builtin_gpt_5_3_codex_default() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 [features]
 remote_models = false
@@ -2670,17 +2846,17 @@ remote_models = false
 
     #[tokio::test]
     async fn get_default_model_without_remote_models_uses_builtin_gpt_5_3_codex() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 [features]
 remote_models = false
@@ -2699,17 +2875,17 @@ remote_models = false
     #[tokio::test]
     async fn list_model_switcher_models_with_chatgpt_auth_and_remote_models_disabled_includes_official_openai_models()
      {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "claude-sonnet-4-5"
 model_provider = "provider_a"
@@ -2745,17 +2921,17 @@ experimental_bearer_token = "sk-a"
     #[tokio::test]
     async fn list_model_switcher_models_with_chatgpt_auth_and_remote_models_disabled_keeps_custom_openai_model()
      {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "custom-openai-model"
 model_provider = "openai"
@@ -2784,17 +2960,17 @@ remote_models = false
 
     #[tokio::test]
     async fn list_picker_models_with_chatgpt_auth_normalizes_hidden_official_openai_model() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "gpt-5.1"
 "#,
@@ -2829,17 +3005,17 @@ model = "gpt-5.1"
 
     #[tokio::test]
     async fn list_model_switcher_models_with_chatgpt_auth_dedupes_hidden_official_openai_model() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "gpt-5.1"
 "#,
@@ -2875,20 +3051,20 @@ model = "gpt-5.1"
     #[tokio::test]
     async fn list_model_switcher_models_without_chatgpt_auth_preserves_providerless_top_level_entry()
      {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "shared-model"
 
@@ -2925,9 +3101,9 @@ experimental_bearer_token = "sk-a"
             matching_models,
             vec![
                 (
-                    "shared-model".to_string(),
-                    None,
-                    "Configured model from config.toml.".to_string(),
+                    generated_provider_profile_name("openai", "shared-model"),
+                    Some("openai".to_string()),
+                    "Configured model from openai provider.".to_string(),
                 ),
                 (
                     generated_provider_profile_name("provider_a", "shared-model"),
@@ -2941,20 +3117,20 @@ experimental_bearer_token = "sk-a"
 
     #[tokio::test]
     async fn list_model_switcher_models_without_chatgpt_auth_keeps_ambiguous_providerless_entry() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "shared-model"
 
@@ -3001,9 +3177,9 @@ experimental_bearer_token = "sk-b"
             matching_models,
             vec![
                 (
-                    "shared-model".to_string(),
-                    None,
-                    "Configured model from config.toml.".to_string(),
+                    generated_provider_profile_name("openai", "shared-model"),
+                    Some("openai".to_string()),
+                    "Configured model from openai provider.".to_string(),
                 ),
                 (
                     generated_provider_profile_name("provider_a", "shared-model"),
@@ -3021,16 +3197,16 @@ experimental_bearer_token = "sk-b"
 
     #[tokio::test]
     async fn list_model_switcher_models_with_chatgpt_auth_keeps_non_openai_catalog_descriptions() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::with_provider(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             provider_for("https://example.test".to_string()),
         );
-        let config = load_config_from_toml(&codex_home, "").await;
+        let config = load_config_from_toml(&adam_home, "").await;
 
         let available_models = manager.build_available_models(vec![remote_model(
             "custom-provider-model",
@@ -3053,16 +3229,16 @@ experimental_bearer_token = "sk-b"
 
     #[tokio::test]
     async fn list_model_switcher_models_with_api_key_auth_returns_only_models_in_config_toml() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("sk-test"));
         let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "mock-model"
 "#,
@@ -3084,19 +3260,19 @@ model = "mock-model"
 
     #[tokio::test]
     async fn messages_provider_starts_with_empty_remote_models() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::with_provider(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             messages_provider_for("http://example.test".to_string()),
         );
-        let mut config = load_config_from_toml(&codex_home, "").await;
+        let mut config = load_config_from_toml(&adam_home, "").await;
         config.features.enable(Feature::RemoteModels);
 
         assert!(manager.get_remote_models(&config).await.is_empty());
@@ -3110,14 +3286,14 @@ model = "mock-model"
 
     #[tokio::test]
     async fn switch_provider_to_messages_clears_remote_state() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::with_provider(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             provider_for("http://example.test".to_string()),
@@ -3138,7 +3314,7 @@ model = "mock-model"
             )
             .await;
 
-        let mut config = load_config_from_toml(&codex_home, "").await;
+        let mut config = load_config_from_toml(&adam_home, "").await;
         config.features.enable(Feature::RemoteModels);
         assert!(manager.get_remote_models(&config).await.is_empty());
         assert_eq!(manager.get_etag().await, None);
@@ -3146,20 +3322,20 @@ model = "mock-model"
 
     #[tokio::test]
     async fn list_picker_models_with_messages_provider_only_shows_configured_model() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::with_provider(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "anthropic",
             messages_provider_for("https://api.anthropic.com/v1".to_string()),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "claude-sonnet-4-5"
 "#,
@@ -3178,20 +3354,20 @@ model = "claude-sonnet-4-5"
     #[tokio::test]
     async fn list_model_switcher_models_with_chatgpt_auth_and_messages_provider_includes_official_openai_models()
      {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::with_provider(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
-            "anthropic#messages",
+            "anthropic.messages",
             messages_provider_for("https://api.anthropic.com/v1".to_string()),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "claude-sonnet-4-5"
-model_provider = "anthropic#messages"
+model_provider = "anthropic.messages"
 
 [model_providers.anthropic.variants.messages]
 name = "anthropic"
@@ -3213,7 +3389,7 @@ experimental_bearer_token = "sk-msg"
         }));
         assert!(picker_models.iter().any(|preset| {
             preset.model == "claude-sonnet-4-5"
-                && preset.model_provider_id.as_deref() == Some("anthropic#messages")
+                && preset.model_provider_id.as_deref() == Some("anthropic.messages")
                 && preset.description == "User-defined model from anthropic (messages) provider."
         }));
     }
@@ -3221,20 +3397,20 @@ experimental_bearer_token = "sk-msg"
     #[tokio::test]
     async fn list_model_switcher_models_with_chatgpt_auth_and_messages_provider_keeps_custom_same_slug()
      {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let manager = ModelsManager::with_provider(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
-            "anthropic#messages",
+            "anthropic.messages",
             messages_provider_for("https://api.anthropic.com/v1".to_string()),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "gpt-5.2"
-model_provider = "anthropic#messages"
+model_provider = "anthropic.messages"
 
 [model_providers.anthropic.variants.messages]
 name = "anthropic"
@@ -3270,8 +3446,8 @@ experimental_bearer_token = "sk-msg"
                     OFFICIAL_OPENAI_PROVIDER_DESCRIPTION.to_string(),
                 ),
                 (
-                    generated_provider_profile_name("anthropic#messages", "gpt-5.2"),
-                    Some("anthropic#messages".to_string()),
+                    generated_provider_profile_name("anthropic.messages", "gpt-5.2"),
+                    Some("anthropic.messages".to_string()),
                     "User-defined model from anthropic (messages) provider.".to_string(),
                 ),
             ]
@@ -3280,19 +3456,19 @@ experimental_bearer_token = "sk-msg"
 
     #[tokio::test]
     async fn get_default_model_with_messages_provider_requires_explicit_model() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::with_provider(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "anthropic",
             messages_provider_for("https://api.anthropic.com/v1".to_string()),
         );
-        let config = load_config_from_toml(&codex_home, "").await;
+        let config = load_config_from_toml(&adam_home, "").await;
 
         let err = manager
             .get_default_model(&None, &config, RefreshStrategy::Offline)
@@ -3307,20 +3483,20 @@ experimental_bearer_token = "sk-msg"
 
     #[tokio::test]
     async fn get_default_model_with_messages_provider_uses_configured_model() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::with_provider(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "anthropic",
             messages_provider_for("https://api.anthropic.com/v1".to_string()),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "claude-sonnet-4-5"
 "#,
@@ -3338,22 +3514,22 @@ model = "claude-sonnet-4-5"
     #[tokio::test]
     async fn list_model_switcher_models_with_provider_bearer_token_returns_only_models_in_config_toml()
      {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let mut provider = provider_for("http://example.test".to_string());
         provider.experimental_bearer_token = Some("sk-test".to_string());
         let manager = ModelsManager::with_provider(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             provider,
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "mock-model"
 "#,
@@ -3370,22 +3546,22 @@ model = "mock-model"
 
     #[tokio::test]
     async fn list_model_switcher_models_with_provider_env_key_returns_only_models_in_config_toml() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let mut provider = provider_for("http://example.test".to_string());
         provider.env_key = Some("PATH".to_string());
         let manager = ModelsManager::with_provider(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             provider,
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "mock-model"
 "#,
@@ -3402,20 +3578,20 @@ model = "mock-model"
 
     #[tokio::test]
     async fn set_provider_does_not_expand_model_switcher_without_chatgpt_auth() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::with_provider(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             provider_for("http://example.test".to_string()),
         );
         let config = load_config_from_toml(
-            &codex_home,
+            &adam_home,
             r#"
 model = "mock-model"
 "#,
@@ -3441,14 +3617,14 @@ model = "mock-model"
 
     #[tokio::test]
     async fn configured_custom_model_detection_matches_picker_behavior() {
-        let codex_home = tempdir().expect("temp dir");
+        let adam_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
+            .adam_home(adam_home.path().to_path_buf())
             .build()
             .await
             .expect("load default test config");

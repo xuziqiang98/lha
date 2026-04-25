@@ -419,15 +419,15 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
     )
     .await;
 
-    let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let adam_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&adam_home).await;
     config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let mut provider = built_in_runtime_endpoints()["openai"].clone();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     let manager = ModelsManager::with_provider(
-        codex_home.path().to_path_buf(),
+        adam_home.path().to_path_buf(),
         codex_agent::auth::AuthManager::from_auth_for_testing(auth),
         "mock-provider",
         provider,
@@ -483,15 +483,15 @@ async fn remote_models_merge_adds_new_high_priority_first() -> Result<()> {
     )
     .await;
 
-    let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let adam_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&adam_home).await;
     config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let mut provider = built_in_runtime_endpoints()["openai"].clone();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     let manager = ModelsManager::with_provider(
-        codex_home.path().to_path_buf(),
+        adam_home.path().to_path_buf(),
         codex_agent::auth::AuthManager::from_auth_for_testing(auth),
         "mock-provider",
         provider,
@@ -531,15 +531,15 @@ async fn remote_models_merge_replaces_overlapping_model() -> Result<()> {
     )
     .await;
 
-    let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let adam_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&adam_home).await;
     config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let mut provider = built_in_runtime_endpoints()["openai"].clone();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     let manager = ModelsManager::with_provider(
-        codex_home.path().to_path_buf(),
+        adam_home.path().to_path_buf(),
         codex_agent::auth::AuthManager::from_auth_for_testing(auth),
         "mock-provider",
         provider,
@@ -576,15 +576,15 @@ async fn remote_models_merge_preserves_bundled_models_on_empty_response() -> Res
     let server = MockServer::start().await;
     let models_mock = mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
 
-    let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let adam_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&adam_home).await;
     config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let mut provider = built_in_runtime_endpoints()["openai"].clone();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     let manager = ModelsManager::with_provider(
-        codex_home.path().to_path_buf(),
+        adam_home.path().to_path_buf(),
         codex_agent::auth::AuthManager::from_auth_for_testing(auth),
         "mock-provider",
         provider,
@@ -623,15 +623,15 @@ async fn remote_models_request_times_out_after_5s() -> Result<()> {
     )
     .await;
 
-    let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let adam_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&adam_home).await;
     config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let mut provider = built_in_runtime_endpoints()["openai"].clone();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     let manager = ModelsManager::with_provider(
-        codex_home.path().to_path_buf(),
+        adam_home.path().to_path_buf(),
         codex_agent::auth::AuthManager::from_auth_for_testing(auth),
         "mock-provider",
         provider,
@@ -691,15 +691,15 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     )
     .await;
 
-    let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let adam_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&adam_home).await;
     config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let mut provider = built_in_runtime_endpoints()["openai"].clone();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     let manager = ModelsManager::with_provider(
-        codex_home.path().to_path_buf(),
+        adam_home.path().to_path_buf(),
         codex_agent::auth::AuthManager::from_auth_for_testing(auth),
         "mock-provider",
         provider,

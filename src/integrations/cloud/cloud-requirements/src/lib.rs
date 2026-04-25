@@ -183,8 +183,8 @@ mod tests {
     use std::path::Path;
     use tempfile::tempdir;
 
-    fn write_auth_json(codex_home: &Path, value: serde_json::Value) -> std::io::Result<()> {
-        std::fs::write(codex_home.join("auth.json"), serde_json::to_string(&value)?)?;
+    fn write_auth_json(adam_home: &Path, value: serde_json::Value) -> std::io::Result<()> {
+        std::fs::write(adam_home.join("auth.json"), serde_json::to_string(&value)?)?;
         Ok(())
     }
 

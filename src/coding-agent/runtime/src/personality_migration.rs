@@ -25,10 +25,10 @@ pub enum PersonalityMigrationStatus {
 }
 
 pub async fn maybe_migrate_personality(
-    codex_home: &Path,
+    adam_home: &Path,
     config_toml: &ConfigToml,
 ) -> io::Result<PersonalityMigrationStatus> {
-    let marker_path = codex_home.join(PERSONALITY_MIGRATION_FILENAME);
+    let marker_path = adam_home.join(PERSONALITY_MIGRATION_FILENAME);
     if tokio::fs::try_exists(&marker_path).await? {
         return Ok(PersonalityMigrationStatus::SkippedMarker);
     }
@@ -42,16 +42,18 @@ pub async fn maybe_migrate_personality(
     }
 
     let model_provider_id = config_profile
-        .model_provider
-        .or_else(|| config_toml.model_provider.clone())
+        .model
+        .as_deref()
+        .and_then(|model| crate::config::model_ref::ModelRef::parse(model).ok())
+        .map(|model_ref| crate::config::model_provider_id_from_ref(&model_ref))
         .unwrap_or_else(|| "openai".to_string());
 
-    if !has_recorded_sessions(codex_home, model_provider_id.as_str()).await? {
+    if !has_recorded_sessions(adam_home, model_provider_id.as_str()).await? {
         create_marker(&marker_path).await?;
         return Ok(PersonalityMigrationStatus::SkippedNoSessions);
     }
 
-    ConfigEditsBuilder::new(codex_home)
+    ConfigEditsBuilder::new(adam_home)
         .set_personality(Some(Personality::Pragmatic))
         .apply()
         .await
@@ -63,13 +65,13 @@ pub async fn maybe_migrate_personality(
     Ok(PersonalityMigrationStatus::Applied)
 }
 
-async fn has_recorded_sessions(codex_home: &Path, default_provider: &str) -> io::Result<bool> {
+async fn has_recorded_sessions(adam_home: &Path, default_provider: &str) -> io::Result<bool> {
     let allowed_sources: &[SessionSource] = &[];
 
-    if let Some(state_db_ctx) = state_db::open_if_present(codex_home, default_provider).await
+    if let Some(state_db_ctx) = state_db::open_if_present(adam_home, default_provider).await
         && let Some(ids) = state_db::list_thread_ids_db(
             Some(state_db_ctx.as_ref()),
-            codex_home,
+            adam_home,
             1,
             None,
             ThreadSortKey::CreatedAt,
@@ -86,7 +88,7 @@ async fn has_recorded_sessions(codex_home: &Path, default_provider: &str) -> io:
     }
 
     let sessions = get_threads_in_root(
-        codex_home.join(SESSIONS_SUBDIR),
+        adam_home.join(SESSIONS_SUBDIR),
         1,
         None,
         ThreadSortKey::CreatedAt,
@@ -104,7 +106,7 @@ async fn has_recorded_sessions(codex_home: &Path, default_provider: &str) -> io:
     }
 
     let archived_sessions = get_threads_in_root(
-        codex_home.join(ARCHIVED_SESSIONS_SUBDIR),
+        adam_home.join(ARCHIVED_SESSIONS_SUBDIR),
         1,
         None,
         ThreadSortKey::CreatedAt,
@@ -150,14 +152,14 @@ mod tests {
 
     const TEST_TIMESTAMP: &str = "2025-01-01T00-00-00";
 
-    async fn read_config_toml(codex_home: &Path) -> io::Result<ConfigToml> {
-        let contents = tokio::fs::read_to_string(codex_home.join("config.toml")).await?;
+    async fn read_config_toml(adam_home: &Path) -> io::Result<ConfigToml> {
+        let contents = tokio::fs::read_to_string(adam_home.join("config.toml")).await?;
         toml::from_str(&contents).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
     }
 
-    async fn write_session_with_user_event(codex_home: &Path) -> io::Result<()> {
+    async fn write_session_with_user_event(adam_home: &Path) -> io::Result<()> {
         let thread_id = ThreadId::new();
-        let dir = codex_home
+        let dir = adam_home
             .join(SESSIONS_SUBDIR)
             .join("2025")
             .join("01")

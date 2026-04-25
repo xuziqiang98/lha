@@ -69,8 +69,8 @@ async fn review_op_emits_lifecycle_and_review_output() {
     let review_json_escaped = serde_json::to_string(&review_json).unwrap();
     let sse_raw = sse_template.replace("__REVIEW__", &review_json_escaped);
     let (server, _request_log) = start_responses_server_with_sse(&sse_raw, 1).await;
-    let codex_home = Arc::new(TempDir::new().unwrap());
-    let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
+    let adam_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, adam_home.clone(), |_| {}).await;
 
     // Submit review request.
     codex
@@ -172,7 +172,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
         "assistant review output contains user_action markup"
     );
 
-    let _codex_home_guard = codex_home;
+    let _adam_home_guard = adam_home;
     server.verify().await;
 }
 
@@ -193,8 +193,8 @@ async fn review_op_with_plain_text_emits_review_fallback() {
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
     let (server, _request_log) = start_responses_server_with_sse(sse_raw, 1).await;
-    let codex_home = Arc::new(TempDir::new().unwrap());
-    let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
+    let adam_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, adam_home.clone(), |_| {}).await;
 
     codex
         .submit(Op::Review {
@@ -225,7 +225,7 @@ async fn review_op_with_plain_text_emits_review_fallback() {
     assert_eq!(expected, review);
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let _codex_home_guard = codex_home;
+    let _adam_home_guard = adam_home;
     server.verify().await;
 }
 
@@ -254,8 +254,8 @@ async fn review_filters_agent_message_related_events() {
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
     let (server, _request_log) = start_responses_server_with_sse(sse_raw, 1).await;
-    let codex_home = Arc::new(TempDir::new().unwrap());
-    let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
+    let adam_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, adam_home.clone(), |_| {}).await;
 
     codex
         .submit(Op::Review {
@@ -295,7 +295,7 @@ async fn review_filters_agent_message_related_events() {
     .await;
     assert!(saw_entered && saw_exited, "missing review lifecycle events");
 
-    let _codex_home_guard = codex_home;
+    let _adam_home_guard = adam_home;
     server.verify().await;
 }
 
@@ -336,8 +336,8 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
     let review_json_escaped = serde_json::to_string(&review_json).unwrap();
     let sse_raw = sse_template.replace("__REVIEW__", &review_json_escaped);
     let (server, _request_log) = start_responses_server_with_sse(&sse_raw, 1).await;
-    let codex_home = Arc::new(TempDir::new().unwrap());
-    let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
+    let adam_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, adam_home.clone(), |_| {}).await;
 
     codex
         .submit(Op::Review {
@@ -376,7 +376,7 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
     assert_eq!(1, agent_messages, "expected exactly one AgentMessage event");
     assert!(saw_entered && saw_exited, "missing review lifecycle events");
 
-    let _codex_home_guard = codex_home;
+    let _adam_home_guard = adam_home;
     server.verify().await;
 }
 
@@ -391,9 +391,9 @@ async fn review_uses_custom_review_model_from_config() {
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
     let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
-    let codex_home = Arc::new(TempDir::new().unwrap());
+    let adam_home = Arc::new(TempDir::new().unwrap());
     // Choose a review model different from the main model; ensure it is used.
-    let codex = new_conversation_for_server(&server, codex_home.clone(), |cfg| {
+    let codex = new_conversation_for_server(&server, adam_home.clone(), |cfg| {
         cfg.model = Some("gpt-4.1".to_string());
         cfg.review_model = Some("gpt-5.1".to_string());
     })
@@ -430,7 +430,7 @@ async fn review_uses_custom_review_model_from_config() {
     let body = request.body_json();
     assert_eq!(body["model"].as_str().unwrap(), "gpt-5.1");
 
-    let _codex_home_guard = codex_home;
+    let _adam_home_guard = adam_home;
     server.verify().await;
 }
 
@@ -445,8 +445,8 @@ async fn review_uses_session_model_when_review_model_unset() {
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
     let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
-    let codex_home = Arc::new(TempDir::new().unwrap());
-    let codex = new_conversation_for_server(&server, codex_home.clone(), |cfg| {
+    let adam_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, adam_home.clone(), |cfg| {
         cfg.model = Some("gpt-4.1".to_string());
         cfg.review_model = None;
     })
@@ -481,7 +481,7 @@ async fn review_uses_session_model_when_review_model_unset() {
     let body = request.body_json();
     assert_eq!(body["model"].as_str().unwrap(), "gpt-4.1");
 
-    let _codex_home_guard = codex_home;
+    let _adam_home_guard = adam_home;
     server.verify().await;
 }
 
@@ -501,9 +501,9 @@ async fn review_input_isolated_from_parent_history() {
     let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
 
     // Seed a parent session history via resume file with both user + assistant items.
-    let codex_home = Arc::new(TempDir::new().unwrap());
+    let adam_home = Arc::new(TempDir::new().unwrap());
 
-    let session_file = codex_home.path().join("resume.jsonl");
+    let session_file = adam_home.path().join("resume.jsonl");
     {
         let mut f = tokio::fs::File::create(&session_file).await.unwrap();
         let convo_id = Uuid::new_v4();
@@ -563,7 +563,7 @@ async fn review_input_isolated_from_parent_history() {
             .unwrap();
     }
     let codex =
-        resume_conversation_for_server(&server, codex_home.clone(), session_file.clone(), |_| {})
+        resume_conversation_for_server(&server, adam_home.clone(), session_file.clone(), |_| {})
             .await;
 
     // Submit review request; it must start fresh (no parent history in `input`).
@@ -658,7 +658,7 @@ async fn review_input_isolated_from_parent_history() {
         "expected user interruption message in rollout"
     );
 
-    let _codex_home_guard = codex_home;
+    let _adam_home_guard = adam_home;
     server.verify().await;
 }
 
@@ -677,8 +677,8 @@ async fn review_history_surfaces_in_parent_session() {
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
     let (server, request_log) = start_responses_server_with_sse(sse_raw, 2).await;
-    let codex_home = Arc::new(TempDir::new().unwrap());
-    let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
+    let adam_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, adam_home.clone(), |_| {}).await;
 
     // 1) Run a review turn that produces an assistant message (isolated in child).
     codex
@@ -757,7 +757,7 @@ async fn review_history_surfaces_in_parent_session() {
         "review assistant output missing from parent turn input"
     );
 
-    let _codex_home_guard = codex_home;
+    let _adam_home_guard = adam_home;
     server.verify().await;
 }
 
@@ -810,9 +810,9 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
         .trim()
         .to_string();
 
-    let codex_home = Arc::new(TempDir::new().unwrap());
+    let adam_home = Arc::new(TempDir::new().unwrap());
     let initial_cwd_path = initial_cwd.path().to_path_buf();
-    let codex = new_conversation_for_server(&server, codex_home.clone(), move |config| {
+    let codex = new_conversation_for_server(&server, adam_home.clone(), move |config| {
         config.cwd = initial_cwd_path;
     })
     .await;
@@ -864,7 +864,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
         "expected review prompt to include merge-base sha {head_sha}"
     );
 
-    let _codex_home_guard = codex_home;
+    let _adam_home_guard = adam_home;
     server.verify().await;
 }
 
@@ -884,7 +884,7 @@ async fn start_responses_server_with_sse(
 #[expect(clippy::expect_used)]
 async fn new_conversation_for_server<F>(
     server: &MockServer,
-    codex_home: Arc<TempDir>,
+    adam_home: Arc<TempDir>,
     mutator: F,
 ) -> Arc<CodexThread>
 where
@@ -892,7 +892,7 @@ where
 {
     let base_url = format!("{}/v1", server.uri());
     let mut builder = test_codex()
-        .with_home(codex_home)
+        .with_home(adam_home)
         .with_config(move |config| {
             config.model_provider.base_url = Some(base_url.clone());
             mutator(config);
@@ -908,7 +908,7 @@ where
 #[expect(clippy::expect_used)]
 async fn resume_conversation_for_server<F>(
     server: &MockServer,
-    codex_home: Arc<TempDir>,
+    adam_home: Arc<TempDir>,
     resume_path: std::path::PathBuf,
     mutator: F,
 ) -> Arc<CodexThread>
@@ -917,13 +917,13 @@ where
 {
     let base_url = format!("{}/v1", server.uri());
     let mut builder = test_codex()
-        .with_home(codex_home.clone())
+        .with_home(adam_home.clone())
         .with_config(move |config| {
             config.model_provider.base_url = Some(base_url.clone());
             mutator(config);
         });
     builder
-        .resume(server, codex_home, resume_path)
+        .resume(server, adam_home, resume_path)
         .await
         .expect("resume conversation")
         .codex

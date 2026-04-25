@@ -137,7 +137,7 @@ impl MessageProcessor {
         } = args;
         let outgoing = Arc::new(outgoing);
         let auth_manager = AuthManager::shared(
-            config.codex_home.clone(),
+            config.adam_home.clone(),
             false,
             config.cli_auth_credentials_store_mode,
         );
@@ -146,7 +146,7 @@ impl MessageProcessor {
             outgoing: outgoing.clone(),
         }));
         let thread_manager = Arc::new(ThreadManager::new(
-            config.codex_home.clone(),
+            config.adam_home.clone(),
             auth_manager.clone(),
             config.model_provider_id.as_str(),
             config.model_provider.clone(),
@@ -163,7 +163,7 @@ impl MessageProcessor {
             feedback,
         });
         let config_api = ConfigApi::new(
-            config.codex_home.clone(),
+            config.adam_home.clone(),
             cli_overrides,
             loader_overrides,
             cloud_requirements,

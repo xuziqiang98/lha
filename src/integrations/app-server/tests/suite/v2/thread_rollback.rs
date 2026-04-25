@@ -30,10 +30,10 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
     ];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Start a thread.
@@ -157,25 +157,17 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
     Ok(())
 }
 
-fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "read-only"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-dialect = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
+fn create_config_toml(adam_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
+    app_test_support::write_mock_responses_config_toml_with_options(
+        adam_home,
+        server_uri,
+        &std::collections::BTreeMap::new(),
+        20_000,
+        Some(false),
+        "mock_provider",
+        "mock-model",
+        "",
+        "never",
+        "read-only",
     )
 }

@@ -45,9 +45,9 @@ mod read_acl_mutex;
 struct RunnerRequest {
     policy_json_or_preset: String,
     // Writable location for logs (sandbox user's .codey).
-    codex_home: PathBuf,
-    // Real user's CODEY_HOME for shared data (caps, config).
-    real_codex_home: PathBuf,
+    adam_home: PathBuf,
+    // Real user's ADAM_HOME for shared data (caps, config).
+    real_adam_home: PathBuf,
     cap_sid: String,
     command: Vec<String>,
     cwd: PathBuf,
@@ -99,16 +99,16 @@ pub fn main() -> Result<()> {
         anyhow::bail!("runner: no request-file provided");
     }
     let req: RunnerRequest = serde_json::from_str(&input).context("parse runner request json")?;
-    let log_dir = Some(req.codex_home.as_path());
-    hide_current_user_profile_dir(req.codex_home.as_path());
+    let log_dir = Some(req.adam_home.as_path());
+    hide_current_user_profile_dir(req.adam_home.as_path());
     log_note(
         &format!(
-            "runner start cwd={} cmd={:?} real_codex_home={}",
+            "runner start cwd={} cmd={:?} real_adam_home={}",
             req.cwd.display(),
             req.command,
-            req.real_codex_home.display()
+            req.real_adam_home.display()
         ),
-        Some(&req.codex_home),
+        Some(&req.adam_home),
     );
 
     let policy = parse_policy(&req.policy_json_or_preset).context("parse policy_json_or_preset")?;
@@ -153,7 +153,7 @@ pub fn main() -> Result<()> {
             let err = unsafe { GetLastError() };
             log_note(
                 &format!("CreateFileW failed for pipe {name}: {err}"),
-                Some(&req.codex_home),
+                Some(&req.adam_home),
             );
             return Err(anyhow::anyhow!("CreateFileW failed for pipe {name}: {err}"));
         }
@@ -206,7 +206,7 @@ pub fn main() -> Result<()> {
             &req.command,
             &effective_cwd,
             &req.env_map,
-            Some(&req.codex_home),
+            Some(&req.adam_home),
             stdio,
         )
     };

@@ -303,7 +303,7 @@ async fn exec_windows_sandbox(
     params: ExecParams,
     sandbox_policy: &SandboxPolicy,
 ) -> Result<RawExecToolCallOutput> {
-    use crate::config::find_codex_home;
+    use crate::config::find_adam_home;
     use codex_protocol::config_types::WindowsSandboxLevel;
     use codex_windows_sandbox::run_windows_sandbox_capture;
     use codex_windows_sandbox::run_windows_sandbox_capture_elevated;
@@ -326,9 +326,9 @@ async fn exec_windows_sandbox(
         )))
     })?;
     let sandbox_cwd = cwd.clone();
-    let codex_home = find_codex_home().map_err(|err| {
+    let adam_home = find_adam_home().map_err(|err| {
         CodexErr::Io(io::Error::other(format!(
-            "windows sandbox: failed to resolve codex_home: {err}"
+            "windows sandbox: failed to resolve adam_home: {err}"
         )))
     })?;
     let command_path = command.first().cloned();
@@ -339,7 +339,7 @@ async fn exec_windows_sandbox(
             run_windows_sandbox_capture_elevated(
                 policy_str.as_str(),
                 &sandbox_cwd,
-                codex_home.as_ref(),
+                adam_home.as_ref(),
                 command,
                 &cwd,
                 env,
@@ -349,7 +349,7 @@ async fn exec_windows_sandbox(
             run_windows_sandbox_capture(
                 policy_str.as_str(),
                 &sandbox_cwd,
-                codex_home.as_ref(),
+                adam_home.as_ref(),
                 command,
                 &cwd,
                 env,

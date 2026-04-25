@@ -49,9 +49,9 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
     let shell_command = vec!["sleep".to_string(), "10".to_string()];
 
     let tmp = TempDir::new()?;
-    // Temporary Codex home with config pointing at the mock server.
-    let codex_home = tmp.path().join("codex_home");
-    std::fs::create_dir(&codex_home)?;
+    // Temporary Adam home with config pointing at the mock server.
+    let adam_home = tmp.path().join("adam_home");
+    std::fs::create_dir(&adam_home)?;
     let working_directory = tmp.path().join("workdir");
     std::fs::create_dir(&working_directory)?;
 
@@ -63,10 +63,10 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
         "call_sleep",
     )?])
     .await;
-    create_config_toml(&codex_home, server.uri())?;
+    create_config_toml(&adam_home, server.uri())?;
 
     // Start MCP server and initialize.
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = McpProcess::new(&adam_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // 1) newConversation
@@ -139,25 +139,17 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn create_config_toml(codex_home: &Path, server_uri: String) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "read-only"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-dialect = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
+fn create_config_toml(adam_home: &Path, server_uri: String) -> std::io::Result<()> {
+    app_test_support::write_mock_responses_config_toml_with_options(
+        adam_home,
+        &server_uri,
+        &std::collections::BTreeMap::new(),
+        20_000,
+        Some(false),
+        "mock_provider",
+        "mock-model",
+        "",
+        "never",
+        "read-only",
     )
 }

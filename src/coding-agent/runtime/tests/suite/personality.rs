@@ -47,8 +47,8 @@ fn sse_completed(id: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn personality_does_not_mutate_base_instructions_without_template() {
-    let codex_home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let adam_home = TempDir::new().expect("create temp dir");
+    let mut config = load_default_config_for_test(&adam_home).await;
     config.features.enable(Feature::Personality);
     config.personality = Some(Personality::Friendly);
 
@@ -61,8 +61,8 @@ async fn personality_does_not_mutate_base_instructions_without_template() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn base_instructions_override_disables_personality_template() {
-    let codex_home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let adam_home = TempDir::new().expect("create temp dir");
+    let mut config = load_default_config_for_test(&adam_home).await;
     config.features.enable(Feature::Personality);
     config.personality = Some(Personality::Friendly);
     config.base_instructions = Some("override instructions".to_string());
@@ -365,8 +365,8 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn instructions_uses_base_if_feature_disabled() -> anyhow::Result<()> {
-    let codex_home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let adam_home = TempDir::new().expect("create temp dir");
+    let mut config = load_default_config_for_test(&adam_home).await;
     config.features.disable(Feature::Personality);
     config.personality = Some(Personality::Friendly);
 

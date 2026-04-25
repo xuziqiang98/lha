@@ -98,7 +98,7 @@ Example (from OpenAI's official VSCode extension):
 - `tool/requestUserInput` — prompt the user with 1–3 short questions for a tool call and return their answers (experimental).
 - `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools, resources, resource templates, and auth status; supports cursor+limit pagination.
-- `feedback/upload` — persist a feedback bundle under `CODEY_HOME/feedback/` (classification + optional reason/logs and conversation_id); returns the tracking thread id and saved path.
+- `feedback/upload` — persist a feedback bundle under `ADAM_HOME/feedback/` (classification + optional reason/logs and conversation_id); returns the tracking thread id and saved path.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `config/read` — fetch the effective config on disk after resolving config layering.
 - `config/value/write` — write a single config key/value to the user's config.toml on disk.
@@ -287,7 +287,7 @@ Invoke a skill explicitly by including `$<skill-name>` in the text input and add
     "threadId": "thr_123",
     "input": [
         { "type": "text", "text": "$skill-creator Add a new skill for triaging flaky CI and include step-by-step usage." },
-        { "type": "skill", "name": "skill-creator", "path": "/Users/me/.codey/skills/skill-creator/SKILL.md" }
+        { "type": "skill", "name": "skill-creator", "path": "/Users/me/.adam/skills/skill-creator/SKILL.md" }
     ]
 } }
 { "id": 33, "result": { "turn": {
@@ -560,7 +560,7 @@ Invoke a skill by including `$<skill-name>` in the text input. Add a `skill` inp
       {
         "type": "skill",
         "name": "skill-creator",
-        "path": "/Users/me/.codey/skills/skill-creator/SKILL.md"
+        "path": "/Users/me/.adam/skills/skill-creator/SKILL.md"
       }
     ]
   }
@@ -612,7 +612,7 @@ To enable or disable a skill by path:
   "method": "skills/config/write",
   "id": 26,
   "params": {
-    "path": "/Users/me/.codey/skills/skill-creator/SKILL.md",
+    "path": "/Users/me/.adam/skills/skill-creator/SKILL.md",
     "enabled": false
   }
 }

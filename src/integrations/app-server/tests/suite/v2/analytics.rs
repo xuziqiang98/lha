@@ -19,9 +19,9 @@ fn set_metrics_exporter(config: &mut codex_agent::config::Config) {
 
 #[tokio::test]
 async fn app_server_default_analytics_disabled_without_flag() -> Result<()> {
-    let codex_home = TempDir::new()?;
+    let adam_home = TempDir::new()?;
     let mut config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
+        .adam_home(adam_home.path().to_path_buf())
         .build()
         .await?;
     set_metrics_exporter(&mut config);
@@ -43,9 +43,9 @@ async fn app_server_default_analytics_disabled_without_flag() -> Result<()> {
 
 #[tokio::test]
 async fn app_server_default_analytics_enabled_with_flag() -> Result<()> {
-    let codex_home = TempDir::new()?;
+    let adam_home = TempDir::new()?;
     let mut config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
+        .adam_home(adam_home.path().to_path_buf())
         .build()
         .await?;
     set_metrics_exporter(&mut config);

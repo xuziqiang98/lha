@@ -162,7 +162,7 @@ pub(crate) struct AuthModeWidget {
     pub highlighted_mode: SignInOption,
     pub error: Option<String>,
     pub sign_in_state: Arc<RwLock<SignInState>>,
-    pub codex_home: PathBuf,
+    pub adam_home: PathBuf,
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub login_status: LoginStatus,
     pub auth_manager: Arc<AuthManager>,
@@ -465,7 +465,7 @@ impl AuthModeWidget {
             vec!["> ".into(), "Configure a custom API provider".bold()].into(),
             "".into(),
             format!("  Step {}/6: {}", state.step.index(), state.step.title()).into(),
-            "  This will be written to ~/.codey/config.toml and used as the default provider."
+            "  This will be written to ~/.adam/config.toml and used as the default provider."
                 .into(),
             "".into(),
             format!(
@@ -744,9 +744,9 @@ impl AuthModeWidget {
 
         let sign_in_state = self.sign_in_state.clone();
         let request_frame = self.request_frame.clone();
-        let codex_home = self.codex_home.clone();
+        let adam_home = self.adam_home.clone();
         tokio::spawn(async move {
-            match persist_custom_provider_config(&codex_home, &config).await {
+            match persist_custom_provider_config(&adam_home, &config).await {
                 Ok(()) => {
                     *sign_in_state.write().unwrap() = SignInState::ApiKeyConfigured;
                 }
@@ -813,7 +813,7 @@ impl AuthModeWidget {
 
         self.error = None;
         let opts = ServerOptions::new(
-            self.codex_home.clone(),
+            self.adam_home.clone(),
             CLIENT_ID.to_string(),
             self.forced_chatgpt_workspace_id.clone(),
             self.cli_auth_credentials_store_mode,
@@ -867,7 +867,7 @@ impl AuthModeWidget {
 
         self.error = None;
         let opts = ServerOptions::new(
-            self.codex_home.clone(),
+            self.adam_home.clone(),
             CLIENT_ID.to_string(),
             self.forced_chatgpt_workspace_id.clone(),
             self.cli_auth_credentials_store_mode,
@@ -950,18 +950,18 @@ mod tests {
     use codex_agent::config::edit::ConfigEditsBuilder;
 
     fn widget_forced_chatgpt() -> (AuthModeWidget, TempDir) {
-        let codex_home = TempDir::new().unwrap();
-        let codex_home_path = codex_home.path().to_path_buf();
+        let adam_home = TempDir::new().unwrap();
+        let adam_home_path = adam_home.path().to_path_buf();
         let widget = AuthModeWidget {
             request_frame: FrameRequester::test_dummy(),
             highlighted_mode: SignInOption::ChatGpt,
             error: None,
             sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
-            codex_home: codex_home_path.clone(),
+            adam_home: adam_home_path.clone(),
             cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             login_status: LoginStatus::NotAuthenticated,
             auth_manager: AuthManager::shared(
-                codex_home_path,
+                adam_home_path,
                 false,
                 AuthCredentialsStoreMode::File,
             ),
@@ -969,12 +969,12 @@ mod tests {
             forced_login_method: Some(ForcedLoginMethod::Chatgpt),
             animations_enabled: true,
         };
-        (widget, codex_home)
+        (widget, adam_home)
     }
 
     fn widget_custom_provider_entry() -> (AuthModeWidget, TempDir) {
-        let codex_home = TempDir::new().unwrap();
-        let codex_home_path = codex_home.path().to_path_buf();
+        let adam_home = TempDir::new().unwrap();
+        let adam_home_path = adam_home.path().to_path_buf();
         let widget = AuthModeWidget {
             request_frame: FrameRequester::test_dummy(),
             highlighted_mode: SignInOption::ApiKey,
@@ -982,11 +982,11 @@ mod tests {
             sign_in_state: Arc::new(RwLock::new(SignInState::ApiKeyEntry(
                 ApiKeyInputState::default(),
             ))),
-            codex_home: codex_home_path.clone(),
+            adam_home: adam_home_path.clone(),
             cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             login_status: LoginStatus::NotAuthenticated,
             auth_manager: AuthManager::shared(
-                codex_home_path,
+                adam_home_path,
                 false,
                 AuthCredentialsStoreMode::File,
             ),
@@ -994,7 +994,7 @@ mod tests {
             forced_login_method: None,
             animations_enabled: true,
         };
-        (widget, codex_home)
+        (widget, adam_home)
     }
 
     fn row_text(buf: &Buffer, row: u16, width: u16) -> String {
@@ -1203,7 +1203,7 @@ mod tests {
 
     #[test]
     fn custom_provider_edits_write_expected_config() {
-        let codex_home = TempDir::new().unwrap();
+        let adam_home = TempDir::new().unwrap();
         let config = CustomProviderConfig {
             provider_id: "custom_1".to_string(),
             dialect: ApiProviderDialect::Responses,
@@ -1213,27 +1213,16 @@ mod tests {
             model_context_window: None,
         };
 
-        ConfigEditsBuilder::new(codex_home.path())
+        ConfigEditsBuilder::new(adam_home.path())
             .with_edits(build_custom_provider_edits(&config))
             .apply_blocking()
             .unwrap();
 
-        let raw = std::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).unwrap();
+        let raw = std::fs::read_to_string(adam_home.path().join(CONFIG_TOML_FILE)).unwrap();
         assert_eq!(
             raw,
-            r#"model_provider = "custom_1#responses"
-model = "gpt-test"
-
-[model_providers.custom_1.variants.responses]
-name = "custom_1"
-base_url = "https://example.com/v1"
-dialect = "responses"
-experimental_bearer_token = "sk-test"
-requires_openai_auth = false
-
-[profiles."_provider.custom_1#responses.gpt-test"]
-model_provider = "custom_1#responses"
-model = "gpt-test"
+            r#"[profiles."_provider.custom_1.responses.gpt-test"]
+model = "custom_1.responses:gpt-test"
 "#
         );
     }

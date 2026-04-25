@@ -229,10 +229,10 @@ impl CodexLogSnapshot {
         Ok(path)
     }
 
-    /// Persist feedback to a local bundle under `CODEY_HOME/feedback/`.
+    /// Persist feedback to a local bundle under `ADAM_HOME/feedback/`.
     pub fn persist_feedback(
         &self,
-        codex_home: &Path,
+        adam_home: &Path,
         classification: &str,
         reason: Option<&str>,
         include_logs: bool,
@@ -242,7 +242,7 @@ impl CodexLogSnapshot {
         let created_at = OffsetDateTime::now_utc();
         let timestamp_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
         let saved_path =
-            create_feedback_bundle_dir(codex_home, created_at, timestamp_ms, &self.thread_id)?;
+            create_feedback_bundle_dir(adam_home, created_at, timestamp_ms, &self.thread_id)?;
 
         let logs_filename = if include_logs {
             fs::write(saved_path.join(LOG_FILENAME), &self.bytes)?;
@@ -347,12 +347,12 @@ struct FeedbackFiles {
 }
 
 fn create_feedback_bundle_dir(
-    codex_home: &Path,
+    adam_home: &Path,
     created_at: OffsetDateTime,
     timestamp_ms: u128,
     thread_id: &str,
 ) -> io::Result<PathBuf> {
-    let root = feedback_day_dir(codex_home, created_at);
+    let root = feedback_day_dir(adam_home, created_at);
     fs::create_dir_all(&root)?;
 
     let base_name = format!("feedback-{timestamp_ms}-{thread_id}");
@@ -375,8 +375,8 @@ fn create_feedback_bundle_dir(
     ))
 }
 
-fn feedback_day_dir(codex_home: &Path, created_at: OffsetDateTime) -> PathBuf {
-    codex_home
+fn feedback_day_dir(adam_home: &Path, created_at: OffsetDateTime) -> PathBuf {
+    adam_home
         .join(FEEDBACK_SUBDIR)
         .join(format!("{:04}", created_at.year()))
         .join(format!("{:02}", u8::from(created_at.month())))
@@ -507,12 +507,12 @@ mod tests {
 
     #[test]
     fn persist_feedback_without_logs_writes_metadata_only() {
-        let codex_home = TempDir::new().expect("tempdir");
+        let adam_home = TempDir::new().expect("tempdir");
         let snap = CodexFeedback::new().snapshot(None);
 
         let persisted = snap
             .persist_feedback(
-                codex_home.path(),
+                adam_home.path(),
                 "good_result",
                 Some("nice"),
                 false,
@@ -524,7 +524,7 @@ mod tests {
         assert!(
             persisted
                 .saved_path
-                .starts_with(codex_home.path().join(FEEDBACK_SUBDIR))
+                .starts_with(adam_home.path().join(FEEDBACK_SUBDIR))
         );
         assert!(!persisted.saved_path.join(LOG_FILENAME).exists());
         let metadata = read_metadata(&persisted.saved_path);
@@ -559,19 +559,19 @@ mod tests {
 
     #[test]
     fn persist_feedback_with_logs_and_rollout_writes_bundle_files() {
-        let codex_home = TempDir::new().expect("tempdir");
+        let adam_home = TempDir::new().expect("tempdir");
         let fb = CodexFeedback::new();
         {
             let mut writer = fb.make_writer().make_writer();
             writer.write_all(b"log line\n").expect("write log");
         }
-        let rollout_path = codex_home.path().join("input-rollout.jsonl");
+        let rollout_path = adam_home.path().join("input-rollout.jsonl");
         fs::write(&rollout_path, "rollout line\n").expect("write rollout");
 
         let persisted = fb
             .snapshot(None)
             .persist_feedback(
-                codex_home.path(),
+                adam_home.path(),
                 "bug",
                 None,
                 true,
@@ -604,7 +604,7 @@ mod tests {
 
     #[test]
     fn persist_feedback_preserves_feedback_tags() {
-        let codex_home = TempDir::new().expect("tempdir");
+        let adam_home = TempDir::new().expect("tempdir");
         let fb = CodexFeedback::new();
         let _guard = tracing_subscriber::registry()
             .with(fb.metadata_layer())
@@ -615,7 +615,7 @@ mod tests {
         let persisted = fb
             .snapshot(None)
             .persist_feedback(
-                codex_home.path(),
+                adam_home.path(),
                 "other",
                 Some("details"),
                 false,
@@ -641,11 +641,11 @@ mod tests {
 
     #[test]
     fn create_feedback_bundle_dir_appends_suffix_on_collision() {
-        let codex_home = TempDir::new().expect("tempdir");
+        let adam_home = TempDir::new().expect("tempdir");
         let created_at = OffsetDateTime::now_utc();
-        let first = create_feedback_bundle_dir(codex_home.path(), created_at, 123, "thread")
+        let first = create_feedback_bundle_dir(adam_home.path(), created_at, 123, "thread")
             .expect("first dir");
-        let second = create_feedback_bundle_dir(codex_home.path(), created_at, 123, "thread")
+        let second = create_feedback_bundle_dir(adam_home.path(), created_at, 123, "thread")
             .expect("second dir");
 
         assert_eq!(

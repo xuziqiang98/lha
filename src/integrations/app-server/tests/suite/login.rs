@@ -18,39 +18,33 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 // Helper to create a config.toml; mirrors create_conversation.rs
-fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "danger-full-access"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "http://127.0.0.1:0/v1"
-dialect = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#,
+fn create_config_toml(adam_home: &Path) -> std::io::Result<()> {
+    app_test_support::write_mock_responses_config_toml_with_options(
+        adam_home,
+        "http://127.0.0.1:0",
+        &std::collections::BTreeMap::new(),
+        20_000,
+        Some(false),
+        "mock_provider",
+        "mock-model",
+        "",
+        "never",
+        "danger-full-access",
     )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn logout_chatgpt_removes_auth() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path())?;
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path())?;
     login_with_api_key(
-        codex_home.path(),
+        adam_home.path(),
         "sk-test-key",
         AuthCredentialsStoreMode::File,
     )?;
-    assert!(codex_home.path().join("auth.json").exists());
+    assert!(adam_home.path().join("auth.json").exists());
 
-    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = McpProcess::new_with_env(adam_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let id = mcp.send_logout_chat_gpt_request().await?;
@@ -62,7 +56,7 @@ async fn logout_chatgpt_removes_auth() -> Result<()> {
     let _ok: LogoutChatGptResponse = to_response(resp)?;
 
     assert!(
-        !codex_home.path().join("auth.json").exists(),
+        !adam_home.path().join("auth.json").exists(),
         "auth.json should be deleted"
     );
 
@@ -84,11 +78,10 @@ async fn logout_chatgpt_removes_auth() -> Result<()> {
     Ok(())
 }
 
-fn create_config_toml_forced_login(codex_home: &Path, forced_method: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
+fn create_config_toml_forced_login(adam_home: &Path, forced_method: &str) -> std::io::Result<()> {
+    let config_toml = adam_home.join("config.toml");
     let contents = format!(
         r#"
-model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
 forced_login_method = "{forced_method}"
@@ -98,13 +91,12 @@ forced_login_method = "{forced_method}"
 }
 
 fn create_config_toml_forced_workspace(
-    codex_home: &Path,
+    adam_home: &Path,
     workspace_id: &str,
 ) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
+    let config_toml = adam_home.join("config.toml");
     let contents = format!(
         r#"
-model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
 forced_chatgpt_workspace_id = "{workspace_id}"
@@ -115,10 +107,10 @@ forced_chatgpt_workspace_id = "{workspace_id}"
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn login_chatgpt_rejected_when_forced_api() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    create_config_toml_forced_login(codex_home.path(), "api")?;
+    let adam_home = TempDir::new()?;
+    create_config_toml_forced_login(adam_home.path(), "api")?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_chat_gpt_request().await?;
@@ -139,10 +131,10 @@ async fn login_chatgpt_rejected_when_forced_api() -> Result<()> {
 // Serialize tests that launch the login server since it binds to a fixed port.
 #[serial(login_port)]
 async fn login_chatgpt_includes_forced_workspace_query_param() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    create_config_toml_forced_workspace(codex_home.path(), "ws-forced")?;
+    let adam_home = TempDir::new()?;
+    create_config_toml_forced_workspace(adam_home.path(), "ws-forced")?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_chat_gpt_request().await?;

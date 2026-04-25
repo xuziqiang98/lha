@@ -181,11 +181,11 @@ fn assert_message_ends_with(request_body: &serde_json::Value, text: &str) {
     );
 }
 
-/// Writes an `auth.json` into the provided `codex_home` with the specified parameters.
+/// Writes an `auth.json` into the provided `adam_home` with the specified parameters.
 /// Returns the fake JWT string written to `tokens.id_token`.
 #[expect(clippy::unwrap_used)]
 fn write_auth_json(
-    codex_home: &TempDir,
+    adam_home: &TempDir,
     openai_api_key: Option<&str>,
     chatgpt_plan_type: &str,
     access_token: &str,
@@ -225,7 +225,7 @@ fn write_auth_json(
     });
 
     std::fs::write(
-        codex_home.path().join("auth.json"),
+        adam_home.path().join("auth.json"),
         serde_json::to_string_pretty(&auth_json).unwrap(),
     )
     .unwrap();
@@ -330,15 +330,15 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
     // Configure Codex to resume from our file
-    let codex_home = Arc::new(TempDir::new().unwrap());
+    let adam_home = Arc::new(TempDir::new().unwrap());
     let mut builder = test_codex()
-        .with_home(codex_home.clone())
+        .with_home(adam_home.clone())
         .with_config(|config| {
             // Ensure user instructions are NOT delivered on resume.
             config.user_instructions = Some("be nice".to_string());
         });
     let test = builder
-        .resume(&server, codex_home, session_path.clone())
+        .resume(&server, adam_home, session_path.clone())
         .await
         .expect("resume conversation");
     let codex = test.codex.clone();
@@ -588,28 +588,28 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     model_provider.base_url = Some(format!("{}/v1", server.uri()));
 
     // Init session
-    let codex_home = TempDir::new().unwrap();
+    let adam_home = TempDir::new().unwrap();
     // Write auth.json that contains both API key and ChatGPT tokens for a plan that should prefer ChatGPT,
     // but config will force API key preference.
     let _jwt = write_auth_json(
-        &codex_home,
+        &adam_home,
         Some("sk-test-key"),
         "pro",
         "Access-123",
         Some("acc-123"),
     );
 
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let mut config = load_default_config_for_test(&adam_home).await;
     config.model_provider = model_provider;
 
     let auth_manager =
-        match CodexAuth::from_auth_storage(codex_home.path(), AuthCredentialsStoreMode::File) {
+        match CodexAuth::from_auth_storage(adam_home.path(), AuthCredentialsStoreMode::File) {
             Ok(Some(auth)) => codex_agent::AuthManager::from_auth_for_testing(auth),
-            Ok(None) => panic!("No CodexAuth found in codex_home"),
+            Ok(None) => panic!("No CodexAuth found in adam_home"),
             Err(e) => panic!("Failed to load CodexAuth: {e}"),
         };
     let thread_manager = ThreadManager::new(
-        codex_home.path().to_path_buf(),
+        adam_home.path().to_path_buf(),
         auth_manager,
         config.model_provider_id.as_str(),
         config.model_provider.clone(),
@@ -703,8 +703,8 @@ async fn skills_append_to_instructions() {
 
     let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
-    let codex_home = Arc::new(TempDir::new().unwrap());
-    let skill_dir = codex_home.path().join("skills/demo");
+    let adam_home = Arc::new(TempDir::new().unwrap());
+    let skill_dir = adam_home.path().join("skills/demo");
     std::fs::create_dir_all(&skill_dir).expect("create skill dir");
     std::fs::write(
         skill_dir.join("SKILL.md"),
@@ -712,12 +712,12 @@ async fn skills_append_to_instructions() {
     )
     .expect("write skill");
 
-    let codex_home_path = codex_home.path().to_path_buf();
+    let adam_home_path = adam_home.path().to_path_buf();
     let mut builder = test_codex()
-        .with_home(codex_home.clone())
+        .with_home(adam_home.clone())
         .with_auth(CodexAuth::from_api_key("Test API Key"))
         .with_config(move |config| {
-            config.cwd = codex_home_path;
+            config.cwd = adam_home_path;
         });
     let codex = builder
         .build(&server)
@@ -761,7 +761,7 @@ async fn skills_append_to_instructions() {
         instructions_text.contains(&expected_path_str),
         "expected path {expected_path_str} in instructions"
     );
-    let _codex_home_guard = codex_home;
+    let _adam_home_guard = adam_home;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1495,8 +1495,8 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             .with_stream_max_retries(Some(0))
             .with_stream_idle_timeout_ms(Some(5_000));
 
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let adam_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&adam_home).await;
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();
     let effort = config.model_reasoning_effort;

@@ -275,7 +275,7 @@ impl<'de> serde::Deserialize<'de> for Cursor {
 /// (timestamp desc, then UUID desc).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn get_threads(
-    codex_home: &Path,
+    adam_home: &Path,
     page_size: usize,
     cursor: Option<&Cursor>,
     sort_key: ThreadSortKey,
@@ -284,7 +284,7 @@ pub(crate) async fn get_threads(
     default_provider: &str,
     cwd_filter: Option<&Path>,
 ) -> io::Result<ThreadsPage> {
-    let root = codex_home.join(SESSIONS_SUBDIR);
+    let root = adam_home.join(SESSIONS_SUBDIR);
     get_threads_in_root(
         root,
         page_size,
@@ -354,7 +354,7 @@ pub(crate) async fn get_threads_in_root(
 
 /// Load thread file paths from disk using directory traversal.
 ///
-/// Directory layout: `~/.codey/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl`
+/// Directory layout: `~/.adam/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl`
 /// Returned newest (based on sort key) first.
 async fn traverse_directories_for_paths(
     root: PathBuf,
@@ -1202,7 +1202,7 @@ fn truncate_to_seconds(dt: OffsetDateTime) -> Option<OffsetDateTime> {
 }
 
 async fn find_thread_path_by_id_str_in_subdir(
-    codex_home: &Path,
+    adam_home: &Path,
     subdir: &str,
     id_str: &str,
 ) -> io::Result<Option<PathBuf>> {
@@ -1211,7 +1211,7 @@ async fn find_thread_path_by_id_str_in_subdir(
         return Ok(None);
     }
 
-    let mut root = codex_home.to_path_buf();
+    let mut root = adam_home.to_path_buf();
     root.push(subdir);
     if !root.exists() {
         return Ok(None);
@@ -1238,7 +1238,7 @@ async fn find_thread_path_by_id_str_in_subdir(
         ARCHIVED_SESSIONS_SUBDIR => Some(true),
         _ => None,
     };
-    let state_db_ctx = state_db::open_if_present(codex_home, "").await;
+    let state_db_ctx = state_db::open_if_present(adam_home, "").await;
     if let Some(state_db_ctx) = state_db_ctx.as_deref()
         && let Ok(thread_id) = ThreadId::from_string(id_str)
     {
@@ -1264,18 +1264,18 @@ async fn find_thread_path_by_id_str_in_subdir(
 /// paginated listing implementation. Returns `Ok(Some(path))` if found, `Ok(None)` if not present
 /// or the id is invalid.
 pub async fn find_thread_path_by_id_str(
-    codex_home: &Path,
+    adam_home: &Path,
     id_str: &str,
 ) -> io::Result<Option<PathBuf>> {
-    find_thread_path_by_id_str_in_subdir(codex_home, SESSIONS_SUBDIR, id_str).await
+    find_thread_path_by_id_str_in_subdir(adam_home, SESSIONS_SUBDIR, id_str).await
 }
 
 /// Locate an archived thread rollout file by its UUID string.
 pub async fn find_archived_thread_path_by_id_str(
-    codex_home: &Path,
+    adam_home: &Path,
     id_str: &str,
 ) -> io::Result<Option<PathBuf>> {
-    find_thread_path_by_id_str_in_subdir(codex_home, ARCHIVED_SESSIONS_SUBDIR, id_str).await
+    find_thread_path_by_id_str_in_subdir(adam_home, ARCHIVED_SESSIONS_SUBDIR, id_str).await
 }
 
 /// Extract the `YYYY/MM/DD` directory components from a rollout filename.

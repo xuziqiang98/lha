@@ -335,7 +335,7 @@ async fn unauthorized_recovery_reloads_then_refreshes_tokens() -> Result<()> {
         last_refresh: Some(initial_last_refresh),
     };
     save_auth(
-        ctx.codex_home.path(),
+        ctx.adam_home.path(),
         &disk_auth,
         AuthCredentialsStoreMode::File,
     )?;
@@ -433,7 +433,7 @@ async fn unauthorized_recovery_skips_reload_on_account_mismatch() -> Result<()> 
         last_refresh: Some(initial_last_refresh),
     };
     save_auth(
-        ctx.codex_home.path(),
+        ctx.adam_home.path(),
         &disk_auth,
         AuthCredentialsStoreMode::File,
     )?;
@@ -515,40 +515,40 @@ async fn unauthorized_recovery_requires_chatgpt_auth() -> Result<()> {
 }
 
 struct RefreshTokenTestContext {
-    codex_home: TempDir,
+    adam_home: TempDir,
     auth_manager: Arc<AuthManager>,
     _env_guard: EnvGuard,
 }
 
 impl RefreshTokenTestContext {
     fn new(server: &MockServer) -> Result<Self> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
 
         let endpoint = format!("{}/oauth/token", server.uri());
         let env_guard = EnvGuard::set(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR, endpoint);
 
         let auth_manager = AuthManager::shared(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         );
 
         Ok(Self {
-            codex_home,
+            adam_home,
             auth_manager,
             _env_guard: env_guard,
         })
     }
 
     fn load_auth(&self) -> Result<AuthDotJson> {
-        load_auth_dot_json(self.codex_home.path(), AuthCredentialsStoreMode::File)
+        load_auth_dot_json(self.adam_home.path(), AuthCredentialsStoreMode::File)
             .context("load auth.json")?
             .context("auth.json should exist")
     }
 
     fn write_auth(&self, auth_dot_json: &AuthDotJson) -> Result<()> {
         save_auth(
-            self.codex_home.path(),
+            self.adam_home.path(),
             auth_dot_json,
             AuthCredentialsStoreMode::File,
         )?;

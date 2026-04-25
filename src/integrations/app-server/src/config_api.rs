@@ -28,14 +28,14 @@ pub(crate) struct ConfigApi {
 
 impl ConfigApi {
     pub(crate) fn new(
-        codex_home: PathBuf,
+        adam_home: PathBuf,
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
         cloud_requirements: CloudRequirementsLoader,
     ) -> Self {
         Self {
             service: ConfigService::new(
-                codex_home,
+                adam_home,
                 cli_overrides,
                 loader_overrides,
                 cloud_requirements,

@@ -74,7 +74,7 @@ struct Payload {
     version: u32,
     offline_username: String,
     online_username: String,
-    codex_home: PathBuf,
+    adam_home: PathBuf,
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
     real_user: String,
@@ -339,8 +339,8 @@ pub fn main() -> Result<()> {
     let ret = real_main();
     if let Err(e) = &ret {
         // Best-effort: log unexpected top-level errors.
-        if let Ok(codex_home) = std::env::var("CODEY_HOME") {
-            let sbx_dir = sandbox_dir(Path::new(&codex_home));
+        if let Ok(adam_home) = std::env::var("ADAM_HOME") {
+            let sbx_dir = sandbox_dir(Path::new(&adam_home));
             let _ = std::fs::create_dir_all(&sbx_dir);
             let log_path = sbx_dir.join(LOG_FILE_NAME);
             if let Ok(mut f) = File::options().create(true).append(true).open(&log_path) {
@@ -386,7 +386,7 @@ fn real_main() -> Result<()> {
             ),
         )));
     }
-    let sbx_dir = sandbox_dir(&payload.codex_home);
+    let sbx_dir = sandbox_dir(&payload.adam_home);
     std::fs::create_dir_all(&sbx_dir).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperSandboxDirCreateFailed,
@@ -417,7 +417,7 @@ fn real_main() -> Result<()> {
             code: failure.code,
             message: failure.message.clone(),
         };
-        if let Err(write_err) = write_setup_error_report(&payload.codex_home, &report) {
+        if let Err(write_err) = write_setup_error_report(&payload.adam_home, &report) {
             let _ = log_line(
                 &mut log,
                 &format!("setup error report write failed: {write_err}"),
@@ -502,7 +502,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     if refresh_only {
     } else {
         let provision_result = provision_sandbox_users(
-            &payload.codex_home,
+            &payload.adam_home,
             &payload.offline_username,
             &payload.online_username,
             log,
@@ -546,7 +546,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         ))
     })?;
 
-    let caps = load_or_create_cap_sids(&payload.codex_home).map_err(|err| {
+    let caps = load_or_create_cap_sids(&payload.adam_home).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperCapabilitySidFailed,
             format!("load or create capability SIDs failed: {err}"),
@@ -722,7 +722,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     }
     if !refresh_only {
         lock_sandbox_dir(
-            &sandbox_dir(&payload.codex_home),
+            &sandbox_dir(&payload.adam_home),
             &payload.real_user,
             &sandbox_group_sid,
             GRANT_ACCESS,
@@ -733,12 +733,12 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                 SetupErrorCode::HelperSandboxLockFailed,
                 format!(
                     "lock sandbox dir {} failed: {err}",
-                    sandbox_dir(&payload.codex_home).display()
+                    sandbox_dir(&payload.adam_home).display()
                 ),
             ))
         })?;
         lock_sandbox_dir(
-            &sandbox_secrets_dir(&payload.codex_home),
+            &sandbox_secrets_dir(&payload.adam_home),
             &payload.real_user,
             &sandbox_group_sid,
             DENY_ACCESS,
@@ -749,11 +749,11 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                 SetupErrorCode::HelperSandboxLockFailed,
                 format!(
                     "lock sandbox secrets dir {} failed: {err}",
-                    sandbox_secrets_dir(&payload.codex_home).display()
+                    sandbox_secrets_dir(&payload.adam_home).display()
                 ),
             ))
         })?;
-        let legacy_users = sandbox_dir(&payload.codex_home).join("sandbox_users.json");
+        let legacy_users = sandbox_dir(&payload.adam_home).join("sandbox_users.json");
         if legacy_users.exists() {
             let _ = std::fs::remove_file(&legacy_users);
         }

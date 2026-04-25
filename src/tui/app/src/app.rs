@@ -51,6 +51,8 @@ use codex_agent::config::ConfigToml;
 use codex_agent::config::display_model_provider_ref;
 use codex_agent::config::edit::ConfigEdit;
 use codex_agent::config::edit::ConfigEditsBuilder;
+use codex_agent::config::model_ref::ModelRef;
+use codex_agent::config::state_json::AdamStateStore;
 use codex_agent::config_loader::ConfigLayerStackOrdering;
 use codex_agent::features::Feature;
 use codex_agent::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
@@ -885,7 +887,7 @@ impl App {
         overrides.cwd = Some(cwd.clone());
         let cwd_display = cwd.display().to_string();
         let config = ConfigBuilder::default()
-            .codex_home(self.config.codex_home.clone())
+            .adam_home(self.config.adam_home.clone())
             .cli_overrides(self.cli_kv_overrides.clone())
             .harness_overrides(overrides)
             .build()
@@ -943,6 +945,7 @@ impl App {
             })?;
 
         self.config.config_layer_stack = reloaded.config_layer_stack.clone();
+        self.config.config_profiles = reloaded.config_profiles.clone();
         self.config.model_providers = reloaded.model_providers.clone();
         self.activate_runtime_provider(provider_id, provider, model, true)
             .await;
@@ -1072,16 +1075,50 @@ impl App {
         };
         let provider = self.runtime_provider_for_id(&provider_id)?;
 
-        self.activate_runtime_provider(&provider_id, provider, &model, false)
+        self.activate_runtime_provider(&provider_id, provider, &model, true)
             .await;
         self.apply_model_selection_to_runtime(&model, effort);
-
-        if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
-            .with_profile(profile.as_deref())
-            .set_model(Some(model.as_str()), effort, Some(provider_id.as_str()))
-            .apply()
-            .await
-        {
+        let model_ref = if provider_id.contains('.') {
+            ModelRef::parse(&format!("{provider_id}:{model}"))
+                .map_err(|err| format!("Invalid model selection: {err}"))?
+        } else {
+            ModelRef::new(provider_id.as_str(), "main", model.as_str())
+        };
+        let save_result = match profile.as_deref() {
+            Some(profile) => {
+                let effort_path = vec![
+                    "profiles".to_string(),
+                    profile.to_string(),
+                    "model_reasoning_effort".to_string(),
+                ];
+                let mut edits = vec![ConfigEdit::SetPath {
+                    segments: vec![
+                        "profiles".to_string(),
+                        profile.to_string(),
+                        "model".to_string(),
+                    ],
+                    value: toml_edit::value(model_ref.to_string()),
+                }];
+                if let Some(effort) = effort {
+                    edits.push(ConfigEdit::SetPath {
+                        segments: effort_path,
+                        value: toml_edit::value(effort.to_string()),
+                    });
+                } else {
+                    edits.push(ConfigEdit::ClearPath {
+                        segments: effort_path,
+                    });
+                }
+                ConfigEditsBuilder::new(&self.config.adam_home)
+                    .with_edits(edits)
+                    .apply()
+                    .await
+            }
+            None => AdamStateStore::new(&self.config.adam_home)
+                .set_last_selected_model(&model_ref, effort, None)
+                .map_err(anyhow::Error::from),
+        };
+        if let Err(err) = save_result {
             let prefix = match profile.as_deref() {
                 Some(profile) => format!("Failed to save model for profile `{profile}`: {err}"),
                 None => format!("Failed to save default model: {err}"),
@@ -1590,7 +1627,7 @@ impl App {
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
         let thread_manager = Arc::new(ThreadManager::new(
-            config.codex_home.clone(),
+            config.adam_home.clone(),
             auth_manager.clone(),
             config.model_provider_id.as_str(),
             config.model_provider.clone(),
@@ -1784,7 +1821,7 @@ impl App {
                 let cwd = app.config.cwd.clone();
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
-                let logs_base_dir = app.config.codex_home.clone();
+                let logs_base_dir = app.config.adam_home.clone();
                 let sandbox_policy = app.config.sandbox_policy.get().clone();
                 Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
             }
@@ -1969,7 +2006,7 @@ impl App {
             AppEvent::OpenResumePicker => {
                 match crate::resume_picker::run_resume_picker(
                     tui,
-                    &self.config.codex_home,
+                    &self.config.adam_home,
                     &self.config.model_provider_id,
                     Some(self.config.cwd.as_path()),
                     false,
@@ -2328,12 +2365,12 @@ impl App {
                     let command_cwd = policy_cwd.clone();
                     let env_map: std::collections::HashMap<String, String> =
                         std::env::vars().collect();
-                    let codex_home = self.config.codex_home.clone();
+                    let adam_home = self.config.adam_home.clone();
                     let tx = self.app_event_tx.clone();
 
                     // If the elevated setup already ran on this machine, don't prompt for
                     // elevation again - just flip the config to use the elevated path.
-                    if codex_agent::windows_sandbox::sandbox_setup_is_complete(codex_home.as_path())
+                    if codex_agent::windows_sandbox::sandbox_setup_is_complete(adam_home.as_path())
                     {
                         tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
                             preset,
@@ -2351,7 +2388,7 @@ impl App {
                             policy_cwd.as_path(),
                             command_cwd.as_path(),
                             &env_map,
-                            codex_home.as_path(),
+                            adam_home.as_path(),
                         );
                         let event = match result {
                             Ok(()) => {
@@ -2422,7 +2459,7 @@ impl App {
                     let elevated_key = Feature::WindowsSandboxElevated.key();
                     let elevated_enabled = matches!(mode, WindowsSandboxEnableMode::Elevated);
                     let mut builder =
-                        ConfigEditsBuilder::new(&self.config.codex_home).with_profile(profile);
+                        ConfigEditsBuilder::new(&self.config.adam_home).with_profile(profile);
                     if elevated_enabled {
                         builder = builder.set_feature_enabled(elevated_key, true);
                     } else {
@@ -2555,7 +2592,7 @@ impl App {
             }
             AppEvent::PersistPersonalitySelection { personality } => {
                 let profile = self.active_profile.as_deref();
-                match ConfigEditsBuilder::new(&self.config.codex_home)
+                match ConfigEditsBuilder::new(&self.config.adam_home)
                     .with_profile(profile)
                     .set_personality(Some(personality))
                     .apply()
@@ -2646,7 +2683,7 @@ impl App {
                         let env_map: std::collections::HashMap<String, String> =
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
-                        let logs_base_dir = self.config.codex_home.clone();
+                        let logs_base_dir = self.config.adam_home.clone();
                         let sandbox_policy = self.config.sandbox_policy.get().clone();
                         Self::spawn_world_writable_scan(
                             cwd,
@@ -2671,7 +2708,7 @@ impl App {
                         Feature::WindowsSandbox | Feature::WindowsSandboxElevated
                     )
                 });
-                let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
+                let mut builder = ConfigEditsBuilder::new(&self.config.adam_home)
                     .with_profile(self.active_profile.as_deref());
                 for (feature, enabled) in &updates {
                     let feature_key = feature.key();
@@ -2745,7 +2782,7 @@ impl App {
                 self.chat_widget.set_rate_limit_switch_prompt_hidden(hidden);
             }
             AppEvent::PersistFullAccessWarningAcknowledged => {
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.adam_home)
                     .set_hide_full_access_warning(true)
                     .apply()
                     .await
@@ -2760,7 +2797,7 @@ impl App {
                 }
             }
             AppEvent::PersistWorldWritableWarningAcknowledged => {
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.adam_home)
                     .set_hide_world_writable_warning(true)
                     .apply()
                     .await
@@ -2775,7 +2812,7 @@ impl App {
                 }
             }
             AppEvent::PersistRateLimitSwitchPromptHidden => {
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.adam_home)
                     .set_hide_rate_limit_model_nudge(true)
                     .apply()
                     .await
@@ -2793,7 +2830,7 @@ impl App {
                 from_model,
                 to_model,
             } => {
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.adam_home)
                     .record_model_migration_seen(from_model.as_str(), to_model.as_str())
                     .apply()
                     .await
@@ -2827,7 +2864,7 @@ impl App {
                     path: path.clone(),
                     enabled,
                 }];
-                match ConfigEditsBuilder::new(&self.config.codex_home)
+                match ConfigEditsBuilder::new(&self.config.adam_home)
                     .with_edits(edits)
                     .apply()
                     .await
@@ -3223,16 +3260,17 @@ mod tests {
     use crate::history_cell::new_session_info;
     use crate::provider_config::ApiProviderDialect;
     use crate::provider_config::CustomProviderConfig;
-    use crate::provider_config::build_custom_provider_edits;
-    use crate::provider_config::build_custom_provider_edits_with_existing;
-    use crate::provider_config::generated_profile_name;
+    use crate::provider_config::persist_custom_provider_files;
     use codex_agent::AuthManager;
     use codex_agent::CodexAuth;
     use codex_agent::ThreadManager;
     use codex_agent::config::ConfigBuilder;
     use codex_agent::config::ConfigOverrides;
     use codex_agent::config::ConfigToml;
-    use codex_agent::config::edit::ConfigEditsBuilder;
+    use codex_agent::config::models_json::ModelsDialect;
+    use codex_agent::config::models_json::ModelsEndpoint;
+    use codex_agent::config::models_json::ModelsJson;
+    use codex_agent::config::models_json::ModelsProvider;
     use codex_agent::features::Feature;
     use codex_agent::models_manager::manager::ModelsManager;
     use codex_agent::protocol::AskForApproval;
@@ -3256,6 +3294,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
     use std::io;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -4038,6 +4077,73 @@ mod tests {
         )
     }
 
+    fn persist_provider_fixture(adam_home: &Path, config: &CustomProviderConfig) {
+        persist_custom_provider_files(adam_home, config).expect("persist provider fixture");
+    }
+
+    fn persist_selected_model_fixture(adam_home: &Path, provider_id: &str, model: &str) {
+        let model_ref = if provider_id.contains('.') {
+            ModelRef::parse(&format!("{provider_id}:{model}")).expect("model ref")
+        } else {
+            ModelRef::new(provider_id, "main", model)
+        };
+        AdamStateStore::new(adam_home)
+            .set_last_selected_model(&model_ref, None, None)
+            .expect("persist state fixture");
+    }
+
+    fn persist_main_provider_fixture(
+        adam_home: &Path,
+        provider_id: &str,
+        model: &str,
+        model_context_window: Option<i64>,
+    ) {
+        let mut models_json = ModelsJson::load_from_adam_home(adam_home).expect("load models");
+        let provider = models_json
+            .providers
+            .entry(provider_id.to_string())
+            .or_insert_with(ModelsProvider::default);
+        provider.name = Some(provider_id.to_string());
+        let endpoint = provider
+            .endpoints
+            .entry("main".to_string())
+            .or_insert_with(|| ModelsEndpoint {
+                name: Some(provider_id.to_string()),
+                base_url: Some(format!("https://example.com/{provider_id}")),
+                env_key: None,
+                env_key_instructions: None,
+                experimental_bearer_token: Some(format!("sk-{provider_id}")),
+                dialect: ModelsDialect::Chat,
+                query_params: None,
+                http_headers: None,
+                env_http_headers: None,
+                request_max_retries: None,
+                stream_max_retries: None,
+                stream_idle_timeout_ms: None,
+                requires_openai_auth: false,
+                supports_realtime_streaming: false,
+                models: Default::default(),
+            });
+        endpoint
+            .models
+            .entry(model.to_string())
+            .or_default()
+            .context_window = model_context_window;
+        models_json
+            .save_to_adam_home(adam_home)
+            .expect("save models");
+    }
+
+    fn write_profile_config(adam_home: &Path, contents: &str) {
+        std::fs::write(adam_home.join("config.toml"), contents).expect("write config");
+    }
+
+    fn persist_provider_mapping_fixture(adam_home: &Path) {
+        persist_main_provider_fixture(adam_home, "provider_a", "model-a", None);
+        persist_main_provider_fixture(adam_home, "provider_b", "model-b", Some(64_000));
+        persist_selected_model_fixture(adam_home, "provider_a", "model-a");
+    }
+
     fn test_otel_manager(config: &Config, model: &str) -> OtelManager {
         let model_info = ModelsManager::construct_model_info_offline(model, config);
         OtelManager::new(
@@ -4162,9 +4268,9 @@ mod tests {
 
     #[tokio::test]
     async fn model_migration_prompt_shows_for_hidden_model() {
-        let codex_home = tempdir().expect("temp codex home");
+        let adam_home = tempdir().expect("temp codex home");
         let config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
+            .adam_home(adam_home.path().to_path_buf())
             .build()
             .await
             .expect("config");
@@ -4433,7 +4539,14 @@ mod tests {
     #[tokio::test]
     async fn custom_provider_save_refreshes_active_provider_from_reloaded_config() {
         let mut app = make_test_app().await;
-        let config_path = app.config.codex_home.join("config.toml");
+        let existing = CustomProviderConfig {
+            provider_id: "custom_1".to_string(),
+            dialect: ApiProviderDialect::Responses,
+            base_url: "https://example.com/v1".to_string(),
+            api_key: "sk-old".to_string(),
+            model: "gpt-test".to_string(),
+            model_context_window: None,
+        };
         let saved = CustomProviderConfig {
             provider_id: "custom_1".to_string(),
             dialect: ApiProviderDialect::Chat,
@@ -4442,40 +4555,11 @@ mod tests {
             model: "gpt-other".to_string(),
             model_context_window: None,
         };
-        std::fs::write(
-            &config_path,
-            r#"model_provider = "custom_1"
-model = "gpt-test"
-
-[model_providers.custom_1]
-name = "custom_1"
-base_url = "https://example.com/v1"
-dialect = "responses"
-experimental_bearer_token = "sk-old"
-env_key = "CUSTOM_API_KEY"
-
-[model_providers.custom_1.query_params]
-api-version = "2025-04-01-preview"
-
-[model_providers.custom_1.http_headers]
-X-Test = "1"
-"#,
-        )
-        .expect("write config");
-        let existing_config: ConfigToml =
-            toml::from_str(&std::fs::read_to_string(&config_path).expect("read config"))
-                .expect("parse config");
-        ConfigEditsBuilder::new(&app.config.codex_home)
-            .with_edits(build_custom_provider_edits_with_existing(
-                &saved,
-                Some(&existing_config),
-            ))
-            .apply()
-            .await
-            .expect("persist provider save");
+        persist_provider_fixture(&app.config.adam_home, &existing);
+        persist_provider_fixture(&app.config.adam_home, &saved);
 
         app.config = ConfigBuilder::default()
-            .codex_home(app.config.codex_home.clone())
+            .adam_home(app.config.adam_home.clone())
             .build()
             .await
             .expect("reload config");
@@ -4491,7 +4575,7 @@ X-Test = "1"
             app.chat_widget.config_ref().model_provider,
             app.config.model_provider
         );
-        assert_eq!(app.config.model_provider_id, "custom_1#chat");
+        assert_eq!(app.config.model_provider_id, "custom_1.chat");
         assert_eq!(app.config.model.as_deref(), Some("gpt-other"));
         assert_eq!(app.chat_widget.current_model(), "gpt-other");
         assert_eq!(
@@ -4500,28 +4584,17 @@ X-Test = "1"
         );
         assert_eq!(
             app.chat_widget.config_ref().model_provider_id,
-            "custom_1#chat"
+            "custom_1.chat"
         );
 
-        let config_toml: ConfigToml = app
-            .config
-            .config_layer_stack
-            .effective_config()
-            .try_into()
-            .expect("config toml");
         assert_eq!(
-            config_toml
-                .profiles
-                .get(generated_profile_name("custom_1#chat", "gpt-other").as_str())
-                .and_then(|profile| profile.model.as_deref()),
-            Some("gpt-other")
-        );
-        assert_eq!(
-            config_toml
-                .model_providers
-                .get("custom_1#responses")
-                .and_then(|provider| provider.env_key.as_deref()),
-            Some("CUSTOM_API_KEY")
+            AdamStateStore::new(&app.config.adam_home)
+                .load()
+                .expect("state")
+                .last_selected_model
+                .as_ref()
+                .map(|model| model.model_ref.as_str()),
+            Some("custom_1.chat:gpt-other")
         );
     }
 
@@ -4536,38 +4609,30 @@ X-Test = "1"
             model: "gpt-test".to_string(),
             model_context_window: None,
         };
-        ConfigEditsBuilder::new(&app.config.codex_home)
-            .with_edits(build_custom_provider_edits(&saved))
-            .apply()
-            .await
-            .expect("persist provider save");
+        persist_provider_fixture(&app.config.adam_home, &saved);
 
         app.handle_custom_provider_configured(saved).await;
 
-        assert_eq!(app.config.model_provider_id, "custom_1#responses");
+        assert_eq!(app.config.model_provider_id, "custom_1.responses");
         assert_eq!(app.config.model.as_deref(), Some("gpt-test"));
         assert_eq!(app.chat_widget.current_model(), "gpt-test");
         assert_eq!(
             app.chat_widget.config_ref().model_provider_id,
-            "custom_1#responses"
+            "custom_1.responses"
         );
         assert_eq!(
             app.chat_widget.config_ref().model.as_deref(),
             Some("gpt-test")
         );
 
-        let config_toml: ConfigToml = app
-            .config
-            .config_layer_stack
-            .effective_config()
-            .try_into()
-            .expect("config toml");
         assert_eq!(
-            config_toml
-                .profiles
-                .get(generated_profile_name("custom_1#responses", "gpt-test").as_str())
-                .and_then(|profile| profile.model_provider.as_deref()),
-            Some("custom_1#responses")
+            AdamStateStore::new(&app.config.adam_home)
+                .load()
+                .expect("state")
+                .last_selected_model
+                .as_ref()
+                .map(|model| model.model_ref.as_str()),
+            Some("custom_1.responses:gpt-test")
         );
     }
 
@@ -4582,35 +4647,16 @@ X-Test = "1"
             model: "gpt-test".to_string(),
             model_context_window: Some(128_000),
         };
-        ConfigEditsBuilder::new(&app.config.codex_home)
-            .with_edits(build_custom_provider_edits(&saved))
-            .apply()
-            .await
-            .expect("persist provider save");
+        persist_provider_fixture(&app.config.adam_home, &saved);
 
         app.handle_custom_provider_configured(saved).await;
 
-        assert_eq!(app.config.model_provider_id, "custom_1#responses");
+        assert_eq!(app.config.model_provider_id, "custom_1.responses");
         assert_eq!(app.config.model.as_deref(), Some("gpt-test"));
         assert_eq!(app.config.model_context_window, Some(128_000));
         assert_eq!(app.chat_widget.current_model(), "gpt-test");
         assert_eq!(
             app.chat_widget.config_ref().model_context_window,
-            Some(128_000)
-        );
-
-        let config_toml: ConfigToml = app
-            .config
-            .config_layer_stack
-            .effective_config()
-            .try_into()
-            .expect("config toml");
-        assert_eq!(config_toml.model_context_window, Some(128_000));
-        assert_eq!(
-            config_toml
-                .profiles
-                .get(generated_profile_name("custom_1#responses", "gpt-test").as_str())
-                .and_then(|profile| profile.model_context_window),
             Some(128_000)
         );
     }
@@ -4634,45 +4680,15 @@ X-Test = "1"
             model: "gpt-test".to_string(),
             model_context_window: None,
         };
-        ConfigEditsBuilder::new(&app.config.codex_home)
-            .with_edits(build_custom_provider_edits(&initial))
-            .apply()
-            .await
-            .expect("persist initial provider save");
-        ConfigEditsBuilder::new(&app.config.codex_home)
-            .with_edits(build_custom_provider_edits(&saved))
-            .apply()
-            .await
-            .expect("persist updated provider save");
+        persist_provider_fixture(&app.config.adam_home, &initial);
+        persist_provider_fixture(&app.config.adam_home, &saved);
 
         app.handle_custom_provider_configured(saved).await;
 
-        assert_eq!(app.config.model_provider_id, "custom_1#chat");
+        assert_eq!(app.config.model_provider_id, "custom_1.chat");
         assert_eq!(app.config.model.as_deref(), Some("gpt-test"));
         assert_eq!(app.config.model_context_window, None);
         assert_eq!(app.chat_widget.config_ref().model_context_window, None);
-
-        let config_toml: ConfigToml = app
-            .config
-            .config_layer_stack
-            .effective_config()
-            .try_into()
-            .expect("config toml");
-        assert_eq!(config_toml.model_context_window, None);
-        assert_eq!(
-            config_toml
-                .profiles
-                .get(generated_profile_name("custom_1#responses", "gpt-test").as_str())
-                .and_then(|profile| profile.model_context_window),
-            Some(64_000)
-        );
-        assert_eq!(
-            config_toml
-                .profiles
-                .get(generated_profile_name("custom_1#chat", "gpt-test").as_str())
-                .and_then(|profile| profile.model_context_window),
-            None
-        );
     }
 
     #[tokio::test]
@@ -4694,45 +4710,15 @@ X-Test = "1"
             model: "gpt-other".to_string(),
             model_context_window: None,
         };
-        ConfigEditsBuilder::new(&app.config.codex_home)
-            .with_edits(build_custom_provider_edits(&initial))
-            .apply()
-            .await
-            .expect("persist initial provider save");
-        ConfigEditsBuilder::new(&app.config.codex_home)
-            .with_edits(build_custom_provider_edits(&saved))
-            .apply()
-            .await
-            .expect("persist updated provider save");
+        persist_provider_fixture(&app.config.adam_home, &initial);
+        persist_provider_fixture(&app.config.adam_home, &saved);
 
         app.handle_custom_provider_configured(saved).await;
 
-        assert_eq!(app.config.model_provider_id, "custom_2#chat");
+        assert_eq!(app.config.model_provider_id, "custom_2.chat");
         assert_eq!(app.config.model.as_deref(), Some("gpt-other"));
         assert_eq!(app.config.model_context_window, None);
         assert_eq!(app.chat_widget.config_ref().model_context_window, None);
-
-        let config_toml: ConfigToml = app
-            .config
-            .config_layer_stack
-            .effective_config()
-            .try_into()
-            .expect("config toml");
-        assert_eq!(config_toml.model_context_window, None);
-        assert_eq!(
-            config_toml
-                .profiles
-                .get(generated_profile_name("custom_1#responses", "gpt-test").as_str())
-                .and_then(|profile| profile.model_context_window),
-            Some(64_000)
-        );
-        assert_eq!(
-            config_toml
-                .profiles
-                .get(generated_profile_name("custom_2#chat", "gpt-other").as_str())
-                .and_then(|profile| profile.model_context_window),
-            None
-        );
     }
 
     #[tokio::test]
@@ -4756,11 +4742,7 @@ X-Test = "1"
             model: "gpt-test".to_string(),
             model_context_window: None,
         };
-        ConfigEditsBuilder::new(&app.config.codex_home)
-            .with_edits(build_custom_provider_edits(&saved))
-            .apply()
-            .await
-            .expect("persist provider save");
+        persist_provider_fixture(&app.config.adam_home, &saved);
 
         app.handle_custom_provider_configured(saved).await;
 
@@ -4770,41 +4752,23 @@ X-Test = "1"
             .await
             .expect("get thread");
         let snapshot = thread.config_snapshot().await;
-        assert_eq!(snapshot.model_provider_id, "custom_1#responses");
+        assert_eq!(snapshot.model_provider_id, "custom_1.responses");
         assert_eq!(snapshot.model, "gpt-test");
     }
 
     #[tokio::test]
     async fn persist_model_selection_switches_runtime_provider_from_saved_profile_mapping() {
         let mut app = make_test_app().await;
-        let config_path = app.config.codex_home.join("config.toml");
-        std::fs::write(
-            &config_path,
-            r#"model = "model-a"
-model_provider = "provider_a"
-
-[model_providers.provider_a]
-name = "provider_a"
-base_url = "https://example.com/a"
-dialect = "chat"
-experimental_bearer_token = "sk-a"
-
-[model_providers.provider_b]
-name = "provider_b"
-base_url = "https://example.com/b"
-dialect = "chat"
-experimental_bearer_token = "sk-b"
-
-[profiles.saved]
-model = "model-b"
-model_provider = "provider_b"
-model_context_window = 64_000
+        persist_provider_mapping_fixture(&app.config.adam_home);
+        write_profile_config(
+            &app.config.adam_home,
+            r#"[profiles.saved]
+model = "provider_b.main:model-b"
 "#,
-        )
-        .expect("write config");
+        );
 
         app.config = ConfigBuilder::default()
-            .codex_home(app.config.codex_home.clone())
+            .adam_home(app.config.adam_home.clone())
             .build()
             .await
             .expect("reload config");
@@ -4830,7 +4794,7 @@ model_context_window = 64_000
             Some(ReasoningEffortConfig::High)
         );
         assert_eq!(app.config.model_context_window, Some(64_000));
-        assert_eq!(app.config.model_auto_compact_token_limit, None);
+        assert_eq!(app.config.model_auto_compact_token_limit, Some(60_800));
         assert_eq!(app.chat_widget.current_model(), "model-b");
         assert_eq!(
             app.chat_widget.current_reasoning_effort(),
@@ -4842,7 +4806,7 @@ model_context_window = 64_000
         );
         assert_eq!(
             app.chat_widget.config_ref().model_auto_compact_token_limit,
-            None
+            Some(60_800)
         );
 
         let config_toml: ConfigToml = app
@@ -4851,59 +4815,31 @@ model_context_window = 64_000
             .effective_config()
             .try_into()
             .expect("config toml");
-        assert_eq!(config_toml.model.as_deref(), Some("model-a"));
-        assert_eq!(config_toml.model_provider.as_deref(), Some("provider_a"));
         assert_eq!(
             config_toml
                 .profiles
                 .get("saved")
                 .and_then(|profile| profile.model.as_deref()),
-            Some("model-b")
-        );
-        assert_eq!(
-            config_toml
-                .profiles
-                .get("saved")
-                .and_then(|profile| profile.model_provider.as_deref()),
-            Some("provider_b")
+            Some("provider_b.main:model-b")
         );
     }
 
     #[tokio::test]
     async fn persist_model_selection_reloads_profile_context_limits_after_save() {
         let mut app = make_test_app().await;
-        let config_path = app.config.codex_home.join("config.toml");
-        std::fs::write(
-            &config_path,
-            r#"model = "model-a"
-model_provider = "provider_a"
-
-[model_providers.provider_a]
-name = "provider_a"
-base_url = "https://example.com/a"
-dialect = "chat"
-experimental_bearer_token = "sk-a"
-
-[model_providers.provider_b]
-name = "provider_b"
-base_url = "https://example.com/b"
-dialect = "chat"
-experimental_bearer_token = "sk-b"
-
-[profiles.saved]
-model = "model-a"
-model_provider = "provider_a"
-model_context_window = 64_000
+        persist_provider_mapping_fixture(&app.config.adam_home);
+        write_profile_config(
+            &app.config.adam_home,
+            r#"[profiles.saved]
+model = "provider_a.main:model-a"
 
 [profiles.target]
-model = "model-b"
-model_provider = "provider_b"
+model = "provider_b.main:model-b"
 "#,
-        )
-        .expect("write config");
+        );
 
         app.config = ConfigBuilder::default()
-            .codex_home(app.config.codex_home.clone())
+            .adam_home(app.config.adam_home.clone())
             .build()
             .await
             .expect("reload config");
@@ -4929,7 +4865,7 @@ model_provider = "provider_b"
             Some(ReasoningEffortConfig::High)
         );
         assert_eq!(app.config.model_context_window, Some(64_000));
-        assert_eq!(app.config.model_auto_compact_token_limit, None);
+        assert_eq!(app.config.model_auto_compact_token_limit, Some(60_800));
         assert_eq!(app.chat_widget.current_model(), "model-b");
         assert_eq!(
             app.chat_widget.current_reasoning_effort(),
@@ -4941,7 +4877,7 @@ model_provider = "provider_b"
         );
         assert_eq!(
             app.chat_widget.config_ref().model_auto_compact_token_limit,
-            None
+            Some(60_800)
         );
 
         let config_toml: ConfigToml = app
@@ -4955,59 +4891,27 @@ model_provider = "provider_b"
                 .profiles
                 .get("saved")
                 .and_then(|profile| profile.model.as_deref()),
-            Some("model-b")
-        );
-        assert_eq!(
-            config_toml
-                .profiles
-                .get("saved")
-                .and_then(|profile| profile.model_provider.as_deref()),
-            Some("provider_b")
-        );
-        assert_eq!(
-            config_toml
-                .profiles
-                .get("saved")
-                .and_then(|profile| profile.model_context_window),
-            Some(64_000)
+            Some("provider_b.main:model-b")
         );
     }
 
     #[tokio::test]
     async fn persist_model_selection_clears_reasoning_effort_when_none_passed() {
         let mut app = make_test_app().await;
-        let config_path = app.config.codex_home.join("config.toml");
-        std::fs::write(
-            &config_path,
-            r#"model = "model-a"
-model_provider = "provider_a"
-
-[model_providers.provider_a]
-name = "provider_a"
-base_url = "https://example.com/a"
-dialect = "chat"
-experimental_bearer_token = "sk-a"
-
-[model_providers.provider_b]
-name = "provider_b"
-base_url = "https://example.com/b"
-dialect = "chat"
-experimental_bearer_token = "sk-b"
-
-[profiles.saved]
-model = "model-a"
-model_provider = "provider_a"
+        persist_provider_mapping_fixture(&app.config.adam_home);
+        write_profile_config(
+            &app.config.adam_home,
+            r#"[profiles.saved]
+model = "provider_a.main:model-a"
 model_reasoning_effort = "high"
 
 [profiles.target]
-model = "model-b"
-model_provider = "provider_b"
+model = "provider_b.main:model-b"
 "#,
-        )
-        .expect("write config");
+        );
 
         app.config = ConfigBuilder::default()
-            .codex_home(app.config.codex_home.clone())
+            .adam_home(app.config.adam_home.clone())
             .build()
             .await
             .expect("reload config");
@@ -5041,14 +4945,7 @@ model_provider = "provider_b"
                 .profiles
                 .get("saved")
                 .and_then(|profile| profile.model.as_deref()),
-            Some("model-b")
-        );
-        assert_eq!(
-            config_toml
-                .profiles
-                .get("saved")
-                .and_then(|profile| profile.model_provider.as_deref()),
-            Some("provider_b")
+            Some("provider_b.main:model-b")
         );
         assert_eq!(
             config_toml
@@ -5062,37 +4959,21 @@ model_provider = "provider_b"
     #[tokio::test]
     async fn persist_model_selection_rejects_ambiguous_provider_mapping() {
         let mut app = make_test_app().await;
-        let config_path = app.config.codex_home.join("config.toml");
-        std::fs::write(
-            &config_path,
-            r#"model = "model-a"
-model_provider = "provider_a"
-
-[model_providers.provider_a]
-name = "provider_a"
-base_url = "https://example.com/a"
-dialect = "chat"
-experimental_bearer_token = "sk-a"
-
-[model_providers.provider_b]
-name = "provider_b"
-base_url = "https://example.com/b"
-dialect = "chat"
-experimental_bearer_token = "sk-b"
-
-[profiles.first]
-model = "shared-model"
-model_provider = "provider_a"
+        persist_main_provider_fixture(&app.config.adam_home, "provider_a", "shared-model", None);
+        persist_main_provider_fixture(&app.config.adam_home, "provider_b", "shared-model", None);
+        persist_selected_model_fixture(&app.config.adam_home, "provider_a", "model-a");
+        write_profile_config(
+            &app.config.adam_home,
+            r#"[profiles.first]
+model = "provider_a.main:shared-model"
 
 [profiles.second]
-model = "shared-model"
-model_provider = "provider_b"
+model = "provider_b.main:shared-model"
 "#,
-        )
-        .expect("write config");
+        );
 
         app.config = ConfigBuilder::default()
-            .codex_home(app.config.codex_home.clone())
+            .adam_home(app.config.adam_home.clone())
             .build()
             .await
             .expect("reload config");
@@ -5116,37 +4997,21 @@ model_provider = "provider_b"
     #[tokio::test]
     async fn persist_model_selection_uses_explicit_provider_for_ambiguous_model() {
         let mut app = make_test_app().await;
-        let config_path = app.config.codex_home.join("config.toml");
-        std::fs::write(
-            &config_path,
-            r#"model = "model-a"
-model_provider = "provider_a"
-
-[model_providers.provider_a]
-name = "provider_a"
-base_url = "https://example.com/a"
-dialect = "chat"
-experimental_bearer_token = "sk-a"
-
-[model_providers.provider_b]
-name = "provider_b"
-base_url = "https://example.com/b"
-dialect = "chat"
-experimental_bearer_token = "sk-b"
-
-[profiles.first]
-model = "shared-model"
-model_provider = "provider_a"
+        persist_main_provider_fixture(&app.config.adam_home, "provider_a", "shared-model", None);
+        persist_main_provider_fixture(&app.config.adam_home, "provider_b", "shared-model", None);
+        persist_selected_model_fixture(&app.config.adam_home, "provider_a", "model-a");
+        write_profile_config(
+            &app.config.adam_home,
+            r#"[profiles.first]
+model = "provider_a.main:shared-model"
 
 [profiles.second]
-model = "shared-model"
-model_provider = "provider_b"
+model = "provider_b.main:shared-model"
 "#,
-        )
-        .expect("write config");
+        );
 
         app.config = ConfigBuilder::default()
-            .codex_home(app.config.codex_home.clone())
+            .adam_home(app.config.adam_home.clone())
             .build()
             .await
             .expect("reload config");
@@ -5166,37 +5031,16 @@ model_provider = "provider_b"
         assert_eq!(app.config.model_provider_id, "provider_b");
         assert_eq!(app.config.model.as_deref(), Some("shared-model"));
         assert_eq!(app.chat_widget.current_model(), "shared-model");
-
-        let config_toml: ConfigToml = app
-            .config
-            .config_layer_stack
-            .effective_config()
-            .try_into()
-            .expect("config toml");
-        assert_eq!(config_toml.model.as_deref(), Some("shared-model"));
-        assert_eq!(config_toml.model_provider.as_deref(), Some("provider_b"));
     }
 
     #[tokio::test]
     async fn persist_model_selection_uses_explicit_openai_provider_for_builtin_same_slug() {
         let mut app = make_test_app().await;
-        let config_path = app.config.codex_home.join("config.toml");
-        std::fs::write(
-            &config_path,
-            r#"model = "gpt-5.2"
-model_provider = "provider_a"
-
-[model_providers.provider_a]
-name = "provider_a"
-base_url = "https://example.com/a"
-dialect = "chat"
-experimental_bearer_token = "sk-a"
-"#,
-        )
-        .expect("write config");
+        persist_main_provider_fixture(&app.config.adam_home, "provider_a", "gpt-5.2", None);
+        persist_selected_model_fixture(&app.config.adam_home, "provider_a", "gpt-5.2");
 
         app.config = ConfigBuilder::default()
-            .codex_home(app.config.codex_home.clone())
+            .adam_home(app.config.adam_home.clone())
             .build()
             .await
             .expect("reload config");
@@ -5212,48 +5056,22 @@ experimental_bearer_token = "sk-a"
         assert_eq!(app.config.model_provider_id, "openai");
         assert_eq!(app.config.model.as_deref(), Some("gpt-5.2"));
         assert_eq!(app.chat_widget.current_model(), "gpt-5.2");
-
-        let config_toml: ConfigToml = app
-            .config
-            .config_layer_stack
-            .effective_config()
-            .try_into()
-            .expect("config toml");
-        assert_eq!(config_toml.model.as_deref(), Some("gpt-5.2"));
-        assert_eq!(config_toml.model_provider.as_deref(), Some("openai"));
     }
 
     #[tokio::test]
     async fn persist_model_selection_switches_runtime_when_save_fails() {
         let mut app = make_test_app().await;
-        let config_path = app.config.codex_home.join("config.toml");
-        std::fs::write(
-            &config_path,
-            r#"model = "model-a"
-model_provider = "provider_a"
-
-[model_providers.provider_a]
-name = "provider_a"
-base_url = "https://example.com/a"
-dialect = "chat"
-experimental_bearer_token = "sk-a"
-
-[model_providers.provider_b]
-name = "provider_b"
-base_url = "https://example.com/b"
-dialect = "chat"
-experimental_bearer_token = "sk-b"
-
-[profiles.saved]
-model = "model-b"
-model_provider = "provider_b"
-model_context_window = 64_000
+        let config_path = app.config.adam_home.join("config.toml");
+        persist_provider_mapping_fixture(&app.config.adam_home);
+        write_profile_config(
+            &app.config.adam_home,
+            r#"[profiles.saved]
+model = "provider_b.main:model-b"
 "#,
-        )
-        .expect("write config");
+        );
 
         app.config = ConfigBuilder::default()
-            .codex_home(app.config.codex_home.clone())
+            .adam_home(app.config.adam_home.clone())
             .build()
             .await
             .expect("reload config");
@@ -5261,7 +5079,7 @@ model_context_window = 64_000
         app.config.active_profile = Some("saved".to_string());
         app.chat_widget.sync_provider_config(&app.config, true);
         app.chat_widget.set_model("model-a");
-        app.config.codex_home = config_path;
+        app.config.adam_home = config_path;
 
         let err = app
             .persist_model_selection(
@@ -5284,17 +5102,14 @@ model_context_window = 64_000
             app.config.model_reasoning_effort,
             Some(ReasoningEffortConfig::High)
         );
-        assert_eq!(app.config.model_context_window, Some(64_000));
+        assert_eq!(app.config.model_context_window, None);
         assert_eq!(app.config.model_auto_compact_token_limit, None);
         assert_eq!(app.chat_widget.current_model(), "model-b");
         assert_eq!(
             app.chat_widget.current_reasoning_effort(),
             Some(ReasoningEffortConfig::High)
         );
-        assert_eq!(
-            app.chat_widget.config_ref().model_context_window,
-            Some(64_000)
-        );
+        assert_eq!(app.chat_widget.config_ref().model_context_window, None);
         assert_eq!(
             app.chat_widget.config_ref().model_auto_compact_token_limit,
             None

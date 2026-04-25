@@ -31,12 +31,12 @@ fn sse_completed(id: &str) -> String {
 }
 
 fn write_rollout_with_schema_version(
-    codex_home: &Path,
+    adam_home: &Path,
     uuid: Uuid,
     schema_version: Option<u32>,
 ) -> Result<std::path::PathBuf> {
     let thread_id = ThreadId::from_string(&uuid.to_string())?;
-    let rollout_path = codex_home.join(format!(
+    let rollout_path = adam_home.join(format!(
         "sessions/2026/01/27/rollout-2026-01-27T12-00-00-{uuid}.jsonl"
     ));
     let parent = rollout_path
@@ -49,7 +49,7 @@ fn write_rollout_with_schema_version(
             id: thread_id,
             forked_from_id: None,
             timestamp: "2026-01-27T12:00:00Z".to_string(),
-            cwd: codex_home.to_path_buf(),
+            cwd: adam_home.to_path_buf(),
             originator: "test".to_string(),
             cli_version: "test".to_string(),
             rollout_schema_version: schema_version
@@ -102,7 +102,7 @@ async fn new_thread_is_recorded_in_state_db() -> Result<()> {
 
     let thread_id = test.session_configured.session_id;
     let rollout_path = test.codex.rollout_path().expect("rollout path");
-    let db_path = test.config.codex_home.join(STATE_DB_FILENAME);
+    let db_path = test.config.adam_home.join(STATE_DB_FILENAME);
 
     for _ in 0..100 {
         if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
@@ -141,8 +141,8 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
     let rollout_rel_path_for_hook = rollout_rel_path.clone();
 
     let mut builder = test_codex()
-        .with_pre_build_hook(move |codex_home| {
-            let rollout_path = codex_home.join(&rollout_rel_path_for_hook);
+        .with_pre_build_hook(move |adam_home| {
+            let rollout_path = adam_home.join(&rollout_rel_path_for_hook);
             let parent = rollout_path
                 .parent()
                 .expect("rollout path should have parent");
@@ -153,7 +153,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                     id: thread_id,
                     forked_from_id: None,
                     timestamp: "2026-01-27T12:00:00Z".to_string(),
-                    cwd: codex_home.to_path_buf(),
+                    cwd: adam_home.to_path_buf(),
                     originator: "test".to_string(),
                     cli_version: "test".to_string(),
                     rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
@@ -194,8 +194,8 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
 
     let test = builder.build(&server).await?;
 
-    let db_path = test.config.codex_home.join(STATE_DB_FILENAME);
-    let rollout_path = test.config.codex_home.join(&rollout_rel_path);
+    let db_path = test.config.adam_home.join(STATE_DB_FILENAME);
+    let rollout_path = test.config.adam_home.join(&rollout_rel_path);
     let default_provider = test.config.model_provider_id.clone();
 
     for _ in 0..20 {
@@ -236,10 +236,10 @@ async fn backfill_skips_unsupported_rollouts() -> Result<()> {
     let missing_thread_id = ThreadId::from_string(&missing_uuid.to_string())?;
 
     let mut builder = test_codex()
-        .with_pre_build_hook(move |codex_home| {
-            write_rollout_with_schema_version(codex_home, v2_uuid, Some(2))
+        .with_pre_build_hook(move |adam_home| {
+            write_rollout_with_schema_version(adam_home, v2_uuid, Some(2))
                 .expect("should write v2 rollout");
-            write_rollout_with_schema_version(codex_home, missing_uuid, None)
+            write_rollout_with_schema_version(adam_home, missing_uuid, None)
                 .expect("should write missing-schema rollout");
         })
         .with_config(|config| {
@@ -247,7 +247,7 @@ async fn backfill_skips_unsupported_rollouts() -> Result<()> {
         });
 
     let test = builder.build(&server).await?;
-    let db_path = test.config.codex_home.join(STATE_DB_FILENAME);
+    let db_path = test.config.adam_home.join(STATE_DB_FILENAME);
     for _ in 0..20 {
         if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
             break;
@@ -276,7 +276,7 @@ async fn reconcile_skips_unsupported_rollout() -> Result<()> {
     });
     let test = builder.build(&server).await?;
     let db = test.codex.state_db().expect("state db enabled");
-    let rollout_path = write_rollout_with_schema_version(&test.config.codex_home, uuid, Some(2))?;
+    let rollout_path = write_rollout_with_schema_version(&test.config.adam_home, uuid, Some(2))?;
 
     codex_agent::state_db::reconcile_rollout(
         Some(db.as_ref()),
@@ -307,7 +307,7 @@ async fn user_messages_persist_in_state_db() -> Result<()> {
     });
     let test = builder.build(&server).await?;
 
-    let db_path = test.config.codex_home.join(STATE_DB_FILENAME);
+    let db_path = test.config.adam_home.join(STATE_DB_FILENAME);
     for _ in 0..100 {
         if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
             break;

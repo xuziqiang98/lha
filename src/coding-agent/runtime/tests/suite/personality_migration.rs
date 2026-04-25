@@ -21,14 +21,14 @@ use tokio::io::AsyncWriteExt;
 
 const TEST_TIMESTAMP: &str = "2025-01-01T00-00-00";
 
-async fn read_config_toml(codex_home: &Path) -> io::Result<ConfigToml> {
-    let contents = tokio::fs::read_to_string(codex_home.join("config.toml")).await?;
+async fn read_config_toml(adam_home: &Path) -> io::Result<ConfigToml> {
+    let contents = tokio::fs::read_to_string(adam_home.join("config.toml")).await?;
     toml::from_str(&contents).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
-async fn write_session_with_user_event(codex_home: &Path) -> io::Result<()> {
+async fn write_session_with_user_event(adam_home: &Path) -> io::Result<()> {
     let thread_id = ThreadId::new();
-    let dir = codex_home
+    let dir = adam_home
         .join(SESSIONS_SUBDIR)
         .join("2025")
         .join("01")
@@ -36,9 +36,9 @@ async fn write_session_with_user_event(codex_home: &Path) -> io::Result<()> {
     write_rollout_with_user_event(&dir, thread_id).await
 }
 
-async fn write_archived_session_with_user_event(codex_home: &Path) -> io::Result<()> {
+async fn write_archived_session_with_user_event(adam_home: &Path) -> io::Result<()> {
     let thread_id = ThreadId::new();
-    let dir = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
+    let dir = adam_home.join(ARCHIVED_SESSIONS_SUBDIR);
     write_rollout_with_user_event(&dir, thread_id).await
 }
 

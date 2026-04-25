@@ -22,15 +22,15 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn request_user_input_round_trip() -> Result<()> {
-    let codex_home = tempfile::TempDir::new()?;
+    let adam_home = tempfile::TempDir::new()?;
     let responses = vec![
         create_request_user_input_sse_response("call1")?,
         create_final_assistant_message_sse_response("done")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    create_config_toml(adam_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_id = mcp
@@ -111,28 +111,21 @@ async fn request_user_input_round_trip() -> Result<()> {
     Ok(())
 }
 
-fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "untrusted"
-sandbox_mode = "read-only"
-
-model_provider = "mock_provider"
-
-[features]
-collaboration_modes = true
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-dialect = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
+fn create_config_toml(adam_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
+    let features = std::collections::BTreeMap::from([(
+        codex_agent::features::Feature::CollaborationModes,
+        true,
+    )]);
+    app_test_support::write_mock_responses_config_toml_with_options(
+        adam_home,
+        server_uri,
+        &features,
+        20_000,
+        Some(false),
+        "mock_provider",
+        "mock-model",
+        "",
+        "untrusted",
+        "read-only",
     )
 }

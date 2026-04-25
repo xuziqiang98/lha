@@ -538,12 +538,8 @@ async fn remote_compact_backfills_recent_skills_into_replacement_history() -> Re
     )
     .await?;
     let codex = harness.test().codex.clone();
-    let skill_path = std::fs::canonicalize(
-        harness
-            .test()
-            .codex_home_path()
-            .join("skills/demo/SKILL.md"),
-    )?;
+    let skill_path =
+        std::fs::canonicalize(harness.test().adam_home_path().join("skills/demo/SKILL.md"))?;
 
     let responses_mock = responses::mount_sse_sequence(
         harness.server(),

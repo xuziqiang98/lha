@@ -45,7 +45,7 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
     });
     let test = builder.build(&server).await?;
 
-    let skill_path = test.codex_home_path().join("skills/demo/SKILL.md");
+    let skill_path = test.adam_home_path().join("skills/demo/SKILL.md");
     let skill_path = std::fs::canonicalize(skill_path)?;
 
     let mock = mount_sse_once(
@@ -172,7 +172,7 @@ async fn list_skills_includes_system_cache_entries() -> Result<()> {
     });
     let test = builder.build(&server).await?;
 
-    let system_skill_path = system_skill_md_path(test.codex_home_path(), SYSTEM_SKILL_NAME);
+    let system_skill_path = system_skill_md_path(test.adam_home_path(), SYSTEM_SKILL_NAME);
     assert!(
         system_skill_path.exists(),
         "expected embedded system skills installed to {system_skill_path:?}"

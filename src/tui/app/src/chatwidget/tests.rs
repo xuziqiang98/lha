@@ -22,7 +22,8 @@ use codex_agent::config::Config;
 use codex_agent::config::ConfigBuilder;
 use codex_agent::config::Constrained;
 use codex_agent::config::ConstraintError;
-use codex_agent::config::edit::ConfigEditsBuilder;
+use codex_agent::config::model_ref::ModelRef;
+use codex_agent::config::state_json::AdamStateStore;
 use codex_agent::config_loader::RequirementSource;
 use codex_agent::features::Feature;
 use codex_agent::models_manager::manager::ModelsManager;
@@ -103,18 +104,19 @@ use tokio::sync::mpsc::unbounded_channel;
 use toml::Value as TomlValue;
 
 use crate::provider_config::CustomProviderConfig;
-use crate::provider_config::build_custom_provider_edits;
+use crate::provider_config::custom_provider_ref;
+use crate::provider_config::persist_custom_provider_files;
 use base64::Engine;
 use chrono::Utc;
 use serde_json::json;
 
 async fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
-    let codex_home = tempdir().expect("tempdir");
-    let codex_home_path = codex_home.path().to_path_buf();
-    std::mem::forget(codex_home);
+    let adam_home = tempdir().expect("tempdir");
+    let adam_home_path = adam_home.path().to_path_buf();
+    std::mem::forget(adam_home);
     ConfigBuilder::default()
-        .codex_home(codex_home_path)
+        .adam_home(adam_home_path)
         .build()
         .await
         .expect("config")
@@ -214,9 +216,9 @@ async fn resumed_initial_messages_render_history() {
 
 #[tokio::test]
 async fn session_configured_updates_footer_reasoning_effort_immediately() {
-    let codex_home = tempdir().expect("tempdir");
+    let adam_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
+        .adam_home(adam_home.path().to_path_buf())
         .cli_overrides(vec![(
             "features.collaboration_modes".to_string(),
             TomlValue::Boolean(true),
@@ -1687,9 +1689,9 @@ async fn make_chatwidget_manual_with_scrollback_mode(
     bottom.set_steer_enabled(true);
     bottom.set_collaboration_modes_enabled(cfg.features.enabled(Feature::CollaborationModes));
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
-    let codex_home = cfg.codex_home.clone();
+    let adam_home = cfg.adam_home.clone();
     let thread_manager = Arc::new(ThreadManager::new(
-        codex_home,
+        adam_home,
         auth_manager.clone(),
         cfg.model_provider_id.as_str(),
         cfg.model_provider.clone(),
@@ -1814,9 +1816,9 @@ async fn make_chatwidget_manual_with_frame_requester(
     bottom.set_steer_enabled(true);
     bottom.set_collaboration_modes_enabled(cfg.features.enabled(Feature::CollaborationModes));
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
-    let codex_home = cfg.codex_home.clone();
+    let adam_home = cfg.adam_home.clone();
     let thread_manager = Arc::new(ThreadManager::new(
-        codex_home,
+        adam_home,
         auth_manager.clone(),
         cfg.model_provider_id.as_str(),
         cfg.model_provider.clone(),
@@ -1930,7 +1932,7 @@ fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     chat.thread_manager = Arc::new(ThreadManager::new(
-        chat.config.codex_home.clone(),
+        chat.config.adam_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
@@ -1942,7 +1944,7 @@ fn set_openai_provider(chat: &mut ChatWidget) {
     chat.config.model_provider_id = "openai".to_string();
     chat.config.model_provider = codex_llm::RuntimeEndpoint::openai();
     chat.thread_manager = Arc::new(ThreadManager::new(
-        chat.config.codex_home.clone(),
+        chat.config.adam_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
@@ -1978,7 +1980,7 @@ fn write_chatgpt_auth(config: &Config) {
         },
         "last_refresh": Utc::now(),
     });
-    let auth_file = config.codex_home.join("auth.json");
+    let auth_file = config.adam_home.join("auth.json");
     std::fs::write(
         auth_file,
         serde_json::to_string_pretty(&auth_json).expect("serialize auth json"),
@@ -1990,21 +1992,26 @@ async fn reload_chat_config_with_saved_providers(
     chat: &mut ChatWidget,
     configs: Vec<CustomProviderConfig>,
 ) {
-    for config in configs {
-        ConfigEditsBuilder::new(&chat.config.codex_home)
-            .with_edits(build_custom_provider_edits(&config))
-            .apply()
-            .await
+    let mut last_selection = None;
+    for config in &configs {
+        persist_custom_provider_files(&chat.config.adam_home, config)
             .expect("persist provider config");
+        last_selection = Some((custom_provider_ref(config), config.model.clone()));
+    }
+    if let Some((provider_id, model)) = last_selection {
+        let model_ref = ModelRef::parse(&format!("{provider_id}:{model}")).expect("model ref");
+        AdamStateStore::new(&chat.config.adam_home)
+            .set_last_selected_model(&model_ref, None, None)
+            .expect("persist active model selection");
     }
 
     chat.config = ConfigBuilder::default()
-        .codex_home(chat.config.codex_home.clone())
+        .adam_home(chat.config.adam_home.clone())
         .build()
         .await
         .expect("reload config");
     chat.thread_manager = Arc::new(ThreadManager::new(
-        chat.config.codex_home.clone(),
+        chat.config.adam_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
@@ -3623,9 +3630,9 @@ async fn plan_slash_command_switches_to_plan_mode() {
 
 #[tokio::test]
 async fn collaboration_modes_defaults_to_code_on_startup() {
-    let codex_home = tempdir().expect("tempdir");
+    let adam_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
+        .adam_home(adam_home.path().to_path_buf())
         .cli_overrides(vec![(
             "features.collaboration_modes".to_string(),
             TomlValue::Boolean(true),
@@ -3661,9 +3668,9 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
 
 #[tokio::test]
 async fn experimental_mode_plan_applies_on_startup() {
-    let codex_home = tempdir().expect("tempdir");
+    let adam_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
+        .adam_home(adam_home.path().to_path_buf())
         .cli_overrides(vec![
             (
                 "features.collaboration_modes".to_string(),
@@ -3705,9 +3712,9 @@ async fn experimental_mode_plan_applies_on_startup() {
 
 #[tokio::test]
 async fn experimental_mode_plan_preserves_configured_effort_on_startup() {
-    let codex_home = tempdir().expect("tempdir");
+    let adam_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
+        .adam_home(adam_home.path().to_path_buf())
         .cli_overrides(vec![
             (
                 "features.collaboration_modes".to_string(),
@@ -4690,12 +4697,12 @@ async fn model_picker_without_auth_shows_only_configured_custom_model() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("mock-model")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.auth_manager = Arc::new(AuthManager::new(
-        chat.config.codex_home.clone(),
+        chat.config.adam_home.clone(),
         false,
         AuthCredentialsStoreMode::File,
     ));
     chat.thread_manager = Arc::new(ThreadManager::new(
-        chat.config.codex_home.clone(),
+        chat.config.adam_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
@@ -4732,12 +4739,12 @@ async fn model_picker_without_auth_shows_all_models_saved_in_config_toml() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("mock-model")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.auth_manager = Arc::new(AuthManager::new(
-        chat.config.codex_home.clone(),
+        chat.config.adam_home.clone(),
         false,
         AuthCredentialsStoreMode::File,
     ));
     chat.thread_manager = Arc::new(ThreadManager::new(
-        chat.config.codex_home.clone(),
+        chat.config.adam_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
@@ -4801,12 +4808,12 @@ async fn model_picker_without_auth_shows_same_model_for_different_custom_provide
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("glm-5")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.auth_manager = Arc::new(AuthManager::new(
-        chat.config.codex_home.clone(),
+        chat.config.adam_home.clone(),
         false,
         AuthCredentialsStoreMode::File,
     ));
     chat.thread_manager = Arc::new(ThreadManager::new(
-        chat.config.codex_home.clone(),
+        chat.config.adam_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
@@ -4910,12 +4917,12 @@ async fn model_picker_reloads_chatgpt_auth_for_custom_provider_sessions() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("glm-5")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.auth_manager = Arc::new(AuthManager::new(
-        chat.config.codex_home.clone(),
+        chat.config.adam_home.clone(),
         false,
         AuthCredentialsStoreMode::File,
     ));
     chat.thread_manager = Arc::new(ThreadManager::new(
-        chat.config.codex_home.clone(),
+        chat.config.adam_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
@@ -4953,12 +4960,12 @@ async fn model_picker_reloads_chatgpt_auth_for_custom_messages_provider_sessions
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("glm-5.1")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.auth_manager = Arc::new(AuthManager::new(
-        chat.config.codex_home.clone(),
+        chat.config.adam_home.clone(),
         false,
         AuthCredentialsStoreMode::File,
     ));
     chat.thread_manager = Arc::new(ThreadManager::new(
-        chat.config.codex_home.clone(),
+        chat.config.adam_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
@@ -5008,18 +5015,20 @@ async fn model_picker_with_chatgpt_auth_keeps_builtin_and_custom_same_slug_visib
         }],
     )
     .await;
-    ConfigEditsBuilder::new(&chat.config.codex_home)
-        .set_model(Some("gpt-5.4"), None, Some("provider_a#responses"))
-        .apply()
-        .await
+    AdamStateStore::new(&chat.config.adam_home)
+        .set_last_selected_model(
+            &ModelRef::parse("provider_a.responses:gpt-5.4").expect("model ref"),
+            None,
+            None,
+        )
         .expect("persist active model selection");
     chat.config = ConfigBuilder::default()
-        .codex_home(chat.config.codex_home.clone())
+        .adam_home(chat.config.adam_home.clone())
         .build()
         .await
         .expect("reload config");
     chat.thread_manager = Arc::new(ThreadManager::new(
-        chat.config.codex_home.clone(),
+        chat.config.adam_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),

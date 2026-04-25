@@ -42,6 +42,12 @@ test:
 write-config-schema:
     cargo run -p codex-coding-agent --bin codex-write-config-schema
 
+write-models-schema:
+    cargo run -p codex-coding-agent --bin codex-write-models-schema
+
+write-state-schema:
+    cargo run -p codex-coding-agent --bin codex-write-state-schema
+
 # Regenerate vendored app-server protocol schema artifacts.
 write-app-server-schema:
     cargo run -p codex-app-server-protocol --bin write_schema_fixtures

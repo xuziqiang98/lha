@@ -60,7 +60,7 @@ pub fn resolve_sandbox_users_group_sid() -> Result<Vec<u8>> {
 }
 
 pub fn provision_sandbox_users(
-    codex_home: &Path,
+    adam_home: &Path,
     offline_username: &str,
     online_username: &str,
     log: &mut File,
@@ -75,7 +75,7 @@ pub fn provision_sandbox_users(
     ensure_sandbox_user(offline_username, &offline_password, log)?;
     ensure_sandbox_user(online_username, &online_password, log)?;
     write_secrets(
-        codex_home,
+        adam_home,
         offline_username,
         &offline_password,
         online_username,
@@ -393,13 +393,13 @@ struct SetupMarker {
 }
 
 fn write_secrets(
-    codex_home: &Path,
+    adam_home: &Path,
     offline_user: &str,
     offline_pwd: &str,
     online_user: &str,
     online_pwd: &str,
 ) -> Result<()> {
-    let sandbox_dir = sandbox_dir(codex_home);
+    let sandbox_dir = sandbox_dir(adam_home);
     std::fs::create_dir_all(&sandbox_dir).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperUsersFileWriteFailed,
@@ -409,7 +409,7 @@ fn write_secrets(
             ),
         ))
     })?;
-    let secrets_dir = sandbox_secrets_dir(codex_home);
+    let secrets_dir = sandbox_secrets_dir(adam_home);
     std::fs::create_dir_all(&secrets_dir).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperUsersFileWriteFailed,

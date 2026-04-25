@@ -341,7 +341,7 @@ impl Codex {
             sandbox_policy: config.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
-            codex_home: config.codex_home.clone(),
+            adam_home: config.adam_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source,
@@ -370,7 +370,7 @@ impl Codex {
         .await
         .map_err(|e| {
             error!("Failed to create session: {e:#}");
-            map_session_init_error(&e, &config.codex_home)
+            map_session_init_error(&e, &config.adam_home)
         })?;
         let thread_id = session.conversation_id;
 
@@ -551,7 +551,7 @@ pub(crate) struct SessionConfiguration {
     /// operate deterministically.
     cwd: PathBuf,
     /// Directory containing all Codex state for this session.
-    codex_home: PathBuf,
+    adam_home: PathBuf,
     /// Optional user-facing name for the thread, updated during the session.
     thread_name: Option<String>,
 
@@ -563,8 +563,8 @@ pub(crate) struct SessionConfiguration {
 }
 
 impl SessionConfiguration {
-    pub(crate) fn codex_home(&self) -> &PathBuf {
-        &self.codex_home
+    pub(crate) fn adam_home(&self) -> &PathBuf {
+        &self.adam_home
     }
 
     fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
@@ -724,9 +724,9 @@ impl Session {
         Some(state.get_or_create_dynamic_context_window(key))
     }
 
-    pub(crate) async fn codex_home(&self) -> PathBuf {
+    pub(crate) async fn adam_home(&self) -> PathBuf {
         let state = self.state.lock().await;
-        state.session_configuration.codex_home().clone()
+        state.session_configuration.adam_home().clone()
     }
 
     pub(crate) async fn update_model_provider(&self, provider: RuntimeEndpoint) {
@@ -998,21 +998,24 @@ impl Session {
         // Create the mutable state for the Session.
         if config.features.enabled(Feature::ShellSnapshot) {
             ShellSnapshot::start_snapshotting(
-                config.codex_home.clone(),
+                config.adam_home.clone(),
                 conversation_id,
                 &mut default_shell,
                 otel_manager.clone(),
             );
         }
-        let thread_name =
-            match session_index::find_thread_name_by_id(&config.codex_home, &conversation_id).await
-            {
-                Ok(name) => name,
-                Err(err) => {
-                    warn!("Failed to read session index for thread name: {err}");
-                    None
-                }
-            };
+        let thread_name = match session_index::find_thread_name_by_id(
+            &config.adam_home,
+            &conversation_id,
+        )
+        .await
+        {
+            Ok(name) => name,
+            Err(err) => {
+                warn!("Failed to read session index for thread name: {err}");
+                None
+            }
+        };
         session_configuration.thread_name = thread_name.clone();
         let state = SessionState::new(session_configuration.clone());
 
@@ -1612,12 +1615,12 @@ impl Session {
         amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
         let features = self.features.clone();
-        let codex_home = self
+        let adam_home = self
             .state
             .lock()
             .await
             .session_configuration
-            .codex_home()
+            .adam_home()
             .clone();
 
         if !features.enabled(Feature::ExecPolicy) {
@@ -1627,7 +1630,7 @@ impl Session {
 
         self.services
             .exec_policy
-            .append_amendment_and_update(&codex_home, amendment)
+            .append_amendment_and_update(&adam_home, amendment)
             .await?;
 
         Ok(())
@@ -3151,7 +3154,7 @@ mod handlers {
     /// Persists the thread name in the session index, updates in-memory state, and emits
     /// a `ThreadNameUpdated` event on success.
     ///
-    /// This appends the name to `CODEY_HOME/sessions_index.jsonl` via `session_index::append_thread_name` for the
+    /// This appends the name to `ADAM_HOME/sessions_index.jsonl` via `session_index::append_thread_name` for the
     /// current `thread_id`, then updates `SessionConfiguration::thread_name`.
     ///
     /// Returns an error event if the name is empty or session persistence is disabled.
@@ -3184,9 +3187,9 @@ mod handlers {
             return;
         };
 
-        let codex_home = sess.codex_home().await;
+        let adam_home = sess.adam_home().await;
         if let Err(e) =
-            session_index::append_thread_name(&codex_home, sess.conversation_id, &name).await
+            session_index::append_thread_name(&adam_home, sess.conversation_id, &name).await
         {
             let event = Event {
                 id: sub_id,
@@ -3899,13 +3902,13 @@ async fn learn_dynamic_context_window(
         return;
     };
 
-    let (codex_home, active_profile, model_provider_id, model) = {
+    let (adam_home, active_profile, model_provider_id, model) = {
         let mut state = sess.state.lock().await;
         state
             .session_configuration
             .set_learned_model_context_window(context_window, auto_compact_token_limit);
         (
-            state.session_configuration.codex_home().clone(),
+            state.session_configuration.adam_home().clone(),
             state
                 .session_configuration
                 .original_config_do_not_use
@@ -3946,7 +3949,7 @@ async fn learn_dynamic_context_window(
         });
     }
 
-    if let Err(err) = ConfigEditsBuilder::new(codex_home.as_path())
+    if let Err(err) = ConfigEditsBuilder::new(adam_home.as_path())
         .with_edits(edits)
         .apply()
         .await
@@ -5442,8 +5445,8 @@ mod tests {
 
     #[tokio::test]
     async fn reconstruct_history_backfills_latest_surviving_plan_after_local_compaction() {
-        let codex_home = tempfile::tempdir().expect("create temp dir");
-        let mut config = build_test_config(codex_home.path()).await;
+        let adam_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(adam_home.path()).await;
         config.features.enable(Feature::BackfillCompactPlanContext);
         let (session, turn_context) = make_session_and_context_for_config(config).await;
 
@@ -5970,8 +5973,8 @@ mod tests {
 
     #[tokio::test]
     async fn set_rate_limits_retains_previous_credits() {
-        let codex_home = tempfile::tempdir().expect("create temp dir");
-        let config = build_test_config(codex_home.path()).await;
+        let adam_home = tempfile::tempdir().expect("create temp dir");
+        let config = build_test_config(adam_home.path()).await;
         let config = Arc::new(config);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
@@ -6000,7 +6003,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
-            codex_home: config.codex_home.clone(),
+            adam_home: config.adam_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
@@ -6053,8 +6056,8 @@ mod tests {
 
     #[tokio::test]
     async fn set_rate_limits_updates_plan_type_when_present() {
-        let codex_home = tempfile::tempdir().expect("create temp dir");
-        let config = build_test_config(codex_home.path()).await;
+        let adam_home = tempfile::tempdir().expect("create temp dir");
+        let config = build_test_config(adam_home.path()).await;
         let config = Arc::new(config);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
@@ -6083,7 +6086,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
-            codex_home: config.codex_home.clone(),
+            adam_home: config.adam_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
@@ -6296,17 +6299,17 @@ mod tests {
         })
     }
 
-    async fn build_test_config(codex_home: &Path) -> Config {
+    async fn build_test_config(adam_home: &Path) -> Config {
         ConfigBuilder::default()
-            .codex_home(codex_home.to_path_buf())
+            .adam_home(adam_home.to_path_buf())
             .build()
             .await
             .expect("load default test config")
     }
 
     async fn make_session_for_messages_model(model_context_window: Option<i64>) -> Session {
-        let codex_home = tempfile::tempdir().expect("create temp dir");
-        let mut config = build_test_config(codex_home.path()).await;
+        let adam_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(adam_home.path()).await;
         config.model = Some("claude-sonnet-4-5".to_string());
         config.model_context_window = model_context_window;
         config.model_auto_compact_token_limit = None;
@@ -6325,8 +6328,8 @@ mod tests {
     }
 
     async fn make_session_for_responses_model_without_static_metadata() -> Session {
-        let codex_home = tempfile::tempdir().expect("create temp dir");
-        let mut config = build_test_config(codex_home.path()).await;
+        let adam_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(adam_home.path()).await;
         config.model = Some("responses-unknown-model".to_string());
 
         make_session_and_context_for_config(config).await.0
@@ -6339,7 +6342,7 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(
-            config.codex_home.clone(),
+            config.adam_home.clone(),
             auth_manager.clone(),
             config.model_provider_id.as_str(),
             config.model_provider.clone(),
@@ -6374,7 +6377,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
-            codex_home: config.codex_home.clone(),
+            adam_home: config.adam_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
@@ -6394,7 +6397,7 @@ mod tests {
 
         let mut state = SessionState::new(session_configuration.clone());
         mark_state_initial_context_seeded(&mut state);
-        let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
+        let skills_manager = Arc::new(SkillsManager::new(config.adam_home.clone()));
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -6468,14 +6471,14 @@ mod tests {
     }
 
     pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
-        let codex_home = tempfile::tempdir().expect("create temp dir");
-        let config = build_test_config(codex_home.path()).await;
+        let adam_home = tempfile::tempdir().expect("create temp dir");
+        let config = build_test_config(adam_home.path()).await;
         make_session_and_context_for_config(config).await
     }
 
     async fn make_session_and_context_without_personality() -> (Session, TurnContext) {
-        let codex_home = tempfile::tempdir().expect("create temp dir");
-        let mut config = build_test_config(codex_home.path()).await;
+        let adam_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(adam_home.path()).await;
         config.personality = None;
         make_session_and_context_for_config(config).await
     }
@@ -6485,8 +6488,8 @@ mod tests {
         developer_instructions: &str,
         user_instructions: &str,
     ) -> (Session, TurnContext) {
-        let codex_home = tempfile::tempdir().expect("create temp dir");
-        let mut config = build_test_config(codex_home.path()).await;
+        let adam_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(adam_home.path()).await;
         config.personality = None;
         config.cwd = PathBuf::from(cwd);
         config.developer_instructions = Some(developer_instructions.to_string());
@@ -6528,14 +6531,14 @@ mod tests {
         async_channel::Receiver<Event>,
     ) {
         let (tx_event, rx_event) = async_channel::unbounded();
-        let codex_home = tempfile::tempdir().expect("create temp dir");
-        let config = build_test_config(codex_home.path()).await;
+        let adam_home = tempfile::tempdir().expect("create temp dir");
+        let config = build_test_config(adam_home.path()).await;
         let config = Arc::new(config);
         let conversation_id = ThreadId::default();
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(
-            config.codex_home.clone(),
+            config.adam_home.clone(),
             auth_manager.clone(),
             config.model_provider_id.as_str(),
             config.model_provider.clone(),
@@ -6570,7 +6573,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
-            codex_home: config.codex_home.clone(),
+            adam_home: config.adam_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
@@ -6590,7 +6593,7 @@ mod tests {
 
         let mut state = SessionState::new(session_configuration.clone());
         mark_state_initial_context_seeded(&mut state);
-        let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
+        let skills_manager = Arc::new(SkillsManager::new(config.adam_home.clone()));
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -6737,22 +6740,35 @@ mod tests {
 
     #[tokio::test]
     async fn switch_provider_and_model_uses_target_model_context_limits() {
-        let codex_home = tempfile::tempdir().expect("create temp dir");
-        let config_path = codex_home.path().join("config.toml");
+        let adam_home = tempfile::tempdir().expect("create temp dir");
+        let config_path = adam_home.path().join("config.toml");
         std::fs::write(
             &config_path,
-            r#"model = "gpt-5"
-model_provider = "openai"
-
-[profiles."_provider.openai.custom-model"]
-model = "custom-model"
-model_provider = "openai"
-model_context_window = 64_000
+            r#"[profiles."_provider.openai.custom-model"]
+model = "openai.main:custom-model"
 "#,
         )
         .expect("write config");
+        std::fs::write(
+            adam_home.path().join("models.json"),
+            r#"{
+  "providers": {
+    "openai": {
+      "endpoints": {
+        "main": {
+          "models": {
+            "custom-model": { "context_window": 64000 }
+          }
+        }
+      }
+    }
+  }
+}
+"#,
+        )
+        .expect("write models.json");
 
-        let config = build_test_config(codex_home.path()).await;
+        let config = build_test_config(adam_home.path()).await;
         let (session, turn_context) = make_session_and_context_for_config(config).await;
         let endpoint = turn_context.runtime.endpoint();
         {

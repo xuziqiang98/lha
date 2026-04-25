@@ -16,17 +16,17 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_info_returns_email_from_auth_json() -> Result<()> {
-    let codex_home = TempDir::new()?;
+    let adam_home = TempDir::new()?;
 
     write_chatgpt_auth(
-        codex_home.path(),
+        adam_home.path(),
         ChatGptAuthFixture::new("access")
             .refresh_token("refresh")
             .email("user@example.com"),
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_user_info_request().await?;

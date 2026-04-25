@@ -23,14 +23,13 @@ use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
-fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
+fn create_config_toml(adam_home: &Path) -> std::io::Result<()> {
     let writable_root = test_tmp_path();
-    let config_toml = codex_home.join("config.toml");
+    let config_toml = adam_home.join("config.toml");
     std::fs::write(
         config_toml,
         format!(
             r#"
-model = "gpt-5.1-codex-max"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 model_reasoning_summary = "detailed"
@@ -51,12 +50,11 @@ web_search = false
 view_image = true
 
 [profiles.test]
-model = "gpt-4o"
+model = "openai.main:gpt-4o"
 approval_policy = "on-request"
 model_reasoning_effort = "high"
 model_reasoning_summary = "detailed"
 model_verbosity = "medium"
-model_provider = "openai"
 chatgpt_base_url = "https://api.chatgpt.com"
 "#,
             serde_json::json!(writable_root)
@@ -66,10 +64,10 @@ chatgpt_base_url = "https://api.chatgpt.com"
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn get_config_toml_parses_all_fields() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path())?;
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_get_user_saved_config_request().await?;
@@ -93,7 +91,7 @@ async fn get_config_toml_parses_all_fields() -> Result<()> {
             }),
             forced_chatgpt_workspace_id: Some("12345678-0000-0000-0000-000000000000".into()),
             forced_login_method: Some(ForcedLoginMethod::Chatgpt),
-            model: Some("gpt-5.1-codex-max".into()),
+            model: None,
             model_reasoning_effort: Some(ReasoningEffort::High),
             model_reasoning_summary: Some(ReasoningSummary::Detailed),
             model_verbosity: Some(Verbosity::Medium),
@@ -105,7 +103,7 @@ async fn get_config_toml_parses_all_fields() -> Result<()> {
             profiles: HashMap::from([(
                 "test".into(),
                 Profile {
-                    model: Some("gpt-4o".into()),
+                    model: Some("openai.main:gpt-4o".into()),
                     approval_policy: Some(AskForApproval::OnRequest),
                     model_reasoning_effort: Some(ReasoningEffort::High),
                     model_reasoning_summary: Some(ReasoningSummary::Detailed),
@@ -123,9 +121,9 @@ async fn get_config_toml_parses_all_fields() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_config_toml_empty() -> Result<()> {
-    let codex_home = TempDir::new()?;
+    let adam_home = TempDir::new()?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_get_user_saved_config_request().await?;

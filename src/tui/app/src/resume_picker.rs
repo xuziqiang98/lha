@@ -78,7 +78,7 @@ impl SessionPickerAction {
 
 #[derive(Clone)]
 struct PageLoadRequest {
-    codex_home: PathBuf,
+    adam_home: PathBuf,
     cursor: Option<Cursor>,
     request_token: usize,
     search_token: Option<usize>,
@@ -101,14 +101,14 @@ enum BackgroundEvent {
 /// time (e.g., "5 seconds ago"), and the absolute path.
 pub async fn run_resume_picker(
     tui: &mut Tui,
-    codex_home: &Path,
+    adam_home: &Path,
     default_provider: &str,
     resolved_cwd: Option<&Path>,
     show_all: bool,
 ) -> Result<SessionSelection> {
     run_session_picker(
         tui,
-        codex_home,
+        adam_home,
         default_provider,
         resolved_cwd,
         show_all,
@@ -119,14 +119,14 @@ pub async fn run_resume_picker(
 
 pub async fn run_fork_picker(
     tui: &mut Tui,
-    codex_home: &Path,
+    adam_home: &Path,
     default_provider: &str,
     resolved_cwd: Option<&Path>,
     show_all: bool,
 ) -> Result<SessionSelection> {
     run_session_picker(
         tui,
-        codex_home,
+        adam_home,
         default_provider,
         resolved_cwd,
         show_all,
@@ -137,7 +137,7 @@ pub async fn run_fork_picker(
 
 async fn run_session_picker(
     tui: &mut Tui,
-    codex_home: &Path,
+    adam_home: &Path,
     default_provider: &str,
     resolved_cwd: Option<&Path>,
     show_all: bool,
@@ -154,7 +154,7 @@ async fn run_session_picker(
         let tx = loader_tx.clone();
         tokio::spawn(async move {
             let page = RolloutRecorder::list_threads(
-                &request.codex_home,
+                &request.adam_home,
                 PAGE_SIZE,
                 request.cursor.as_ref(),
                 ThreadSortKey::CreatedAt,
@@ -173,7 +173,7 @@ async fn run_session_picker(
     });
 
     let mut state = PickerState::new(
-        codex_home.to_path_buf(),
+        adam_home.to_path_buf(),
         alt.tui.frame_requester(),
         page_loader,
         default_provider.clone(),
@@ -240,7 +240,7 @@ impl Drop for AltScreenGuard<'_> {
 }
 
 struct PickerState {
-    codex_home: PathBuf,
+    adam_home: PathBuf,
     requester: FrameRequester,
     pagination: PaginationState,
     all_rows: Vec<Row>,
@@ -321,7 +321,7 @@ struct Row {
 
 impl PickerState {
     fn new(
-        codex_home: PathBuf,
+        adam_home: PathBuf,
         requester: FrameRequester,
         page_loader: PageLoader,
         default_provider: String,
@@ -330,7 +330,7 @@ impl PickerState {
         action: SessionPickerAction,
     ) -> Self {
         Self {
-            codex_home,
+            adam_home,
             requester,
             pagination: PaginationState {
                 next_cursor: None,
@@ -446,7 +446,7 @@ impl PickerState {
         self.request_frame();
 
         (self.page_loader)(PageLoadRequest {
-            codex_home: self.codex_home.clone(),
+            adam_home: self.adam_home.clone(),
             cursor: None,
             request_token,
             search_token: None,
@@ -662,7 +662,7 @@ impl PickerState {
         self.request_frame();
 
         (self.page_loader)(PageLoadRequest {
-            codex_home: self.codex_home.clone(),
+            adam_home: self.adam_home.clone(),
             cursor: Some(cursor),
             request_token,
             search_token,
@@ -1199,17 +1199,14 @@ mod tests {
             },
             RolloutLine {
                 timestamp: ts.to_rfc3339(),
-                item: RolloutItem::TranscriptItem(
-                    TranscriptItem::Message {
-                        id: None,
-                        role: "user".to_string(),
-                        content: vec![ContentItem::InputText {
-                            text: preview.to_string(),
-                        }],
-                        end_turn: None,
-                    }
-                    .into(),
-                ),
+                item: RolloutItem::TranscriptItem(TranscriptItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: preview.to_string(),
+                    }],
+                    end_turn: None,
+                }),
             },
             RolloutLine {
                 timestamp: ts.to_rfc3339(),
@@ -1456,7 +1453,7 @@ mod tests {
         );
 
         let page = RolloutRecorder::list_threads(
-            &state.codex_home,
+            &state.adam_home,
             PAGE_SIZE,
             None,
             ThreadSortKey::CreatedAt,

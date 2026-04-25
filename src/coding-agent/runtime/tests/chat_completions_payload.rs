@@ -66,11 +66,11 @@ async fn run_request(input: Vec<TranscriptItem>) -> Value {
         .with_stream_max_retries(Some(0))
         .with_stream_idle_timeout_ms(Some(5_000));
 
-    let codex_home = match TempDir::new() {
+    let adam_home = match TempDir::new() {
         Ok(dir) => dir,
         Err(e) => panic!("failed to create TempDir: {e}"),
     };
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let mut config = load_default_config_for_test(&adam_home).await;
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();
     config.show_raw_agent_reasoning = true;
@@ -136,11 +136,11 @@ async fn run_request(input: Vec<TranscriptItem>) -> Value {
 }
 
 async fn build_client(provider: RuntimeEndpoint) -> TestRuntimeClient {
-    let codex_home = match TempDir::new() {
+    let adam_home = match TempDir::new() {
         Ok(dir) => dir,
         Err(e) => panic!("failed to create TempDir: {e}"),
     };
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let mut config = load_default_config_for_test(&adam_home).await;
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();
     config.show_raw_agent_reasoning = true;

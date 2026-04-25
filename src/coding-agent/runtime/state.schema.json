@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "LastSelectedModel": {
+      "additionalProperties": false,
+      "properties": {
+        "model_ref": {
+          "type": "string"
+        },
+        "selected_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "model_ref"
+      ],
+      "type": "object"
+    },
+    "ReasoningEffort": {
+      "enum": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "type": "string"
+    },
+    "Verbosity": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "last_model_verbosity": {
+      "$ref": "#/definitions/Verbosity"
+    },
+    "last_reasoning_effort": {
+      "$ref": "#/definitions/ReasoningEffort"
+    },
+    "last_selected_model": {
+      "$ref": "#/definitions/LastSelectedModel"
+    }
+  },
+  "title": "AdamStateJson",
+  "type": "object"
+}

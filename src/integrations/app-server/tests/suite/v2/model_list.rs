@@ -7,6 +7,7 @@ use app_test_support::McpProcess;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_mock_responses_config_toml;
+use app_test_support::write_mock_responses_config_toml_with_options;
 use app_test_support::write_models_cache;
 use codex_agent::auth::AuthCredentialsStoreMode;
 use codex_agent::features::Feature;
@@ -75,9 +76,9 @@ fn expected_visible_models() -> Vec<Model> {
 
 #[tokio::test]
 async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    write_models_cache(codex_home.path())?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let adam_home = TempDir::new()?;
+    write_models_cache(adam_home.path())?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
@@ -108,9 +109,9 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
 
 #[tokio::test]
 async fn list_models_pagination_works() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    write_models_cache(codex_home.path())?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let adam_home = TempDir::new()?;
+    write_models_cache(adam_home.path())?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
@@ -156,9 +157,9 @@ async fn list_models_pagination_works() -> Result<()> {
 
 #[tokio::test]
 async fn list_models_rejects_invalid_cursor() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    write_models_cache(codex_home.path())?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let adam_home = TempDir::new()?;
+    write_models_cache(adam_home.path())?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
@@ -182,11 +183,11 @@ async fn list_models_rejects_invalid_cursor() -> Result<()> {
 }
 
 #[tokio::test]
-async fn list_models_without_auth_returns_only_configured_custom_model() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    write_models_cache(codex_home.path())?;
+async fn list_models_without_auth_appends_configured_custom_model() -> Result<()> {
+    let adam_home = TempDir::new()?;
+    write_models_cache(adam_home.path())?;
     write_mock_responses_config_toml(
-        codex_home.path(),
+        adam_home.path(),
         "http://unused.test",
         &BTreeMap::from([(Feature::RemoteModels, false)]),
         10_000,
@@ -194,7 +195,7 @@ async fn list_models_without_auth_returns_only_configured_custom_model() -> Resu
         "mock_provider",
         "compact",
     )?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
@@ -216,9 +217,10 @@ async fn list_models_without_auth_returns_only_configured_custom_model() -> Resu
         next_cursor,
     } = to_response::<ModelListResponse>(response)?;
 
+    assert!(items.iter().any(|model| model.id == "gpt-5.3-codex"));
     assert_eq!(
-        items,
-        vec![Model {
+        items.last(),
+        Some(&Model {
             id: "_provider.mock_provider.mock-model".to_string(),
             model: "mock-model".to_string(),
             display_name: "mock-model".to_string(),
@@ -226,8 +228,8 @@ async fn list_models_without_auth_returns_only_configured_custom_model() -> Resu
             supported_reasoning_efforts: vec![],
             default_reasoning_effort: ReasoningEffort::None,
             supports_personality: false,
-            is_default: true,
-        }]
+            is_default: false,
+        })
     );
     assert!(next_cursor.is_none());
     Ok(())
@@ -235,10 +237,10 @@ async fn list_models_without_auth_returns_only_configured_custom_model() -> Resu
 
 #[tokio::test]
 async fn list_models_with_auth_appends_configured_custom_model() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    write_models_cache(codex_home.path())?;
+    let adam_home = TempDir::new()?;
+    write_models_cache(adam_home.path())?;
     write_mock_responses_config_toml(
-        codex_home.path(),
+        adam_home.path(),
         "http://unused.test",
         &BTreeMap::from([(Feature::RemoteModels, false)]),
         10_000,
@@ -247,11 +249,11 @@ async fn list_models_with_auth_appends_configured_custom_model() -> Result<()> {
         "compact",
     )?;
     write_chatgpt_auth(
-        codex_home.path(),
+        adam_home.path(),
         ChatGptAuthFixture::new("chatgpt-access"),
         AuthCredentialsStoreMode::File,
     )?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
@@ -289,33 +291,26 @@ async fn list_models_with_auth_appends_configured_custom_model() -> Result<()> {
 
 #[tokio::test]
 async fn list_models_with_auth_keeps_same_slug_custom_provider_entry() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    write_models_cache(codex_home.path())?;
-    std::fs::write(
-        codex_home.path().join("config.toml"),
-        r#"
-model = "gpt-5.2"
-model_provider = "provider_a"
-approval_policy = "never"
-sandbox_mode = "read-only"
-
-[features]
-remote_models = false
-
-[model_providers.provider_a]
-name = "provider_a"
-base_url = "https://example.test/a"
-dialect = "chat"
-experimental_bearer_token = "sk-a"
-requires_openai_auth = false
-"#,
+    let adam_home = TempDir::new()?;
+    write_models_cache(adam_home.path())?;
+    write_mock_responses_config_toml_with_options(
+        adam_home.path(),
+        "https://example.test/a",
+        &BTreeMap::new(),
+        20_000,
+        Some(false),
+        "provider_a",
+        "gpt-5.2",
+        "",
+        "never",
+        "read-only",
     )?;
     write_chatgpt_auth(
-        codex_home.path(),
+        adam_home.path(),
         ChatGptAuthFixture::new("chatgpt-access"),
         AuthCredentialsStoreMode::File,
     )?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 

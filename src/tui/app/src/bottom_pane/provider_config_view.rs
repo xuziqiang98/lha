@@ -49,14 +49,14 @@ pub(crate) struct ProviderConfigView {
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
     complete: bool,
-    codex_home: PathBuf,
+    adam_home: PathBuf,
     app_event_tx: AppEventSender,
     request_frame: FrameRequester,
 }
 
 impl ProviderConfigView {
     pub(crate) fn new(
-        codex_home: PathBuf,
+        adam_home: PathBuf,
         app_event_tx: AppEventSender,
         request_frame: FrameRequester,
     ) -> Self {
@@ -67,7 +67,7 @@ impl ProviderConfigView {
             textarea,
             textarea_state: RefCell::new(TextAreaState::default()),
             complete: false,
-            codex_home,
+            adam_home,
             app_event_tx,
             request_frame,
         }
@@ -102,11 +102,11 @@ impl ProviderConfigView {
         }
 
         let state = Arc::clone(&self.state);
-        let codex_home = self.codex_home.clone();
+        let adam_home = self.adam_home.clone();
         let app_event_tx = self.app_event_tx.clone();
         let request_frame = self.request_frame.clone();
         tokio::spawn(async move {
-            match persist_custom_provider_config(&codex_home, &config).await {
+            match persist_custom_provider_config(&adam_home, &config).await {
                 Ok(()) => {
                     app_event_tx.send(AppEvent::CustomProviderConfigured(config));
                 }
@@ -312,7 +312,7 @@ impl Renderable for ProviderConfigView {
             vec!["> ".into(), "Configure a custom API provider".bold()].into(),
             "".into(),
             format!("  Step {}/6: {}", state.step.index(), state.step.title()).into(),
-            "  This saves the provider and model to ~/.codey/config.toml.".into(),
+            "  This saves the provider and model to ~/.adam/config.toml.".into(),
             "".into(),
             format!(
                 "  Provider ID: {}",

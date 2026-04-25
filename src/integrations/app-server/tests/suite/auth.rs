@@ -17,52 +17,38 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 fn create_config_toml_custom_provider(
-    codex_home: &Path,
+    adam_home: &Path,
     requires_openai_auth: bool,
 ) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    let requires_line = if requires_openai_auth {
-        "requires_openai_auth = true\n"
-    } else {
-        ""
-    };
-    let contents = format!(
-        r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "danger-full-access"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "http://127.0.0.1:0/v1"
-dialect = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-{requires_line}
-"#
-    );
-    std::fs::write(config_toml, contents)
+    app_test_support::write_mock_responses_config_toml_with_options(
+        adam_home,
+        "http://127.0.0.1:0",
+        &std::collections::BTreeMap::new(),
+        20_000,
+        Some(requires_openai_auth),
+        "mock_provider",
+        "mock-model",
+        "",
+        "never",
+        "danger-full-access",
+    )
 }
 
-fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
+fn create_config_toml(adam_home: &Path) -> std::io::Result<()> {
+    let config_toml = adam_home.join("config.toml");
     std::fs::write(
         config_toml,
         r#"
-model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
 "#,
     )
 }
 
-fn create_config_toml_forced_login(codex_home: &Path, forced_method: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
+fn create_config_toml_forced_login(adam_home: &Path, forced_method: &str) -> std::io::Result<()> {
+    let config_toml = adam_home.join("config.toml");
     let contents = format!(
         r#"
-model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
 forced_login_method = "{forced_method}"
@@ -89,10 +75,10 @@ async fn login_with_api_key_via_request(mcp: &mut McpProcess, api_key: &str) -> 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_auth_status_no_auth() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path())?;
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path())?;
 
-    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp = McpProcess::new_with_env(adam_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -115,10 +101,10 @@ async fn get_auth_status_no_auth() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_auth_status_with_api_key() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path())?;
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     login_with_api_key_via_request(&mut mcp, "sk-test-key").await?;
@@ -143,10 +129,10 @@ async fn get_auth_status_with_api_key() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_auth_status_with_api_key_when_auth_not_required() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    create_config_toml_custom_provider(codex_home.path(), false)?;
+    let adam_home = TempDir::new()?;
+    create_config_toml_custom_provider(adam_home.path(), false)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     login_with_api_key_via_request(&mut mcp, "sk-test-key").await?;
@@ -176,10 +162,10 @@ async fn get_auth_status_with_api_key_when_auth_not_required() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_auth_status_with_api_key_no_include_token() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path())?;
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     login_with_api_key_via_request(&mut mcp, "sk-test-key").await?;
@@ -204,10 +190,10 @@ async fn get_auth_status_with_api_key_no_include_token() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn login_api_key_rejected_when_forced_chatgpt() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    create_config_toml_forced_login(codex_home.path(), "chatgpt")?;
+    let adam_home = TempDir::new()?;
+    create_config_toml_forced_login(adam_home.path(), "chatgpt")?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp

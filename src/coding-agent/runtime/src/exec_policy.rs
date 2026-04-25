@@ -190,10 +190,10 @@ impl ExecPolicyManager {
 
     pub(crate) async fn append_amendment_and_update(
         &self,
-        codex_home: &Path,
+        adam_home: &Path,
         amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
-        let policy_path = default_policy_path(codex_home);
+        let policy_path = default_policy_path(adam_home);
         let prefix = amendment.command.clone();
         spawn_blocking({
             let policy_path = policy_path.clone();
@@ -358,8 +358,8 @@ pub fn render_decision_for_unmatched_command(
     }
 }
 
-fn default_policy_path(codex_home: &Path) -> PathBuf {
-    codex_home.join(RULES_DIR_NAME).join(DEFAULT_POLICY_FILE)
+fn default_policy_path(adam_home: &Path) -> PathBuf {
+    adam_home.join(RULES_DIR_NAME).join(DEFAULT_POLICY_FILE)
 }
 
 /// Derive a proposed execpolicy amendment when a command requires user approval
@@ -1025,12 +1025,12 @@ prefix_rule(
 
     #[tokio::test]
     async fn append_execpolicy_amendment_updates_policy_and_file() {
-        let codex_home = tempdir().expect("create temp dir");
+        let adam_home = tempdir().expect("create temp dir");
         let prefix = vec!["echo".to_string(), "hello".to_string()];
         let manager = ExecPolicyManager::default();
 
         manager
-            .append_amendment_and_update(codex_home.path(), &ExecPolicyAmendment::from(prefix))
+            .append_amendment_and_update(adam_home.path(), &ExecPolicyAmendment::from(prefix))
             .await
             .expect("update policy");
         let updated_policy = manager.current();
@@ -1047,7 +1047,7 @@ prefix_rule(
             }
         ));
 
-        let contents = fs::read_to_string(default_policy_path(codex_home.path()))
+        let contents = fs::read_to_string(default_policy_path(adam_home.path()))
             .expect("policy file should have been created");
         assert_eq!(
             contents,
@@ -1058,11 +1058,11 @@ prefix_rule(
 
     #[tokio::test]
     async fn append_execpolicy_amendment_rejects_empty_prefix() {
-        let codex_home = tempdir().expect("create temp dir");
+        let adam_home = tempdir().expect("create temp dir");
         let manager = ExecPolicyManager::default();
 
         let result = manager
-            .append_amendment_and_update(codex_home.path(), &ExecPolicyAmendment::from(vec![]))
+            .append_amendment_and_update(adam_home.path(), &ExecPolicyAmendment::from(vec![]))
             .await;
 
         assert!(matches!(

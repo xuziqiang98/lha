@@ -131,7 +131,7 @@
       "description": "Determine where Codex should store CLI auth credentials.",
       "oneOf": [
         {
-          "description": "Persist credentials in CODEY_HOME/auth.json.",
+          "description": "Persist credentials in ADAM_HOME/auth.json.",
           "enum": [
             "file"
           ],
@@ -145,7 +145,7 @@
           "type": "string"
         },
         {
-          "description": "Use keyring when available; otherwise, fall back to a file in CODEY_HOME.",
+          "description": "Use keyring when available; otherwise, fall back to a file in ADAM_HOME.",
           "enum": [
             "auto"
           ],
@@ -307,10 +307,6 @@
         "model": {
           "type": "string"
         },
-        "model_context_window": {
-          "format": "int64",
-          "type": "integer"
-        },
         "model_instructions_file": {
           "allOf": [
             {
@@ -318,10 +314,6 @@
             }
           ],
           "description": "Optional path to a file containing model instructions."
-        },
-        "model_provider": {
-          "description": "The key in the `model_providers` map identifying the [`RuntimeEndpoint`] to use.",
-          "type": "string"
         },
         "model_reasoning_effort": {
           "$ref": "#/definitions/ReasoningEffort"
@@ -349,32 +341,6 @@
         }
       },
       "type": "object"
-    },
-    "ConversationDialect": {
-      "description": "Internal protocol profile spoken by the target runtime endpoint.",
-      "oneOf": [
-        {
-          "description": "The Responses API exposed by OpenAI at `/v1/responses`.",
-          "enum": [
-            "responses"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Regular Chat Completions compatible with `/v1/chat/completions`.",
-          "enum": [
-            "chat"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Anthropic-compatible Messages API exposed at `/v1/messages`.",
-          "enum": [
-            "messages"
-          ],
-          "type": "string"
-        }
-      ]
     },
     "FeedbackConfigToml": {
       "additionalProperties": false,
@@ -415,7 +381,7 @@
     },
     "History": {
       "additionalProperties": false,
-      "description": "Settings that govern if and what will be written to `~/.codey/history.jsonl`.",
+      "description": "Settings that govern if and what will be written to `~/.adam/history.jsonl`.",
       "properties": {
         "max_bytes": {
           "description": "If set, the maximum size of the history file in bytes. The oldest entries are dropped once the file exceeds this limit.",
@@ -532,7 +498,7 @@
           "type": "string"
         },
         {
-          "description": "CODEY_HOME/.credentials.json This file will be readable to Codex and other applications running as the same user.",
+          "description": "ADAM_HOME/.credentials.json This file will be readable to Codex and other applications running as the same user.",
           "enum": [
             "file"
           ],
@@ -812,29 +778,6 @@
       },
       "type": "object"
     },
-    "RawModelProviderEntryToml": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/RuntimeEndpoint"
-        },
-        {
-          "$ref": "#/definitions/RawModelProviderVariantsToml"
-        }
-      ]
-    },
-    "RawModelProviderVariantsToml": {
-      "additionalProperties": false,
-      "properties": {
-        "variants": {
-          "additionalProperties": {
-            "$ref": "#/definitions/RuntimeEndpoint"
-          },
-          "default": {},
-          "type": "object"
-        }
-      },
-      "type": "object"
-    },
     "ReasoningEffort": {
       "enum": [
         "none",
@@ -854,94 +797,6 @@
         "none"
       ],
       "type": "string"
-    },
-    "RuntimeEndpoint": {
-      "additionalProperties": false,
-      "description": "Serializable description of a runtime endpoint.",
-      "properties": {
-        "base_url": {
-          "description": "Base URL for the provider's OpenAI-compatible API.",
-          "type": "string"
-        },
-        "dialect": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ConversationDialect"
-            }
-          ],
-          "default": "chat",
-          "description": "Which conversation dialect this endpoint expects."
-        },
-        "env_http_headers": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "description": "Optional HTTP headers to include in requests to this provider where the (key, value) pairs are the header name and _environment variable_ whose value should be used. If the environment variable is not set, or the value is empty, the header will not be included in the request.",
-          "type": "object"
-        },
-        "env_key": {
-          "description": "Environment variable that stores the user's API key for this provider.",
-          "type": "string"
-        },
-        "env_key_instructions": {
-          "description": "Optional instructions to help the user get a valid value for the variable and set it.",
-          "type": "string"
-        },
-        "experimental_bearer_token": {
-          "description": "Value to use with `Authorization: Bearer <token>` header. Use of this config is discouraged in favor of `env_key` for security reasons, but this may be necessary when using this programmatically.",
-          "type": "string"
-        },
-        "http_headers": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "description": "Additional HTTP headers to include in requests to this provider where the (key, value) pairs are the header name and value.",
-          "type": "object"
-        },
-        "name": {
-          "description": "Friendly display name.",
-          "type": "string"
-        },
-        "query_params": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "description": "Optional query parameters to append to the base URL.",
-          "type": "object"
-        },
-        "request_max_retries": {
-          "description": "Maximum number of times to retry a failed HTTP request to this provider.",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "requires_openai_auth": {
-          "default": false,
-          "description": "Does this provider require an OpenAI API Key or ChatGPT login token? If true, user is presented with login screen on first run, and login preference and token/key are stored in auth.json. If false (which is the default), login screen is skipped, and API key (if needed) comes from the \"env_key\" environment variable.",
-          "type": "boolean"
-        },
-        "stream_idle_timeout_ms": {
-          "description": "Idle timeout (in milliseconds) to wait for activity on a streaming response before treating the connection as lost.",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "stream_max_retries": {
-          "description": "Number of times to retry reconnecting a dropped streaming response before failing.",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "supports_realtime_streaming": {
-          "default": false,
-          "description": "Whether this endpoint supports realtime streaming.",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "name"
-      ],
-      "type": "object"
     },
     "SandboxMode": {
       "enum": [
@@ -1178,7 +1033,7 @@
       "type": "string"
     }
   },
-  "description": "Base config deserialized from ~/.codey/config.toml.",
+  "description": "Base config deserialized from ~/.adam/config.toml.",
   "properties": {
     "agents": {
       "allOf": [
@@ -1219,7 +1074,7 @@
         }
       ],
       "default": null,
-      "description": "Preferred backend for storing CLI auth credentials. file (default): Use a file in the Codex home directory. keyring: Use an OS-specific keyring service. auto: Use the keyring if available, otherwise use a file."
+      "description": "Preferred backend for storing CLI auth credentials. file (default): Use a file in the Adam home directory. keyring: Use an OS-specific keyring service. auto: Use the keyring if available, otherwise use a file."
     },
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
@@ -1412,7 +1267,7 @@
         }
       ],
       "default": null,
-      "description": "Settings that govern if and what will be written to `~/.codey/history.jsonl`."
+      "description": "Settings that govern if and what will be written to `~/.adam/history.jsonl`."
     },
     "instructions": {
       "description": "System instructions.",
@@ -1431,7 +1286,7 @@
         }
       ],
       "default": null,
-      "description": "Preferred backend for storing MCP OAuth credentials. keyring: Use an OS-specific keyring service. https://github.com/openai/codex/blob/main/src/resources/rmcp-client/src/oauth.rs#L2 file: Use a file in the Codex home directory. auto (default): Use the OS-specific keyring service if available, otherwise use a file."
+      "description": "Preferred backend for storing MCP OAuth credentials. keyring: Use an OS-specific keyring service. https://github.com/openai/codex/blob/main/src/resources/rmcp-client/src/oauth.rs#L2 file: Use a file in the Adam home directory. auto (default): Use the OS-specific keyring service if available, otherwise use a file."
     },
     "mcp_servers": {
       "additionalProperties": {
@@ -1441,20 +1296,6 @@
       "description": "Definition for MCP servers that Codex can reach out to for tool calls.",
       "type": "object"
     },
-    "model": {
-      "description": "Optional override of model selection.",
-      "type": "string"
-    },
-    "model_auto_compact_token_limit": {
-      "description": "Token usage threshold triggering auto-compaction of conversation history.",
-      "format": "int64",
-      "type": "integer"
-    },
-    "model_context_window": {
-      "description": "Size of the context window for the model, in tokens.",
-      "format": "int64",
-      "type": "integer"
-    },
     "model_instructions_file": {
       "allOf": [
         {
@@ -1462,18 +1303,6 @@
         }
       ],
       "description": "Optional path to a file containing model instructions that will override the built-in instructions for the selected model. Users are STRONGLY DISCOURAGED from using this field, as deviating from the instructions sanctioned by Codex will likely degrade model performance."
-    },
-    "model_provider": {
-      "description": "Provider to use from the model_providers map.",
-      "type": "string"
-    },
-    "model_providers": {
-      "additionalProperties": {
-        "$ref": "#/definitions/RawModelProviderEntryToml"
-      },
-      "default": {},
-      "description": "User-defined provider entries that extend/override the built-in list.",
-      "type": "object"
     },
     "model_reasoning_effort": {
       "$ref": "#/definitions/ReasoningEffort"
@@ -1563,10 +1392,6 @@
         "$ref": "#/definitions/ProjectConfig"
       },
       "type": "object"
-    },
-    "review_model": {
-      "description": "Review model override used by the `/review` feature.",
-      "type": "string"
     },
     "sandbox_mode": {
       "allOf": [

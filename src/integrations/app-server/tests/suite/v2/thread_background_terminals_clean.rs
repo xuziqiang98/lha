@@ -15,10 +15,10 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test]
 async fn thread_background_terminals_clean_returns_success_for_loaded_thread() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path())?;
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -50,8 +50,8 @@ async fn thread_background_terminals_clean_returns_success_for_loaded_thread() -
     Ok(())
 }
 
-fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
+fn create_config_toml(adam_home: &Path) -> std::io::Result<()> {
+    let config_toml = adam_home.join("config.toml");
     std::fs::write(config_toml, config_contents())
 }
 

@@ -16,9 +16,9 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     let responses = Vec::new();
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
 
     let message = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -43,10 +43,10 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
 async fn initialize_respects_originator_override_env_var() -> Result<()> {
     let responses = Vec::new();
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path(), &server.uri(), "never")?;
     let mut mcp = McpProcess::new_with_env(
-        codex_home.path(),
+        adam_home.path(),
         &[(
             "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
             Some("codex_originator_via_env_var"),
@@ -77,10 +77,10 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
 async fn initialize_rejects_invalid_client_name() -> Result<()> {
     let responses = Vec::new();
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path(), &server.uri(), "never")?;
     let mut mcp = McpProcess::new_with_env(
-        codex_home.path(),
+        adam_home.path(),
         &[("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", None)],
     )
     .await?;
@@ -110,28 +110,20 @@ async fn initialize_rejects_invalid_client_name() -> Result<()> {
 
 // Helper to create a config.toml pointing at the mock model server.
 fn create_config_toml(
-    codex_home: &Path,
+    adam_home: &Path,
     server_uri: &str,
     approval_policy: &str,
 ) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "{approval_policy}"
-sandbox_mode = "read-only"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-dialect = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
+    app_test_support::write_mock_responses_config_toml_with_options(
+        adam_home,
+        server_uri,
+        &std::collections::BTreeMap::new(),
+        20_000,
+        Some(false),
+        "mock_provider",
+        "mock-model",
+        "",
+        approval_policy,
+        "read-only",
     )
 }

@@ -28,6 +28,8 @@ use codex_agent::config::ConfigService;
 use codex_agent::config::ConfigToml;
 use codex_agent::config::edit::ConfigEdit;
 use codex_agent::config::edit::ConfigEditsBuilder;
+use codex_agent::config::model_ref::ModelRef;
+use codex_agent::config::state_json::AdamStateStore;
 use codex_agent::config::types::McpServerTransportConfig;
 use codex_agent::config_loader::CloudRequirementsLoader;
 use codex_agent::default_client::get_codex_user_agent;
@@ -783,7 +785,7 @@ impl CodexMessageProcessor {
         }
 
         match login_with_api_key(
-            &self.config.codex_home,
+            &self.config.adam_home,
             &params.api_key,
             self.config.cli_auth_credentials_store_mode,
         ) {
@@ -878,7 +880,7 @@ impl CodexMessageProcessor {
         Ok(LoginServerOptions {
             open_browser: false,
             ..LoginServerOptions::new(
-                config.codex_home.clone(),
+                config.adam_home.clone(),
                 CLIENT_ID.to_string(),
                 config.forced_chatgpt_workspace_id.clone(),
                 config.cli_auth_credentials_store_mode,
@@ -1188,7 +1190,7 @@ impl CodexMessageProcessor {
         }
 
         if let Err(err) =
-            login_with_chatgpt_auth_tokens(&self.config.codex_home, &id_token, &access_token)
+            login_with_chatgpt_auth_tokens(&self.config.adam_home, &id_token, &access_token)
         {
             let error = JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
@@ -1451,7 +1453,7 @@ impl CodexMessageProcessor {
     }
 
     async fn get_user_saved_config(&self, request_id: RequestId) {
-        let service = ConfigService::new_with_defaults(self.config.codex_home.clone());
+        let service = ConfigService::new_with_defaults(self.config.adam_home.clone());
         let user_saved_config: UserSavedConfig = match service.load_user_saved_config().await {
             Ok(config) => config,
             Err(err) => {
@@ -1495,10 +1497,6 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        let previous_provider = previous_config
-            .model_providers
-            .get(previous_config.model_provider_id.as_str())
-            .cloned();
         let previous_effective_selection = match self
             .resolve_effective_model_selection(&previous_config)
             .await
@@ -1514,152 +1512,132 @@ impl CodexMessageProcessor {
             }
         };
 
-        let resolved_model_provider = match (model_provider, model.as_deref()) {
-            (Some(model_provider), _) => {
-                if previous_config
-                    .model_providers
-                    .contains_key(&model_provider)
-                {
-                    Ok(Some(model_provider))
-                } else {
-                    Err(anyhow::anyhow!(
-                        "model provider `{model_provider}` was not found"
-                    ))
-                }
-            }
-            (None, Some(model)) => previous_config
-                .config_layer_stack
-                .effective_config()
-                .try_into()
-                .map_err(anyhow::Error::from)
-                .and_then(|config_toml: ConfigToml| {
-                    config_toml
-                        .resolve_model_provider_for_model(model)
-                        .map_err(anyhow::Error::from)
-                })
-                .map(|model_provider| {
-                    Some(
-                        model_provider.unwrap_or_else(|| previous_config.model_provider_id.clone()),
-                    )
-                }),
-            (None, None) => Ok(None),
+        let target_model = model
+            .as_deref()
+            .or(previous_effective_selection
+                .as_ref()
+                .map(|selection| selection.model.as_str()))
+            .or(previous_config.model.as_deref());
+        let Some(target_model) = target_model else {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "model selection requires a model".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
         };
 
-        match resolved_model_provider {
-            Ok(resolved_model_provider) => match ConfigEditsBuilder::new(&self.config.codex_home)
-                .with_profile(previous_config.active_profile.as_deref())
-                .set_model(
-                    model.as_deref(),
-                    reasoning_effort,
-                    resolved_model_provider.as_deref(),
-                )
-                .apply()
-                .await
-            {
-                Ok(()) => {
-                    let next_config = match self.load_latest_config().await {
-                        Ok(config) => config,
+        let inferred_provider = if model_provider.is_none() {
+            model.as_deref().and_then(|model| {
+                previous_config
+                    .config_layer_stack
+                    .effective_config()
+                    .try_into()
+                    .ok()
+                    .and_then(|config_toml: ConfigToml| {
+                        config_toml
+                            .resolve_model_provider_for_model(model)
+                            .ok()
+                            .flatten()
+                    })
+            })
+        } else {
+            None
+        };
+        let target_provider_id = model_provider
+            .as_deref()
+            .or(inferred_provider.as_deref())
+            .unwrap_or(previous_config.model_provider_id.as_str());
+        if !previous_config
+            .model_providers
+            .contains_key(target_provider_id)
+        {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("model provider `{target_provider_id}` was not found"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let model_ref = if target_provider_id.contains('.') {
+            let value = format!("{target_provider_id}:{target_model}");
+            match ModelRef::parse(&value) {
+                Ok(model_ref) => model_ref,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid model selection: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            }
+        } else {
+            ModelRef::new(target_provider_id, "main", target_model)
+        };
+
+        let persist_result = AdamStateStore::new(&self.config.adam_home).set_last_selected_model(
+            &model_ref,
+            reasoning_effort,
+            None,
+        );
+
+        match persist_result {
+            Ok(()) => {
+                let next_config = match self.load_latest_config().await {
+                    Ok(config) => config,
+                    Err(error) => {
+                        self.outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                };
+
+                let Some(next_provider) = next_config
+                    .model_providers
+                    .get(next_config.model_provider_id.as_str())
+                    .cloned()
+                else {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!(
+                            "failed to activate model selection: model provider `{}` was not found after reloading config",
+                            next_config.model_provider_id
+                        ),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                };
+
+                let next_effective_selection =
+                    match self.resolve_effective_model_selection(&next_config).await {
+                        Ok(selection) => selection,
                         Err(error) => {
                             self.outgoing.send_error(request_id, error).await;
                             return;
                         }
                     };
 
-                    let Some(next_provider) = next_config
-                        .model_providers
-                        .get(next_config.model_provider_id.as_str())
-                        .cloned()
-                    else {
-                        let error = JSONRPCErrorError {
-                            code: INTERNAL_ERROR_CODE,
-                            message: format!(
-                                "failed to activate model selection: model provider `{}` was not found after reloading config",
-                                next_config.model_provider_id
-                            ),
-                            data: None,
-                        };
-                        self.outgoing.send_error(request_id, error).await;
-                        return;
-                    };
-
-                    let next_effective_selection = if model.is_none() {
-                        if let Some(previous_effective_selection) =
-                            previous_effective_selection.as_ref()
-                        {
-                            EffectiveModelSelection {
-                                model: previous_effective_selection.model.clone(),
-                                provider_id: next_config.model_provider_id.clone(),
-                                provider: next_provider.clone(),
-                            }
-                        } else {
-                            let should_switch_provider_before_resolution =
-                                next_config.model.is_none()
-                                    && next_config.model_provider_id
-                                        != previous_config.model_provider_id;
-                            if should_switch_provider_before_resolution {
-                                self.thread_manager
-                                    .switch_model_provider(
-                                        next_config.model_provider_id.as_str(),
-                                        next_provider.clone(),
-                                    )
-                                    .await;
-                            }
-
-                            match self.resolve_effective_model_selection(&next_config).await {
-                                Ok(selection) => selection,
-                                Err(error) => {
-                                    if should_switch_provider_before_resolution
-                                        && let Some(previous_provider) = previous_provider
-                                    {
-                                        self.thread_manager
-                                            .switch_model_provider(
-                                                previous_config.model_provider_id.as_str(),
-                                                previous_provider,
-                                            )
-                                            .await;
-                                    }
-                                    self.outgoing.send_error(request_id, error).await;
-                                    return;
-                                }
-                            }
-                        }
-                    } else {
-                        match self.resolve_effective_model_selection(&next_config).await {
-                            Ok(selection) => selection,
-                            Err(error) => {
-                                self.outgoing.send_error(request_id, error).await;
-                                return;
-                            }
-                        }
-                    };
-
-                    self.thread_manager
-                        .switch_model_provider(
-                            next_effective_selection.provider_id.as_str(),
-                            next_effective_selection.provider.clone(),
-                        )
-                        .await;
-                    if let Some(previous_effective_selection) =
-                        previous_effective_selection.as_ref()
-                    {
-                        self.switch_loaded_threads_following_previous_default(
-                            previous_effective_selection,
-                            &next_effective_selection,
-                        )
-                        .await;
-                    }
-                    let response = SetDefaultModelResponse {};
-                    self.outgoing.send_response(request_id, response).await;
+                self.thread_manager
+                    .switch_model_provider(
+                        next_effective_selection.provider_id.as_str(),
+                        next_provider,
+                    )
+                    .await;
+                if let Some(previous_effective_selection) = previous_effective_selection.as_ref() {
+                    self.switch_loaded_threads_following_previous_default(
+                        previous_effective_selection,
+                        &next_effective_selection,
+                    )
+                    .await;
                 }
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!("failed to persist model selection: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                }
-            },
+                let response = SetDefaultModelResponse {};
+                self.outgoing.send_response(request_id, response).await;
+            }
             Err(err) => {
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
@@ -2053,29 +2031,32 @@ impl CodexMessageProcessor {
             }
         };
 
-        let rollout_path =
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
-            {
-                Ok(Some(p)) => p,
-                Ok(None) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("no rollout found for thread id {thread_id}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("failed to locate thread id {thread_id}: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            };
+        let rollout_path = match find_thread_path_by_id_str(
+            &self.config.adam_home,
+            &thread_id.to_string(),
+        )
+        .await
+        {
+            Ok(Some(p)) => p,
+            Ok(None) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("no rollout found for thread id {thread_id}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("failed to locate thread id {thread_id}: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
 
         match self.archive_thread_common(thread_id, &rollout_path).await {
             Ok(()) => {
@@ -2134,7 +2115,7 @@ impl CodexMessageProcessor {
         };
 
         let archived_path = match find_archived_thread_path_by_id_str(
-            &self.config.codex_home,
+            &self.config.adam_home,
             &thread_id.to_string(),
         )
         .await
@@ -2165,7 +2146,7 @@ impl CodexMessageProcessor {
         let state_db_ctx = get_state_db(&self.config, None).await;
         let archived_folder = self
             .config
-            .codex_home
+            .adam_home
             .join(codex_agent::ARCHIVED_SESSIONS_SUBDIR);
 
         let result: Result<Thread, JSONRPCErrorError> = async {
@@ -2224,7 +2205,7 @@ impl CodexMessageProcessor {
                 });
             };
 
-            let sessions_folder = self.config.codex_home.join(codex_agent::SESSIONS_SUBDIR);
+            let sessions_folder = self.config.adam_home.join(codex_agent::SESSIONS_SUBDIR);
             let dest_dir = sessions_folder.join(year).join(month).join(day);
             let restored_path = dest_dir.join(&file_name);
             tokio::fs::create_dir_all(&dest_dir)
@@ -2455,21 +2436,23 @@ impl CodexMessageProcessor {
             }
         };
 
-        let rollout_path =
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_uuid.to_string())
-                .await
-            {
-                Ok(Some(path)) => Some(path),
-                Ok(None) => None,
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to locate thread id {thread_uuid}: {err}"),
-                    )
-                    .await;
-                    return;
-                }
-            };
+        let rollout_path = match find_thread_path_by_id_str(
+            &self.config.adam_home,
+            &thread_uuid.to_string(),
+        )
+        .await
+        {
+            Ok(Some(path)) => Some(path),
+            Ok(None) => None,
+            Err(err) => {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("failed to locate thread id {thread_uuid}: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
 
         let mut thread = if let Some(rollout_path) = rollout_path.as_ref() {
             let fallback_provider = self.config.model_provider_id.as_str();
@@ -2638,7 +2621,7 @@ impl CodexMessageProcessor {
             };
 
             let path = match find_thread_path_by_id_str(
-                &self.config.codex_home,
+                &self.config.adam_home,
                 &existing_thread_id.to_string(),
             )
             .await
@@ -2831,7 +2814,7 @@ impl CodexMessageProcessor {
             };
 
             match find_thread_path_by_id_str(
-                &self.config.codex_home,
+                &self.config.adam_home,
                 &existing_thread_id.to_string(),
             )
             .await
@@ -3043,14 +3026,14 @@ impl CodexMessageProcessor {
         let path = match params {
             GetConversationSummaryParams::RolloutPath { rollout_path } => {
                 if rollout_path.is_relative() {
-                    self.config.codex_home.join(&rollout_path)
+                    self.config.adam_home.join(&rollout_path)
                 } else {
                     rollout_path
                 }
             }
             GetConversationSummaryParams::ThreadId { conversation_id } => {
                 match codex_agent::find_thread_path_by_id_str(
-                    &self.config.codex_home,
+                    &self.config.adam_home,
                     &conversation_id.to_string(),
                 )
                 .await
@@ -3180,7 +3163,7 @@ impl CodexMessageProcessor {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
             let page = if archived {
                 RolloutRecorder::list_archived_threads(
-                    &self.config.codex_home,
+                    &self.config.adam_home,
                     page_size,
                     cursor_obj.as_ref(),
                     sort_key,
@@ -3197,7 +3180,7 @@ impl CodexMessageProcessor {
                 })?
             } else {
                 RolloutRecorder::list_threads(
-                    &self.config.codex_home,
+                    &self.config.adam_home,
                     page_size,
                     cursor_obj.as_ref(),
                     sort_key,
@@ -3631,7 +3614,7 @@ impl CodexMessageProcessor {
                 }
             }
         } else if let Some(conversation_id) = conversation_id {
-            match find_thread_path_by_id_str(&self.config.codex_home, &conversation_id.to_string())
+            match find_thread_path_by_id_str(&self.config.adam_home, &conversation_id.to_string())
                 .await
             {
                 Ok(Some(found_path)) => {
@@ -3839,7 +3822,7 @@ impl CodexMessageProcessor {
         let rollout_path = if let Some(path) = path {
             path
         } else if let Some(conversation_id) = conversation_id {
-            match find_thread_path_by_id_str(&self.config.codex_home, &conversation_id.to_string())
+            match find_thread_path_by_id_str(&self.config.adam_home, &conversation_id.to_string())
                 .await
             {
                 Ok(Some(found_path)) => found_path,
@@ -4073,7 +4056,7 @@ impl CodexMessageProcessor {
         rollout_path: &Path,
     ) -> Result<(), JSONRPCErrorError> {
         // Verify rollout_path is under sessions dir.
-        let rollout_folder = self.config.codex_home.join(codex_agent::SESSIONS_SUBDIR);
+        let rollout_folder = self.config.adam_home.join(codex_agent::SESSIONS_SUBDIR);
 
         let canonical_sessions_dir = match tokio::fs::canonicalize(&rollout_folder).await {
             Ok(path) => path,
@@ -4170,7 +4153,7 @@ impl CodexMessageProcessor {
         let result: std::io::Result<()> = async move {
             let archive_folder = self
                 .config
-                .codex_home
+                .adam_home
                 .join(codex_agent::ARCHIVED_SESSIONS_SUBDIR);
             tokio::fs::create_dir_all(&archive_folder).await?;
             let archived_path = archive_folder.join(&file_name);
@@ -4406,7 +4389,7 @@ impl CodexMessageProcessor {
     async fn skills_config_write(&self, request_id: RequestId, params: SkillsConfigWriteParams) {
         let SkillsConfigWriteParams { path, enabled } = params;
         let edits = vec![ConfigEdit::SetSkillConfig { path, enabled }];
-        let result = ConfigEditsBuilder::new(&self.config.codex_home)
+        let result = ConfigEditsBuilder::new(&self.config.adam_home)
             .with_edits(edits)
             .apply()
             .await;
@@ -4628,7 +4611,7 @@ impl CodexMessageProcessor {
         display_text: &str,
     ) -> std::result::Result<(), JSONRPCErrorError> {
         let rollout_path =
-            find_thread_path_by_id_str(&self.config.codex_home, &parent_thread_id.to_string())
+            find_thread_path_by_id_str(&self.config.adam_home, &parent_thread_id.to_string())
                 .await
                 .map_err(|err| JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
@@ -5054,11 +5037,11 @@ impl CodexMessageProcessor {
         };
         let session_source = self.thread_manager.session_source();
 
-        let codex_home = self.config.codex_home.clone();
+        let adam_home = self.config.adam_home.clone();
         let persist_result = tokio::task::spawn_blocking(move || {
             let rollout_path_ref = validated_rollout_path.as_deref();
             snapshot.persist_feedback(
-                codex_home.as_path(),
+                adam_home.as_path(),
                 &classification,
                 reason.as_deref(),
                 include_logs,

@@ -970,7 +970,7 @@ impl ChatWidget {
         };
         let view = crate::bottom_pane::FeedbackNoteView::new(
             category,
-            self.config.codex_home.clone(),
+            self.config.adam_home.clone(),
             snapshot,
             rollout,
             self.app_event_tx.clone(),
@@ -3077,7 +3077,7 @@ impl ChatWidget {
             }
             SlashCommand::Logout => {
                 if let Err(e) = codex_agent::auth::logout(
-                    &self.config.codex_home,
+                    &self.config.adam_home,
                     self.config.cli_auth_credentials_store_mode,
                 ) {
                     tracing::error!("failed to logout: {e}");
@@ -4145,7 +4145,7 @@ impl ChatWidget {
 
     pub(crate) fn open_provider_popup(&mut self) {
         self.bottom_pane.show_view(Box::new(ProviderConfigView::new(
-            self.config.codex_home.clone(),
+            self.config.adam_home.clone(),
             self.app_event_tx.clone(),
             self.frame_requester.clone(),
         )));
@@ -4762,7 +4762,7 @@ impl ChatWidget {
                         let preset_clone = preset.clone();
                         if codex_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                             && codex_agent::windows_sandbox::sandbox_setup_is_complete(
-                                self.config.codex_home.as_path(),
+                                self.config.adam_home.as_path(),
                             )
                         {
                             vec![Box::new(move |tx| {
@@ -4907,11 +4907,11 @@ impl ChatWidget {
         let cwd = self.config.cwd.clone();
         let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
         match codex_windows_sandbox::apply_world_writable_scan_and_denies(
-            self.config.codex_home.as_path(),
+            self.config.adam_home.as_path(),
             cwd.as_path(),
             &env_map,
             self.config.sandbox_policy.get(),
-            Some(self.config.codex_home.as_path()),
+            Some(self.config.adam_home.as_path()),
         ) {
             Ok(_) => None,
             Err(_) => Some((Vec::new(), 0, true)),

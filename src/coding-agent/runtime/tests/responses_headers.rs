@@ -47,8 +47,8 @@ async fn responses_stream_includes_subagent_header_on_review() {
             .with_stream_max_retries(Some(0))
             .with_stream_idle_timeout_ms(Some(5_000));
 
-    let codex_home = TempDir::new().expect("failed to create TempDir");
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let adam_home = TempDir::new().expect("failed to create TempDir");
+    let mut config = load_default_config_for_test(&adam_home).await;
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();
     let effort = config.model_reasoning_effort;
@@ -135,8 +135,8 @@ async fn responses_stream_includes_subagent_header_on_other() {
             .with_stream_max_retries(Some(0))
             .with_stream_idle_timeout_ms(Some(5_000));
 
-    let codex_home = TempDir::new().expect("failed to create TempDir");
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let adam_home = TempDir::new().expect("failed to create TempDir");
+    let mut config = load_default_config_for_test(&adam_home).await;
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();
     let effort = config.model_reasoning_effort;
@@ -279,8 +279,8 @@ async fn responses_respects_model_info_overrides_from_config() {
             .with_stream_max_retries(Some(0))
             .with_stream_idle_timeout_ms(Some(5_000));
 
-    let codex_home = TempDir::new().expect("failed to create TempDir");
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let adam_home = TempDir::new().expect("failed to create TempDir");
+    let mut config = load_default_config_for_test(&adam_home).await;
     config.model = Some("gpt-3.5-turbo".to_string());
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();

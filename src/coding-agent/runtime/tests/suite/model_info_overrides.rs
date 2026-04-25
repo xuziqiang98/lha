@@ -11,8 +11,8 @@ use tempfile::TempDir;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn offline_model_info_without_tool_output_override() {
-    let codex_home = TempDir::new().expect("create temp dir");
-    let config = load_default_config_for_test(&codex_home).await;
+    let adam_home = TempDir::new().expect("create temp dir");
+    let config = load_default_config_for_test(&adam_home).await;
 
     let model_info = ModelsManager::construct_model_info_offline("gpt-5.1", &config);
 
@@ -25,8 +25,8 @@ async fn offline_model_info_without_tool_output_override() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn offline_model_info_with_tool_output_override() {
-    let codex_home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let adam_home = TempDir::new().expect("create temp dir");
+    let mut config = load_default_config_for_test(&adam_home).await;
     config.tool_output_token_limit = Some(123);
 
     let model_info = ModelsManager::construct_model_info_offline("gpt-5.1-codex", &config);
@@ -39,8 +39,8 @@ async fn offline_model_info_with_tool_output_override() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn offline_gpt_5_3_codex_uses_codex_fallback_metadata() {
-    let codex_home = TempDir::new().expect("create temp dir");
-    let config = load_default_config_for_test(&codex_home).await;
+    let adam_home = TempDir::new().expect("create temp dir");
+    let config = load_default_config_for_test(&adam_home).await;
 
     let model_info = ModelsManager::construct_model_info_offline("gpt-5.3-codex", &config);
 
@@ -56,15 +56,15 @@ async fn offline_gpt_5_3_codex_uses_codex_fallback_metadata() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn bundled_model_info_takes_precedence_over_builtin_fallback() {
-    let codex_home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let adam_home = TempDir::new().expect("create temp dir");
+    let mut config = load_default_config_for_test(&adam_home).await;
     config.features.enable(Feature::RemoteModels);
 
     let auth_manager = codex_agent::auth::AuthManager::from_auth_for_testing(
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
     );
     let models_manager = ModelsManager::with_provider(
-        codex_home.path().to_path_buf(),
+        adam_home.path().to_path_buf(),
         auth_manager,
         "openai",
         built_in_runtime_endpoints()["openai"].clone(),

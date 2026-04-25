@@ -20,12 +20,12 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_conversation_creates_new_rollout() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path())?;
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path())?;
 
     let preview = "Hello A";
     let conversation_id = create_fake_rollout(
-        codex_home.path(),
+        adam_home.path(),
         "2025-01-02T12-00-00",
         "2025-01-02T12:00:00Z",
         preview,
@@ -33,7 +33,7 @@ async fn fork_conversation_creates_new_rollout() -> Result<()> {
         None,
     )?;
 
-    let original_path = codex_home
+    let original_path = adam_home
         .path()
         .join("sessions")
         .join("2025")
@@ -49,7 +49,7 @@ async fn fork_conversation_creates_new_rollout() -> Result<()> {
     );
     let original_contents = std::fs::read_to_string(&original_path)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let fork_req_id = mcp
@@ -141,8 +141,8 @@ async fn fork_conversation_creates_new_rollout() -> Result<()> {
     Ok(())
 }
 
-fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
+fn create_config_toml(adam_home: &Path) -> std::io::Result<()> {
+    let config_toml = adam_home.join("config.toml");
     std::fs::write(config_toml, config_contents())
 }
 

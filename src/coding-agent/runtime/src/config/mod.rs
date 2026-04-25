@@ -1,4 +1,8 @@
 use crate::auth::AuthCredentialsStoreMode;
+use crate::config::model_ref::ModelRef;
+use crate::config::models_json::ModelsJson;
+use crate::config::models_json::provider_ref as models_provider_ref;
+use crate::config::state_json::load_state;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
@@ -56,12 +60,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde::Deserializer;
 use serde::Serialize;
-use serde::Serializer;
-use serde::de::Error as _;
-use serde::ser::Error as _;
-use serde::ser::SerializeMap;
 use sha1::Digest;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
@@ -79,9 +78,12 @@ use toml_edit::DocumentMut;
 
 mod constraint;
 pub mod edit;
+pub mod model_ref;
+pub mod models_json;
 pub mod profile;
 pub mod schema;
 pub mod service;
+pub mod state_json;
 pub mod types;
 pub use constraint::Constrained;
 pub use constraint::ConstraintError;
@@ -100,10 +102,14 @@ pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 pub const GENERATED_PROVIDER_PROFILE_PREFIX: &str = "_provider.";
-pub const MODEL_PROVIDER_VARIANT_SEPARATOR: char = '#';
+pub const MODEL_PROVIDER_VARIANT_SEPARATOR: char = '.';
 pub const MODEL_PROVIDER_VARIANTS_KEY: &str = "variants";
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+
+pub(crate) fn model_provider_id_from_ref(model_ref: &ModelRef) -> String {
+    models_provider_ref(&model_ref.provider_id, &model_ref.endpoint_id)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfiguredProviderDialect {
@@ -190,168 +196,50 @@ pub fn display_model_provider_ref(provider_ref: &str) -> String {
         .unwrap_or_else(|| provider_ref.to_string())
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub(crate) struct RawModelProviderVariantsToml {
-    #[serde(default)]
-    pub variants: HashMap<String, RuntimeEndpoint>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
-#[serde(untagged)]
-pub(crate) enum RawModelProviderEntryToml {
-    Legacy(Box<RuntimeEndpoint>),
-    Variants(RawModelProviderVariantsToml),
-}
-
-fn parse_model_provider_variants(
-    provider_id: &str,
-    variants_value: TomlValue,
-) -> Result<HashMap<String, RuntimeEndpoint>, String> {
-    let mut model_providers = HashMap::new();
-
-    let TomlValue::Table(variants_table) = variants_value else {
-        return Err(format!(
-            "model_providers.{provider_id}.{MODEL_PROVIDER_VARIANTS_KEY} must be a table"
-        ));
-    };
-
-    if variants_table.is_empty() {
-        return Err(format!(
-            "model_providers.{provider_id}.{MODEL_PROVIDER_VARIANTS_KEY} cannot be empty"
-        ));
-    }
-
-    for (variant_name, provider_value) in variants_table {
-        let Some(dialect) = parse_dialect_config_value(&variant_name) else {
-            return Err(format!(
-                "model_providers.{provider_id}.{MODEL_PROVIDER_VARIANTS_KEY}.{variant_name} must be one of: chat, responses, messages"
-            ));
+fn warn_ignored_legacy_config_keys(config_layer_stack: &ConfigLayerStack) {
+    for layer in config_layer_stack.layers_high_to_low() {
+        let Some(table) = layer.config.as_table() else {
+            continue;
         };
-
-        let provider: RuntimeEndpoint = provider_value.try_into().map_err(|err| {
-            format!(
-                "model_providers.{provider_id}.{MODEL_PROVIDER_VARIANTS_KEY}.{variant_name}: {err}"
-            )
-        })?;
-
-        let dialect_matches = match dialect {
-            ConfiguredProviderDialect::Responses => provider.uses_responses_api(),
-            ConfiguredProviderDialect::Chat => provider.uses_chat_completions_api(),
-            ConfiguredProviderDialect::Messages => provider.uses_messages_api(),
-        };
-        if !dialect_matches {
-            return Err(format!(
-                "model_providers.{provider_id}.{MODEL_PROVIDER_VARIANTS_KEY}.{variant_name}.dialect must match `{variant_name}`"
-            ));
-        }
-
-        model_providers.insert(model_provider_variant_ref(provider_id, dialect), provider);
-    }
-
-    Ok(model_providers)
-}
-
-fn parse_raw_model_providers(
-    raw_providers: HashMap<String, TomlValue>,
-) -> Result<HashMap<String, RuntimeEndpoint>, String> {
-    let mut model_providers = HashMap::new();
-
-    for (provider_id, provider_value) in raw_providers {
-        let TomlValue::Table(mut provider_table) = provider_value else {
-            return Err(format!("model_providers.{provider_id} must be a table"));
-        };
-
-        let variants_value = provider_table.remove(MODEL_PROVIDER_VARIANTS_KEY);
-        if let Some(variants_value) = variants_value {
-            if !provider_table.is_empty() {
-                return Err(format!(
-                    "model_providers.{provider_id} cannot mix provider fields with `{MODEL_PROVIDER_VARIANTS_KEY}`"
-                ));
+        for key in [
+            "model",
+            "model_provider",
+            "model_providers",
+            "model_context_window",
+            "model_auto_compact_token_limit",
+        ] {
+            if table.contains_key(key) {
+                tracing::warn!(
+                    "Ignoring legacy config key `{key}` from `{:?}`; use state.json/models.json instead.",
+                    layer.name
+                );
             }
-
-            model_providers.extend(parse_model_provider_variants(&provider_id, variants_value)?);
-        } else {
-            let provider: RuntimeEndpoint = TomlValue::Table(provider_table)
-                .try_into()
-                .map_err(|err| format!("model_providers.{provider_id}: {err}"))?;
-            model_providers.insert(provider_id, provider);
+        }
+        if let Some(profiles) = table.get("profiles").and_then(TomlValue::as_table) {
+            for (profile_name, profile) in profiles {
+                let Some(profile_table) = profile.as_table() else {
+                    continue;
+                };
+                for key in ["model_provider", "model_context_window"] {
+                    if profile_table.contains_key(key) {
+                        tracing::warn!(
+                            "Ignoring legacy config key `profiles.{profile_name}.{key}` from `{:?}`; use canonical profile model refs and models.json instead.",
+                            layer.name
+                        );
+                    }
+                }
+            }
         }
     }
-
-    Ok(model_providers)
-}
-
-fn deserialize_model_providers<'de, D>(
-    deserializer: D,
-) -> Result<HashMap<String, RuntimeEndpoint>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let raw_providers = HashMap::<String, TomlValue>::deserialize(deserializer)?;
-    parse_raw_model_providers(raw_providers).map_err(D::Error::custom)
-}
-
-fn serialize_model_providers<S>(
-    model_providers: &HashMap<String, RuntimeEndpoint>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let mut legacy_entries = HashMap::new();
-    let mut variant_entries = HashMap::<String, HashMap<String, RuntimeEndpoint>>::new();
-
-    for (provider_ref, provider) in model_providers {
-        if let Some((provider_id, dialect)) = split_model_provider_variant_ref(provider_ref) {
-            variant_entries
-                .entry(provider_id.to_string())
-                .or_default()
-                .insert(dialect_config_value(dialect).to_string(), provider.clone());
-        } else {
-            legacy_entries.insert(provider_ref.clone(), provider.clone());
-        }
-    }
-
-    if let Some(provider_id) = legacy_entries
-        .keys()
-        .find(|provider_id| variant_entries.contains_key(provider_id.as_str()))
-    {
-        return Err(S::Error::custom(format!(
-            "cannot serialize mixed legacy and variant model provider entries for `{provider_id}`"
-        )));
-    }
-
-    let mut map = serializer.serialize_map(Some(legacy_entries.len() + variant_entries.len()))?;
-
-    let mut legacy_entries = legacy_entries.into_iter().collect::<Vec<_>>();
-    legacy_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-    for (provider_id, provider) in legacy_entries {
-        map.serialize_entry(
-            &provider_id,
-            &RawModelProviderEntryToml::Legacy(Box::new(provider)),
-        )?;
-    }
-
-    let mut variant_entries = variant_entries.into_iter().collect::<Vec<_>>();
-    variant_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-    for (provider_id, variants) in variant_entries {
-        map.serialize_entry(
-            &provider_id,
-            &RawModelProviderEntryToml::Variants(RawModelProviderVariantsToml { variants }),
-        )?;
-    }
-
-    map.end()
 }
 
 #[cfg(test)]
 pub(crate) fn test_config() -> Config {
-    let codex_home = tempdir().expect("create temp dir");
+    let adam_home = tempdir().expect("create temp dir");
     Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        adam_home.path().to_path_buf(),
     )
     .expect("load default test config")
 }
@@ -432,7 +320,7 @@ pub struct Config {
     /// appends one extra argument containing a JSON payload describing the
     /// event.
     ///
-    /// Example `~/.codey/config.toml` snippet:
+    /// Example `~/.adam/config.toml` snippet:
     ///
     /// ```toml
     /// notify = ["notify-send", "Codex"]
@@ -477,7 +365,7 @@ pub struct Config {
     pub cwd: PathBuf,
 
     /// Preferred store for CLI auth credentials.
-    /// file (default): Use a file in the Codex home directory.
+    /// file (default): Use a file in the Adam home directory.
     /// keyring: Use an OS-specific keyring service.
     /// auto: Use the OS-specific keyring service if available, otherwise use a file.
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
@@ -485,11 +373,14 @@ pub struct Config {
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     pub mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
 
+    #[doc(hidden)]
+    pub config_profiles: HashMap<String, ConfigProfile>,
+
     /// Preferred store for MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
     ///          Credentials stored in the keyring will only be readable by Codex unless the user explicitly grants access via OS-level keyring access.
     ///          https://github.com/openai/codex/blob/main/src/resources/rmcp-client/src/oauth.rs#L2
-    /// file: CODEY_HOME/.credentials.json
+    /// file: ADAM_HOME/.credentials.json
     ///       This file will be readable to Codex and other applications running as the same user.
     /// auto (default): keyring if available, otherwise file.
     pub mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode,
@@ -522,11 +413,11 @@ pub struct Config {
     /// User-defined role declarations keyed by role name.
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
 
-    /// Directory containing all Codex state (defaults to `~/.codey` but can be
-    /// overridden by the `CODEY_HOME` environment variable).
-    pub codex_home: PathBuf,
+    /// Directory containing all Codex state (defaults to `~/.adam` but can be
+    /// overridden by the `ADAM_HOME` environment variable).
+    pub adam_home: PathBuf,
 
-    /// Settings that govern if and what will be written to `~/.codey/history.jsonl`.
+    /// Settings that govern if and what will be written to `~/.adam/history.jsonl`.
     pub history: History,
 
     /// When true, session is not persisted on disk. Default to `false`
@@ -624,7 +515,7 @@ pub struct Config {
 
 #[derive(Debug, Clone, Default)]
 pub struct ConfigBuilder {
-    codex_home: Option<PathBuf>,
+    adam_home: Option<PathBuf>,
     cli_overrides: Option<Vec<(String, TomlValue)>>,
     harness_overrides: Option<ConfigOverrides>,
     loader_overrides: Option<LoaderOverrides>,
@@ -633,8 +524,8 @@ pub struct ConfigBuilder {
 }
 
 impl ConfigBuilder {
-    pub fn codex_home(mut self, codex_home: PathBuf) -> Self {
-        self.codex_home = Some(codex_home);
+    pub fn adam_home(mut self, adam_home: PathBuf) -> Self {
+        self.adam_home = Some(adam_home);
         self
     }
 
@@ -665,14 +556,14 @@ impl ConfigBuilder {
 
     pub async fn build(self) -> std::io::Result<Config> {
         let Self {
-            codex_home,
+            adam_home,
             cli_overrides,
             harness_overrides,
             loader_overrides,
             cloud_requirements,
             fallback_cwd,
         } = self;
-        let codex_home = codex_home.map_or_else(find_codex_home, std::io::Result::Ok)?;
+        let adam_home = adam_home.map_or_else(find_adam_home, std::io::Result::Ok)?;
         let cli_overrides = cli_overrides.unwrap_or_default();
         let mut harness_overrides = harness_overrides.unwrap_or_default();
         let loader_overrides = loader_overrides.unwrap_or_default();
@@ -683,13 +574,14 @@ impl ConfigBuilder {
         };
         harness_overrides.cwd = Some(cwd.to_path_buf());
         let config_layer_stack = load_config_layers_state(
-            &codex_home,
+            &adam_home,
             Some(cwd),
             &cli_overrides,
             loader_overrides,
             cloud_requirements,
         )
         .await?;
+        warn_ignored_legacy_config_keys(&config_layer_stack);
         let merged_toml = config_layer_stack.effective_config();
 
         // Note that each layer in ConfigLayerStack should have resolved
@@ -714,7 +606,7 @@ impl ConfigBuilder {
         Config::load_config_with_layer_stack(
             config_toml,
             harness_overrides,
-            codex_home,
+            adam_home,
             config_layer_stack,
         )
     }
@@ -737,6 +629,9 @@ impl Config {
                     format!("failed to deserialize effective config: {err}"),
                 )
             })?;
+        for (name, profile) in &self.config_profiles {
+            config_toml.profiles.insert(name.clone(), profile.clone());
+        }
         let matching_active_profile =
             self.active_profile_name_for_model_limits(&config_toml, model_provider_id, model);
         if self.active_profile.is_some() && matching_active_profile.is_none() {
@@ -751,7 +646,7 @@ impl Config {
                 config_profile: matching_active_profile,
                 ..Default::default()
             },
-            self.codex_home.clone(),
+            self.adam_home.clone(),
             self.config_layer_stack.clone(),
         )?;
         Ok((
@@ -768,14 +663,22 @@ impl Config {
     ) -> Option<String> {
         let active_profile_name = self.active_profile.as_deref()?;
         let active_profile = config_toml.profiles.get(active_profile_name)?;
-        let model_matches = active_profile
+        let profile_model_ref = active_profile
             .model
             .as_deref()
-            .is_none_or(|profile_model| profile_model == model);
-        let provider_matches = active_profile
-            .model_provider
-            .as_deref()
-            .is_none_or(|profile_provider| profile_provider == model_provider_id);
+            .and_then(|profile_model| ModelRef::parse(profile_model).ok());
+        let model_matches = match (active_profile.model.as_deref(), profile_model_ref.as_ref()) {
+            (None, _) => true,
+            (Some(profile_model), _) if profile_model == model => true,
+            (Some(_), Some(profile_model_ref)) => profile_model_ref.model_id == model,
+            (Some(_), None) => false,
+        };
+        let provider_matches = match profile_model_ref {
+            None => true,
+            Some(profile_model_ref) => {
+                model_provider_id_from_ref(&profile_model_ref) == model_provider_id
+            }
+        };
 
         (model_matches && provider_matches).then(|| active_profile_name.to_string())
     }
@@ -794,7 +697,7 @@ impl Config {
     pub fn load_default_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
     ) -> std::io::Result<Self> {
-        let codex_home = find_codex_home()?;
+        let adam_home = find_adam_home()?;
         let mut merged = toml::Value::try_from(ConfigToml::default()).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -803,11 +706,11 @@ impl Config {
         })?;
         let cli_layer = crate::config_loader::build_cli_overrides_layer(&cli_overrides);
         crate::config_loader::merge_toml_values(&mut merged, &cli_layer);
-        let config_toml = deserialize_config_toml_with_base(merged, &codex_home)?;
+        let config_toml = deserialize_config_toml_with_base(merged, &adam_home)?;
         Self::load_config_with_layer_stack(
             config_toml,
             ConfigOverrides::default(),
-            codex_home,
+            adam_home,
             ConfigLayerStack::default(),
         )
     }
@@ -835,12 +738,12 @@ impl Config {
 /// with [ConfigToml] directly means that [ConfigRequirements] have not been
 /// applied yet, which risks failing to enforce required constraints.
 pub async fn load_config_as_toml_with_cli_overrides(
-    codex_home: &Path,
+    adam_home: &Path,
     cwd: &AbsolutePathBuf,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
     let config_layer_stack = load_config_layers_state(
-        codex_home,
+        adam_home,
         Some(cwd.clone()),
         &cli_overrides,
         LoaderOverrides::default(),
@@ -849,7 +752,7 @@ pub async fn load_config_as_toml_with_cli_overrides(
     .await?;
 
     let merged_toml = config_layer_stack.effective_config();
-    let cfg = deserialize_config_toml_with_base(merged_toml, codex_home).map_err(|e| {
+    let cfg = deserialize_config_toml_with_base(merged_toml, adam_home).map_err(|e| {
         tracing::error!("Failed to deserialize overridden config: {e}");
         e
     })?;
@@ -930,7 +833,7 @@ fn mcp_server_matches_requirement(
 }
 
 pub async fn load_global_mcp_servers(
-    codex_home: &Path,
+    adam_home: &Path,
 ) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
     // In general, Config::load_with_cli_overrides() should be used to load the
     // full config with requirements.toml applied, but in this case, we need
@@ -944,7 +847,7 @@ pub async fn load_global_mcp_servers(
     // MCP servers defined in in-repo .codex/ folders.
     let cwd: Option<AbsolutePathBuf> = None;
     let config_layer_stack = load_config_layers_state(
-        codex_home,
+        adam_home,
         cwd,
         &cli_overrides,
         LoaderOverrides::default(),
@@ -1054,37 +957,28 @@ pub(crate) fn set_project_trust_level_inner(
     Ok(())
 }
 
-/// Patch `CODEY_HOME/config.toml` project state to set trust level.
+/// Patch `ADAM_HOME/config.toml` project state to set trust level.
 /// Use with caution.
 pub fn set_project_trust_level(
-    codex_home: &Path,
+    adam_home: &Path,
     project_path: &Path,
     trust_level: TrustLevel,
 ) -> anyhow::Result<()> {
     use crate::config::edit::ConfigEditsBuilder;
 
-    ConfigEditsBuilder::new(codex_home)
+    ConfigEditsBuilder::new(adam_home)
         .set_project_trust_level(project_path, trust_level)
         .apply_blocking()
 }
 
-/// Base config deserialized from ~/.codey/config.toml.
+/// Base config deserialized from ~/.adam/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ConfigToml {
-    /// Optional override of model selection.
-    pub model: Option<String>,
-    /// Review model override used by the `/review` feature.
+    /// Legacy review model override.
+    #[serde(default, skip_serializing)]
+    #[schemars(skip)]
     pub review_model: Option<String>,
-
-    /// Provider to use from the model_providers map.
-    pub model_provider: Option<String>,
-
-    /// Size of the context window for the model, in tokens.
-    pub model_context_window: Option<i64>,
-
-    /// Token usage threshold triggering auto-compaction of conversation history.
-    pub model_auto_compact_token_limit: Option<i64>,
 
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
@@ -1127,7 +1021,7 @@ pub struct ConfigToml {
     pub forced_login_method: Option<ForcedLoginMethod>,
 
     /// Preferred backend for storing CLI auth credentials.
-    /// file (default): Use a file in the Codex home directory.
+    /// file (default): Use a file in the Adam home directory.
     /// keyring: Use an OS-specific keyring service.
     /// auto: Use the keyring if available, otherwise use a file.
     #[serde(default)]
@@ -1142,7 +1036,7 @@ pub struct ConfigToml {
     /// Preferred backend for storing MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
     ///          https://github.com/openai/codex/blob/main/src/resources/rmcp-client/src/oauth.rs#L2
-    /// file: Use a file in the Codex home directory.
+    /// file: Use a file in the Adam home directory.
     /// auto (default): Use the OS-specific keyring service if available, otherwise use a file.
     #[serde(default)]
     pub mcp_oauth_credentials_store: Option<OAuthCredentialsStoreMode>,
@@ -1150,15 +1044,6 @@ pub struct ConfigToml {
     /// Optional fixed port for the local HTTP callback server used during MCP OAuth login.
     /// When unset, Codex will bind to an ephemeral port chosen by the OS.
     pub mcp_oauth_callback_port: Option<u16>,
-
-    /// User-defined provider entries that extend/override the built-in list.
-    #[serde(
-        default,
-        deserialize_with = "deserialize_model_providers",
-        serialize_with = "serialize_model_providers"
-    )]
-    #[schemars(schema_with = "crate::config::schema::model_providers_schema")]
-    pub model_providers: HashMap<String, RuntimeEndpoint>,
 
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: Option<usize>,
@@ -1176,7 +1061,7 @@ pub struct ConfigToml {
     #[serde(default)]
     pub profiles: HashMap<String, ConfigProfile>,
 
-    /// Settings that govern if and what will be written to `~/.codey/history.jsonl`.
+    /// Settings that govern if and what will be written to `~/.adam/history.jsonl`.
     #[serde(default)]
     pub history: Option<History>,
 
@@ -1296,7 +1181,7 @@ impl From<ConfigToml> for UserSavedConfig {
             sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
             forced_chatgpt_workspace_id: config_toml.forced_chatgpt_workspace_id,
             forced_login_method: config_toml.forced_login_method,
-            model: config_toml.model,
+            model: None,
             model_reasoning_effort: config_toml.model_reasoning_effort,
             model_reasoning_summary: config_toml.model_reasoning_summary,
             model_verbosity: config_toml.model_verbosity,
@@ -1553,28 +1438,14 @@ impl ConfigToml {
 
         let mut provider_ids = BTreeSet::new();
 
-        if self.model.as_deref().map(str::trim) == Some(model)
-            && let Some(provider_id) = self
-                .model_provider
-                .as_deref()
-                .map(str::trim)
-                .filter(|provider_id| !provider_id.is_empty())
-        {
-            provider_ids.insert(provider_id.to_string());
-        }
-
         for profile in self.profiles.values() {
-            if profile.model.as_deref().map(str::trim) != Some(model) {
-                continue;
-            }
-
-            if let Some(provider_id) = profile
-                .model_provider
+            if let Some(model_ref) = profile
+                .model
                 .as_deref()
-                .map(str::trim)
-                .filter(|provider_id| !provider_id.is_empty())
+                .and_then(|profile_model| ModelRef::parse(profile_model).ok())
+                && model_ref.model_id == model
             {
-                provider_ids.insert(provider_id.to_string());
+                provider_ids.insert(model_provider_id_from_ref(&model_ref));
             }
         }
 
@@ -1583,22 +1454,6 @@ impl ConfigToml {
             1 => Ok(provider_ids.into_iter().next()),
             _ => Err(ResolveModelProviderError::ambiguous(model, provider_ids)),
         }
-    }
-
-    fn learned_context_window_from_generated_profile(
-        &self,
-        active_profile_name: Option<&str>,
-        model_provider_id: &str,
-        model: Option<&str>,
-    ) -> Option<i64> {
-        if active_profile_name.is_some() {
-            return None;
-        }
-
-        let model = model?;
-        self.profiles
-            .get(generated_provider_profile_name(model_provider_id, model).as_str())
-            .and_then(|profile| profile.model_context_window)
     }
 }
 
@@ -1666,21 +1521,21 @@ impl Config {
     fn load_from_base_config_with_overrides(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
-        codex_home: PathBuf,
+        adam_home: PathBuf,
     ) -> std::io::Result<Self> {
         // Note this ignores requirements.toml enforcement for tests.
         let config_layer_stack = ConfigLayerStack::default();
-        Self::load_config_with_layer_stack(cfg, overrides, codex_home, config_layer_stack)
+        Self::load_config_with_layer_stack(cfg, overrides, adam_home, config_layer_stack)
     }
 
     pub(crate) fn load_config_with_layer_stack(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
-        codex_home: PathBuf,
+        adam_home: PathBuf,
         config_layer_stack: ConfigLayerStack,
     ) -> std::io::Result<Self> {
         let requirements = config_layer_stack.requirements().clone();
-        let user_instructions = Self::load_instructions(Some(&codex_home));
+        let user_instructions = Self::load_instructions(Some(&adam_home));
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
@@ -1793,17 +1648,23 @@ impl Config {
             || config_profile.sandbox_mode.is_some()
             || cfg.sandbox_mode.is_some();
 
-        let learned_context_profile = cfg.clone();
-
+        let models_json = ModelsJson::load_from_adam_home(&adam_home)?;
+        let state_json = load_state(&adam_home)?;
         let mut model_providers = built_in_runtime_endpoints();
-        // Merge user-defined providers into the built-in list.
-        for (key, provider) in cfg.model_providers.into_iter() {
-            model_providers.entry(key).or_insert(provider);
-        }
+        model_providers.extend(models_json.to_runtime_endpoints());
+
+        let profile_model_ref = config_profile
+            .model
+            .as_deref()
+            .and_then(|model| ModelRef::parse(model).ok());
+        let state_model_ref = state_json
+            .last_selected_model
+            .as_ref()
+            .and_then(|selection| ModelRef::parse(selection.model_ref.as_str()).ok());
 
         let model_provider_id = model_provider
-            .or(config_profile.model_provider)
-            .or(cfg.model_provider)
+            .or_else(|| profile_model_ref.as_ref().map(model_provider_id_from_ref))
+            .or_else(|| state_model_ref.as_ref().map(model_provider_id_from_ref))
             .unwrap_or_else(|| "openai".to_string());
         let model_provider = model_providers
             .get(&model_provider_id)
@@ -1815,29 +1676,43 @@ impl Config {
             })?
             .clone();
 
-        let model = model.or(config_profile.model).or_else(|| cfg.model.clone());
-        let active_generated_profile_context_window = active_profile_name
-            .as_deref()
-            .zip(model.as_deref())
-            .and_then(|(profile_name, model_name)| {
-                (profile_name
-                    == generated_provider_profile_name(&model_provider_id, model_name).as_str())
-                .then_some(config_profile.model_context_window)
-                .flatten()
+        let model = model
+            .or_else(|| {
+                profile_model_ref
+                    .as_ref()
+                    .map(|model_ref| model_ref.model_id.clone())
+            })
+            .or_else(|| {
+                state_model_ref
+                    .as_ref()
+                    .map(|model_ref| model_ref.model_id.clone())
+            })
+            .or_else(|| {
+                config_profile.model.as_ref().map(|profile_model| {
+                    ModelRef::parse(profile_model)
+                        .map(|model_ref| model_ref.model_id)
+                        .unwrap_or_else(|_| profile_model.clone())
+                })
             });
-        let learned_model_context_window = learned_context_profile
-            .learned_context_window_from_generated_profile(
-                active_profile_name.as_deref(),
-                &model_provider_id,
-                model.as_deref(),
-            );
-        let learned_model_auto_compact_token_limit = active_generated_profile_context_window
-            .or(learned_model_context_window)
-            .and_then(|context_window| {
-                model.as_deref().map(|model_name| {
-                    let effective_context_window_percent =
-                        find_model_info_for_slug(model_name).effective_context_window_percent;
-                    context_window.saturating_mul(effective_context_window_percent) / 100
+        let selected_model_ref = model.as_ref().map(|model| {
+            profile_model_ref
+                .clone()
+                .or_else(|| state_model_ref.clone())
+                .unwrap_or_else(|| ModelRef::new(model_provider_id.clone(), "main", model.clone()))
+        });
+        let model_metadata = selected_model_ref
+            .as_ref()
+            .and_then(|model_ref| models_json.model_metadata(model_ref));
+        let model_context_window = model_metadata.and_then(|metadata| metadata.context_window);
+        let model_auto_compact_token_limit = model_metadata
+            .and_then(|metadata| metadata.auto_compact_token_limit)
+            .or_else(|| {
+                model_context_window.and_then(|context_window| {
+                    model.as_deref().map(|model_name| {
+                        let effective_context_window_percent =
+                            find_model_info_for_slug(model_name).effective_context_window_percent;
+                        context_window.saturating_mul(effective_context_window_percent) / 100
+                    })
                 })
             });
 
@@ -2013,13 +1888,8 @@ impl Config {
         let config = Self {
             model,
             review_model,
-            model_context_window: config_profile
-                .model_context_window
-                .or(cfg.model_context_window)
-                .or(learned_model_context_window),
-            model_auto_compact_token_limit: cfg
-                .model_auto_compact_token_limit
-                .or(learned_model_auto_compact_token_limit),
+            model_context_window,
+            model_auto_compact_token_limit,
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
@@ -2039,6 +1909,7 @@ impl Config {
             // is important in code to differentiate the mode from the store implementation.
             cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
             mcp_servers,
+            config_profiles: cfg.profiles.clone(),
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             mcp_oauth_credentials_store_mode: cfg.mcp_oauth_credentials_store.unwrap_or_default(),
@@ -2063,7 +1934,7 @@ impl Config {
             agent_job_max_runtime_seconds,
             agent_max_depth,
             agent_roles,
-            codex_home,
+            adam_home,
             config_layer_stack,
             history,
             ephemeral: ephemeral.unwrap_or_default(),
@@ -2240,21 +2111,21 @@ fn toml_uses_deprecated_instructions_file(value: &TomlValue) -> bool {
 }
 
 /// Returns the path to the Codex configuration directory, which can be
-/// specified by the `CODEY_HOME` environment variable. If not set, defaults to
-/// `~/.codey`.
+/// specified by the `ADAM_HOME` environment variable. If not set, defaults to
+/// `~/.adam`.
 ///
-/// - If `CODEY_HOME` is set, the value must exist and be a directory. The
+/// - If `ADAM_HOME` is set, the value must exist and be a directory. The
 ///   value will be canonicalized and this function will Err otherwise.
-/// - If `CODEY_HOME` is not set, this function does not verify that the
+/// - If `ADAM_HOME` is not set, this function does not verify that the
 ///   directory exists.
-pub fn find_codex_home() -> std::io::Result<PathBuf> {
-    codex_utils_home_dir::find_codex_home()
+pub fn find_adam_home() -> std::io::Result<PathBuf> {
+    codex_utils_home_dir::find_adam_home()
 }
 
 /// Returns the path to the folder where Codex logs are stored. Does not verify
 /// that the directory exists.
 pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
-    let mut p = cfg.codex_home.clone();
+    let mut p = cfg.adam_home.clone();
     p.push("log");
     Ok(p)
 }
@@ -2353,16 +2224,16 @@ persistence = "none"
     fn load_test_config_from_toml(config_toml: &str) -> std::io::Result<Config> {
         let cfg =
             toml::from_str::<ConfigToml>(config_toml).expect("TOML deserialization should succeed");
-        let codex_home = tempfile::tempdir().expect("tempdir");
-        let cwd = codex_home.path().to_path_buf();
-        let codex_home_path = codex_home.keep();
+        let adam_home = tempfile::tempdir().expect("tempdir");
+        let cwd = adam_home.path().to_path_buf();
+        let adam_home_path = adam_home.keep();
         Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides {
                 cwd: Some(cwd),
                 ..Default::default()
             },
-            codex_home_path,
+            adam_home_path,
         )
     }
 
@@ -2780,13 +2651,13 @@ trust_level = "trusted"
 
     #[test]
     fn config_defaults_to_file_cli_auth_store_mode() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
         let cfg = ConfigToml::default();
 
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
         )?;
 
         assert_eq!(
@@ -2799,7 +2670,7 @@ trust_level = "trusted"
 
     #[test]
     fn config_honors_explicit_keyring_auth_store_mode() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
         let cfg = ConfigToml {
             cli_auth_credentials_store: Some(AuthCredentialsStoreMode::Keyring),
             ..Default::default()
@@ -2808,7 +2679,7 @@ trust_level = "trusted"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
         )?;
 
         assert_eq!(
@@ -2821,13 +2692,13 @@ trust_level = "trusted"
 
     #[test]
     fn config_defaults_to_auto_oauth_store_mode() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
         let cfg = ConfigToml::default();
 
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
         )?;
 
         assert_eq!(
@@ -2840,7 +2711,7 @@ trust_level = "trusted"
 
     #[test]
     fn feedback_enabled_defaults_to_true() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
         let cfg = ConfigToml {
             feedback: Some(FeedbackConfigToml::default()),
             ..Default::default()
@@ -2849,7 +2720,7 @@ trust_level = "trusted"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
         )?;
 
         assert_eq!(config.feedback_enabled, true);
@@ -2932,7 +2803,7 @@ trust_level = "trusted"
 
     #[test]
     fn profile_legacy_toggles_override_base() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
         let mut profiles = HashMap::new();
         profiles.insert(
             "work".to_string(),
@@ -2950,7 +2821,7 @@ trust_level = "trusted"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
         )?;
 
         assert!(!config.features.enabled(Feature::WebSearchRequest));
@@ -2960,11 +2831,11 @@ trust_level = "trusted"
 
     #[tokio::test]
     async fn project_profile_overrides_user_profile() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
         let workspace = TempDir::new()?;
         let workspace_key = workspace.path().to_string_lossy().replace('\\', "\\\\");
         std::fs::write(
-            codex_home.path().join(CONFIG_TOML_FILE),
+            adam_home.path().join(CONFIG_TOML_FILE),
             format!(
                 r#"
 profile = "global"
@@ -2990,7 +2861,7 @@ profile = "project"
         )?;
 
         let config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
+            .adam_home(adam_home.path().to_path_buf())
             .harness_overrides(ConfigOverrides {
                 cwd: Some(workspace.path().to_path_buf()),
                 ..Default::default()
@@ -3006,7 +2877,7 @@ profile = "project"
 
     #[test]
     fn profile_sandbox_mode_overrides_base() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
         let mut profiles = HashMap::new();
         profiles.insert(
             "work".to_string(),
@@ -3025,7 +2896,7 @@ profile = "project"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
         )?;
 
         assert!(matches!(
@@ -3038,212 +2909,8 @@ profile = "project"
     }
 
     #[test]
-    fn generated_provider_profile_context_window_is_loaded_without_active_profile()
-    -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
-        let model = "unknown-chat-model";
-        let mut profiles = HashMap::new();
-        profiles.insert(
-            generated_provider_profile_name("openai", model),
-            ConfigProfile {
-                model: Some(model.to_string()),
-                model_provider: Some("openai".to_string()),
-                model_context_window: Some(64_000),
-                ..Default::default()
-            },
-        );
-        let cfg = ConfigToml {
-            model: Some(model.to_string()),
-            model_provider: Some("openai".to_string()),
-            profiles,
-            ..Default::default()
-        };
-
-        let config = Config::load_from_base_config_with_overrides(
-            cfg,
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )?;
-
-        assert_eq!(config.model_context_window, Some(64_000));
-        assert_eq!(config.model_auto_compact_token_limit, Some(60_800));
-
-        Ok(())
-    }
-
-    #[test]
-    fn generated_provider_profile_context_window_does_not_merge_other_profile_fields()
-    -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
-        let model = "unknown-chat-model";
-        let mut profiles = HashMap::new();
-        profiles.insert(
-            generated_provider_profile_name("openai", model),
-            ConfigProfile {
-                model: Some(model.to_string()),
-                model_provider: Some("openai".to_string()),
-                model_context_window: Some(64_000),
-                approval_policy: Some(AskForApproval::Never),
-                ..Default::default()
-            },
-        );
-        let cfg = ConfigToml {
-            model: Some(model.to_string()),
-            model_provider: Some("openai".to_string()),
-            profiles,
-            ..Default::default()
-        };
-
-        let config = Config::load_from_base_config_with_overrides(
-            cfg,
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )?;
-
-        assert_eq!(config.model_context_window, Some(64_000));
-        assert_eq!(config.model_auto_compact_token_limit, Some(60_800));
-        assert_eq!(config.approval_policy.value(), AskForApproval::OnRequest);
-
-        Ok(())
-    }
-
-    #[test]
-    fn active_profile_context_window_takes_precedence_over_generated_profile() -> std::io::Result<()>
-    {
-        let codex_home = TempDir::new()?;
-        let model = "unknown-chat-model";
-        let mut profiles = HashMap::new();
-        profiles.insert(
-            "selected".to_string(),
-            ConfigProfile {
-                model: Some(model.to_string()),
-                model_provider: Some("openai".to_string()),
-                model_context_window: Some(96_000),
-                ..Default::default()
-            },
-        );
-        profiles.insert(
-            generated_provider_profile_name("openai", model),
-            ConfigProfile {
-                model: Some(model.to_string()),
-                model_provider: Some("openai".to_string()),
-                model_context_window: Some(64_000),
-                ..Default::default()
-            },
-        );
-        let cfg = ConfigToml {
-            model: Some(model.to_string()),
-            model_provider: Some("openai".to_string()),
-            profile: Some("selected".to_string()),
-            profiles,
-            ..Default::default()
-        };
-
-        let config = Config::load_from_base_config_with_overrides(
-            cfg,
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )?;
-
-        assert_eq!(config.model_context_window, Some(96_000));
-        assert_eq!(config.model_auto_compact_token_limit, None);
-
-        Ok(())
-    }
-
-    #[test]
-    fn active_generated_provider_profile_keeps_aligned_auto_compact_limit() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
-        let model = "unknown-chat-model";
-        let profile_name = generated_provider_profile_name("openai", model);
-        let mut profiles = HashMap::new();
-        profiles.insert(
-            profile_name.clone(),
-            ConfigProfile {
-                model: Some(model.to_string()),
-                model_provider: Some("openai".to_string()),
-                model_context_window: Some(64_000),
-                ..Default::default()
-            },
-        );
-        let cfg = ConfigToml {
-            profile: Some(profile_name),
-            profiles,
-            ..Default::default()
-        };
-
-        let config = Config::load_from_base_config_with_overrides(
-            cfg,
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )?;
-
-        assert_eq!(config.model_context_window, Some(64_000));
-        assert_eq!(config.model_auto_compact_token_limit, Some(60_800));
-
-        Ok(())
-    }
-
-    #[test]
-    fn resolve_model_context_limits_ignores_non_matching_active_profile_context_window()
-    -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
-        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
-        let mut profiles = HashMap::new();
-        profiles.insert(
-            "selected".to_string(),
-            ConfigProfile {
-                model: Some("gpt-5".to_string()),
-                model_provider: Some("openai".to_string()),
-                model_context_window: Some(96_000),
-                ..Default::default()
-            },
-        );
-        profiles.insert(
-            generated_provider_profile_name("openai", "custom-model"),
-            ConfigProfile {
-                model: Some("custom-model".to_string()),
-                model_provider: Some("openai".to_string()),
-                model_context_window: Some(64_000),
-                ..Default::default()
-            },
-        );
-        let cfg = ConfigToml {
-            model: Some("gpt-5".to_string()),
-            model_provider: Some("openai".to_string()),
-            profile: Some("selected".to_string()),
-            profiles,
-            ..Default::default()
-        };
-
-        let config_layer_stack = ConfigLayerStack::new(
-            vec![crate::config_loader::ConfigLayerEntry::new(
-                codex_app_server_protocol::ConfigLayerSource::User {
-                    file: AbsolutePathBuf::try_from(config_path)?,
-                },
-                toml::Value::try_from(cfg.clone()).expect("serialize config"),
-            )],
-            crate::config_loader::ConfigRequirements::default(),
-            crate::config_loader::ConfigRequirementsToml::default(),
-        )?;
-        let config = Config::load_config_with_layer_stack(
-            cfg,
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-            config_layer_stack,
-        )?;
-
-        assert_eq!(
-            config.resolve_model_context_limits("openai", "custom-model")?,
-            (Some(64_000), Some(60_800))
-        );
-
-        Ok(())
-    }
-
-    #[test]
     fn cli_override_takes_precedence_over_profile_sandbox_mode() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
         let mut profiles = HashMap::new();
         profiles.insert(
             "work".to_string(),
@@ -3266,7 +2933,7 @@ profile = "project"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             overrides,
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
         )?;
 
         if cfg!(target_os = "windows") {
@@ -3288,7 +2955,7 @@ profile = "project"
 
     #[test]
     fn feature_table_overrides_legacy_flags() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
         let mut entries = BTreeMap::new();
         entries.insert("apply_patch_freeform".to_string(), false);
         let cfg = ConfigToml {
@@ -3299,7 +2966,7 @@ profile = "project"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
         )?;
 
         assert!(!config.features.enabled(Feature::ApplyPatchFreeform));
@@ -3310,7 +2977,7 @@ profile = "project"
 
     #[test]
     fn apps_feature_is_disabled_even_when_explicitly_enabled() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
         let mut entries = BTreeMap::new();
         entries.insert("apps".to_string(), true);
         entries.insert("steer".to_string(), true);
@@ -3322,7 +2989,7 @@ profile = "project"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
         )?;
 
         assert!(!config.features.enabled(Feature::Apps));
@@ -3333,7 +3000,7 @@ profile = "project"
 
     #[test]
     fn legacy_connectors_alias_is_disabled_even_when_explicitly_enabled() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
         let mut entries = BTreeMap::new();
         entries.insert("connectors".to_string(), true);
         entries.insert("steer".to_string(), true);
@@ -3345,7 +3012,7 @@ profile = "project"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
         )?;
 
         assert!(!config.features.enabled(Feature::Apps));
@@ -3356,7 +3023,7 @@ profile = "project"
 
     #[test]
     fn legacy_toggles_map_to_features() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
         let cfg = ConfigToml {
             experimental_use_unified_exec_tool: Some(true),
             experimental_use_freeform_apply_patch: Some(true),
@@ -3366,7 +3033,7 @@ profile = "project"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
         )?;
 
         assert!(config.features.enabled(Feature::ApplyPatchFreeform));
@@ -3381,7 +3048,7 @@ profile = "project"
 
     #[test]
     fn responses_realtime_feature_does_not_change_dialect() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
         let mut entries = BTreeMap::new();
         entries.insert("responses_websockets".to_string(), true);
         let cfg = ConfigToml {
@@ -3392,7 +3059,7 @@ profile = "project"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
         )?;
 
         assert!(config.model_provider.uses_responses_api());
@@ -3402,7 +3069,7 @@ profile = "project"
 
     #[test]
     fn config_honors_explicit_file_oauth_store_mode() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
         let cfg = ConfigToml {
             mcp_oauth_credentials_store: Some(OAuthCredentialsStoreMode::File),
             ..Default::default()
@@ -3411,7 +3078,7 @@ profile = "project"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
         )?;
 
         assert_eq!(
@@ -3424,9 +3091,9 @@ profile = "project"
 
     #[tokio::test]
     async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
-        let managed_path = codex_home.path().join("managed_config.toml");
-        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let adam_home = TempDir::new()?;
+        let managed_path = adam_home.path().join("managed_config.toml");
+        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
 
         std::fs::write(&config_path, "mcp_oauth_credentials_store = \"file\"\n")?;
         std::fs::write(&managed_path, "mcp_oauth_credentials_store = \"keyring\"\n")?;
@@ -3438,9 +3105,9 @@ profile = "project"
             macos_managed_config_requirements_base64: None,
         };
 
-        let cwd = AbsolutePathBuf::try_from(codex_home.path())?;
+        let cwd = AbsolutePathBuf::try_from(adam_home.path())?;
         let config_layer_stack = load_config_layers_state(
-            codex_home.path(),
+            adam_home.path(),
             Some(cwd),
             &Vec::new(),
             overrides,
@@ -3449,7 +3116,7 @@ profile = "project"
         .await?;
         let cfg = deserialize_config_toml_with_base(
             config_layer_stack.effective_config(),
-            codex_home.path(),
+            adam_home.path(),
         )
         .map_err(|e| {
             tracing::error!("Failed to deserialize overridden config: {e}");
@@ -3463,7 +3130,7 @@ profile = "project"
         let final_config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
         )?;
         assert_eq!(
             final_config.mcp_oauth_credentials_store_mode,
@@ -3475,9 +3142,9 @@ profile = "project"
 
     #[tokio::test]
     async fn load_global_mcp_servers_returns_empty_if_missing() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
 
-        let servers = load_global_mcp_servers(codex_home.path()).await?;
+        let servers = load_global_mcp_servers(adam_home.path()).await?;
         assert!(servers.is_empty());
 
         Ok(())
@@ -3485,7 +3152,7 @@ profile = "project"
 
     #[tokio::test]
     async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
 
         let mut servers = BTreeMap::new();
         servers.insert(
@@ -3509,12 +3176,12 @@ profile = "project"
         );
 
         apply_blocking(
-            codex_home.path(),
+            adam_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(adam_home.path()).await?;
         assert_eq!(loaded.len(), 1);
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
@@ -3539,11 +3206,11 @@ profile = "project"
 
         let empty = BTreeMap::new();
         apply_blocking(
-            codex_home.path(),
+            adam_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(empty.clone())],
         )?;
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(adam_home.path()).await?;
         assert!(loaded.is_empty());
 
         Ok(())
@@ -3551,14 +3218,14 @@ profile = "project"
 
     #[tokio::test]
     async fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
-        let managed_path = codex_home.path().join("managed_config.toml");
+        let adam_home = TempDir::new()?;
+        let managed_path = adam_home.path().join("managed_config.toml");
 
         std::fs::write(
-            codex_home.path().join(CONFIG_TOML_FILE),
-            "model = \"base\"\n",
+            adam_home.path().join(CONFIG_TOML_FILE),
+            "approval_policy = \"on-request\"\n",
         )?;
-        std::fs::write(&managed_path, "model = \"managed_config\"\n")?;
+        std::fs::write(&managed_path, "approval_policy = \"never\"\n")?;
 
         let overrides = LoaderOverrides {
             managed_config_path: Some(managed_path),
@@ -3567,11 +3234,14 @@ profile = "project"
             macos_managed_config_requirements_base64: None,
         };
 
-        let cwd = AbsolutePathBuf::try_from(codex_home.path())?;
+        let cwd = AbsolutePathBuf::try_from(adam_home.path())?;
         let config_layer_stack = load_config_layers_state(
-            codex_home.path(),
+            adam_home.path(),
             Some(cwd),
-            &[("model".to_string(), TomlValue::String("cli".to_string()))],
+            &[(
+                "approval_policy".to_string(),
+                TomlValue::String("untrusted".to_string()),
+            )],
             overrides,
             CloudRequirementsLoader::default(),
         )
@@ -3579,21 +3249,21 @@ profile = "project"
 
         let cfg = deserialize_config_toml_with_base(
             config_layer_stack.effective_config(),
-            codex_home.path(),
+            adam_home.path(),
         )
         .map_err(|e| {
             tracing::error!("Failed to deserialize overridden config: {e}");
             e
         })?;
 
-        assert_eq!(cfg.model.as_deref(), Some("managed_config"));
+        assert_eq!(cfg.approval_policy, Some(AskForApproval::Never));
         Ok(())
     }
 
     #[tokio::test]
     async fn load_global_mcp_servers_accepts_legacy_ms_field() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
-        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let adam_home = TempDir::new()?;
+        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
 
         std::fs::write(
             &config_path,
@@ -3605,7 +3275,7 @@ startup_timeout_ms = 2500
 "#,
         )?;
 
-        let servers = load_global_mcp_servers(codex_home.path()).await?;
+        let servers = load_global_mcp_servers(adam_home.path()).await?;
         let docs = servers.get("docs").expect("docs entry");
         assert_eq!(docs.startup_timeout_sec, Some(Duration::from_millis(2500)));
 
@@ -3614,8 +3284,8 @@ startup_timeout_ms = 2500
 
     #[tokio::test]
     async fn load_global_mcp_servers_rejects_inline_bearer_token() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
-        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let adam_home = TempDir::new()?;
+        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
 
         std::fs::write(
             &config_path,
@@ -3626,7 +3296,7 @@ bearer_token = "secret"
 "#,
         )?;
 
-        let err = load_global_mcp_servers(codex_home.path())
+        let err = load_global_mcp_servers(adam_home.path())
             .await
             .expect_err("bearer_token entries should be rejected");
 
@@ -3639,7 +3309,7 @@ bearer_token = "secret"
 
     #[tokio::test]
     async fn replace_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
 
         let servers = BTreeMap::from([(
             "docs".to_string(),
@@ -3665,12 +3335,12 @@ bearer_token = "secret"
         )]);
 
         apply_blocking(
-            codex_home.path(),
+            adam_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
 
-        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
         let serialized = std::fs::read_to_string(&config_path)?;
         assert_eq!(
             serialized,
@@ -3684,7 +3354,7 @@ ZIG_VAR = "3"
 "#
         );
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(adam_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::Stdio {
@@ -3712,7 +3382,7 @@ ZIG_VAR = "3"
 
     #[tokio::test]
     async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
 
         let servers = BTreeMap::from([(
             "docs".to_string(),
@@ -3735,19 +3405,19 @@ ZIG_VAR = "3"
         )]);
 
         apply_blocking(
-            codex_home.path(),
+            adam_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
 
-        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
         let serialized = std::fs::read_to_string(&config_path)?;
         assert!(
             serialized.contains(r#"env_vars = ["ALPHA", "BETA"]"#),
             "serialized config missing env_vars field:\n{serialized}"
         );
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(adam_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::Stdio { env_vars, .. } => {
@@ -3761,7 +3431,7 @@ ZIG_VAR = "3"
 
     #[tokio::test]
     async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
 
         let cwd_path = PathBuf::from("/tmp/codex-mcp");
         let servers = BTreeMap::from([(
@@ -3785,19 +3455,19 @@ ZIG_VAR = "3"
         )]);
 
         apply_blocking(
-            codex_home.path(),
+            adam_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
 
-        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
         let serialized = std::fs::read_to_string(&config_path)?;
         assert!(
             serialized.contains(r#"cwd = "/tmp/codex-mcp""#),
             "serialized config missing cwd field:\n{serialized}"
         );
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(adam_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::Stdio { cwd, .. } => {
@@ -3811,7 +3481,7 @@ ZIG_VAR = "3"
 
     #[tokio::test]
     async fn replace_mcp_servers_streamable_http_serializes_bearer_token() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
 
         let servers = BTreeMap::from([(
             "docs".to_string(),
@@ -3833,12 +3503,12 @@ ZIG_VAR = "3"
         )]);
 
         apply_blocking(
-            codex_home.path(),
+            adam_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
 
-        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
         let serialized = std::fs::read_to_string(&config_path)?;
         assert_eq!(
             serialized,
@@ -3849,7 +3519,7 @@ startup_timeout_sec = 2.0
 "#
         );
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(adam_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::StreamableHttp {
@@ -3872,7 +3542,7 @@ startup_timeout_sec = 2.0
 
     #[tokio::test]
     async fn replace_mcp_servers_streamable_http_serializes_custom_headers() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
 
         let servers = BTreeMap::from([(
             "docs".to_string(),
@@ -3896,12 +3566,12 @@ startup_timeout_sec = 2.0
             },
         )]);
         apply_blocking(
-            codex_home.path(),
+            adam_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
 
-        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
         let serialized = std::fs::read_to_string(&config_path)?;
         assert_eq!(
             serialized,
@@ -3918,7 +3588,7 @@ X-Auth = "DOCS_AUTH"
 "#
         );
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(adam_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::StreamableHttp {
@@ -3946,9 +3616,9 @@ X-Auth = "DOCS_AUTH"
 
     #[tokio::test]
     async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
 
-        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
 
         let mut servers = BTreeMap::from([(
             "docs".to_string(),
@@ -3973,7 +3643,7 @@ X-Auth = "DOCS_AUTH"
         )]);
 
         apply_blocking(
-            codex_home.path(),
+            adam_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
@@ -4001,7 +3671,7 @@ X-Auth = "DOCS_AUTH"
             },
         );
         apply_blocking(
-            codex_home.path(),
+            adam_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
@@ -4014,7 +3684,7 @@ url = "https://example.com/mcp"
 "#
         );
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(adam_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::StreamableHttp {
@@ -4039,8 +3709,8 @@ url = "https://example.com/mcp"
     #[tokio::test]
     async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers()
     -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
-        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let adam_home = TempDir::new()?;
+        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
 
         let servers = BTreeMap::from([
             (
@@ -4089,7 +3759,7 @@ url = "https://example.com/mcp"
         ]);
 
         apply_blocking(
-            codex_home.path(),
+            adam_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
@@ -4112,7 +3782,7 @@ url = "https://example.com/mcp"
             "serialized config should not add bearer token to logs:\n{serialized}"
         );
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(adam_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::StreamableHttp {
@@ -4147,7 +3817,7 @@ url = "https://example.com/mcp"
 
     #[tokio::test]
     async fn replace_mcp_servers_serializes_disabled_flag() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
 
         let servers = BTreeMap::from([(
             "docs".to_string(),
@@ -4170,19 +3840,19 @@ url = "https://example.com/mcp"
         )]);
 
         apply_blocking(
-            codex_home.path(),
+            adam_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
 
-        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
         let serialized = std::fs::read_to_string(&config_path)?;
         assert!(
             serialized.contains("enabled = false"),
             "serialized config missing disabled flag:\n{serialized}"
         );
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(adam_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         assert!(!docs.enabled);
 
@@ -4191,7 +3861,7 @@ url = "https://example.com/mcp"
 
     #[tokio::test]
     async fn replace_mcp_servers_serializes_tool_filters() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
 
         let servers = BTreeMap::from([(
             "docs".to_string(),
@@ -4214,17 +3884,17 @@ url = "https://example.com/mcp"
         )]);
 
         apply_blocking(
-            codex_home.path(),
+            adam_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
 
-        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
         let serialized = std::fs::read_to_string(&config_path)?;
         assert!(serialized.contains(r#"enabled_tools = ["allowed"]"#));
         assert!(serialized.contains(r#"disabled_tools = ["blocked"]"#));
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(adam_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         assert_eq!(
             docs.enabled_tools.as_ref(),
@@ -4240,18 +3910,16 @@ url = "https://example.com/mcp"
 
     #[tokio::test]
     async fn set_model_updates_defaults() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
 
-        ConfigEditsBuilder::new(codex_home.path())
+        ConfigEditsBuilder::new(adam_home.path())
             .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High), None)
             .apply()
             .await?;
 
-        let serialized =
-            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let serialized = tokio::fs::read_to_string(adam_home.path().join(CONFIG_TOML_FILE)).await?;
         let parsed: ConfigToml = toml::from_str(&serialized)?;
 
-        assert_eq!(parsed.model.as_deref(), Some("gpt-5.1-codex"));
         assert_eq!(parsed.model_reasoning_effort, Some(ReasoningEffort::High));
 
         Ok(())
@@ -4259,13 +3927,12 @@ url = "https://example.com/mcp"
 
     #[tokio::test]
     async fn set_model_overwrites_existing_model() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
-        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let adam_home = TempDir::new()?;
+        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
 
         tokio::fs::write(
             &config_path,
             r#"
-model = "gpt-5.1-codex"
 model_reasoning_effort = "medium"
 
 [profiles.dev]
@@ -4274,7 +3941,7 @@ model = "gpt-4.1"
         )
         .await?;
 
-        ConfigEditsBuilder::new(codex_home.path())
+        ConfigEditsBuilder::new(adam_home.path())
             .set_model(Some("o4-mini"), Some(ReasoningEffort::High), None)
             .apply()
             .await?;
@@ -4282,7 +3949,6 @@ model = "gpt-4.1"
         let serialized = tokio::fs::read_to_string(config_path).await?;
         let parsed: ConfigToml = toml::from_str(&serialized)?;
 
-        assert_eq!(parsed.model.as_deref(), Some("o4-mini"));
         assert_eq!(parsed.model_reasoning_effort, Some(ReasoningEffort::High));
         assert_eq!(
             parsed
@@ -4297,16 +3963,15 @@ model = "gpt-4.1"
 
     #[tokio::test]
     async fn set_model_updates_profile() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
 
-        ConfigEditsBuilder::new(codex_home.path())
+        ConfigEditsBuilder::new(adam_home.path())
             .with_profile(Some("dev"))
             .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::Medium), None)
             .apply()
             .await?;
 
-        let serialized =
-            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let serialized = tokio::fs::read_to_string(adam_home.path().join(CONFIG_TOML_FILE)).await?;
         let parsed: ConfigToml = toml::from_str(&serialized)?;
         let profile = parsed
             .profiles
@@ -4324,8 +3989,8 @@ model = "gpt-4.1"
 
     #[tokio::test]
     async fn set_model_updates_existing_profile() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
-        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let adam_home = TempDir::new()?;
+        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
 
         tokio::fs::write(
             &config_path,
@@ -4340,7 +4005,7 @@ model = "gpt-5.1-codex"
         )
         .await?;
 
-        ConfigEditsBuilder::new(codex_home.path())
+        ConfigEditsBuilder::new(adam_home.path())
             .with_profile(Some("dev"))
             .set_model(Some("o4-high"), Some(ReasoningEffort::Medium), None)
             .apply()
@@ -4374,12 +4039,8 @@ model = "gpt-5.1-codex"
     fn resolve_model_provider_for_model_uses_unique_profile_mapping() {
         let config_toml: ConfigToml = toml::from_str(
             r#"
-model = "glm-5"
-model_provider = "chatanywhere"
-
 [profiles.deepseek]
-model = "deepseek-v3"
-model_provider = "iie"
+model = "iie.main:deepseek-v3"
 "#,
         )
         .expect("parse config");
@@ -4396,11 +4057,8 @@ model_provider = "iie"
     fn resolve_model_provider_for_model_returns_none_when_unmapped() {
         let config_toml: ConfigToml = toml::from_str(
             r#"
-model = "glm-5"
-model_provider = "chatanywhere"
-
 [profiles.deepseek]
-model = "deepseek-v3"
+model = "iie.main:deepseek-v3"
 "#,
         )
         .expect("parse config");
@@ -4418,12 +4076,10 @@ model = "deepseek-v3"
         let config_toml: ConfigToml = toml::from_str(
             r#"
 [profiles.first]
-model = "deepseek-v3"
-model_provider = "iie"
+model = "iie.main:deepseek-v3"
 
 [profiles.second]
-model = "deepseek-v3"
-model_provider = "chatanywhere"
+model = "chatanywhere.main:deepseek-v3"
 "#,
         )
         .expect("parse config");
@@ -4438,92 +4094,14 @@ model_provider = "chatanywhere"
     }
 
     #[test]
-    fn config_toml_deserializes_nested_model_provider_variants() {
-        let config_toml: ConfigToml = toml::from_str(
-            r#"
-[model_providers.anthropic.variants.messages]
-name = "Anthropic"
-base_url = "https://api.anthropic.com/v1"
-dialect = "messages"
-experimental_bearer_token = "sk-msg"
-
-[model_providers.anthropic.variants.chat]
-name = "Anthropic Chat"
-base_url = "https://example.com/chat"
-dialect = "chat"
-experimental_bearer_token = "sk-chat"
-"#,
-        )
-        .expect("parse config");
-
-        assert_eq!(config_toml.model_providers.len(), 2);
-        assert_eq!(
-            config_toml
-                .model_providers
-                .get("anthropic#messages")
-                .and_then(|provider| provider.base_url.as_deref()),
-            Some("https://api.anthropic.com/v1")
-        );
-        assert_eq!(
-            config_toml
-                .model_providers
-                .get("anthropic#chat")
-                .map(RuntimeEndpoint::uses_chat_completions_api),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn config_toml_rejects_mixed_legacy_and_variant_model_provider_entry() {
-        let err = toml::from_str::<ConfigToml>(
-            r#"
-[model_providers.anthropic]
-name = "Anthropic"
-dialect = "messages"
-
-[model_providers.anthropic.variants.chat]
-name = "Anthropic Chat"
-dialect = "chat"
-"#,
-        )
-        .expect_err("expected mixed provider entry to fail");
-
-        assert!(
-            err.to_string().contains("model_providers"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn config_toml_rejects_variant_key_mismatch() {
-        let err = toml::from_str::<ConfigToml>(
-            r#"
-[model_providers.anthropic.variants.messages]
-name = "Anthropic"
-dialect = "chat"
-"#,
-        )
-        .expect_err("expected wire api mismatch to fail");
-
-        assert!(
-            err.to_string().contains(
-                "model_providers.anthropic.variants.messages.dialect must match `messages`"
-            ),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
     fn resolve_model_provider_for_model_rejects_ambiguous_variant_mapping() {
         let config_toml: ConfigToml = toml::from_str(
             r#"
 [profiles.messages]
-model = "claude-sonnet-4-5"
-model_provider = "anthropic#messages"
+model = "anthropic.messages:claude-sonnet-4-5"
 
 [profiles.chat]
-model = "claude-sonnet-4-5"
-model_provider = "anthropic#chat"
+model = "anthropic.chat:claude-sonnet-4-5"
 "#,
         )
         .expect("parse config");
@@ -4533,17 +4111,16 @@ model_provider = "anthropic#chat"
             .expect_err("expected ambiguous provider mapping");
         assert_eq!(
             err.to_string(),
-            "model `claude-sonnet-4-5` is configured for multiple providers: anthropic#chat, anthropic#messages"
+            "model `claude-sonnet-4-5` is configured for multiple providers: anthropic.chat, anthropic.messages"
         );
     }
 
     struct PrecedenceTestFixture {
         cwd: TempDir,
-        codex_home: TempDir,
+        adam_home: TempDir,
         cfg: ConfigToml,
         model_provider_map: HashMap<String, RuntimeEndpoint>,
         openai_provider: RuntimeEndpoint,
-        openai_chat_completions_provider: RuntimeEndpoint,
     }
 
     impl PrecedenceTestFixture {
@@ -4551,14 +4128,14 @@ model_provider = "anthropic#chat"
             self.cwd.path().to_path_buf()
         }
 
-        fn codex_home(&self) -> PathBuf {
-            self.codex_home.path().to_path_buf()
+        fn adam_home(&self) -> PathBuf {
+            self.adam_home.path().to_path_buf()
         }
     }
 
     #[test]
     fn cli_override_sets_compact_prompt() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
         let overrides = ConfigOverrides {
             compact_prompt: Some("Use the compact override".to_string()),
             ..Default::default()
@@ -4567,7 +4144,7 @@ model_provider = "anthropic#chat"
         let config = Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
             overrides,
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
         )?;
 
         assert_eq!(
@@ -4580,8 +4157,8 @@ model_provider = "anthropic#chat"
 
     #[test]
     fn loads_compact_prompt_from_file() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
-        let workspace = codex_home.path().join("workspace");
+        let adam_home = TempDir::new()?;
+        let workspace = adam_home.path().join("workspace");
         std::fs::create_dir_all(&workspace)?;
 
         let prompt_path = workspace.join("compact_prompt.txt");
@@ -4602,7 +4179,7 @@ model_provider = "anthropic#chat"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             overrides,
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
         )?;
 
         assert_eq!(
@@ -4615,7 +4192,6 @@ model_provider = "anthropic#chat"
 
     fn create_test_fixture() -> std::io::Result<PrecedenceTestFixture> {
         let toml = r#"
-model = "o3"
 approval_policy = "untrusted"
 
 # Can be used to determine which profile to use if not specified by
@@ -4625,37 +4201,24 @@ profile = "gpt3"
 [analytics]
 enabled = true
 
-[model_providers.openai-chat-completions]
-name = "OpenAI using Chat Completions"
-base_url = "https://api.openai.com/v1"
-env_key = "OPENAI_API_KEY"
-dialect = "chat"
-request_max_retries = 4            # retry failed HTTP requests
-stream_max_retries = 10            # retry dropped SSE streams
-stream_idle_timeout_ms = 300000    # 5m idle timeout
-
 [profiles.o3]
-model = "o3"
-model_provider = "openai"
+model = "openai.main:o3"
 approval_policy = "never"
 model_reasoning_effort = "high"
 model_reasoning_summary = "detailed"
 
 [profiles.gpt3]
-model = "gpt-3.5-turbo"
-model_provider = "openai-chat-completions"
+model = "openai.main:gpt-3.5-turbo"
 
 [profiles.zdr]
-model = "o3"
-model_provider = "openai"
+model = "openai.main:o3"
 approval_policy = "on-failure"
 
 [profiles.zdr.analytics]
 enabled = false
 
 [profiles.gpt5]
-model = "gpt-5.1"
-model_provider = "openai"
+model = "openai.main:gpt-5.1"
 approval_policy = "on-failure"
 model_reasoning_effort = "high"
 model_reasoning_summary = "detailed"
@@ -4672,24 +4235,9 @@ model_verbosity = "high"
         // a parent folder, either.
         std::fs::write(cwd.join(".git"), "gitdir: nowhere")?;
 
-        let codex_home_temp_dir = TempDir::new().unwrap();
+        let adam_home_temp_dir = TempDir::new().unwrap();
 
-        let openai_chat_completions_provider = RuntimeEndpoint::openai_compatible_chat(
-            "OpenAI using Chat Completions",
-            "https://api.openai.com/v1",
-        )
-        .with_env_key(Some("OPENAI_API_KEY".to_string()))
-        .with_request_max_retries(Some(4))
-        .with_stream_max_retries(Some(10))
-        .with_stream_idle_timeout_ms(Some(300_000));
-        let model_provider_map = {
-            let mut model_provider_map = built_in_runtime_endpoints();
-            model_provider_map.insert(
-                "openai-chat-completions".to_string(),
-                openai_chat_completions_provider.clone(),
-            );
-            model_provider_map
-        };
+        let model_provider_map = built_in_runtime_endpoints();
 
         let openai_provider = model_provider_map
             .get("openai")
@@ -4698,11 +4246,10 @@ model_verbosity = "high"
 
         Ok(PrecedenceTestFixture {
             cwd: cwd_temp_dir,
-            codex_home: codex_home_temp_dir,
+            adam_home: adam_home_temp_dir,
             cfg,
             model_provider_map,
             openai_provider,
-            openai_chat_completions_provider,
         })
     }
 
@@ -4730,7 +4277,7 @@ model_verbosity = "high"
         let o3_profile_config: Config = Config::load_from_base_config_with_overrides(
             fixture.cfg.clone(),
             o3_profile_overrides,
-            fixture.codex_home(),
+            fixture.adam_home(),
         )?;
         assert_eq!(
             Config {
@@ -4751,6 +4298,7 @@ model_verbosity = "high"
                 cwd: fixture.cwd(),
                 cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: Constrained::allow_any(HashMap::new()),
+                config_profiles: fixture.cfg.profiles.clone(),
                 mcp_oauth_credentials_store_mode: Default::default(),
                 mcp_oauth_callback_port: None,
                 model_providers: fixture.model_provider_map.clone(),
@@ -4761,7 +4309,7 @@ model_verbosity = "high"
                 agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
                 agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
                 agent_roles: BTreeMap::new(),
-                codex_home: fixture.codex_home(),
+                adam_home: fixture.adam_home(),
                 config_layer_stack: Default::default(),
                 history: History::default(),
                 ephemeral: false,
@@ -4819,15 +4367,15 @@ model_verbosity = "high"
         let gpt3_profile_config = Config::load_from_base_config_with_overrides(
             fixture.cfg.clone(),
             gpt3_profile_overrides,
-            fixture.codex_home(),
+            fixture.adam_home(),
         )?;
         let expected_gpt3_profile_config = Config {
             model: Some("gpt-3.5-turbo".to_string()),
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
-            model_provider_id: "openai-chat-completions".to_string(),
-            model_provider: fixture.openai_chat_completions_provider.clone(),
+            model_provider_id: "openai".to_string(),
+            model_provider: fixture.openai_provider.clone(),
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             enforce_residency: Constrained::allow_any(None),
@@ -4839,6 +4387,7 @@ model_verbosity = "high"
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
+            config_profiles: fixture.cfg.profiles.clone(),
             mcp_oauth_credentials_store_mode: Default::default(),
             mcp_oauth_callback_port: None,
             model_providers: fixture.model_provider_map.clone(),
@@ -4849,7 +4398,7 @@ model_verbosity = "high"
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
-            codex_home: fixture.codex_home(),
+            adam_home: fixture.adam_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
             ephemeral: false,
@@ -4903,7 +4452,7 @@ model_verbosity = "high"
         let default_profile_config = Config::load_from_base_config_with_overrides(
             fixture.cfg.clone(),
             default_profile_overrides,
-            fixture.codex_home(),
+            fixture.adam_home(),
         )?;
 
         assert_eq!(expected_gpt3_profile_config, default_profile_config);
@@ -4922,7 +4471,7 @@ model_verbosity = "high"
         let zdr_profile_config = Config::load_from_base_config_with_overrides(
             fixture.cfg.clone(),
             zdr_profile_overrides,
-            fixture.codex_home(),
+            fixture.adam_home(),
         )?;
         let expected_zdr_profile_config = Config {
             model: Some("o3".to_string()),
@@ -4942,6 +4491,7 @@ model_verbosity = "high"
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
+            config_profiles: fixture.cfg.profiles.clone(),
             mcp_oauth_credentials_store_mode: Default::default(),
             mcp_oauth_callback_port: None,
             model_providers: fixture.model_provider_map.clone(),
@@ -4952,7 +4502,7 @@ model_verbosity = "high"
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
-            codex_home: fixture.codex_home(),
+            adam_home: fixture.adam_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
             ephemeral: false,
@@ -5011,7 +4561,7 @@ model_verbosity = "high"
         let gpt5_profile_config = Config::load_from_base_config_with_overrides(
             fixture.cfg.clone(),
             gpt5_profile_overrides,
-            fixture.codex_home(),
+            fixture.adam_home(),
         )?;
         let expected_gpt5_profile_config = Config {
             model: Some("gpt-5.1".to_string()),
@@ -5031,6 +4581,7 @@ model_verbosity = "high"
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
+            config_profiles: fixture.cfg.profiles.clone(),
             mcp_oauth_credentials_store_mode: Default::default(),
             mcp_oauth_callback_port: None,
             model_providers: fixture.model_provider_map.clone(),
@@ -5041,7 +4592,7 @@ model_verbosity = "high"
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
-            codex_home: fixture.codex_home(),
+            adam_home: fixture.adam_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
             ephemeral: false,
@@ -5098,7 +4649,7 @@ model_verbosity = "high"
             ConfigOverrides {
                 ..Default::default()
             },
-            fixture.codex_home(),
+            fixture.adam_home(),
         )?;
 
         assert!(config.did_user_set_custom_approval_policy_or_sandbox_mode);
@@ -5271,7 +4822,7 @@ oss_provider = "lmstudio"
 
     #[test]
     fn config_loads_mcp_oauth_callback_port_from_toml() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
         let toml = r#"
 model = "gpt-5.1"
 mcp_oauth_callback_port = 5678
@@ -5282,7 +4833,7 @@ mcp_oauth_callback_port = 5678
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
         )?;
 
         assert_eq!(config.mcp_oauth_callback_port, Some(5678));
@@ -5291,7 +4842,7 @@ mcp_oauth_callback_port = 5678
 
     #[test]
     fn test_untrusted_project_gets_unless_trusted_approval_policy() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
+        let adam_home = TempDir::new()?;
         let test_project_dir = TempDir::new()?;
         let test_path = test_project_dir.path();
 
@@ -5309,7 +4860,7 @@ mcp_oauth_callback_port = 5678
                 cwd: Some(test_path.to_path_buf()),
                 ..Default::default()
             },
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
         )?;
 
         // Verify that untrusted projects get UnlessTrusted approval policy

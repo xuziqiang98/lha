@@ -1,0 +1,184 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "ModelMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "auto_compact_token_limit": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "context_window": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "input_modalities": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reasoning_effort": {
+          "$ref": "#/definitions/ReasoningEffort"
+        },
+        "reasoning_summary": {
+          "$ref": "#/definitions/ReasoningSummary"
+        },
+        "supports_reasoning_summaries": {
+          "type": "boolean"
+        },
+        "supports_verbosity": {
+          "type": "boolean"
+        },
+        "verbosity": {
+          "$ref": "#/definitions/Verbosity"
+        }
+      },
+      "type": "object"
+    },
+    "ModelsDialect": {
+      "enum": [
+        "responses",
+        "chat",
+        "messages"
+      ],
+      "type": "string"
+    },
+    "ModelsEndpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "base_url": {
+          "type": "string"
+        },
+        "dialect": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelsDialect"
+            }
+          ],
+          "default": "chat"
+        },
+        "env_http_headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "env_key": {
+          "type": "string"
+        },
+        "env_key_instructions": {
+          "type": "string"
+        },
+        "experimental_bearer_token": {
+          "type": "string"
+        },
+        "http_headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "models": {
+          "additionalProperties": {
+            "$ref": "#/definitions/ModelMetadata"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        },
+        "query_params": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "request_max_retries": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "requires_openai_auth": {
+          "default": false,
+          "type": "boolean"
+        },
+        "stream_idle_timeout_ms": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "stream_max_retries": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "supports_realtime_streaming": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ModelsProvider": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoints": {
+          "additionalProperties": {
+            "$ref": "#/definitions/ModelsEndpoint"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ReasoningEffort": {
+      "enum": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "type": "string"
+    },
+    "ReasoningSummary": {
+      "enum": [
+        "auto",
+        "concise",
+        "detailed",
+        "none"
+      ],
+      "type": "string"
+    },
+    "Verbosity": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "providers": {
+      "additionalProperties": {
+        "$ref": "#/definitions/ModelsProvider"
+      },
+      "default": {},
+      "type": "object"
+    }
+  },
+  "title": "ModelsJson",
+  "type": "object"
+}

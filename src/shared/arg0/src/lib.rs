@@ -72,7 +72,7 @@ pub fn arg0_dispatch() -> Option<TempDir> {
 /// `codex-linux-sandbox` we *directly* execute
 /// [`codex_linux_sandbox::run_main`] (which never returns). Otherwise we:
 ///
-/// 1.  Load `.env` values from `~/.codey/.env` before creating any threads.
+/// 1.  Load `.env` values from `~/.adam/.env` before creating any threads.
 /// 2.  Construct a Tokio multi-thread runtime.
 /// 3.  Derive the path to the current executable (so children can re-invoke the
 ///     sandbox) when running on Linux.
@@ -109,13 +109,13 @@ where
 
 const ILLEGAL_ENV_VAR_PREFIX: &str = "CODEX_";
 
-/// Load env vars from ~/.codey/.env.
+/// Load env vars from ~/.adam/.env.
 ///
 /// Security: Do not allow `.env` files to create or modify any variables
 /// with names starting with `CODEX_`.
 fn load_dotenv() {
-    if let Ok(codex_home) = codex_agent::config::find_codex_home()
-        && let Ok(iter) = dotenvy::from_path_iter(codex_home.join(".env"))
+    if let Ok(adam_home) = codex_agent::config::find_adam_home()
+        && let Ok(iter) = dotenvy::from_path_iter(adam_home.join(".env"))
     {
         set_filtered(iter);
     }
@@ -150,24 +150,24 @@ where
 /// IMPORTANT: This function modifies the PATH environment variable, so it MUST
 /// be called before multiple threads are spawned.
 pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
-    let codex_home = codex_agent::config::find_codex_home()?;
+    let adam_home = codex_agent::config::find_adam_home()?;
     #[cfg(not(debug_assertions))]
     {
         // Guard against placing helpers in system temp directories outside debug builds.
         let temp_root = std::env::temp_dir();
-        if codex_home.starts_with(&temp_root) {
+        if adam_home.starts_with(&temp_root) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!(
-                    "Refusing to create helper binaries under temporary dir {temp_root:?} (codex_home: {codex_home:?})"
+                    "Refusing to create helper binaries under temporary dir {temp_root:?} (adam_home: {adam_home:?})"
                 ),
             ));
         }
     }
 
-    std::fs::create_dir_all(&codex_home)?;
-    // Use a CODEY_HOME-scoped temp root to avoid cluttering the top-level directory.
-    let temp_root = codex_home.join("tmp").join("path");
+    std::fs::create_dir_all(&adam_home)?;
+    // Use a ADAM_HOME-scoped temp root to avoid cluttering the top-level directory.
+    let temp_root = adam_home.join("tmp").join("path");
     std::fs::create_dir_all(&temp_root)?;
     #[cfg(unix)]
     {

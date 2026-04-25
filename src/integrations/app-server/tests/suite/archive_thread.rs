@@ -16,10 +16,10 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn archive_conversation_moves_rollout_into_archived_directory() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path())?;
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let new_request_id = mcp
@@ -61,7 +61,7 @@ async fn archive_conversation_moves_rollout_into_archived_directory() -> Result<
     let _: ArchiveConversationResponse =
         to_response::<ArchiveConversationResponse>(archive_response)?;
 
-    let archived_directory = codex_home.path().join(ARCHIVED_SESSIONS_SUBDIR);
+    let archived_directory = adam_home.path().join(ARCHIVED_SESSIONS_SUBDIR);
     let archived_rollout_path =
         archived_directory.join(rollout_path.file_name().unwrap_or_else(|| {
             panic!("rollout path {} missing file name", rollout_path.display())
@@ -81,8 +81,8 @@ async fn archive_conversation_moves_rollout_into_archived_directory() -> Result<
     Ok(())
 }
 
-fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
+fn create_config_toml(adam_home: &Path) -> std::io::Result<()> {
+    let config_toml = adam_home.join("config.toml");
     std::fs::write(config_toml, config_contents())
 }
 

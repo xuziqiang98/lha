@@ -147,7 +147,7 @@ async fn run_command_under_sandbox(
             let cwd_clone = cwd.clone();
             let env_map = env.clone();
             let command_vec = command.clone();
-            let base_dir = config.codex_home.clone();
+            let base_dir = config.adam_home.clone();
             let use_elevated = matches!(
                 WindowsSandboxLevel::from_config(&config),
                 WindowsSandboxLevel::Elevated

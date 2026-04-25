@@ -215,7 +215,7 @@ pub fn audit_everyone_writable(
 }
 
 pub fn apply_world_writable_scan_and_denies(
-    codex_home: &Path,
+    adam_home: &Path,
     cwd: &Path,
     env_map: &std::collections::HashMap<String, String>,
     sandbox_policy: &SandboxPolicy,
@@ -226,7 +226,7 @@ pub fn apply_world_writable_scan_and_denies(
         return Ok(());
     }
     if let Err(err) = apply_capability_denies_for_world_writable(
-        codex_home,
+        adam_home,
         &flagged,
         sandbox_policy,
         cwd,
@@ -241,7 +241,7 @@ pub fn apply_world_writable_scan_and_denies(
 }
 
 pub fn apply_capability_denies_for_world_writable(
-    codex_home: &Path,
+    adam_home: &Path,
     flagged: &[PathBuf],
     sandbox_policy: &SandboxPolicy,
     cwd: &Path,
@@ -250,9 +250,9 @@ pub fn apply_capability_denies_for_world_writable(
     if flagged.is_empty() {
         return Ok(());
     }
-    std::fs::create_dir_all(codex_home)?;
-    let cap_path = cap_sid_file(codex_home);
-    let caps = load_or_create_cap_sids(codex_home)?;
+    std::fs::create_dir_all(adam_home)?;
+    let cap_path = cap_sid_file(adam_home);
+    let caps = load_or_create_cap_sids(adam_home)?;
     std::fs::write(&cap_path, serde_json::to_string(&caps)?)?;
     let (active_sid, workspace_roots): (*mut c_void, Vec<PathBuf>) = match sandbox_policy {
         SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {

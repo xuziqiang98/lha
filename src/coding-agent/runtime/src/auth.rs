@@ -147,7 +147,7 @@ impl From<RefreshTokenError> for std::io::Error {
 
 impl CodexAuth {
     fn from_auth_dot_json(
-        codex_home: &Path,
+        adam_home: &Path,
         auth_dot_json: AuthDotJson,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         client: CodexHttpClient,
@@ -168,7 +168,7 @@ impl CodexAuth {
 
         match auth_mode {
             ApiAuthMode::Chatgpt => {
-                let storage = create_auth_storage(codex_home.to_path_buf(), storage_mode);
+                let storage = create_auth_storage(adam_home.to_path_buf(), storage_mode);
                 Ok(Self::Chatgpt(ChatgptAuth { state, storage }))
             }
             ApiAuthMode::ChatgptAuthTokens => {
@@ -180,10 +180,10 @@ impl CodexAuth {
 
     /// Loads the available auth information from auth storage.
     pub fn from_auth_storage(
-        codex_home: &Path,
+        adam_home: &Path,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
     ) -> std::io::Result<Option<Self>> {
-        load_auth(codex_home, false, auth_credentials_store_mode)
+        load_auth(adam_home, false, auth_credentials_store_mode)
     }
 
     pub fn internal_auth_mode(&self) -> AuthMode {
@@ -361,19 +361,19 @@ pub fn read_codex_api_key_from_env() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-/// Delete the auth.json file inside `codex_home` if it exists. Returns `Ok(true)`
+/// Delete the auth.json file inside `adam_home` if it exists. Returns `Ok(true)`
 /// if a file was removed, `Ok(false)` if no auth file was present.
 pub fn logout(
-    codex_home: &Path,
+    adam_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<bool> {
-    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
+    let storage = create_auth_storage(adam_home.to_path_buf(), auth_credentials_store_mode);
     storage.delete()
 }
 
 /// Writes an `auth.json` that contains only the API key.
 pub fn login_with_api_key(
-    codex_home: &Path,
+    adam_home: &Path,
     api_key: &str,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
@@ -383,18 +383,18 @@ pub fn login_with_api_key(
         tokens: None,
         last_refresh: None,
     };
-    save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
+    save_auth(adam_home, &auth_dot_json, auth_credentials_store_mode)
 }
 
 /// Writes an in-memory auth payload for externally managed ChatGPT tokens.
 pub fn login_with_chatgpt_auth_tokens(
-    codex_home: &Path,
+    adam_home: &Path,
     id_token: &str,
     access_token: &str,
 ) -> std::io::Result<()> {
     let auth_dot_json = AuthDotJson::from_external_token_strings(id_token, access_token)?;
     save_auth(
-        codex_home,
+        adam_home,
         &auth_dot_json,
         AuthCredentialsStoreMode::Ephemeral,
     )
@@ -402,11 +402,11 @@ pub fn login_with_chatgpt_auth_tokens(
 
 /// Persist the provided auth payload using the specified backend.
 pub fn save_auth(
-    codex_home: &Path,
+    adam_home: &Path,
     auth: &AuthDotJson,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
-    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
+    let storage = create_auth_storage(adam_home.to_path_buf(), auth_credentials_store_mode);
     storage.save(auth)
 }
 
@@ -416,16 +416,16 @@ pub fn save_auth(
 /// from the auth.json storage. It should use the AuthManager abstraction
 /// instead.
 pub fn load_auth_dot_json(
-    codex_home: &Path,
+    adam_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<Option<AuthDotJson>> {
-    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
+    let storage = create_auth_storage(adam_home.to_path_buf(), auth_credentials_store_mode);
     storage.load()
 }
 
 pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
     let Some(auth) = load_auth(
-        &config.codex_home,
+        &config.adam_home,
         true,
         config.cli_auth_credentials_store_mode,
     )?
@@ -449,7 +449,7 @@ pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
 
         if let Some(message) = method_violation {
             return logout_with_message(
-                &config.codex_home,
+                &config.adam_home,
                 message,
                 config.cli_auth_credentials_store_mode,
             );
@@ -465,7 +465,7 @@ pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
             Ok(data) => data,
             Err(err) => {
                 return logout_with_message(
-                    &config.codex_home,
+                    &config.adam_home,
                     format!(
                         "Failed to load ChatGPT credentials while enforcing workspace restrictions: {err}. Logging out."
                     ),
@@ -486,7 +486,7 @@ pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
                 ),
             };
             return logout_with_message(
-                &config.codex_home,
+                &config.adam_home,
                 message,
                 config.cli_auth_credentials_store_mode,
             );
@@ -497,13 +497,13 @@ pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
 }
 
 fn logout_with_message(
-    codex_home: &Path,
+    adam_home: &Path,
     message: String,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
     // External auth tokens live in the ephemeral store, but persistent auth may still exist
     // from earlier logins. Clear both so a forced logout truly removes all active auth.
-    let removal_result = logout_all_stores(codex_home, auth_credentials_store_mode);
+    let removal_result = logout_all_stores(adam_home, auth_credentials_store_mode);
     let error_message = match removal_result {
         Ok(_) => message,
         Err(err) => format!("{message}. Failed to remove auth.json: {err}"),
@@ -512,25 +512,25 @@ fn logout_with_message(
 }
 
 fn logout_all_stores(
-    codex_home: &Path,
+    adam_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<bool> {
     if auth_credentials_store_mode == AuthCredentialsStoreMode::Ephemeral {
-        return logout(codex_home, AuthCredentialsStoreMode::Ephemeral);
+        return logout(adam_home, AuthCredentialsStoreMode::Ephemeral);
     }
-    let removed_ephemeral = logout(codex_home, AuthCredentialsStoreMode::Ephemeral)?;
-    let removed_managed = logout(codex_home, auth_credentials_store_mode)?;
+    let removed_ephemeral = logout(adam_home, AuthCredentialsStoreMode::Ephemeral)?;
+    let removed_managed = logout(adam_home, auth_credentials_store_mode)?;
     Ok(removed_ephemeral || removed_managed)
 }
 
 fn load_auth(
-    codex_home: &Path,
+    adam_home: &Path,
     enable_codex_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<Option<CodexAuth>> {
     let build_auth = |auth_dot_json: AuthDotJson, storage_mode| {
         let client = crate::default_client::create_client();
-        CodexAuth::from_auth_dot_json(codex_home, auth_dot_json, storage_mode, client)
+        CodexAuth::from_auth_dot_json(adam_home, auth_dot_json, storage_mode, client)
     };
 
     // API key via env var takes precedence over any other auth method.
@@ -544,10 +544,8 @@ fn load_auth(
 
     // External ChatGPT auth tokens live in the in-memory (ephemeral) store. Always check this
     // first so external auth takes precedence over any persisted credentials.
-    let ephemeral_storage = create_auth_storage(
-        codex_home.to_path_buf(),
-        AuthCredentialsStoreMode::Ephemeral,
-    );
+    let ephemeral_storage =
+        create_auth_storage(adam_home.to_path_buf(), AuthCredentialsStoreMode::Ephemeral);
     if let Some(auth_dot_json) = ephemeral_storage.load()? {
         let auth = build_auth(auth_dot_json, AuthCredentialsStoreMode::Ephemeral)?;
         return Ok(Some(auth));
@@ -559,7 +557,7 @@ fn load_auth(
     }
 
     // Fall back to the configured persistent store (file/keyring/auto) for managed auth.
-    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
+    let storage = create_auth_storage(adam_home.to_path_buf(), auth_credentials_store_mode);
     let auth_dot_json = match storage.load()? {
         Some(auth) => auth,
         None => return Ok(None),
@@ -918,7 +916,7 @@ impl UnauthorizedRecovery {
 /// different parts of the program seeing inconsistent auth data mid‑run.
 #[derive(Debug)]
 pub struct AuthManager {
-    codex_home: PathBuf,
+    adam_home: PathBuf,
     inner: RwLock<CachedAuth>,
     enable_codex_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
@@ -931,19 +929,19 @@ impl AuthManager {
     /// simply return `None` in that case so callers can treat it as an
     /// unauthenticated state.
     pub fn new(
-        codex_home: PathBuf,
+        adam_home: PathBuf,
         enable_codex_api_key_env: bool,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
     ) -> Self {
         let managed_auth = load_auth(
-            &codex_home,
+            &adam_home,
             enable_codex_api_key_env,
             auth_credentials_store_mode,
         )
         .ok()
         .flatten();
         Self {
-            codex_home,
+            adam_home,
             inner: RwLock::new(CachedAuth {
                 auth: managed_auth,
                 external_refresher: None,
@@ -963,7 +961,7 @@ impl AuthManager {
         };
 
         Arc::new(Self {
-            codex_home: PathBuf::from("non-existent"),
+            adam_home: PathBuf::from("non-existent"),
             inner: RwLock::new(cached),
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
@@ -973,13 +971,13 @@ impl AuthManager {
 
     #[cfg(any(test, feature = "test-support"))]
     /// Create an AuthManager with a specific CodexAuth and codex home, for testing only.
-    pub fn from_auth_for_testing_with_home(auth: CodexAuth, codex_home: PathBuf) -> Arc<Self> {
+    pub fn from_auth_for_testing_with_home(auth: CodexAuth, adam_home: PathBuf) -> Arc<Self> {
         let cached = CachedAuth {
             auth: Some(auth),
             external_refresher: None,
         };
         Arc::new(Self {
-            codex_home,
+            adam_home,
             inner: RwLock::new(cached),
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
@@ -1046,7 +1044,7 @@ impl AuthManager {
 
     fn load_auth_from_storage(&self) -> Option<CodexAuth> {
         load_auth(
-            &self.codex_home,
+            &self.adam_home,
             self.enable_codex_api_key_env,
             self.auth_credentials_store_mode,
         )
@@ -1101,12 +1099,12 @@ impl AuthManager {
 
     /// Convenience constructor returning an `Arc` wrapper.
     pub fn shared(
-        codex_home: PathBuf,
+        adam_home: PathBuf,
         enable_codex_api_key_env: bool,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
     ) -> Arc<Self> {
         Arc::new(Self::new(
-            codex_home,
+            adam_home,
             enable_codex_api_key_env,
             auth_credentials_store_mode,
         ))
@@ -1152,7 +1150,7 @@ impl AuthManager {
     /// reloads the in‑memory auth cache so callers immediately observe the
     /// unauthenticated state.
     pub fn logout(&self) -> std::io::Result<bool> {
-        let removed = logout_all_stores(&self.codex_home, self.auth_credentials_store_mode)?;
+        let removed = logout_all_stores(&self.adam_home, self.auth_credentials_store_mode)?;
         // Always reload to clear any cached auth (even if file absent).
         self.reload();
         Ok(removed)
@@ -1239,7 +1237,7 @@ impl AuthManager {
         }
         let auth_dot_json = AuthDotJson::from_external_tokens(&refreshed, id_token);
         save_auth(
-            &self.codex_home,
+            &self.adam_home,
             &auth_dot_json,
             AuthCredentialsStoreMode::Ephemeral,
         )
@@ -1288,19 +1286,19 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_without_id_token() {
-        let codex_home = tempdir().unwrap();
+        let adam_home = tempdir().unwrap();
         let fake_jwt = write_auth_file(
             AuthFileParams {
                 openai_api_key: None,
                 chatgpt_plan_type: "pro".to_string(),
                 chatgpt_account_id: None,
             },
-            codex_home.path(),
+            adam_home.path(),
         )
         .expect("failed to write auth file");
 
         let storage = create_auth_storage(
-            codex_home.path().to_path_buf(),
+            adam_home.path().to_path_buf(),
             AuthCredentialsStoreMode::File,
         );
         let updated = super::update_tokens(
@@ -1358,18 +1356,18 @@ mod tests {
     #[tokio::test]
     #[serial(codex_api_key)]
     async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
-        let codex_home = tempdir().unwrap();
+        let adam_home = tempdir().unwrap();
         let fake_jwt = write_auth_file(
             AuthFileParams {
                 openai_api_key: None,
                 chatgpt_plan_type: "pro".to_string(),
                 chatgpt_account_id: None,
             },
-            codex_home.path(),
+            adam_home.path(),
         )
         .expect("failed to write auth file");
 
-        let auth = super::load_auth(codex_home.path(), false, AuthCredentialsStoreMode::File)
+        let auth = super::load_auth(adam_home.path(), false, AuthCredentialsStoreMode::File)
             .unwrap()
             .unwrap();
         assert_eq!(None, auth.api_key());
@@ -1447,8 +1445,8 @@ mod tests {
         chatgpt_account_id: Option<String>,
     }
 
-    fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result<String> {
-        let auth_file = get_auth_file(codex_home);
+    fn write_auth_file(params: AuthFileParams, adam_home: &Path) -> std::io::Result<String> {
+        let auth_file = get_auth_file(adam_home);
         // Create a minimal valid JWT for the id_token field.
         #[derive(Serialize)]
         struct Header {
@@ -1496,12 +1494,12 @@ mod tests {
     }
 
     async fn build_config(
-        codex_home: &Path,
+        adam_home: &Path,
         forced_login_method: Option<ForcedLoginMethod>,
         forced_chatgpt_workspace_id: Option<String>,
     ) -> Config {
         let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.to_path_buf())
+            .adam_home(adam_home.to_path_buf())
             .build()
             .await
             .expect("config should load");
@@ -1543,17 +1541,17 @@ mod tests {
 
     #[tokio::test]
     async fn enforce_login_restrictions_logs_out_for_method_mismatch() {
-        let codex_home = tempdir().unwrap();
-        login_with_api_key(codex_home.path(), "sk-test", AuthCredentialsStoreMode::File)
+        let adam_home = tempdir().unwrap();
+        login_with_api_key(adam_home.path(), "sk-test", AuthCredentialsStoreMode::File)
             .expect("seed api key");
 
-        let config = build_config(codex_home.path(), Some(ForcedLoginMethod::Chatgpt), None).await;
+        let config = build_config(adam_home.path(), Some(ForcedLoginMethod::Chatgpt), None).await;
 
         let err = super::enforce_login_restrictions(&config)
             .expect_err("expected method mismatch to error");
         assert!(err.to_string().contains("ChatGPT login is required"));
         assert!(
-            !codex_home.path().join("auth.json").exists(),
+            !adam_home.path().join("auth.json").exists(),
             "auth.json should be removed on mismatch"
         );
     }
@@ -1561,24 +1559,24 @@ mod tests {
     #[tokio::test]
     #[serial(codex_api_key)]
     async fn enforce_login_restrictions_logs_out_for_workspace_mismatch() {
-        let codex_home = tempdir().unwrap();
+        let adam_home = tempdir().unwrap();
         let _jwt = write_auth_file(
             AuthFileParams {
                 openai_api_key: None,
                 chatgpt_plan_type: "pro".to_string(),
                 chatgpt_account_id: Some("org_another_org".to_string()),
             },
-            codex_home.path(),
+            adam_home.path(),
         )
         .expect("failed to write auth file");
 
-        let config = build_config(codex_home.path(), None, Some("org_mine".to_string())).await;
+        let config = build_config(adam_home.path(), None, Some("org_mine".to_string())).await;
 
         let err = super::enforce_login_restrictions(&config)
             .expect_err("expected workspace mismatch to error");
         assert!(err.to_string().contains("workspace org_mine"));
         assert!(
-            !codex_home.path().join("auth.json").exists(),
+            !adam_home.path().join("auth.json").exists(),
             "auth.json should be removed on mismatch"
         );
     }
@@ -1586,22 +1584,22 @@ mod tests {
     #[tokio::test]
     #[serial(codex_api_key)]
     async fn enforce_login_restrictions_allows_matching_workspace() {
-        let codex_home = tempdir().unwrap();
+        let adam_home = tempdir().unwrap();
         let _jwt = write_auth_file(
             AuthFileParams {
                 openai_api_key: None,
                 chatgpt_plan_type: "pro".to_string(),
                 chatgpt_account_id: Some("org_mine".to_string()),
             },
-            codex_home.path(),
+            adam_home.path(),
         )
         .expect("failed to write auth file");
 
-        let config = build_config(codex_home.path(), None, Some("org_mine".to_string())).await;
+        let config = build_config(adam_home.path(), None, Some("org_mine".to_string())).await;
 
         super::enforce_login_restrictions(&config).expect("matching workspace should succeed");
         assert!(
-            codex_home.path().join("auth.json").exists(),
+            adam_home.path().join("auth.json").exists(),
             "auth.json should remain when restrictions pass"
         );
     }
@@ -1609,15 +1607,15 @@ mod tests {
     #[tokio::test]
     async fn enforce_login_restrictions_allows_api_key_if_login_method_not_set_but_forced_chatgpt_workspace_id_is_set()
      {
-        let codex_home = tempdir().unwrap();
-        login_with_api_key(codex_home.path(), "sk-test", AuthCredentialsStoreMode::File)
+        let adam_home = tempdir().unwrap();
+        login_with_api_key(adam_home.path(), "sk-test", AuthCredentialsStoreMode::File)
             .expect("seed api key");
 
-        let config = build_config(codex_home.path(), None, Some("org_mine".to_string())).await;
+        let config = build_config(adam_home.path(), None, Some("org_mine".to_string())).await;
 
         super::enforce_login_restrictions(&config).expect("matching workspace should succeed");
         assert!(
-            codex_home.path().join("auth.json").exists(),
+            adam_home.path().join("auth.json").exists(),
             "auth.json should remain when restrictions pass"
         );
     }
@@ -1626,9 +1624,9 @@ mod tests {
     #[serial(codex_api_key)]
     async fn enforce_login_restrictions_blocks_env_api_key_when_chatgpt_required() {
         let _guard = EnvVarGuard::set(CODEX_API_KEY_ENV_VAR, "sk-env");
-        let codex_home = tempdir().unwrap();
+        let adam_home = tempdir().unwrap();
 
-        let config = build_config(codex_home.path(), Some(ForcedLoginMethod::Chatgpt), None).await;
+        let config = build_config(adam_home.path(), Some(ForcedLoginMethod::Chatgpt), None).await;
 
         let err = super::enforce_login_restrictions(&config)
             .expect_err("environment API key should not satisfy forced ChatGPT login");
@@ -1640,18 +1638,18 @@ mod tests {
 
     #[test]
     fn plan_type_maps_known_plan() {
-        let codex_home = tempdir().unwrap();
+        let adam_home = tempdir().unwrap();
         let _jwt = write_auth_file(
             AuthFileParams {
                 openai_api_key: None,
                 chatgpt_plan_type: "pro".to_string(),
                 chatgpt_account_id: None,
             },
-            codex_home.path(),
+            adam_home.path(),
         )
         .expect("failed to write auth file");
 
-        let auth = super::load_auth(codex_home.path(), false, AuthCredentialsStoreMode::File)
+        let auth = super::load_auth(adam_home.path(), false, AuthCredentialsStoreMode::File)
             .expect("load auth")
             .expect("auth available");
 
@@ -1660,18 +1658,18 @@ mod tests {
 
     #[test]
     fn plan_type_maps_unknown_to_unknown() {
-        let codex_home = tempdir().unwrap();
+        let adam_home = tempdir().unwrap();
         let _jwt = write_auth_file(
             AuthFileParams {
                 openai_api_key: None,
                 chatgpt_plan_type: "mystery-tier".to_string(),
                 chatgpt_account_id: None,
             },
-            codex_home.path(),
+            adam_home.path(),
         )
         .expect("failed to write auth file");
 
-        let auth = super::load_auth(codex_home.path(), false, AuthCredentialsStoreMode::File)
+        let auth = super::load_auth(adam_home.path(), false, AuthCredentialsStoreMode::File)
             .expect("load auth")
             .expect("auth available");
 

@@ -26,8 +26,8 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 #[tokio::test]
 async fn thread_read_returns_summary_without_turns() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path(), &server.uri())?;
 
     let preview = "Saved user message";
     let text_elements = [TextElement::new(
@@ -35,7 +35,7 @@ async fn thread_read_returns_summary_without_turns() -> Result<()> {
         Some("<note>".into()),
     )];
     let conversation_id = create_fake_rollout_with_text_elements(
-        codex_home.path(),
+        adam_home.path(),
         "2025-01-05T12-00-00",
         "2025-01-05T12:00:00Z",
         preview,
@@ -47,7 +47,7 @@ async fn thread_read_returns_summary_without_turns() -> Result<()> {
         None,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let read_id = mcp
@@ -79,8 +79,8 @@ async fn thread_read_returns_summary_without_turns() -> Result<()> {
 #[tokio::test]
 async fn thread_read_can_include_turns() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path(), &server.uri())?;
 
     let preview = "Saved user message";
     let text_elements = vec![TextElement::new(
@@ -88,7 +88,7 @@ async fn thread_read_can_include_turns() -> Result<()> {
         Some("<note>".into()),
     )];
     let conversation_id = create_fake_rollout_with_text_elements(
-        codex_home.path(),
+        adam_home.path(),
         "2025-01-05T12-00-00",
         "2025-01-05T12:00:00Z",
         preview,
@@ -100,7 +100,7 @@ async fn thread_read_can_include_turns() -> Result<()> {
         None,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let read_id = mcp
@@ -148,11 +148,11 @@ async fn thread_read_rejects_missing_schema_version_rollout() -> Result<()> {
 
 async fn thread_read_rejects_unsupported_rollout(schema_version: Option<u32>) -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    let adam_home = TempDir::new()?;
+    create_config_toml(adam_home.path(), &server.uri())?;
 
     let conversation_id = create_fake_rollout_with_schema_version(
-        codex_home.path(),
+        adam_home.path(),
         "2025-01-06T12-00-00",
         "2025-01-06T12:00:00Z",
         "legacy message",
@@ -160,7 +160,7 @@ async fn thread_read_rejects_unsupported_rollout(schema_version: Option<u32>) ->
         schema_version,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let read_id = mcp
@@ -185,25 +185,17 @@ async fn thread_read_rejects_unsupported_rollout(schema_version: Option<u32>) ->
 }
 
 // Helper to create a config.toml pointing at the mock model server.
-fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "read-only"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-dialect = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
+fn create_config_toml(adam_home: &Path, server_uri: &str) -> std::io::Result<()> {
+    app_test_support::write_mock_responses_config_toml_with_options(
+        adam_home,
+        server_uri,
+        &std::collections::BTreeMap::new(),
+        20_000,
+        Some(false),
+        "mock_provider",
+        "mock-model",
+        "",
+        "never",
+        "read-only",
     )
 }

@@ -42,8 +42,8 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
 async fn list_apps_returns_empty_when_connectors_disabled() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let adam_home = TempDir::new()?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
@@ -95,10 +95,10 @@ async fn list_apps_returns_empty_even_when_legacy_feature_alias_is_enabled() -> 
     let tools = vec![connector_tool("beta", "Beta App")?];
     let (server_url, server_handle) = start_apps_server(connectors.clone(), tools).await?;
 
-    let codex_home = TempDir::new()?;
-    write_connectors_config(codex_home.path(), &server_url)?;
+    let adam_home = TempDir::new()?;
+    write_connectors_config(adam_home.path(), &server_url)?;
     write_chatgpt_auth(
-        codex_home.path(),
+        adam_home.path(),
         ChatGptAuthFixture::new("chatgpt-token")
             .account_id("account-123")
             .chatgpt_user_id("user-123")
@@ -106,7 +106,7 @@ async fn list_apps_returns_empty_even_when_legacy_feature_alias_is_enabled() -> 
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -255,8 +255,8 @@ fn connector_tool(connector_id: &str, connector_name: &str) -> Result<Tool> {
     Ok(tool)
 }
 
-fn write_connectors_config(codex_home: &std::path::Path, base_url: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
+fn write_connectors_config(adam_home: &std::path::Path, base_url: &str) -> std::io::Result<()> {
+    let config_toml = adam_home.join("config.toml");
     std::fs::write(
         config_toml,
         format!(

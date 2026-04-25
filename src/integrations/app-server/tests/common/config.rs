@@ -4,13 +4,39 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 pub fn write_mock_responses_config_toml(
-    codex_home: &Path,
+    adam_home: &Path,
     server_uri: &str,
     feature_flags: &BTreeMap<Feature, bool>,
     auto_compact_limit: i64,
     requires_openai_auth: Option<bool>,
     model_provider_id: &str,
     compact_prompt: &str,
+) -> std::io::Result<()> {
+    write_mock_responses_config_toml_with_options(
+        adam_home,
+        server_uri,
+        feature_flags,
+        auto_compact_limit,
+        requires_openai_auth,
+        model_provider_id,
+        "mock-model",
+        compact_prompt,
+        "never",
+        "read-only",
+    )
+}
+
+pub fn write_mock_responses_config_toml_with_options(
+    adam_home: &Path,
+    server_uri: &str,
+    feature_flags: &BTreeMap<Feature, bool>,
+    auto_compact_limit: i64,
+    requires_openai_auth: Option<bool>,
+    model_provider_id: &str,
+    model: &str,
+    compact_prompt: &str,
+    approval_policy: &str,
+    sandbox_mode: &str,
 ) -> std::io::Result<()> {
     // Phase 1: build the features block for config.toml.
     let mut features = BTreeMap::from([(Feature::RemoteModels, false)]);
@@ -29,43 +55,87 @@ pub fn write_mock_responses_config_toml(
         })
         .collect::<Vec<_>>()
         .join("\n");
-    // Phase 2: build provider-specific config bits.
-    let requires_line = match requires_openai_auth {
-        Some(true) => "requires_openai_auth = true\n".to_string(),
-        Some(false) | None => String::new(),
-    };
-    let provider_block = if model_provider_id == "openai" {
-        String::new()
-    } else {
-        format!(
-            r#"
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-dialect = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-{requires_line}
-"#
-        )
-    };
-    // Phase 3: write the final config file.
-    let config_toml = codex_home.join("config.toml");
+    if model_provider_id != "openai" {
+        write_mock_responses_models_json(
+            adam_home,
+            server_uri,
+            model_provider_id,
+            requires_openai_auth.unwrap_or(false),
+            Some(auto_compact_limit),
+            model,
+        )?;
+        write_state_json(adam_home, &format!("{model_provider_id}.main:{model}"))?;
+    }
+    let config_toml = adam_home.join("config.toml");
     std::fs::write(
         config_toml,
         format!(
             r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "read-only"
+approval_policy = "{approval_policy}"
+sandbox_mode = "{sandbox_mode}"
 compact_prompt = "{compact_prompt}"
-model_auto_compact_token_limit = {auto_compact_limit}
-
-model_provider = "{model_provider_id}"
 
 [features]
 {feature_entries}
-{provider_block}
+"#
+        ),
+    )
+}
+
+pub fn write_state_json(adam_home: &Path, model_ref: &str) -> std::io::Result<()> {
+    std::fs::write(
+        adam_home.join("state.json"),
+        format!(
+            r#"{{
+  "last_selected_model": {{
+    "model_ref": "{model_ref}",
+    "selected_at": null
+  }},
+  "last_reasoning_effort": null,
+  "last_model_verbosity": null
+}}
+"#
+        ),
+    )
+}
+
+pub fn write_mock_responses_models_json(
+    adam_home: &Path,
+    server_uri: &str,
+    provider_id: &str,
+    requires_openai_auth: bool,
+    auto_compact_limit: Option<i64>,
+    model: &str,
+) -> std::io::Result<()> {
+    let auto_compact = auto_compact_limit
+        .map(|limit| format!(",\n              \"auto_compact_token_limit\": {limit}"))
+        .unwrap_or_default();
+    std::fs::write(
+        adam_home.join("models.json"),
+        format!(
+            r#"{{
+  "providers": {{
+    "{provider_id}": {{
+      "name": "{provider_id}",
+      "endpoints": {{
+        "main": {{
+          "name": "{provider_id}",
+          "base_url": "{server_uri}/v1",
+          "dialect": "responses",
+          "experimental_bearer_token": "sk-test",
+          "request_max_retries": 0,
+          "stream_max_retries": 0,
+          "requires_openai_auth": {requires_openai_auth},
+          "models": {{
+            "{model}": {{
+              "context_window": 100000{auto_compact}
+            }}
+          }}
+        }}
+      }}
+    }}
+  }}
+}}
 "#
         ),
     )

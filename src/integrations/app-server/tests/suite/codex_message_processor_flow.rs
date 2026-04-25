@@ -48,9 +48,9 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
     }
 
     let tmp = TempDir::new()?;
-    // Temporary Codex home with config pointing at the mock server.
-    let codex_home = tmp.path().join("codex_home");
-    std::fs::create_dir(&codex_home)?;
+    // Temporary Adam home with config pointing at the mock server.
+    let adam_home = tmp.path().join("adam_home");
+    std::fs::create_dir(&adam_home)?;
     let working_directory = tmp.path().join("workdir");
     std::fs::create_dir(&working_directory)?;
 
@@ -66,10 +66,10 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
         create_final_assistant_message_sse_response("Enjoy your new git repo!")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(&codex_home, &server.uri())?;
+    create_config_toml(&adam_home, &server.uri())?;
 
     // Start MCP server and initialize.
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = McpProcess::new(&adam_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // 1) newConversation
@@ -197,8 +197,8 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     }
 
     let tmp = TempDir::new()?;
-    let codex_home = tmp.path().join("codex_home");
-    std::fs::create_dir(&codex_home)?;
+    let adam_home = tmp.path().join("adam_home");
+    std::fs::create_dir(&adam_home)?;
     let working_directory = tmp.path().join("workdir");
     std::fs::create_dir(&working_directory)?;
 
@@ -228,10 +228,10 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
         create_final_assistant_message_sse_response("done 2")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(&codex_home, &server.uri())?;
+    create_config_toml(&adam_home, &server.uri())?;
 
     // Start MCP server and initialize.
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = McpProcess::new(&adam_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // 1) Start conversation with approval_policy=untrusted
@@ -370,8 +370,8 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
     }
 
     let tmp = TempDir::new()?;
-    let codex_home = tmp.path().join("codex_home");
-    std::fs::create_dir(&codex_home)?;
+    let adam_home = tmp.path().join("adam_home");
+    std::fs::create_dir(&adam_home)?;
     let workspace_root = tmp.path().join("workspace");
     std::fs::create_dir(&workspace_root)?;
     let first_cwd = workspace_root.join("turn1");
@@ -396,9 +396,9 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
         create_final_assistant_message_sse_response("done second")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(&codex_home, &server.uri())?;
+    create_config_toml(&adam_home, &server.uri())?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = McpProcess::new(&adam_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let new_conv_id = mcp
@@ -520,24 +520,17 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
     Ok(())
 }
 
-fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "untrusted"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-dialect = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
+fn create_config_toml(adam_home: &Path, server_uri: &str) -> std::io::Result<()> {
+    app_test_support::write_mock_responses_config_toml_with_options(
+        adam_home,
+        server_uri,
+        &std::collections::BTreeMap::new(),
+        20_000,
+        Some(false),
+        "mock_provider",
+        "mock-model",
+        "",
+        "untrusted",
+        "read-only",
     )
 }

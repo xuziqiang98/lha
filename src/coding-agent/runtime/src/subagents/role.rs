@@ -43,7 +43,7 @@ pub(crate) async fn apply_role_to_config(
             built_in::config_file_contents(config_file)
                 .map(str::to_owned)
                 .ok_or_else(|| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?,
-            config.codex_home.as_path(),
+            config.adam_home.as_path(),
         )
     } else {
         (
@@ -99,7 +99,7 @@ pub(crate) async fn apply_role_to_config(
     .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
 
     let merged_toml = config_layer_stack.effective_config();
-    let merged_config = deserialize_config_toml_with_base(merged_toml, &config.codex_home)
+    let merged_config = deserialize_config_toml_with_base(merged_toml, &config.adam_home)
         .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
     let next_config = Config::load_config_with_layer_stack(
         merged_config,
@@ -112,7 +112,7 @@ pub(crate) async fn apply_role_to_config(
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             ..Default::default()
         },
-        config.codex_home.clone(),
+        config.adam_home.clone(),
         config_layer_stack,
     )
     .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;

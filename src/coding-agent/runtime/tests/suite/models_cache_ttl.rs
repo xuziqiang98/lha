@@ -72,7 +72,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
         .list_models(&config, RefreshStrategy::OnlineIfUncached)
         .await;
 
-    let cache_path = cache_path_for_provider(&config.codex_home, &config.model_provider_id);
+    let cache_path = cache_path_for_provider(&config.adam_home, &config.model_provider_id);
     let stale_time = Utc.timestamp_opt(0, 0).single().expect("valid epoch");
     rewrite_cache_timestamp(&cache_path, stale_time).await?;
 
@@ -156,8 +156,8 @@ struct ModelsCache {
     models: Vec<ModelInfo>,
 }
 
-fn cache_path_for_provider(codex_home: &Path, model_provider_id: &str) -> std::path::PathBuf {
-    codex_home
+fn cache_path_for_provider(adam_home: &Path, model_provider_id: &str) -> std::path::PathBuf {
+    adam_home
         .join("remote_models")
         .join(model_provider_cache_key(model_provider_id))
         .join(CACHE_FILE)

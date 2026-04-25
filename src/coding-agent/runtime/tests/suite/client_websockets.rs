@@ -35,7 +35,7 @@ use tracing_test::traced_test;
 const MODEL: &str = "gpt-5.2-codex";
 
 struct WebsocketTestHarness {
-    _codex_home: TempDir,
+    _adam_home: TempDir,
     client: TestRuntimeClient,
     otel_manager: OtelManager,
 }
@@ -230,8 +230,8 @@ fn websocket_provider(server: &WebSocketTestServer) -> RuntimeEndpoint {
 
 async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness {
     let provider = websocket_provider(server);
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home).await;
+    let adam_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&adam_home).await;
     config.model = Some(MODEL.to_string());
     config.features.enable(Feature::ResponsesWebsockets);
     let config = Arc::new(config);
@@ -274,7 +274,7 @@ async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness
     );
 
     WebsocketTestHarness {
-        _codex_home: codex_home,
+        _adam_home: adam_home,
         client,
         otel_manager,
     }

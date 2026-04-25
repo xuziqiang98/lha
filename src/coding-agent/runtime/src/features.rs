@@ -670,7 +670,7 @@ pub fn maybe_push_unstable_features_warning(
 
     let under_development_feature_keys = under_development_feature_keys.join(", ");
     let config_path = config
-        .codex_home
+        .adam_home
         .join(CONFIG_TOML_FILE)
         .display()
         .to_string();

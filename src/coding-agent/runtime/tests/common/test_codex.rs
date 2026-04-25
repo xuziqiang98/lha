@@ -173,7 +173,7 @@ impl TestCodexBuilder {
             auth.clone(),
             config.model_provider_id.as_str(),
             config.model_provider.clone(),
-            config.codex_home.clone(),
+            config.adam_home.clone(),
         );
         let thread_manager = Arc::new(thread_manager);
 
@@ -245,8 +245,8 @@ impl TestCodex {
         self.cwd.path()
     }
 
-    pub fn codex_home_path(&self) -> &Path {
-        self.config.codex_home.as_path()
+    pub fn adam_home_path(&self) -> &Path {
+        self.config.adam_home.as_path()
     }
 
     pub fn workspace_path(&self, rel: impl AsRef<Path>) -> PathBuf {

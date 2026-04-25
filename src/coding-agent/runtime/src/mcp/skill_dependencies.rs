@@ -177,14 +177,14 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         return;
     }
 
-    let codex_home = config.codex_home.clone();
+    let adam_home = config.adam_home.clone();
     let installed = config.mcp_servers.get().clone();
     let missing = collect_missing_mcp_dependencies(mentioned_skills, &installed);
     if missing.is_empty() {
         return;
     }
 
-    let mut servers = match load_global_mcp_servers(&codex_home).await {
+    let mut servers = match load_global_mcp_servers(&adam_home).await {
         Ok(servers) => servers,
         Err(err) => {
             warn!("failed to load MCP servers while installing skill dependencies: {err}");
@@ -207,7 +207,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         return;
     }
 
-    if let Err(err) = ConfigEditsBuilder::new(&codex_home)
+    if let Err(err) = ConfigEditsBuilder::new(&adam_home)
         .replace_mcp_servers(&servers)
         .apply()
         .await

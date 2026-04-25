@@ -83,7 +83,7 @@ const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 ///
 /// - admin:    managed preferences (*)
 /// - system    `/etc/codex/config.toml`
-/// - user      `${CODEY_HOME}/config.toml`
+/// - user      `${ADAM_HOME}/config.toml`
 /// - cwd       `${PWD}/config.toml` (loaded but disabled when the directory is untrusted)
 /// - tree      parent directories up to root looking for `./.codex/config.toml` (loaded but disabled when untrusted)
 /// - repo      `$(git rev-parse --show-toplevel)/.codex/config.toml` (loaded but disabled when untrusted)
@@ -98,7 +98,7 @@ const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 /// thread-agnostic config loading (e.g., for the app server's `/config`
 /// endpoint) should `cwd` be `None`.
 pub async fn load_config_layers_state(
-    codex_home: &Path,
+    adam_home: &Path,
     cwd: Option<AbsolutePathBuf>,
     cli_overrides: &[(String, TomlValue)],
     overrides: LoaderOverrides,
@@ -131,7 +131,7 @@ pub async fn load_config_layers_state(
 
     // Make a best-effort to support the legacy `managed_config.toml` as a
     // requirements specification.
-    let loaded_config_layers = layer_io::load_config_layers_internal(codex_home, overrides).await?;
+    let loaded_config_layers = layer_io::load_config_layers_internal(adam_home, overrides).await?;
     load_requirements_from_legacy_scheme(
         &mut config_requirements_toml,
         loaded_config_layers.clone(),
@@ -170,10 +170,10 @@ pub async fn load_config_layers_state(
         layers.push(system_layer);
     }
 
-    // Add a layer for $CODEY_HOME/config.toml if it exists. Note if the file
+    // Add a layer for $ADAM_HOME/config.toml if it exists. Note if the file
     // exists, but is malformed, then this error should be propagated to the
     // user.
-    let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home)?;
+    let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, adam_home)?;
     let user_layer = load_config_toml_for_required_layer(&user_file, |config_toml| {
         ConfigLayerEntry::new(
             ConfigLayerSource::User {
@@ -211,7 +211,7 @@ pub async fn load_config_layers_state(
             &merged_so_far,
             &cwd,
             &project_root_markers,
-            codex_home,
+            adam_home,
             &user_file,
         )
         .await
@@ -236,7 +236,7 @@ pub async fn load_config_layers_state(
             &cwd,
             &project_trust_context.project_root,
             &project_trust_context,
-            codex_home,
+            adam_home,
         )
         .await?;
         layers.extend(project_layers);
@@ -674,11 +674,11 @@ async fn load_project_layers(
     cwd: &AbsolutePathBuf,
     project_root: &AbsolutePathBuf,
     trust_context: &ProjectTrustContext,
-    codex_home: &Path,
+    adam_home: &Path,
 ) -> io::Result<Vec<ConfigLayerEntry>> {
-    let codex_home_abs = AbsolutePathBuf::from_absolute_path(codex_home)?;
-    let codex_home_normalized =
-        normalize_path(codex_home_abs.as_path()).unwrap_or_else(|_| codex_home_abs.to_path_buf());
+    let adam_home_abs = AbsolutePathBuf::from_absolute_path(adam_home)?;
+    let adam_home_normalized =
+        normalize_path(adam_home_abs.as_path()).unwrap_or_else(|_| adam_home_abs.to_path_buf());
     let mut dirs = cwd
         .as_path()
         .ancestors()
@@ -711,7 +711,7 @@ async fn load_project_layers(
         let dot_codex_abs = AbsolutePathBuf::from_absolute_path(&dot_codex)?;
         let dot_codex_normalized =
             normalize_path(dot_codex_abs.as_path()).unwrap_or_else(|_| dot_codex_abs.to_path_buf());
-        if dot_codex_abs == codex_home_abs || dot_codex_normalized == codex_home_normalized {
+        if dot_codex_abs == adam_home_abs || dot_codex_normalized == adam_home_normalized {
             continue;
         }
         let config_file = dot_codex_abs.join(CONFIG_TOML_FILE)?;

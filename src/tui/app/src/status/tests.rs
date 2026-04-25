@@ -29,7 +29,7 @@ use tempfile::TempDir;
 
 async fn test_config(temp_home: &TempDir) -> Config {
     ConfigBuilder::default()
-        .codex_home(temp_home.path().to_path_buf())
+        .adam_home(temp_home.path().to_path_buf())
         .build()
         .await
         .expect("load config")
@@ -37,7 +37,7 @@ async fn test_config(temp_home: &TempDir) -> Config {
 
 fn test_auth_manager(config: &Config) -> AuthManager {
     AuthManager::new(
-        config.codex_home.clone(),
+        config.adam_home.clone(),
         false,
         config.cli_auth_credentials_store_mode,
     )
@@ -71,7 +71,7 @@ fn write_chatgpt_auth(config: &Config) {
         },
         "last_refresh": Utc::now(),
     });
-    let auth_file = config.codex_home.join("auth.json");
+    let auth_file = config.adam_home.join("auth.json");
     std::fs::write(
         auth_file,
         serde_json::to_string_pretty(&auth_json).expect("serialize auth json"),
@@ -87,7 +87,7 @@ fn write_api_key_auth(config: &Config) {
         last_refresh: None,
     };
     save_auth(
-        &config.codex_home,
+        &config.adam_home,
         &auth_json,
         config.cli_auth_credentials_store_mode,
     )

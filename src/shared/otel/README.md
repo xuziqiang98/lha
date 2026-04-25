@@ -24,7 +24,7 @@ let settings = OtelSettings {
     environment: "dev".to_string(),
     service_name: "codex-cli".to_string(),
     service_version: env!("CARGO_PKG_VERSION").to_string(),
-    codex_home: std::path::PathBuf::from("/tmp"),
+    adam_home: std::path::PathBuf::from("/tmp"),
     exporter: OtelExporter::OtlpHttp {
         endpoint: "https://otlp.example.com".to_string(),
         headers: std::collections::HashMap::new(),
