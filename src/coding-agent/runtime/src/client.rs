@@ -18,11 +18,13 @@ use adam_protocol::protocol::SessionSource;
 
 use crate::AuthManager;
 use crate::config::Config;
-use crate::default_client::build_reqwest_client;
+use crate::default_client::ReqwestClientOptions;
+use crate::default_client::build_reqwest_client_with_options;
 use crate::dynamic_context_window::DynamicContextWindowFailure;
 use crate::dynamic_context_window::DynamicContextWindowState;
 use crate::dynamic_context_window::DynamicContextWindowSuccess;
 use crate::error::Result;
+use crate::features::Feature;
 use crate::runtime_builder::AgentAuthSource;
 use adam_llm::RuntimeEndpoint;
 
@@ -77,11 +79,14 @@ impl TurnRuntime {
             endpoint.set_realtime_turn_streaming_enabled(false);
         }
 
+        let http_client_options = ReqwestClientOptions {
+            http1_only: config.features.enabled(Feature::ForceHttp1Streaming),
+        };
         let auth_source = AgentAuthSource::boxed(auth_manager.clone(), endpoint.clone());
         let runtime = runtime_factory.build_client(RuntimeBuildSpec {
             endpoint_id: config.model_provider_id.clone(),
             auth_source,
-            http_client: build_reqwest_client(),
+            http_client: build_reqwest_client_with_options(http_client_options),
             model_info: model_info.clone().into(),
             otel_manager: otel_manager.clone(),
             endpoint: endpoint.clone(),

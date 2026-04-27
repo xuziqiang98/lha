@@ -91,6 +91,8 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Margin;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -135,6 +137,7 @@ use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
+use adam_agent::terminal::Multiplexer;
 use adam_common::fuzzy_match::fuzzy_match;
 use adam_protocol::custom_prompts::CustomPrompt;
 use adam_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
@@ -290,6 +293,7 @@ pub(crate) struct ChatComposer {
     connectors_enabled: bool,
     personality_command_enabled: bool,
     windows_degraded_sandbox_active: bool,
+    is_zellij: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -382,6 +386,10 @@ impl ChatComposer {
             connectors_enabled: false,
             personality_command_enabled: false,
             windows_degraded_sandbox_active: false,
+            is_zellij: matches!(
+                adam_agent::terminal::terminal_info().multiplexer,
+                Some(Multiplexer::Zellij { .. })
+            ),
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -2965,10 +2973,20 @@ impl ChatComposer {
             }
         }
         let style = user_message_style();
+        let textarea_style = style.fg(Color::Reset);
         Block::default().style(style).render_ref(composer_rect, buf);
+        if self.is_zellij && !textarea_rect.is_empty() {
+            buf.set_style(textarea_rect, textarea_style);
+        }
         if !textarea_rect.is_empty() {
             let prompt = if self.input_enabled {
-                "›".bold()
+                if self.is_zellij {
+                    Span::styled("›", style.fg(Color::Cyan))
+                } else {
+                    "›".bold()
+                }
+            } else if self.is_zellij {
+                Span::styled("›", style.fg(Color::DarkGray))
             } else {
                 "›".dim()
             };
@@ -2981,13 +2999,28 @@ impl ChatComposer {
         }
 
         let mut state = self.textarea_state.borrow_mut();
+        let textarea_is_empty = self.textarea.text().is_empty();
         if let Some(mask_char) = mask_char {
+            self.textarea.render_ref_masked(
+                textarea_rect,
+                buf,
+                &mut state,
+                mask_char,
+                if self.is_zellij {
+                    textarea_style
+                } else {
+                    Style::default()
+                },
+            );
+        } else if self.is_zellij && textarea_is_empty {
+            buf.set_style(textarea_rect, textarea_style);
+        } else if self.is_zellij {
             self.textarea
-                .render_ref_masked(textarea_rect, buf, &mut state, mask_char);
+                .render_ref_styled(textarea_rect, buf, &mut state, textarea_style);
         } else {
             StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
         }
-        if self.textarea.text().is_empty() {
+        if textarea_is_empty {
             let text = if self.input_enabled {
                 self.placeholder_text.as_str().to_string()
             } else {
@@ -2997,9 +3030,18 @@ impl ChatComposer {
                     .to_string()
             };
             if !textarea_rect.is_empty() {
-                let placeholder = Span::from(text).dim();
-                Line::from(vec![placeholder])
-                    .render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
+                if self.is_zellij {
+                    buf.set_string(
+                        textarea_rect.x,
+                        textarea_rect.y,
+                        text,
+                        textarea_style.fg(Color::White).italic(),
+                    );
+                } else {
+                    let placeholder = Span::from(text).dim();
+                    Line::from(vec![placeholder])
+                        .render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
+                }
             }
         }
     }
@@ -3251,6 +3293,40 @@ mod tests {
         F: FnOnce(&mut ChatComposer),
     {
         snapshot_composer_state_with_width(name, 100, enhanced_keys_supported, setup);
+    }
+
+    fn snapshot_zellij_composer_state<F>(name: &str, setup: F)
+    where
+        F: FnOnce(&mut ChatComposer),
+    {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            true,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.is_zellij = true;
+        setup(&mut composer);
+        let footer_props = composer.footer_props();
+        let footer_lines = footer_height(&footer_props);
+        let footer_spacing = ChatComposer::footer_spacing(footer_lines);
+        let height = footer_lines + footer_spacing + 8;
+        let mut terminal = Terminal::new(TestBackend::new(100, height)).unwrap();
+        terminal
+            .draw(|f| composer.render(f.area(), f.buffer_mut()))
+            .unwrap();
+        insta::assert_snapshot!(name, terminal.backend());
+    }
+
+    #[test]
+    fn zellij_empty_composer_snapshot() {
+        snapshot_zellij_composer_state("zellij_empty_composer", |_composer| {});
     }
 
     #[test]

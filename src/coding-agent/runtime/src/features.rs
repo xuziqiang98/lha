@@ -113,6 +113,8 @@ pub enum Feature {
     PowershellUtf8,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
     EnableRequestCompression,
+    /// Force HTTP/1.1 for model streaming requests.
+    ForceHttp1Streaming,
     /// Enable multi-agent collaboration tools.
     Collab,
     /// Run `/review` in a detached review thread that appears in `/agent`.
@@ -541,6 +543,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::ForceHttp1Streaming,
+        key: "force_http1_streaming",
+        stage: Stage::Experimental {
+            name: "Force HTTP/1.1 streaming",
+            menu_description: "Use HTTP/1.1 for model streaming requests to avoid proxy or gateway issues with HTTP/2.",
+            announcement: "NEW: Force HTTP/1.1 for model streaming requests in /experimental.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Collab,
         key: "multi_agent",
         stage: Stage::Stable,
@@ -846,6 +858,42 @@ mod tests {
             ),
             stage.experimental_announcement()
         );
+    }
+
+    #[test]
+    fn force_http1_streaming_is_experimental_and_disabled_by_default() {
+        let stage = Feature::ForceHttp1Streaming.stage();
+
+        assert_eq!(false, Feature::ForceHttp1Streaming.default_enabled());
+        assert_eq!(
+            Some("Force HTTP/1.1 streaming"),
+            stage.experimental_menu_name()
+        );
+        assert_eq!(
+            Some(
+                "Use HTTP/1.1 for model streaming requests to avoid proxy or gateway issues with HTTP/2.",
+            ),
+            stage.experimental_menu_description()
+        );
+        assert_eq!(
+            Some("NEW: Force HTTP/1.1 for model streaming requests in /experimental."),
+            stage.experimental_announcement()
+        );
+    }
+
+    #[test]
+    fn force_http1_streaming_can_be_enabled_from_config() {
+        let cfg = ConfigToml {
+            features: Some(FeaturesToml {
+                entries: BTreeMap::from([("force_http1_streaming".to_string(), true)]),
+            }),
+            ..Default::default()
+        };
+
+        let features =
+            Features::from_config(&cfg, &ConfigProfile::default(), FeatureOverrides::default());
+
+        assert!(features.enabled(Feature::ForceHttp1Streaming));
     }
 
     #[test]

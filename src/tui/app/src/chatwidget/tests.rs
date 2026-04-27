@@ -7340,3 +7340,35 @@ async fn review_queues_user_messages_snapshot() {
     .unwrap();
     assert_snapshot!(term.backend().vt100().screen().contents());
 }
+
+#[test]
+fn model_popup_refreshes_after_chatgpt_auth_reload_only() {
+    assert!(ChatWidget::should_refresh_models_after_auth_reload(
+        None,
+        Some(AuthMode::Chatgpt),
+        true,
+    ));
+    assert!(ChatWidget::should_refresh_models_after_auth_reload(
+        Some(AuthMode::ApiKey),
+        Some(AuthMode::Chatgpt),
+        true,
+    ));
+    assert!(!ChatWidget::should_refresh_models_after_auth_reload(
+        Some(AuthMode::Chatgpt),
+        Some(AuthMode::Chatgpt),
+        true,
+    ));
+    assert!(!ChatWidget::should_refresh_models_after_auth_reload(
+        Some(AuthMode::ApiKey),
+        Some(AuthMode::ApiKey),
+        true,
+    ));
+    assert!(!ChatWidget::should_refresh_models_after_auth_reload(
+        Some(AuthMode::ApiKey),
+        Some(AuthMode::Chatgpt),
+        false,
+    ));
+    assert!(!ChatWidget::should_refresh_models_after_auth_reload(
+        None, None, true
+    ));
+}

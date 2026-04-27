@@ -177,6 +177,11 @@ pub(crate) enum AppEvent {
         models: Vec<ModelPreset>,
     },
 
+    /// Open the model popup with a freshly refreshed model list.
+    OpenModelPopupWithPresets {
+        models: Vec<ModelPreset>,
+    },
+
     /// Open the confirmation prompt before enabling full access mode.
     OpenFullAccessConfirmation {
         preset: ApprovalPreset,

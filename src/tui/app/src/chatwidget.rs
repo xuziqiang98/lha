@@ -213,6 +213,7 @@ use adam_agent::AuthManager;
 use adam_agent::CodexAuth;
 use adam_agent::ThreadManager;
 use adam_agent::auth::AuthMode;
+use adam_agent::models_manager::manager::RefreshStrategy;
 use adam_agent::protocol::AskForApproval;
 use adam_agent::protocol::SandboxPolicy;
 use adam_common::approval_presets::ApprovalPreset;
@@ -4120,11 +4121,34 @@ impl ChatWidget {
             return;
         }
 
+        let previous_auth_mode = self.auth_manager.get_internal_auth_mode();
         // Refresh auth from disk so `/model` picks up a ChatGPT login that was
         // established after this session started, without clobbering an
         // already-active in-memory ChatGPT auth state.
-        if self.auth_manager.get_internal_auth_mode() != Some(AuthMode::Chatgpt) {
+        if previous_auth_mode != Some(AuthMode::Chatgpt) {
             self.auth_manager.reload();
+        }
+        let current_auth_mode = self.auth_manager.get_internal_auth_mode();
+
+        if Self::should_refresh_models_after_auth_reload(
+            previous_auth_mode,
+            current_auth_mode,
+            self.config.model_provider.is_openai(),
+        ) {
+            self.add_info_message(
+                "Refreshing models; opening picker when ready.".to_string(),
+                None,
+            );
+            let thread_manager = self.thread_manager.clone();
+            let config = self.config.clone();
+            let app_event_tx = self.app_event_tx.clone();
+            tokio::spawn(async move {
+                let models = thread_manager
+                    .list_model_switcher_models(&config, RefreshStrategy::OnlineIfUncached)
+                    .await;
+                app_event_tx.send(AppEvent::OpenModelPopupWithPresets { models });
+            });
+            return;
         }
 
         let presets: Vec<ModelPreset> = match self
@@ -4141,6 +4165,14 @@ impl ChatWidget {
             }
         };
         self.open_model_popup_with_presets(presets);
+    }
+
+    fn should_refresh_models_after_auth_reload(
+        before: Option<AuthMode>,
+        after: Option<AuthMode>,
+        provider_is_openai: bool,
+    ) -> bool {
+        provider_is_openai && before != Some(AuthMode::Chatgpt) && after == Some(AuthMode::Chatgpt)
     }
 
     pub(crate) fn open_provider_popup(&mut self) {

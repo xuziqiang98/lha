@@ -1852,6 +1852,15 @@ mod tests {
             !response.models.is_empty(),
             "bundled models.json should contain at least one model"
         );
+        let gpt55 = response
+            .models
+            .iter()
+            .find(|model| model.slug == "gpt-5.5")
+            .expect("bundled models.json should include gpt-5.5");
+        assert!(
+            gpt55.supported_in_api,
+            "gpt-5.5 should be visible for API key auth via bundled models"
+        );
     }
 
     #[test]
@@ -2235,7 +2244,7 @@ model = "deepseek-r1"
 
         assert_eq!(
             picker_models.first().map(|preset| preset.model.as_str()),
-            Some("gpt-5.3-codex")
+            Some("gpt-5.5")
         );
         assert_eq!(
             picker_models.last().map(|preset| preset.model.as_str()),
@@ -2251,7 +2260,7 @@ model = "deepseek-r1"
         assert!(
             picker_models
                 .iter()
-                .any(|preset| preset.model == "gpt-5.3-codex" && preset.is_default)
+                .any(|preset| preset.model == "gpt-5.5" && preset.is_default)
         );
         assert!(
             picker_models

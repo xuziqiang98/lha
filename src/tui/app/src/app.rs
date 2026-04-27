@@ -1876,8 +1876,14 @@ impl App {
                     }
                     AppRunControl::Continue
                 }
-                Some(event) = tui_events.next() => {
-                    app.handle_tui_event(tui, event).await?
+                event = tui_events.next() => {
+                    if let Some(event) = event {
+                        app.handle_tui_event(tui, event).await?
+                    } else {
+                        tracing::warn!("terminal input stream closed; shutting down active thread");
+                        app.handle_event(tui, AppEvent::Exit(ExitMode::ShutdownFirst))
+                            .await?
+                    }
                 }
                 // Listen on new thread creation due to collab tools.
                 created = thread_created_rx.recv(), if listen_for_threads => {
@@ -2305,6 +2311,9 @@ impl App {
             }
             AppEvent::OpenAllModelsPopup { models } => {
                 self.chat_widget.open_all_models_popup(models);
+            }
+            AppEvent::OpenModelPopupWithPresets { models } => {
+                self.chat_widget.open_model_popup_with_presets(models);
             }
             AppEvent::OpenFullAccessConfirmation {
                 preset,
@@ -3269,7 +3278,7 @@ mod tests {
     use adam_agent::config::models_json::ModelsDialect;
     use adam_agent::config::models_json::ModelsEndpoint;
     use adam_agent::config::models_json::ModelsJson;
-    use adam_agent::config::models_json::ModelsProvider;
+
     use adam_agent::features::Feature;
     use adam_agent::models_manager::manager::ModelsManager;
     use adam_agent::protocol::AskForApproval;

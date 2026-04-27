@@ -375,6 +375,7 @@ async fn run_ratatui_app(
     terminal.clear()?;
 
     let mut tui = Tui::new(terminal);
+    let mut terminal_restore_guard = TerminalRestoreGuard::new();
 
     #[cfg(not(debug_assertions))]
     {
@@ -385,7 +386,7 @@ async fn run_ratatui_app(
             match update_prompt::run_update_prompt_if_needed(&mut tui, &initial_config).await? {
                 UpdatePromptOutcome::Continue => {}
                 UpdatePromptOutcome::RunUpdate(action) => {
-                    crate::tui::restore()?;
+                    terminal_restore_guard.restore()?;
                     return Ok(AppExitInfo {
                         token_usage: adam_agent::protocol::TokenUsage::default(),
                         thread_id: None,
@@ -424,7 +425,7 @@ async fn run_ratatui_app(
         )
         .await?;
         if onboarding_result.should_exit {
-            restore();
+            terminal_restore_guard.restore_silently();
             session_log::log_session_end();
             let _ = tui.terminal.clear();
             return Ok(AppExitInfo {
@@ -458,7 +459,7 @@ async fn run_ratatui_app(
 
     let mut missing_session_exit = |id_str: &str, action: &str| {
         error!("Error finding conversation path: {id_str}");
-        restore();
+        terminal_restore_guard.restore_silently();
         session_log::log_session_end();
         let _ = tui.terminal.clear();
         Ok(AppExitInfo {
@@ -517,7 +518,7 @@ async fn run_ratatui_app(
             .await?
             {
                 resume_picker::SessionSelection::Exit => {
-                    restore();
+                    terminal_restore_guard.restore_silently();
                     session_log::log_session_end();
                     return Ok(AppExitInfo {
                         token_usage: adam_agent::protocol::TokenUsage::default(),
@@ -575,7 +576,7 @@ async fn run_ratatui_app(
         .await?
         {
             resume_picker::SessionSelection::Exit => {
-                restore();
+                terminal_restore_guard.restore_silently();
                 session_log::log_session_end();
                 return Ok(AppExitInfo {
                     token_usage: adam_agent::protocol::TokenUsage::default(),
@@ -646,7 +647,7 @@ async fn run_ratatui_app(
     )
     .await;
 
-    restore();
+    terminal_restore_guard.restore_silently();
     // Mark the end of the recorded session.
     session_log::log_session_end();
     // ignore error when collecting usage – report underlying error instead
@@ -708,6 +709,38 @@ fn restore() {
         eprintln!(
             "failed to restore terminal. Run `reset` or restart your terminal to recover: {err}"
         );
+    }
+}
+
+struct TerminalRestoreGuard {
+    active: bool,
+}
+
+impl TerminalRestoreGuard {
+    fn new() -> Self {
+        Self { active: true }
+    }
+
+    #[cfg_attr(debug_assertions, allow(dead_code))]
+    fn restore(&mut self) -> color_eyre::Result<()> {
+        if self.active {
+            crate::tui::restore()?;
+            self.active = false;
+        }
+        Ok(())
+    }
+
+    fn restore_silently(&mut self) {
+        if self.active {
+            restore();
+            self.active = false;
+        }
+    }
+}
+
+impl Drop for TerminalRestoreGuard {
+    fn drop(&mut self) {
+        self.restore_silently();
     }
 }
 

@@ -24,7 +24,7 @@ use std::sync::RwLock;
 /// The full user agent string is returned from the mcp initialize response.
 /// Parenthesis will be added by Codex. This should only specify what goes inside of the parenthesis.
 pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
-pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
+pub const DEFAULT_ORIGINATOR: &str = "adam_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
 
@@ -178,7 +178,16 @@ pub fn create_client() -> CodexHttpClient {
     CodexHttpClient::new(inner)
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReqwestClientOptions {
+    pub http1_only: bool,
+}
+
 pub fn build_reqwest_client() -> reqwest::Client {
+    build_reqwest_client_with_options(ReqwestClientOptions::default())
+}
+
+pub fn build_reqwest_client_with_options(options: ReqwestClientOptions) -> reqwest::Client {
     let mut headers = HeaderMap::new();
     headers.insert("originator", originator().header_value);
     if let Ok(guard) = REQUIREMENTS_RESIDENCY.read()
@@ -196,6 +205,9 @@ pub fn build_reqwest_client() -> reqwest::Client {
         // Set UA via dedicated helper to avoid header validation pitfalls
         .user_agent(ua)
         .default_headers(headers);
+    if options.http1_only {
+        builder = builder.http1_only();
+    }
     if is_sandboxed() {
         builder = builder.no_proxy();
     }
@@ -288,24 +300,37 @@ mod tests {
     }
 
     #[test]
+    fn reqwest_client_options_default_does_not_force_http1() {
+        assert_eq!(
+            ReqwestClientOptions::default(),
+            ReqwestClientOptions { http1_only: false }
+        );
+    }
+
+    #[test]
+    fn build_reqwest_client_accepts_http1_only_option() {
+        let _client = build_reqwest_client_with_options(ReqwestClientOptions { http1_only: true });
+    }
+
+    #[test]
     fn test_invalid_suffix_is_sanitized() {
-        let prefix = "codex_cli_rs/0.0.0";
+        let prefix = "adam_cli_rs/0.0.0";
         let suffix = "bad\rsuffix";
 
         assert_eq!(
             sanitize_user_agent(format!("{prefix} ({suffix})"), prefix),
-            "codex_cli_rs/0.0.0 (bad_suffix)"
+            "adam_cli_rs/0.0.0 (bad_suffix)"
         );
     }
 
     #[test]
     fn test_invalid_suffix_is_sanitized2() {
-        let prefix = "codex_cli_rs/0.0.0";
+        let prefix = "adam_cli_rs/0.0.0";
         let suffix = "bad\0suffix";
 
         assert_eq!(
             sanitize_user_agent(format!("{prefix} ({suffix})"), prefix),
-            "codex_cli_rs/0.0.0 (bad_suffix)"
+            "adam_cli_rs/0.0.0 (bad_suffix)"
         );
     }
 
