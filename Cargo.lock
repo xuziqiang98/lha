@@ -948,7 +948,6 @@ version = "0.94.4"
 dependencies = [
  "dirs",
  "pretty_assertions",
- "serial_test",
  "tempfile",
 ]
 

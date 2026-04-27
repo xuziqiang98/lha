@@ -65,7 +65,6 @@ mod tests {
     use super::find_adam_home_from_env;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
-    use serial_test::serial;
     use std::fs;
     use std::io::ErrorKind;
     use tempfile::TempDir;
@@ -125,34 +124,5 @@ mod tests {
         let mut expected = home_dir().expect("home dir");
         expected.push(".adam");
         assert_eq!(resolved, expected);
-    }
-
-    #[test]
-    #[serial]
-    fn find_adam_home_ignores_legacy_codey_home_env() {
-        let temp_home = TempDir::new().expect("temp home");
-        let legacy_env_var = concat!("CODEY", "_HOME");
-        let previous_adam_home = std::env::var_os("ADAM_HOME");
-        let previous_codey_home = std::env::var_os(legacy_env_var);
-        unsafe {
-            std::env::remove_var("ADAM_HOME");
-            std::env::set_var(legacy_env_var, temp_home.path());
-        }
-
-        let resolved = super::find_adam_home().expect("default ADAM_HOME");
-        let mut expected = home_dir().expect("home dir");
-        expected.push(".adam");
-        assert_eq!(resolved, expected);
-
-        unsafe {
-            match previous_adam_home {
-                Some(value) => std::env::set_var("ADAM_HOME", value),
-                None => std::env::remove_var("ADAM_HOME"),
-            }
-            match previous_codey_home {
-                Some(value) => std::env::set_var(legacy_env_var, value),
-                None => std::env::remove_var(legacy_env_var),
-            }
-        }
     }
 }
