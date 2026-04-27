@@ -1,12 +1,12 @@
+use adam_agent::auth::AuthCredentialsStoreMode;
+use adam_app_server_protocol::JSONRPCResponse;
+use adam_app_server_protocol::RequestId;
+use adam_app_server_protocol::UserInfoResponse;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
-use codex_agent::auth::AuthCredentialsStoreMode;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::UserInfoResponse;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
 use tempfile::TempDir;

@@ -1,15 +1,15 @@
-use codex_agent::CodexAuth;
-use codex_agent::auth::AuthCredentialsStoreMode;
-use codex_agent::auth::CLIENT_ID;
-use codex_agent::auth::login_with_api_key;
-use codex_agent::auth::logout;
-use codex_agent::config::Config;
-use codex_app_server_protocol::AuthMode;
-use codex_common::CliConfigOverrides;
-use codex_login::ServerOptions;
-use codex_login::run_device_code_login;
-use codex_login::run_login_server;
-use codex_protocol::config_types::ForcedLoginMethod;
+use adam_agent::CodexAuth;
+use adam_agent::auth::AuthCredentialsStoreMode;
+use adam_agent::auth::CLIENT_ID;
+use adam_agent::auth::login_with_api_key;
+use adam_agent::auth::logout;
+use adam_agent::config::Config;
+use adam_app_server_protocol::AuthMode;
+use adam_common::CliConfigOverrides;
+use adam_login::ServerOptions;
+use adam_login::run_device_code_login;
+use adam_login::run_login_server;
+use adam_protocol::config_types::ForcedLoginMethod;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
@@ -104,7 +104,7 @@ pub fn read_api_key_from_stdin() -> String {
 
     if stdin.is_terminal() {
         eprintln!(
-            "--with-api-key expects the API key on stdin. Try piping it, e.g. `printenv OPENAI_API_KEY | codey login --with-api-key`."
+            "--with-api-key expects the API key on stdin. Try piping it, e.g. `printenv OPENAI_API_KEY | adam login --with-api-key`."
         );
         std::process::exit(1);
     }

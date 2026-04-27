@@ -1,7 +1,7 @@
-use codex_protocol::config_types::SandboxMode;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use adam_protocol::config_types::SandboxMode;
+use adam_protocol::protocol::AskForApproval;
+use adam_protocol::protocol::SandboxPolicy;
+use adam_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -347,12 +347,12 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adam_execpolicy::Decision;
+    use adam_execpolicy::Evaluation;
+    use adam_execpolicy::RuleMatch;
+    use adam_protocol::protocol::NetworkAccess;
+    use adam_utils_absolute_path::AbsolutePathBuf;
     use anyhow::Result;
-    use codex_execpolicy::Decision;
-    use codex_execpolicy::Evaluation;
-    use codex_execpolicy::RuleMatch;
-    use codex_protocol::protocol::NetworkAccess;
-    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use toml::from_str;
 

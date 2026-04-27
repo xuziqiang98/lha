@@ -1,15 +1,15 @@
+use adam_protocol::ThreadId;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::protocol::AskForApproval;
+use adam_protocol::protocol::GitInfo;
+use adam_protocol::protocol::RolloutItem;
+use adam_protocol::protocol::RolloutLine;
+use adam_protocol::protocol::SandboxPolicy;
+use adam_protocol::protocol::SessionMeta;
+use adam_protocol::protocol::SessionMetaLine;
+use adam_protocol::protocol::SessionSource;
+use adam_protocol::protocol::TurnContextItem;
 use anyhow::Result;
-use codex_protocol::ThreadId;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::GitInfo;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::SessionMeta;
-use codex_protocol::protocol::SessionMetaLine;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::TurnContextItem;
 use serde_json::json;
 use std::fs;
 use std::fs::FileTimes;
@@ -84,7 +84,7 @@ pub fn create_fake_rollout_with_cwds(
         cwd: session_cwd,
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
-        rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+        rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
         source: SessionSource::Cli,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
@@ -182,7 +182,7 @@ pub fn create_fake_rollout_with_source(
         cwd: PathBuf::from("/"),
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
-        rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+        rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
         source,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
@@ -258,7 +258,7 @@ pub fn create_fake_rollout_with_schema_version(
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
         rollout_schema_version: schema_version
-            .unwrap_or(codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3),
+            .unwrap_or(adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3),
         source: SessionSource::Cli,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
@@ -340,7 +340,7 @@ pub fn create_fake_rollout_with_text_elements(
         cwd: PathBuf::from("/"),
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
-        rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+        rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
         source: SessionSource::Cli,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,

@@ -1,14 +1,14 @@
 #![expect(clippy::expect_used)]
 
-use codex_utils_cargo_bin::CargoBinError;
-use codex_utils_cargo_bin::find_resource;
+use adam_utils_cargo_bin::CargoBinError;
+use adam_utils_cargo_bin::find_resource;
 use tempfile::TempDir;
 
-use codex_agent::CodexThread;
-use codex_agent::config::Config;
-use codex_agent::config::ConfigBuilder;
-use codex_agent::config::ConfigOverrides;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use adam_agent::CodexThread;
+use adam_agent::config::Config;
+use adam_agent::config::ConfigBuilder;
+use adam_agent::config::ConfigOverrides;
+use adam_utils_absolute_path::AbsolutePathBuf;
 use regex_lite::Regex;
 use std::path::PathBuf;
 
@@ -183,9 +183,9 @@ pub fn load_sse_fixture_with_id(path: impl AsRef<std::path::Path>, id: &str) -> 
         .collect()
 }
 
-pub async fn wait_for_event<F>(codex: &CodexThread, predicate: F) -> codex_agent::protocol::EventMsg
+pub async fn wait_for_event<F>(codex: &CodexThread, predicate: F) -> adam_agent::protocol::EventMsg
 where
-    F: FnMut(&codex_agent::protocol::EventMsg) -> bool,
+    F: FnMut(&adam_agent::protocol::EventMsg) -> bool,
 {
     use tokio::time::Duration;
     wait_for_event_with_timeout(codex, predicate, Duration::from_secs(1)).await
@@ -193,7 +193,7 @@ where
 
 pub async fn wait_for_event_match<T, F>(codex: &CodexThread, matcher: F) -> T
 where
-    F: Fn(&codex_agent::protocol::EventMsg) -> Option<T>,
+    F: Fn(&adam_agent::protocol::EventMsg) -> Option<T>,
 {
     let ev = wait_for_event(codex, |ev| matcher(ev).is_some()).await;
     matcher(&ev).unwrap()
@@ -203,9 +203,9 @@ pub async fn wait_for_event_with_timeout<F>(
     codex: &CodexThread,
     mut predicate: F,
     wait_time: tokio::time::Duration,
-) -> codex_agent::protocol::EventMsg
+) -> adam_agent::protocol::EventMsg
 where
-    F: FnMut(&codex_agent::protocol::EventMsg) -> bool,
+    F: FnMut(&adam_agent::protocol::EventMsg) -> bool,
 {
     use tokio::time::Duration;
     use tokio::time::timeout;
@@ -222,15 +222,15 @@ where
 }
 
 pub fn sandbox_env_var() -> &'static str {
-    codex_agent::spawn::CODEX_SANDBOX_ENV_VAR
+    adam_agent::spawn::CODEX_SANDBOX_ENV_VAR
 }
 
 pub fn sandbox_network_env_var() -> &'static str {
-    codex_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
+    adam_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
 }
 
 pub fn format_with_current_shell(command: &str) -> Vec<String> {
-    codex_agent::shell::default_user_shell().derive_exec_args(command, true)
+    adam_agent::shell::default_user_shell().derive_exec_args(command, true)
 }
 
 pub fn format_with_current_shell_display(command: &str) -> String {
@@ -239,7 +239,7 @@ pub fn format_with_current_shell_display(command: &str) -> String {
 }
 
 pub fn format_with_current_shell_non_login(command: &str) -> Vec<String> {
-    codex_agent::shell::default_user_shell().derive_exec_args(command, false)
+    adam_agent::shell::default_user_shell().derive_exec_args(command, false)
 }
 
 pub fn format_with_current_shell_display_non_login(command: &str) -> String {
@@ -249,7 +249,7 @@ pub fn format_with_current_shell_display_non_login(command: &str) -> String {
 }
 
 pub fn stdio_server_bin() -> Result<String, CargoBinError> {
-    codex_utils_cargo_bin::cargo_bin("test_stdio_server").map(|p| p.to_string_lossy().to_string())
+    adam_utils_cargo_bin::cargo_bin("test_stdio_server").map(|p| p.to_string_lossy().to_string())
 }
 
 pub mod fs_wait {

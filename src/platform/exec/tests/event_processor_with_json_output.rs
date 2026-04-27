@@ -1,69 +1,69 @@
-use codex_agent::protocol::AgentMessageEvent;
-use codex_agent::protocol::AgentReasoningEvent;
-use codex_agent::protocol::AgentStatus;
-use codex_agent::protocol::AskForApproval;
-use codex_agent::protocol::CollabAgentSpawnBeginEvent;
-use codex_agent::protocol::CollabAgentSpawnEndEvent;
-use codex_agent::protocol::CollabWaitingEndEvent;
-use codex_agent::protocol::ErrorEvent;
-use codex_agent::protocol::Event;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::ExecCommandBeginEvent;
-use codex_agent::protocol::ExecCommandEndEvent;
-use codex_agent::protocol::ExecCommandSource;
-use codex_agent::protocol::FileChange;
-use codex_agent::protocol::McpInvocation;
-use codex_agent::protocol::McpToolCallBeginEvent;
-use codex_agent::protocol::McpToolCallEndEvent;
-use codex_agent::protocol::PatchApplyBeginEvent;
-use codex_agent::protocol::PatchApplyEndEvent;
-use codex_agent::protocol::SandboxPolicy;
-use codex_agent::protocol::SessionConfiguredEvent;
-use codex_agent::protocol::WarningEvent;
-use codex_agent::protocol::WebSearchBeginEvent;
-use codex_agent::protocol::WebSearchEndEvent;
-use codex_exec::event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
-use codex_exec::exec_events::AgentMessageItem;
-use codex_exec::exec_events::CollabAgentState;
-use codex_exec::exec_events::CollabAgentStatus;
-use codex_exec::exec_events::CollabTool;
-use codex_exec::exec_events::CollabToolCallItem;
-use codex_exec::exec_events::CollabToolCallStatus;
-use codex_exec::exec_events::CommandExecutionItem;
-use codex_exec::exec_events::CommandExecutionStatus;
-use codex_exec::exec_events::ErrorItem;
-use codex_exec::exec_events::ItemCompletedEvent;
-use codex_exec::exec_events::ItemStartedEvent;
-use codex_exec::exec_events::ItemUpdatedEvent;
-use codex_exec::exec_events::McpToolCallItem;
-use codex_exec::exec_events::McpToolCallItemError;
-use codex_exec::exec_events::McpToolCallItemResult;
-use codex_exec::exec_events::McpToolCallStatus;
-use codex_exec::exec_events::PatchApplyStatus;
-use codex_exec::exec_events::PatchChangeKind;
-use codex_exec::exec_events::ReasoningItem;
-use codex_exec::exec_events::ThreadErrorEvent;
-use codex_exec::exec_events::ThreadEvent;
-use codex_exec::exec_events::ThreadItem;
-use codex_exec::exec_events::ThreadItemDetails;
-use codex_exec::exec_events::ThreadStartedEvent;
-use codex_exec::exec_events::TodoItem as ExecTodoItem;
-use codex_exec::exec_events::TodoListItem as ExecTodoListItem;
-use codex_exec::exec_events::TurnCompletedEvent;
-use codex_exec::exec_events::TurnFailedEvent;
-use codex_exec::exec_events::TurnStartedEvent;
-use codex_exec::exec_events::Usage;
-use codex_exec::exec_events::WebSearchItem;
-use codex_protocol::ThreadId;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::models::WebSearchAction;
-use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::plan_tool::PlanItemArg;
-use codex_protocol::plan_tool::StepStatus;
-use codex_protocol::plan_tool::UpdatePlanArgs;
-use codex_protocol::protocol::CodexErrorInfo;
-use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
-use codex_protocol::protocol::ExecOutputStream;
+use adam_agent::protocol::AgentMessageEvent;
+use adam_agent::protocol::AgentReasoningEvent;
+use adam_agent::protocol::AgentStatus;
+use adam_agent::protocol::AskForApproval;
+use adam_agent::protocol::CollabAgentSpawnBeginEvent;
+use adam_agent::protocol::CollabAgentSpawnEndEvent;
+use adam_agent::protocol::CollabWaitingEndEvent;
+use adam_agent::protocol::ErrorEvent;
+use adam_agent::protocol::Event;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::ExecCommandBeginEvent;
+use adam_agent::protocol::ExecCommandEndEvent;
+use adam_agent::protocol::ExecCommandSource;
+use adam_agent::protocol::FileChange;
+use adam_agent::protocol::McpInvocation;
+use adam_agent::protocol::McpToolCallBeginEvent;
+use adam_agent::protocol::McpToolCallEndEvent;
+use adam_agent::protocol::PatchApplyBeginEvent;
+use adam_agent::protocol::PatchApplyEndEvent;
+use adam_agent::protocol::SandboxPolicy;
+use adam_agent::protocol::SessionConfiguredEvent;
+use adam_agent::protocol::WarningEvent;
+use adam_agent::protocol::WebSearchBeginEvent;
+use adam_agent::protocol::WebSearchEndEvent;
+use adam_exec::event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
+use adam_exec::exec_events::AgentMessageItem;
+use adam_exec::exec_events::CollabAgentState;
+use adam_exec::exec_events::CollabAgentStatus;
+use adam_exec::exec_events::CollabTool;
+use adam_exec::exec_events::CollabToolCallItem;
+use adam_exec::exec_events::CollabToolCallStatus;
+use adam_exec::exec_events::CommandExecutionItem;
+use adam_exec::exec_events::CommandExecutionStatus;
+use adam_exec::exec_events::ErrorItem;
+use adam_exec::exec_events::ItemCompletedEvent;
+use adam_exec::exec_events::ItemStartedEvent;
+use adam_exec::exec_events::ItemUpdatedEvent;
+use adam_exec::exec_events::McpToolCallItem;
+use adam_exec::exec_events::McpToolCallItemError;
+use adam_exec::exec_events::McpToolCallItemResult;
+use adam_exec::exec_events::McpToolCallStatus;
+use adam_exec::exec_events::PatchApplyStatus;
+use adam_exec::exec_events::PatchChangeKind;
+use adam_exec::exec_events::ReasoningItem;
+use adam_exec::exec_events::ThreadErrorEvent;
+use adam_exec::exec_events::ThreadEvent;
+use adam_exec::exec_events::ThreadItem;
+use adam_exec::exec_events::ThreadItemDetails;
+use adam_exec::exec_events::ThreadStartedEvent;
+use adam_exec::exec_events::TodoItem as ExecTodoItem;
+use adam_exec::exec_events::TodoListItem as ExecTodoListItem;
+use adam_exec::exec_events::TurnCompletedEvent;
+use adam_exec::exec_events::TurnFailedEvent;
+use adam_exec::exec_events::TurnStartedEvent;
+use adam_exec::exec_events::Usage;
+use adam_exec::exec_events::WebSearchItem;
+use adam_protocol::ThreadId;
+use adam_protocol::config_types::ModeKind;
+use adam_protocol::models::WebSearchAction;
+use adam_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use adam_protocol::plan_tool::PlanItemArg;
+use adam_protocol::plan_tool::StepStatus;
+use adam_protocol::plan_tool::UpdatePlanArgs;
+use adam_protocol::protocol::CodexErrorInfo;
+use adam_protocol::protocol::ExecCommandOutputDeltaEvent;
+use adam_protocol::protocol::ExecOutputStream;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
 use mcp_types::TextContent;
@@ -83,7 +83,7 @@ fn event(id: &str, msg: EventMsg) -> Event {
 fn session_configured_produces_thread_started_event() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let session_id =
-        codex_protocol::ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
+        adam_protocol::ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
     let rollout_path = PathBuf::from("/tmp/rollout.json");
     let ev = event(
         "e1",
@@ -117,7 +117,7 @@ fn task_started_produces_turn_started_event() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let out = ep.collect_thread_events(&event(
         "t1",
-        EventMsg::TurnStarted(codex_agent::protocol::TurnStartedEvent {
+        EventMsg::TurnStarted(adam_agent::protocol::TurnStartedEvent {
             model_context_window: Some(32_000),
             collaboration_mode_kind: ModeKind::Custom,
         }),
@@ -310,7 +310,7 @@ fn plan_update_emits_todo_list_started_updated_and_completed() {
     // Task completes => item.completed (same id, latest state)
     let complete = event(
         "p3",
-        EventMsg::TurnComplete(codex_agent::protocol::TurnCompleteEvent {
+        EventMsg::TurnComplete(adam_agent::protocol::TurnCompleteEvent {
             last_agent_message: None,
         }),
     );
@@ -690,7 +690,7 @@ fn plan_update_after_complete_starts_new_todo_list_with_new_id() {
     let _ = ep.collect_thread_events(&start);
     let complete = event(
         "t2",
-        EventMsg::TurnComplete(codex_agent::protocol::TurnCompleteEvent {
+        EventMsg::TurnComplete(adam_agent::protocol::TurnCompleteEvent {
             last_agent_message: None,
         }),
     );
@@ -768,7 +768,7 @@ fn error_event_produces_error() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let out = ep.collect_thread_events(&event(
         "e1",
-        EventMsg::Error(codex_agent::protocol::ErrorEvent {
+        EventMsg::Error(adam_agent::protocol::ErrorEvent {
             message: "boom".to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
         }),
@@ -808,7 +808,7 @@ fn stream_error_event_produces_error() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let out = ep.collect_thread_events(&event(
         "e1",
-        EventMsg::StreamError(codex_agent::protocol::StreamErrorEvent {
+        EventMsg::StreamError(adam_agent::protocol::StreamErrorEvent {
             message: "retrying".to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
             additional_details: None,
@@ -842,7 +842,7 @@ fn error_followed_by_task_complete_produces_turn_failed() {
 
     let complete_event = event(
         "e2",
-        EventMsg::TurnComplete(codex_agent::protocol::TurnCompleteEvent {
+        EventMsg::TurnComplete(adam_agent::protocol::TurnCompleteEvent {
             last_agent_message: None,
         }),
     );
@@ -1265,21 +1265,21 @@ fn task_complete_produces_turn_completed_with_usage() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
 
     // First, feed a TokenCount event with known totals.
-    let usage = codex_agent::protocol::TokenUsage {
+    let usage = adam_agent::protocol::TokenUsage {
         input_tokens: 1200,
         cached_input_tokens: 200,
         output_tokens: 345,
         reasoning_output_tokens: 0,
         total_tokens: 0,
     };
-    let info = codex_agent::protocol::TokenUsageInfo {
+    let info = adam_agent::protocol::TokenUsageInfo {
         total_token_usage: usage.clone(),
         last_token_usage: usage,
         model_context_window: None,
     };
     let token_count_event = event(
         "e1",
-        EventMsg::TokenCount(codex_agent::protocol::TokenCountEvent {
+        EventMsg::TokenCount(adam_agent::protocol::TokenCountEvent {
             info: Some(info),
             rate_limits: None,
         }),
@@ -1289,7 +1289,7 @@ fn task_complete_produces_turn_completed_with_usage() {
     // Then TurnComplete should produce turn.completed with the captured usage.
     let complete_event = event(
         "e2",
-        EventMsg::TurnComplete(codex_agent::protocol::TurnCompleteEvent {
+        EventMsg::TurnComplete(adam_agent::protocol::TurnCompleteEvent {
             last_agent_message: Some("done".to_string()),
         }),
     );

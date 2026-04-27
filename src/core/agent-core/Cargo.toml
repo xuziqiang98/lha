@@ -1,12 +1,12 @@
 [package]
 edition.workspace = true
 license.workspace = true
-name = "codex-agent-core"
+name = "adam-agent-core"
 version.workspace = true
 
 [lib]
 doctest = false
-name = "codex_agent_core"
+name = "adam_agent_core"
 path = "src/lib.rs"
 
 [lints]
@@ -14,9 +14,9 @@ workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
-codex-async-utils = { workspace = true }
-codex-llm = { workspace = true }
-codex-llm-types = { workspace = true }
+adam-async-utils = { workspace = true }
+adam-llm = { workspace = true }
+adam-llm-types = { workspace = true }
 futures = { workspace = true }
 tokio-util = { workspace = true }
 

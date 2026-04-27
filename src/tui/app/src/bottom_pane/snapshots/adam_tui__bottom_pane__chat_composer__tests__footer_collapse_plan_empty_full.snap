@@ -1,0 +1,13 @@
+---
+source: src/tui/app/src/bottom_pane/chat_composer.rs
+expression: terminal.backend()
+---
+"                                                                                                                        "
+"› Ask Codex to do anything                                                                                              "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"  gpt-5.4 high · 100% left · ~/Workspace/adam                                           Plan mode (shift+tab to cycle)  "

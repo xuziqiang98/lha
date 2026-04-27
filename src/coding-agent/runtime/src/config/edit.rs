@@ -3,10 +3,10 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
 use crate::path_utils::resolve_symlink_write_paths;
 use crate::path_utils::write_atomically;
+use adam_protocol::config_types::Personality;
+use adam_protocol::config_types::TrustLevel;
+use adam_protocol::openai_models::ReasoningEffort;
 use anyhow::Context;
-use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::TrustLevel;
-use codex_protocol::openai_models::ReasoningEffort;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -846,7 +846,7 @@ impl ConfigEditsBuilder {
 mod tests {
     use super::*;
     use crate::config::types::McpServerTransportConfig;
-    use codex_protocol::openai_models::ReasoningEffort;
+    use adam_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
     #[cfg(unix)]
     use std::os::unix::fs::symlink;

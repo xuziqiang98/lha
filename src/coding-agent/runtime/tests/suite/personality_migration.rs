@@ -1,18 +1,18 @@
-use codex_agent::ARCHIVED_SESSIONS_SUBDIR;
-use codex_agent::SESSIONS_SUBDIR;
-use codex_agent::config::ConfigToml;
-use codex_agent::personality_migration::PERSONALITY_MIGRATION_FILENAME;
-use codex_agent::personality_migration::PersonalityMigrationStatus;
-use codex_agent::personality_migration::maybe_migrate_personality;
-use codex_protocol::ThreadId;
-use codex_protocol::config_types::Personality;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::SessionMeta;
-use codex_protocol::protocol::SessionMetaLine;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::UserMessageEvent;
+use adam_agent::ARCHIVED_SESSIONS_SUBDIR;
+use adam_agent::SESSIONS_SUBDIR;
+use adam_agent::config::ConfigToml;
+use adam_agent::personality_migration::PERSONALITY_MIGRATION_FILENAME;
+use adam_agent::personality_migration::PersonalityMigrationStatus;
+use adam_agent::personality_migration::maybe_migrate_personality;
+use adam_protocol::ThreadId;
+use adam_protocol::config_types::Personality;
+use adam_protocol::protocol::EventMsg;
+use adam_protocol::protocol::RolloutItem;
+use adam_protocol::protocol::RolloutLine;
+use adam_protocol::protocol::SessionMeta;
+use adam_protocol::protocol::SessionMetaLine;
+use adam_protocol::protocol::SessionSource;
+use adam_protocol::protocol::UserMessageEvent;
 use pretty_assertions::assert_eq;
 use std::io;
 use std::path::Path;
@@ -55,7 +55,7 @@ async fn write_rollout_with_user_event(dir: &Path, thread_id: ThreadId) -> io::R
             cwd: std::path::PathBuf::from("."),
             originator: "test_originator".to_string(),
             cli_version: "test_version".to_string(),
-            rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+            rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
             source: SessionSource::Cli,
             model_provider: None,
             base_instructions: None,

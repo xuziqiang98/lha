@@ -1,10 +1,10 @@
 //! Verifies that the agent retries when the SSE stream terminates before
 //! delivering a `response.completed` event.
 
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::Op;
-use codex_llm::RuntimeEndpoint;
-use codex_protocol::user_input::UserInput;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::Op;
+use adam_llm::RuntimeEndpoint;
+use adam_protocol::user_input::UserInput;
 use core_test_support::load_sse_fixture;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::skip_if_no_network;

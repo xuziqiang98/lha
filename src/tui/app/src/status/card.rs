@@ -3,19 +3,19 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::with_border_with_inner_width;
 use crate::version::CODEX_CLI_VERSION;
+use adam_agent::config::Config;
+use adam_agent::config::display_model_provider_ref;
+use adam_agent::models_manager::manager::ModelsManager;
+use adam_agent::protocol::NetworkAccess;
+use adam_agent::protocol::SandboxPolicy;
+use adam_agent::protocol::TokenUsage;
+use adam_agent::protocol::TokenUsageInfo;
+use adam_common::summarize_sandbox_policy;
+use adam_protocol::ThreadId;
+use adam_protocol::account::PlanType;
+use adam_protocol::openai_models::ReasoningEffort;
 use chrono::DateTime;
 use chrono::Local;
-use codex_agent::config::Config;
-use codex_agent::config::display_model_provider_ref;
-use codex_agent::models_manager::manager::ModelsManager;
-use codex_agent::protocol::NetworkAccess;
-use codex_agent::protocol::SandboxPolicy;
-use codex_agent::protocol::TokenUsage;
-use codex_agent::protocol::TokenUsageInfo;
-use codex_common::summarize_sandbox_policy;
-use codex_protocol::ThreadId;
-use codex_protocol::account::PlanType;
-use codex_protocol::openai_models::ReasoningEffort;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use std::collections::BTreeSet;
@@ -41,7 +41,7 @@ use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
-use codex_agent::AuthManager;
+use adam_agent::AuthManager;
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
@@ -409,7 +409,7 @@ impl HistoryCell for StatusHistoryCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from(vec![
             Span::from(format!("{}>_ ", FieldFormatter::INDENT)).dim(),
-            Span::from("Codey").bold(),
+            Span::from("Adam").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{CODEX_CLI_VERSION})")).dim(),
         ]));

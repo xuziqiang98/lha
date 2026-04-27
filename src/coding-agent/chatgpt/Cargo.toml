@@ -1,5 +1,5 @@
 [package]
-name = "codex-chatgpt"
+name = "adam-chatgpt"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,13 +10,13 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-codex-common = { workspace = true, features = ["cli"] }
-codex-agent = { workspace = true }
-codex-utils-cargo-bin = { workspace = true }
+adam-common = { workspace = true, features = ["cli"] }
+adam-agent = { workspace = true }
+adam-utils-cargo-bin = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
-codex-git = { workspace = true }
+adam-git = { workspace = true }
 urlencoding = { workspace = true }
 
 [dev-dependencies]

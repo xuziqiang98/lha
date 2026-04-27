@@ -1,5 +1,5 @@
-use codex_agent::skills::model::SkillMetadata;
-use codex_common::fuzzy_match::fuzzy_match;
+use adam_agent::skills::model::SkillMetadata;
+use adam_common::fuzzy_match::fuzzy_match;
 
 use crate::text_formatting::truncate_text;
 

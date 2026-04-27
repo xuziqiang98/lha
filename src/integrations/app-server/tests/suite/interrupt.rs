@@ -3,16 +3,16 @@
 
 use std::path::Path;
 
-use codex_agent::protocol::TurnAbortReason;
-use codex_app_server_protocol::AddConversationListenerParams;
-use codex_app_server_protocol::InterruptConversationParams;
-use codex_app_server_protocol::InterruptConversationResponse;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::NewConversationParams;
-use codex_app_server_protocol::NewConversationResponse;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::SendUserMessageParams;
-use codex_app_server_protocol::SendUserMessageResponse;
+use adam_agent::protocol::TurnAbortReason;
+use adam_app_server_protocol::AddConversationListenerParams;
+use adam_app_server_protocol::InterruptConversationParams;
+use adam_app_server_protocol::InterruptConversationResponse;
+use adam_app_server_protocol::JSONRPCResponse;
+use adam_app_server_protocol::NewConversationParams;
+use adam_app_server_protocol::NewConversationResponse;
+use adam_app_server_protocol::RequestId;
+use adam_app_server_protocol::SendUserMessageParams;
+use adam_app_server_protocol::SendUserMessageResponse;
 use core_test_support::skip_if_no_network;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -103,7 +103,7 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
     let send_user_id = mcp
         .send_send_user_message_request(SendUserMessageParams {
             conversation_id,
-            items: vec![codex_app_server_protocol::InputItem::Text {
+            items: vec![adam_app_server_protocol::InputItem::Text {
                 text: "run first sleep command".to_string(),
                 text_elements: Vec::new(),
             }],

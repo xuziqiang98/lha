@@ -12,12 +12,12 @@ use crate::truncate::approx_tokens_from_byte_count;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
 use crate::user_shell_command::is_user_shell_command_text;
-use codex_llm::ToolResultContentItem;
-use codex_llm::ToolResultPayload;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::protocol::TokenUsage;
-use codex_protocol::protocol::TokenUsageInfo;
+use adam_llm::ToolResultContentItem;
+use adam_llm::ToolResultPayload;
+use adam_protocol::models::ContentItem;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::protocol::TokenUsage;
+use adam_protocol::protocol::TokenUsageInfo;
 
 /// Transcript of thread history
 #[derive(Debug, Clone, Default)]

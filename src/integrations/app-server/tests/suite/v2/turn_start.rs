@@ -1,3 +1,36 @@
+use adam_agent::features::Feature;
+use adam_agent::protocol_config_types::ReasoningSummary;
+use adam_app_server_protocol::ByteRange;
+use adam_app_server_protocol::ClientInfo;
+use adam_app_server_protocol::CommandExecutionApprovalDecision;
+use adam_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use adam_app_server_protocol::CommandExecutionStatus;
+use adam_app_server_protocol::FileChangeApprovalDecision;
+use adam_app_server_protocol::FileChangeOutputDeltaNotification;
+use adam_app_server_protocol::FileChangeRequestApprovalResponse;
+use adam_app_server_protocol::ItemCompletedNotification;
+use adam_app_server_protocol::ItemStartedNotification;
+use adam_app_server_protocol::JSONRPCNotification;
+use adam_app_server_protocol::JSONRPCResponse;
+use adam_app_server_protocol::PatchApplyStatus;
+use adam_app_server_protocol::PatchChangeKind;
+use adam_app_server_protocol::RequestId;
+use adam_app_server_protocol::ServerRequest;
+use adam_app_server_protocol::TextElement;
+use adam_app_server_protocol::ThreadItem;
+use adam_app_server_protocol::ThreadStartParams;
+use adam_app_server_protocol::ThreadStartResponse;
+use adam_app_server_protocol::TurnCompletedNotification;
+use adam_app_server_protocol::TurnStartParams;
+use adam_app_server_protocol::TurnStartResponse;
+use adam_app_server_protocol::TurnStartedNotification;
+use adam_app_server_protocol::TurnStatus;
+use adam_app_server_protocol::UserInput as V2UserInput;
+use adam_protocol::config_types::CollaborationMode;
+use adam_protocol::config_types::ModeKind;
+use adam_protocol::config_types::Personality;
+use adam_protocol::config_types::Settings;
+use adam_protocol::openai_models::ReasoningEffort;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_apply_patch_sse_response;
@@ -8,39 +41,6 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
-use codex_agent::features::Feature;
-use codex_agent::protocol_config_types::ReasoningSummary;
-use codex_app_server_protocol::ByteRange;
-use codex_app_server_protocol::ClientInfo;
-use codex_app_server_protocol::CommandExecutionApprovalDecision;
-use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
-use codex_app_server_protocol::CommandExecutionStatus;
-use codex_app_server_protocol::FileChangeApprovalDecision;
-use codex_app_server_protocol::FileChangeOutputDeltaNotification;
-use codex_app_server_protocol::FileChangeRequestApprovalResponse;
-use codex_app_server_protocol::ItemCompletedNotification;
-use codex_app_server_protocol::ItemStartedNotification;
-use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::PatchApplyStatus;
-use codex_app_server_protocol::PatchChangeKind;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::TextElement;
-use codex_app_server_protocol::ThreadItem;
-use codex_app_server_protocol::ThreadStartParams;
-use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::TurnCompletedNotification;
-use codex_app_server_protocol::TurnStartParams;
-use codex_app_server_protocol::TurnStartResponse;
-use codex_app_server_protocol::TurnStartedNotification;
-use codex_app_server_protocol::TurnStatus;
-use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::Settings;
-use codex_protocol::openai_models::ReasoningEffort;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -279,7 +279,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     assert_eq!(started.thread_id, thread.id);
     assert_eq!(
         started.turn.status,
-        codex_app_server_protocol::TurnStatus::InProgress
+        adam_app_server_protocol::TurnStatus::InProgress
     );
 
     // Send a second turn that exercises the overrides path: change the model.
@@ -742,7 +742,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     // Approve and wait for task completion
     mcp.send_response(
         request_id,
-        serde_json::json!({ "decision": codex_agent::protocol::ReviewDecision::Approved }),
+        serde_json::json!({ "decision": adam_agent::protocol::ReviewDecision::Approved }),
     )
     .await?;
     timeout(
@@ -764,8 +764,8 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
                 text: "run python again".to_string(),
                 text_elements: Vec::new(),
             }],
-            approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
-            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
+            approval_policy: Some(adam_app_server_protocol::AskForApproval::Never),
+            sandbox_policy: Some(adam_app_server_protocol::SandboxPolicy::DangerFullAccess),
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
@@ -996,8 +996,8 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: Some(first_cwd.clone()),
-            approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
-            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+            approval_policy: Some(adam_app_server_protocol::AskForApproval::Never),
+            sandbox_policy: Some(adam_app_server_protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![first_cwd.try_into()?],
                 network_access: false,
                 exclude_tmpdir_env_var: false,
@@ -1032,8 +1032,8 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: Some(second_cwd.clone()),
-            approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
-            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
+            approval_policy: Some(adam_app_server_protocol::AskForApproval::Never),
+            sandbox_policy: Some(adam_app_server_protocol::SandboxPolicy::DangerFullAccess),
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
@@ -1185,7 +1185,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     let expected_readme_path = expected_readme_path.to_string_lossy().into_owned();
     pretty_assertions::assert_eq!(
         started_changes,
-        vec![codex_app_server_protocol::FileUpdateChange {
+        vec![adam_app_server_protocol::FileUpdateChange {
             path: expected_readme_path.clone(),
             kind: PatchChangeKind::Add,
             diff: "new line\n".to_string(),
@@ -1538,7 +1538,7 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
     let expected_readme_path_str = expected_readme_path.to_string_lossy().into_owned();
     pretty_assertions::assert_eq!(
         started_changes,
-        vec![codex_app_server_protocol::FileUpdateChange {
+        vec![adam_app_server_protocol::FileUpdateChange {
             path: expected_readme_path_str.clone(),
             kind: PatchChangeKind::Add,
             diff: "new line\n".to_string(),

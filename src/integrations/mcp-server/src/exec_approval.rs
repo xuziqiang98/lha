@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use codex_agent::CodexThread;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::ReviewDecision;
-use codex_protocol::ThreadId;
-use codex_protocol::parse_command::ParsedCommand;
+use adam_agent::CodexThread;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::ReviewDecision;
+use adam_protocol::ThreadId;
+use adam_protocol::parse_command::ParsedCommand;
 use mcp_types::ElicitRequest;
 use mcp_types::ElicitRequestParamsRequestedSchema;
 use mcp_types::JSONRPCErrorError;

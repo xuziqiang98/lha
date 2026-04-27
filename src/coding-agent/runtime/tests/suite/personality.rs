@@ -1,22 +1,22 @@
-use codex_agent::config::types::Personality;
-use codex_agent::features::Feature;
-use codex_agent::models_manager::manager::ModelsManager;
-use codex_agent::models_manager::manager::RefreshStrategy;
-use codex_agent::protocol::AskForApproval;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::SandboxPolicy;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::openai_models::ConfigShellToolType;
-use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ModelInstructionsVariables;
-use codex_protocol::openai_models::ModelMessages;
-use codex_protocol::openai_models::ModelVisibility;
-use codex_protocol::openai_models::ModelsResponse;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::openai_models::ReasoningEffortPreset;
-use codex_protocol::openai_models::TruncationPolicyConfig;
-use codex_protocol::user_input::UserInput;
+use adam_agent::config::types::Personality;
+use adam_agent::features::Feature;
+use adam_agent::models_manager::manager::ModelsManager;
+use adam_agent::models_manager::manager::RefreshStrategy;
+use adam_agent::protocol::AskForApproval;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::SandboxPolicy;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::openai_models::ConfigShellToolType;
+use adam_protocol::openai_models::ModelInfo;
+use adam_protocol::openai_models::ModelInstructionsVariables;
+use adam_protocol::openai_models::ModelMessages;
+use adam_protocol::openai_models::ModelVisibility;
+use adam_protocol::openai_models::ModelsResponse;
+use adam_protocol::openai_models::ReasoningEffort;
+use adam_protocol::openai_models::ReasoningEffortPreset;
+use adam_protocol::openai_models::TruncationPolicyConfig;
+use adam_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -525,7 +525,7 @@ async fn ignores_remote_personality_if_remote_models_disabled() -> anyhow::Resul
     let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
 
     let mut builder = test_codex()
-        .with_auth(codex_agent::CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_auth(adam_agent::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config.features.disable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
@@ -640,7 +640,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
     let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
 
     let mut builder = test_codex()
-        .with_auth(codex_agent::CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_auth(adam_agent::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config.features.enable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
@@ -754,7 +754,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
     .await;
 
     let mut builder = test_codex()
-        .with_auth(codex_agent::CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_auth(adam_agent::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config.features.enable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
@@ -849,7 +849,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
 async fn wait_for_model_available(
     manager: &Arc<ModelsManager>,
     slug: &str,
-    config: &codex_agent::config::Config,
+    config: &adam_agent::config::Config,
 ) {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {

@@ -1,4 +1,4 @@
-# codex-common
+# adam-common
 
 This crate is designed for utilities that need to be shared across other crates in the workspace, but should not go in `core`.
 

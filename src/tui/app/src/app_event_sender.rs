@@ -4,7 +4,7 @@ use std::sync::PoisonError;
 
 use tokio::sync::mpsc::UnboundedSender;
 
-use codex_protocol::ThreadId;
+use adam_protocol::ThreadId;
 
 use crate::app_event::AppEvent;
 use crate::history_cell::HistoryCell;

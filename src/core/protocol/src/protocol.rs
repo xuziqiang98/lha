@@ -34,12 +34,12 @@ use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
-use codex_git::GhostCommit;
-pub use codex_llm_types::CreditsSnapshot;
-pub use codex_llm_types::RateLimitSnapshot;
-pub use codex_llm_types::RateLimitWindow;
-pub use codex_llm_types::TokenUsage;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use adam_git::GhostCommit;
+pub use adam_llm_types::CreditsSnapshot;
+pub use adam_llm_types::RateLimitSnapshot;
+pub use adam_llm_types::RateLimitWindow;
+pub use adam_llm_types::TokenUsage;
+use adam_utils_absolute_path::AbsolutePathBuf;
 use mcp_types::CallToolResult;
 use mcp_types::RequestId;
 use mcp_types::Resource as McpResource;
@@ -284,7 +284,7 @@ pub enum Op {
     Compact,
 
     /// Set a user-facing thread name in the persisted rollout metadata.
-    /// This is a local-only operation handled by codex-coding-agent; it does not
+    /// This is a local-only operation handled by adam-coding-agent; it does not
     /// involve the model.
     SetThreadName { name: String },
 

@@ -12,7 +12,7 @@ use crate::config::profile::ConfigProfile;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::WarningEvent;
-use codex_otel::OtelManager;
+use adam_otel::OtelManager;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;

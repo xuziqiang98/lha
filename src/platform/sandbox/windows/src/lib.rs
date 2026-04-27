@@ -485,9 +485,9 @@ mod windows_impl {
 
 #[cfg(not(target_os = "windows"))]
 mod stub {
+    use adam_protocol::protocol::SandboxPolicy;
     use anyhow::bail;
     use anyhow::Result;
-    use codex_protocol::protocol::SandboxPolicy;
     use std::collections::HashMap;
     use std::path::Path;
 

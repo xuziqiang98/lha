@@ -1,20 +1,20 @@
+use adam_agent::AuthManager;
 use assert_matches::assert_matches;
-use codex_agent::AuthManager;
 use std::sync::Arc;
 use tracing_test::traced_test;
 
-use codex_agent::CodexAuth;
-use codex_agent::ContentItem;
-use codex_agent::models_manager::manager::ModelsManager;
-use codex_llm::OutputItem;
-use codex_llm::RuntimeEndpoint;
-use codex_llm::TranscriptItem;
-use codex_llm::TurnEvent;
-use codex_llm::TurnRequest;
-use codex_otel::OtelManager;
-use codex_protocol::ThreadId;
-use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::protocol::SessionSource;
+use adam_agent::CodexAuth;
+use adam_agent::ContentItem;
+use adam_agent::models_manager::manager::ModelsManager;
+use adam_llm::OutputItem;
+use adam_llm::RuntimeEndpoint;
+use adam_llm::TranscriptItem;
+use adam_llm::TurnEvent;
+use adam_llm::TurnRequest;
+use adam_otel::OtelManager;
+use adam_protocol::ThreadId;
+use adam_protocol::models::ReasoningItemContent;
+use adam_protocol::protocol::SessionSource;
 use core_test_support::load_default_config_for_test;
 use core_test_support::runtime_client::TestRuntimeClient;
 use core_test_support::skip_if_no_network;
@@ -528,7 +528,7 @@ async fn streams_reasoning_before_tool_call() {
         TurnEvent::ToolCall(call) => {
             assert_eq!(call.tool_name, "run");
             match &call.payload {
-                codex_llm::ToolCallPayload::JsonArguments { arguments } => {
+                adam_llm::ToolCallPayload::JsonArguments { arguments } => {
                     assert_eq!(arguments, "{}");
                 }
                 other => panic!("expected function payload, got {other:?}"),

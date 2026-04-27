@@ -1,5 +1,5 @@
+use adam_api::AuthProvider as ApiAuthProvider;
 use async_trait::async_trait;
-use codex_api::AuthProvider as ApiAuthProvider;
 
 use crate::Result;
 

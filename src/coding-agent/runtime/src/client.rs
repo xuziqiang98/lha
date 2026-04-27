@@ -1,20 +1,20 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use codex_llm::RuntimeBuildSpec;
-use codex_llm::RuntimeCapabilities;
-use codex_llm::RuntimeClient;
-use codex_llm::RuntimeClientFactory;
-use codex_llm::RuntimeSession;
-use codex_llm::TurnRequest;
-pub use codex_llm::WEB_SEARCH_ELIGIBLE_HEADER;
-use codex_otel::OtelManager;
-use codex_protocol::ThreadId;
-use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::protocol::SessionSource;
+use adam_llm::RuntimeBuildSpec;
+use adam_llm::RuntimeCapabilities;
+use adam_llm::RuntimeClient;
+use adam_llm::RuntimeClientFactory;
+use adam_llm::RuntimeSession;
+use adam_llm::TurnRequest;
+pub use adam_llm::WEB_SEARCH_ELIGIBLE_HEADER;
+use adam_otel::OtelManager;
+use adam_protocol::ThreadId;
+use adam_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::openai_models::ModelInfo;
+use adam_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use adam_protocol::protocol::SessionSource;
 
 use crate::AuthManager;
 use crate::config::Config;
@@ -24,7 +24,7 @@ use crate::dynamic_context_window::DynamicContextWindowState;
 use crate::dynamic_context_window::DynamicContextWindowSuccess;
 use crate::error::Result;
 use crate::runtime_builder::AgentAuthSource;
-use codex_llm::RuntimeEndpoint;
+use adam_llm::RuntimeEndpoint;
 
 struct TurnRuntimeState {
     config: Arc<Config>,
@@ -336,12 +336,12 @@ fn session_source_to_origin_tag(session_source: &SessionSource) -> String {
         SessionSource::Exec => "exec".to_string(),
         SessionSource::Mcp => "mcp".to_string(),
         SessionSource::SubAgent(sub) => match sub {
-            codex_protocol::protocol::SubAgentSource::Review => "review".to_string(),
-            codex_protocol::protocol::SubAgentSource::Compact => "compact".to_string(),
-            codex_protocol::protocol::SubAgentSource::ThreadSpawn { .. } => {
+            adam_protocol::protocol::SubAgentSource::Review => "review".to_string(),
+            adam_protocol::protocol::SubAgentSource::Compact => "compact".to_string(),
+            adam_protocol::protocol::SubAgentSource::ThreadSpawn { .. } => {
                 "thread_spawn".to_string()
             }
-            codex_protocol::protocol::SubAgentSource::Other(label) => label.clone(),
+            adam_protocol::protocol::SubAgentSource::Other(label) => label.clone(),
         },
         SessionSource::Unknown => "unknown".to_string(),
     }

@@ -1,22 +1,22 @@
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
-use codex_agent::config::ConfigService;
-use codex_agent::config::ConfigServiceError;
-use codex_agent::config_loader::CloudRequirementsLoader;
-use codex_agent::config_loader::ConfigRequirementsToml;
-use codex_agent::config_loader::LoaderOverrides;
-use codex_agent::config_loader::ResidencyRequirement as CoreResidencyRequirement;
-use codex_agent::config_loader::SandboxModeRequirement as CoreSandboxModeRequirement;
-use codex_app_server_protocol::ConfigBatchWriteParams;
-use codex_app_server_protocol::ConfigReadParams;
-use codex_app_server_protocol::ConfigReadResponse;
-use codex_app_server_protocol::ConfigRequirements;
-use codex_app_server_protocol::ConfigRequirementsReadResponse;
-use codex_app_server_protocol::ConfigValueWriteParams;
-use codex_app_server_protocol::ConfigWriteErrorCode;
-use codex_app_server_protocol::ConfigWriteResponse;
-use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::SandboxMode;
+use adam_agent::config::ConfigService;
+use adam_agent::config::ConfigServiceError;
+use adam_agent::config_loader::CloudRequirementsLoader;
+use adam_agent::config_loader::ConfigRequirementsToml;
+use adam_agent::config_loader::LoaderOverrides;
+use adam_agent::config_loader::ResidencyRequirement as CoreResidencyRequirement;
+use adam_agent::config_loader::SandboxModeRequirement as CoreSandboxModeRequirement;
+use adam_app_server_protocol::ConfigBatchWriteParams;
+use adam_app_server_protocol::ConfigReadParams;
+use adam_app_server_protocol::ConfigReadResponse;
+use adam_app_server_protocol::ConfigRequirements;
+use adam_app_server_protocol::ConfigRequirementsReadResponse;
+use adam_app_server_protocol::ConfigValueWriteParams;
+use adam_app_server_protocol::ConfigWriteErrorCode;
+use adam_app_server_protocol::ConfigWriteResponse;
+use adam_app_server_protocol::JSONRPCErrorError;
+use adam_app_server_protocol::SandboxMode;
 use serde_json::json;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
@@ -83,7 +83,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         allowed_approval_policies: requirements.allowed_approval_policies.map(|policies| {
             policies
                 .into_iter()
-                .map(codex_app_server_protocol::AskForApproval::from)
+                .map(adam_app_server_protocol::AskForApproval::from)
                 .collect()
         }),
         allowed_sandbox_modes: requirements.allowed_sandbox_modes.map(|modes| {
@@ -109,9 +109,9 @@ fn map_sandbox_mode_requirement_to_api(mode: CoreSandboxModeRequirement) -> Opti
 
 fn map_residency_requirement_to_api(
     residency: CoreResidencyRequirement,
-) -> codex_app_server_protocol::ResidencyRequirement {
+) -> adam_app_server_protocol::ResidencyRequirement {
     match residency {
-        CoreResidencyRequirement::Us => codex_app_server_protocol::ResidencyRequirement::Us,
+        CoreResidencyRequirement::Us => adam_app_server_protocol::ResidencyRequirement::Us,
     }
 }
 
@@ -140,7 +140,7 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
+    use adam_protocol::protocol::AskForApproval as CoreAskForApproval;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -164,8 +164,8 @@ mod tests {
         assert_eq!(
             mapped.allowed_approval_policies,
             Some(vec![
-                codex_app_server_protocol::AskForApproval::Never,
-                codex_app_server_protocol::AskForApproval::OnRequest,
+                adam_app_server_protocol::AskForApproval::Never,
+                adam_app_server_protocol::AskForApproval::OnRequest,
             ])
         );
         assert_eq!(
@@ -174,7 +174,7 @@ mod tests {
         );
         assert_eq!(
             mapped.enforce_residency,
-            Some(codex_app_server_protocol::ResidencyRequirement::Us),
+            Some(adam_app_server_protocol::ResidencyRequirement::Us),
         );
     }
 }

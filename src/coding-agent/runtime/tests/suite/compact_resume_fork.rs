@@ -10,20 +10,20 @@
 use super::compact::COMPACT_WARNING_MESSAGE;
 use super::compact::FIRST_REPLY;
 use super::compact::SUMMARY_TEXT;
-use codex_agent::CodexThread;
-use codex_agent::ThreadManager;
-use codex_agent::compact::SUMMARIZATION_PROMPT;
-use codex_agent::config::Config;
-use codex_agent::features::Feature;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::WarningEvent;
-use codex_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::Settings;
-use codex_protocol::user_input::UserInput;
+use adam_agent::CodexThread;
+use adam_agent::ThreadManager;
+use adam_agent::compact::SUMMARIZATION_PROMPT;
+use adam_agent::config::Config;
+use adam_agent::features::Feature;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::WarningEvent;
+use adam_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use adam_protocol::config_types::CollaborationMode;
+use adam_protocol::config_types::ModeKind;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::config_types::Settings;
+use adam_protocol::user_input::UserInput;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -912,8 +912,8 @@ async fn compact_resume_and_fork_preserve_persisted_backfilled_plan_context() {
         }],
         final_output_json_schema: None,
         cwd: std::env::current_dir().expect("cwd"),
-        approval_policy: codex_agent::protocol::AskForApproval::Never,
-        sandbox_policy: codex_agent::protocol::SandboxPolicy::DangerFullAccess,
+        approval_policy: adam_agent::protocol::AskForApproval::Never,
+        sandbox_policy: adam_agent::protocol::SandboxPolicy::DangerFullAccess,
         model: "gpt-5.1-codex".to_string(),
         effort: None,
         summary: ReasoningSummary::Auto,
@@ -1239,8 +1239,8 @@ async fn resume_conversation(
     config: &Config,
     path: std::path::PathBuf,
 ) -> Arc<CodexThread> {
-    let auth_manager = codex_agent::AuthManager::from_auth_for_testing(
-        codex_agent::CodexAuth::from_api_key("dummy"),
+    let auth_manager = adam_agent::AuthManager::from_auth_for_testing(
+        adam_agent::CodexAuth::from_api_key("dummy"),
     );
     manager
         .resume_thread_from_rollout(config.clone(), path, auth_manager)

@@ -1,9 +1,9 @@
 #![allow(clippy::unwrap_used)]
 
-use codex_agent::features::Feature;
-use codex_agent::protocol::SandboxPolicy;
-use codex_llm::built_in_runtime_endpoints;
-use codex_protocol::config_types::WebSearchMode;
+use adam_agent::features::Feature;
+use adam_agent::protocol::SandboxPolicy;
+use adam_llm::built_in_runtime_endpoints;
+use adam_protocol::config_types::WebSearchMode;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses;
 use core_test_support::responses::start_mock_server;

@@ -66,15 +66,15 @@ async fn run_codex_cli(
     adam_home: impl AsRef<Path>,
     cwd: impl AsRef<Path>,
 ) -> anyhow::Result<CodexCliOutput> {
-    let (program, args, timeout_secs) = match codex_utils_cargo_bin::cargo_bin("codey") {
+    let (program, args, timeout_secs) = match adam_utils_cargo_bin::cargo_bin("adam") {
         Ok(path) => (
             path.to_string_lossy().into_owned(),
             vec!["-c".to_string(), "analytics.enabled=false".to_string()],
             10,
         ),
-        Err(codex_utils_cargo_bin::CargoBinError::NotFound { .. })
-        | Err(codex_utils_cargo_bin::CargoBinError::ResolvedPathDoesNotExist { .. }) => {
-            let built_binary = build_codey_binary().await?;
+        Err(adam_utils_cargo_bin::CargoBinError::NotFound { .. })
+        | Err(adam_utils_cargo_bin::CargoBinError::ResolvedPathDoesNotExist { .. }) => {
+            let built_binary = build_adam_binary().await?;
             (
                 built_binary.to_string_lossy().into_owned(),
                 vec!["-c".to_string(), "analytics.enabled=false".to_string()],
@@ -91,7 +91,7 @@ async fn run_codex_cli(
     );
 
     let spawned =
-        codex_utils_pty::spawn_pty_process(&program, &args, cwd.as_ref(), &env, &None).await?;
+        adam_utils_pty::spawn_pty_process(&program, &args, cwd.as_ref(), &env, &None).await?;
     let mut output = Vec::new();
     let mut output_rx = spawned.output_rx;
     let mut exit_rx = spawned.exit_rx;
@@ -146,7 +146,7 @@ fn cli_manifest_path() -> anyhow::Result<PathBuf> {
     Ok(workspace_root.join("cli/Cargo.toml"))
 }
 
-async fn build_codey_binary() -> anyhow::Result<PathBuf> {
+async fn build_adam_binary() -> anyhow::Result<PathBuf> {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let cli_manifest_path = cli_manifest_path()?;
     let workspace_root = cli_manifest_path
@@ -163,22 +163,22 @@ async fn build_codey_binary() -> anyhow::Result<PathBuf> {
             "--manifest-path",
             cli_manifest_path.to_string_lossy().as_ref(),
             "--bin",
-            "codey",
+            "adam",
         ])
         .current_dir(workspace_root)
         .status()
         .await?;
 
     if !status.success() {
-        anyhow::bail!("failed to build codey binary via cargo before PTY test");
+        anyhow::bail!("failed to build adam binary via cargo before PTY test");
     }
 
     let target_dir = cargo_target_directory(&cargo, &cli_manifest_path, workspace_root).await?;
-    let binary_name = if cfg!(windows) { "codey.exe" } else { "codey" };
+    let binary_name = if cfg!(windows) { "adam.exe" } else { "adam" };
     let binary_path = target_dir.join("debug").join(binary_name);
     if !binary_path.exists() {
         anyhow::bail!(
-            "built codey binary was not found at {} (cargo target dir: {})",
+            "built adam binary was not found at {} (cargo target dir: {})",
             binary_path.display(),
             target_dir.display()
         );

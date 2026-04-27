@@ -1,15 +1,15 @@
+use adam_agent::features::Feature;
+use adam_protocol::ThreadId;
+use adam_protocol::protocol::EventMsg;
+use adam_protocol::protocol::RolloutItem;
+use adam_protocol::protocol::RolloutLine;
+use adam_protocol::protocol::SessionMeta;
+use adam_protocol::protocol::SessionMetaLine;
+use adam_protocol::protocol::SessionSource;
+use adam_protocol::protocol::UserMessageEvent;
+use adam_state::STATE_DB_FILENAME;
 use anyhow::Result;
 use anyhow::anyhow;
-use codex_agent::features::Feature;
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::SessionMeta;
-use codex_protocol::protocol::SessionMetaLine;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::UserMessageEvent;
-use codex_state::STATE_DB_FILENAME;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
@@ -53,7 +53,7 @@ fn write_rollout_with_schema_version(
             originator: "test".to_string(),
             cli_version: "test".to_string(),
             rollout_schema_version: schema_version
-                .unwrap_or(codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3),
+                .unwrap_or(adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3),
             source: SessionSource::default(),
             model_provider: None,
             base_instructions: None,
@@ -156,7 +156,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                     cwd: adam_home.to_path_buf(),
                     originator: "test".to_string(),
                     cli_version: "test".to_string(),
-                    rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+                    rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
                     source: SessionSource::default(),
                     model_provider: None,
                     base_instructions: None,
@@ -278,7 +278,7 @@ async fn reconcile_skips_unsupported_rollout() -> Result<()> {
     let db = test.codex.state_db().expect("state db enabled");
     let rollout_path = write_rollout_with_schema_version(&test.config.adam_home, uuid, Some(2))?;
 
-    codex_agent::state_db::reconcile_rollout(
+    adam_agent::state_db::reconcile_rollout(
         Some(db.as_ref()),
         &rollout_path,
         test.config.model_provider_id.as_str(),
@@ -373,7 +373,7 @@ async fn tool_call_logs_include_thread_id() -> Result<()> {
     let expected_thread_id = test.session_configured.session_id.to_string();
 
     test.submit_turn("run a shell command").await?;
-    let subscriber = tracing_subscriber::registry().with(codex_state::log_db::start(db.clone()));
+    let subscriber = tracing_subscriber::registry().with(adam_state::log_db::start(db.clone()));
     let dispatch = tracing::Dispatch::new(subscriber);
     tracing::dispatcher::with_default(&dispatch, || {
         let span = tracing::info_span!("test_log_span", thread_id = %expected_thread_id);
@@ -383,7 +383,7 @@ async fn tool_call_logs_include_thread_id() -> Result<()> {
 
     let mut found = None;
     for _ in 0..80 {
-        let query = codex_state::LogQuery {
+        let query = adam_state::LogQuery {
             descending: true,
             limit: Some(20),
             ..Default::default()

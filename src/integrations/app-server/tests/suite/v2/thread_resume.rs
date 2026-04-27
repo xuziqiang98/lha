@@ -1,3 +1,20 @@
+use adam_app_server_protocol::JSONRPCError;
+use adam_app_server_protocol::JSONRPCResponse;
+use adam_app_server_protocol::RequestId;
+use adam_app_server_protocol::SessionSource;
+use adam_app_server_protocol::ThreadItem;
+use adam_app_server_protocol::ThreadResumeParams;
+use adam_app_server_protocol::ThreadResumeResponse;
+use adam_app_server_protocol::ThreadStartParams;
+use adam_app_server_protocol::ThreadStartResponse;
+use adam_app_server_protocol::TurnStartParams;
+use adam_app_server_protocol::TurnStatus;
+use adam_app_server_protocol::UserInput;
+use adam_protocol::config_types::Personality;
+use adam_protocol::models::ContentItem;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::user_input::ByteRange;
+use adam_protocol::user_input::TextElement;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout_with_schema_version;
@@ -6,23 +23,6 @@ use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
 use chrono::Utc;
-use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::SessionSource;
-use codex_app_server_protocol::ThreadItem;
-use codex_app_server_protocol::ThreadResumeParams;
-use codex_app_server_protocol::ThreadResumeResponse;
-use codex_app_server_protocol::ThreadStartParams;
-use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::TurnStartParams;
-use codex_app_server_protocol::TurnStatus;
-use codex_app_server_protocol::UserInput;
-use codex_protocol::config_types::Personality;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::user_input::ByteRange;
-use codex_protocol::user_input::TextElement;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -536,7 +536,7 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
 // Helper to create a config.toml pointing at the mock model server.
 fn create_config_toml(adam_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
     let features =
-        std::collections::BTreeMap::from([(codex_agent::features::Feature::Personality, true)]);
+        std::collections::BTreeMap::from([(adam_agent::features::Feature::Personality, true)]);
     app_test_support::write_mock_responses_config_toml_with_options(
         adam_home,
         server_uri,

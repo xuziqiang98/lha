@@ -7,9 +7,9 @@ use crate::analytics_client::SkillInvocation;
 use crate::analytics_client::TrackEventsContext;
 use crate::instructions::SkillInstructions;
 use crate::skills::SkillMetadata;
-use codex_otel::OtelManager;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::user_input::UserInput;
+use adam_otel::OtelManager;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::user_input::UserInput;
 use tokio::fs;
 
 #[derive(Debug, Default)]
@@ -446,7 +446,7 @@ mod tests {
             interface: None,
             dependencies: None,
             path: PathBuf::from(path),
-            scope: codex_protocol::protocol::SkillScope::User,
+            scope: adam_protocol::protocol::SkillScope::User,
         }
     }
 

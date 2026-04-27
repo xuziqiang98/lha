@@ -9,9 +9,9 @@ use crate::requests::MessagesRequest;
 use crate::requests::MessagesRequestBuilder;
 use crate::sse::spawn_messages_stream;
 use crate::telemetry::SseTelemetry;
-use codex_client::HttpTransport;
-use codex_client::RequestCompression;
-use codex_client::RequestTelemetry;
+use adam_client::HttpTransport;
+use adam_client::RequestCompression;
+use adam_client::RequestTelemetry;
 use http::HeaderMap;
 use std::sync::Arc;
 

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
     "FuzzyFileSearchResult": {
-      "description": "Superset of [`codex_file_search::FileMatch`]",
+      "description": "Superset of [`adam_file_search::FileMatch`]",
       "properties": {
         "file_name": {
           "type": "string"

@@ -1,15 +1,15 @@
 [package]
-name = "codex-cli"
+name = "adam-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "codey"
+name = "adam"
 path = "src/main.rs"
 
 [lib]
-name = "codex_cli"
+name = "adam_cli"
 path = "src/lib.rs"
 
 [lints]
@@ -19,22 +19,22 @@ workspace = true
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 clap_complete = { workspace = true }
-codex-app-server = { workspace = true }
-codex-app-server-protocol = { workspace = true }
-codex-arg0 = { workspace = true }
-codex-chatgpt = { workspace = true }
-codex-cloud-tasks = { path = "../../integrations/cloud/cloud-tasks" }
-codex-common = { workspace = true, features = ["cli"] }
-codex-agent = { workspace = true }
-codex-exec = { workspace = true }
-codex-execpolicy = { workspace = true }
-codex-login = { workspace = true }
-codex-mcp-server = { workspace = true }
-codex-protocol = { workspace = true }
-codex-responses-api-proxy = { workspace = true }
-codex-rmcp-client = { workspace = true }
-codex-stdio-to-uds = { workspace = true }
-codex-tui = { workspace = true }
+adam-app-server = { workspace = true }
+adam-app-server-protocol = { workspace = true }
+adam-arg0 = { workspace = true }
+adam-chatgpt = { workspace = true }
+adam-cloud-tasks = { path = "../../integrations/cloud/cloud-tasks" }
+adam-common = { workspace = true, features = ["cli"] }
+adam-agent = { workspace = true }
+adam-exec = { workspace = true }
+adam-execpolicy = { workspace = true }
+adam-login = { workspace = true }
+adam-mcp-server = { workspace = true }
+adam-protocol = { workspace = true }
+adam-responses-api-proxy = { workspace = true }
+adam-rmcp-client = { workspace = true }
+adam-stdio-to-uds = { workspace = true }
+adam-tui = { workspace = true }
 libc = { workspace = true }
 owo-colors = { workspace = true }
 regex-lite = { workspace = true }
@@ -51,12 +51,12 @@ toml = { workspace = true }
 tracing = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../../platform/sandbox/windows" }
+adam_windows_sandbox = { package = "adam-windows-sandbox", path = "../../platform/sandbox/windows" }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
-codex-utils-cargo-bin = { workspace = true }
+adam-utils-cargo-bin = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

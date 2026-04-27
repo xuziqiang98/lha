@@ -4,11 +4,11 @@
 // definitions that do not contain business logic.
 
 use crate::config_loader::RequirementSource;
-pub use codex_protocol::config_types::AltScreenMode;
-pub use codex_protocol::config_types::ModeKind;
-pub use codex_protocol::config_types::Personality;
-pub use codex_protocol::config_types::WebSearchMode;
-use codex_utils_absolute_path::AbsolutePathBuf;
+pub use adam_protocol::config_types::AltScreenMode;
+pub use adam_protocol::config_types::ModeKind;
+pub use adam_protocol::config_types::Personality;
+pub use adam_protocol::config_types::WebSearchMode;
+use adam_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
@@ -545,7 +545,7 @@ pub struct SandboxWorkspaceWrite {
     pub exclude_slash_tmp: bool,
 }
 
-impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings {
+impl From<SandboxWorkspaceWrite> for adam_app_server_protocol::SandboxSettings {
     fn from(sandbox_workspace_write: SandboxWorkspaceWrite) -> Self {
         Self {
             writable_roots: sandbox_workspace_write.writable_roots,

@@ -1,4 +1,4 @@
-# codex-utils-cargo-bin
+# adam-utils-cargo-bin
 
 Helpers for Cargo-based test runs in this workspace.
 

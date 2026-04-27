@@ -1,43 +1,43 @@
-use codex_agent::config::Config;
-use codex_agent::protocol::AgentMessageEvent;
-use codex_agent::protocol::AgentReasoningRawContentEvent;
-use codex_agent::protocol::AgentStatus;
-use codex_agent::protocol::BackgroundEventEvent;
-use codex_agent::protocol::CollabAgentInteractionBeginEvent;
-use codex_agent::protocol::CollabAgentInteractionEndEvent;
-use codex_agent::protocol::CollabAgentSpawnBeginEvent;
-use codex_agent::protocol::CollabAgentSpawnEndEvent;
-use codex_agent::protocol::CollabCloseBeginEvent;
-use codex_agent::protocol::CollabCloseEndEvent;
-use codex_agent::protocol::CollabResumeBeginEvent;
-use codex_agent::protocol::CollabResumeEndEvent;
-use codex_agent::protocol::CollabWaitingBeginEvent;
-use codex_agent::protocol::CollabWaitingEndEvent;
-use codex_agent::protocol::DeprecationNoticeEvent;
-use codex_agent::protocol::ErrorEvent;
-use codex_agent::protocol::Event;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::ExecCommandBeginEvent;
-use codex_agent::protocol::ExecCommandEndEvent;
-use codex_agent::protocol::FileChange;
-use codex_agent::protocol::ItemCompletedEvent;
-use codex_agent::protocol::McpInvocation;
-use codex_agent::protocol::McpToolCallBeginEvent;
-use codex_agent::protocol::McpToolCallEndEvent;
-use codex_agent::protocol::PatchApplyBeginEvent;
-use codex_agent::protocol::PatchApplyEndEvent;
-use codex_agent::protocol::SessionConfiguredEvent;
-use codex_agent::protocol::StreamErrorEvent;
-use codex_agent::protocol::TurnAbortReason;
-use codex_agent::protocol::TurnCompleteEvent;
-use codex_agent::protocol::TurnDiffEvent;
-use codex_agent::protocol::WarningEvent;
-use codex_agent::protocol::WebSearchEndEvent;
-use codex_agent::web_search::web_search_detail;
-use codex_common::elapsed::format_duration;
-use codex_common::elapsed::format_elapsed;
-use codex_protocol::items::TurnItem;
-use codex_protocol::num_format::format_with_separators;
+use adam_agent::config::Config;
+use adam_agent::protocol::AgentMessageEvent;
+use adam_agent::protocol::AgentReasoningRawContentEvent;
+use adam_agent::protocol::AgentStatus;
+use adam_agent::protocol::BackgroundEventEvent;
+use adam_agent::protocol::CollabAgentInteractionBeginEvent;
+use adam_agent::protocol::CollabAgentInteractionEndEvent;
+use adam_agent::protocol::CollabAgentSpawnBeginEvent;
+use adam_agent::protocol::CollabAgentSpawnEndEvent;
+use adam_agent::protocol::CollabCloseBeginEvent;
+use adam_agent::protocol::CollabCloseEndEvent;
+use adam_agent::protocol::CollabResumeBeginEvent;
+use adam_agent::protocol::CollabResumeEndEvent;
+use adam_agent::protocol::CollabWaitingBeginEvent;
+use adam_agent::protocol::CollabWaitingEndEvent;
+use adam_agent::protocol::DeprecationNoticeEvent;
+use adam_agent::protocol::ErrorEvent;
+use adam_agent::protocol::Event;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::ExecCommandBeginEvent;
+use adam_agent::protocol::ExecCommandEndEvent;
+use adam_agent::protocol::FileChange;
+use adam_agent::protocol::ItemCompletedEvent;
+use adam_agent::protocol::McpInvocation;
+use adam_agent::protocol::McpToolCallBeginEvent;
+use adam_agent::protocol::McpToolCallEndEvent;
+use adam_agent::protocol::PatchApplyBeginEvent;
+use adam_agent::protocol::PatchApplyEndEvent;
+use adam_agent::protocol::SessionConfiguredEvent;
+use adam_agent::protocol::StreamErrorEvent;
+use adam_agent::protocol::TurnAbortReason;
+use adam_agent::protocol::TurnCompleteEvent;
+use adam_agent::protocol::TurnDiffEvent;
+use adam_agent::protocol::WarningEvent;
+use adam_agent::protocol::WebSearchEndEvent;
+use adam_agent::web_search::web_search_detail;
+use adam_common::elapsed::format_duration;
+use adam_common::elapsed::format_elapsed;
+use adam_protocol::items::TurnItem;
+use adam_protocol::num_format::format_with_separators;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
@@ -48,9 +48,9 @@ use std::time::Instant;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::handle_last_message;
-use codex_common::create_config_summary_entries;
-use codex_protocol::plan_tool::StepStatus;
-use codex_protocol::plan_tool::UpdatePlanArgs;
+use adam_common::create_config_summary_entries;
+use adam_protocol::plan_tool::StepStatus;
+use adam_protocol::plan_tool::UpdatePlanArgs;
 
 /// This should be configurable. When used in CI, users may not want to impose
 /// a limit so they can see the full transcript.
@@ -75,7 +75,7 @@ pub(crate) struct EventProcessorWithHumanOutput {
     show_agent_reasoning: bool,
     show_raw_agent_reasoning: bool,
     last_message_path: Option<PathBuf>,
-    last_total_token_usage: Option<codex_agent::protocol::TokenUsageInfo>,
+    last_total_token_usage: Option<adam_agent::protocol::TokenUsageInfo>,
     final_message: Option<String>,
     last_proposed_plan: Option<String>,
 }
@@ -202,10 +202,10 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             EventMsg::McpStartupUpdate(update) => {
                 let status_text = match update.status {
-                    codex_agent::protocol::McpStartupStatus::Starting => "starting".to_string(),
-                    codex_agent::protocol::McpStartupStatus::Ready => "ready".to_string(),
-                    codex_agent::protocol::McpStartupStatus::Cancelled => "cancelled".to_string(),
-                    codex_agent::protocol::McpStartupStatus::Failed { ref error } => {
+                    adam_agent::protocol::McpStartupStatus::Starting => "starting".to_string(),
+                    adam_agent::protocol::McpStartupStatus::Ready => "ready".to_string(),
+                    adam_agent::protocol::McpStartupStatus::Cancelled => "cancelled".to_string(),
+                    adam_agent::protocol::McpStartupStatus::Failed { ref error } => {
                         format!("failed: {error}")
                     }
                 };
@@ -936,7 +936,7 @@ fn is_collab_status_failure(status: &AgentStatus) -> bool {
     matches!(status, AgentStatus::Errored(_) | AgentStatus::NotFound)
 }
 
-fn format_receiver_list(ids: &[codex_protocol::ThreadId]) -> String {
+fn format_receiver_list(ids: &[adam_protocol::ThreadId]) -> String {
     if ids.is_empty() {
         return "none".to_string();
     }

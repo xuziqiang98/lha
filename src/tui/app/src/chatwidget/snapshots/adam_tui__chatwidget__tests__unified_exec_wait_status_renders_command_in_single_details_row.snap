@@ -1,0 +1,11 @@
+---
+source: src/tui/app/src/chatwidget/tests.rs
+expression: rendered
+---
+• Waiting for background terminal (0s • esc to …
+  └ cargo test -p adam-coding-agent -- --exact
+
+
+› Ask Codex to do anything
+
+  gpt-5.3-codex · 100% left

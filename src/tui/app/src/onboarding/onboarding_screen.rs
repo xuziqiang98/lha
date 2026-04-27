@@ -1,6 +1,6 @@
-use codex_agent::AuthManager;
-use codex_agent::config::Config;
-use codex_agent::git_info::get_git_repo_root;
+use adam_agent::AuthManager;
+use adam_agent::config::Config;
+use adam_agent::git_info::get_git_repo_root;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -11,7 +11,7 @@ use ratatui::style::Color;
 use ratatui::widgets::Clear;
 use ratatui::widgets::WidgetRef;
 
-use codex_protocol::config_types::ForcedLoginMethod;
+use adam_protocol::config_types::ForcedLoginMethod;
 
 use crate::LoginStatus;
 use crate::onboarding::auth::AuthModeWidget;
@@ -491,7 +491,7 @@ mod tests {
     use crate::onboarding::auth::AuthModeWidget;
     use crate::onboarding::auth::SignInOption;
     use crate::onboarding::auth::SignInState;
-    use codex_agent::auth::AuthCredentialsStoreMode;
+    use adam_agent::auth::AuthCredentialsStoreMode;
     use pretty_assertions::assert_eq;
     use ratatui::layout::Rect;
     use std::sync::Arc;

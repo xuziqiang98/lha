@@ -1,10 +1,10 @@
-use codex_agent::auth::CodexAuth;
-use codex_agent::features::Feature;
-use codex_agent::models_manager::manager::ModelsManager;
-use codex_llm::built_in_runtime_endpoints;
-use codex_protocol::openai_models::ApplyPatchToolType;
-use codex_protocol::openai_models::ConfigShellToolType;
-use codex_protocol::openai_models::TruncationPolicyConfig;
+use adam_agent::auth::CodexAuth;
+use adam_agent::features::Feature;
+use adam_agent::models_manager::manager::ModelsManager;
+use adam_llm::built_in_runtime_endpoints;
+use adam_protocol::openai_models::ApplyPatchToolType;
+use adam_protocol::openai_models::ConfigShellToolType;
+use adam_protocol::openai_models::TruncationPolicyConfig;
 use core_test_support::load_default_config_for_test;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -60,7 +60,7 @@ async fn bundled_model_info_takes_precedence_over_builtin_fallback() {
     let mut config = load_default_config_for_test(&adam_home).await;
     config.features.enable(Feature::RemoteModels);
 
-    let auth_manager = codex_agent::auth::AuthManager::from_auth_for_testing(
+    let auth_manager = adam_agent::auth::AuthManager::from_auth_for_testing(
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
     );
     let models_manager = ModelsManager::with_provider(

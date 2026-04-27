@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use codex_agent::ThreadManager;
-use codex_agent::config::Config;
-use codex_app_server_protocol::Model;
-use codex_app_server_protocol::ReasoningEffortOption;
-use codex_llm::CatalogRefreshStrategy;
-use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::openai_models::ReasoningEffortPreset;
+use adam_agent::ThreadManager;
+use adam_agent::config::Config;
+use adam_app_server_protocol::Model;
+use adam_app_server_protocol::ReasoningEffortOption;
+use adam_llm::CatalogRefreshStrategy;
+use adam_protocol::openai_models::ModelPreset;
+use adam_protocol::openai_models::ReasoningEffortPreset;
 
 pub async fn supported_models(thread_manager: Arc<ThreadManager>, config: &Config) -> Vec<Model> {
     thread_manager

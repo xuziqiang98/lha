@@ -30,10 +30,10 @@ use crate::session_prefix::TURN_ABORTED_OPEN_TAG;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::user_input::UserInput;
+use adam_protocol::models::ContentItem;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::protocol::RolloutItem;
+use adam_protocol::user_input::UserInput;
 
 pub(crate) use compact::CompactTask;
 pub(crate) use ghost_snapshot::GhostSnapshotTask;

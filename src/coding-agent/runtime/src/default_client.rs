@@ -1,7 +1,7 @@
 use crate::config_loader::ResidencyRequirement;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
-use codex_client::CodexHttpClient;
-pub use codex_client::CodexRequestBuilder;
+use adam_client::CodexHttpClient;
+pub use adam_client::CodexRequestBuilder;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderValue;
 use std::sync::LazyLock;
@@ -226,7 +226,7 @@ mod tests {
         assert_eq!(is_first_party_originator(DEFAULT_ORIGINATOR), true);
         assert_eq!(is_first_party_originator("codex_vscode"), true);
         assert_eq!(is_first_party_originator("Codex Something Else"), true);
-        assert_eq!(is_first_party_originator("codex_cli"), false);
+        assert_eq!(is_first_party_originator("adam_cli"), false);
         assert_eq!(is_first_party_originator("Other"), false);
     }
 

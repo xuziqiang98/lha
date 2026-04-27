@@ -1,24 +1,24 @@
 use std::collections::HashMap;
 
+use adam_agent::config::Config;
+use adam_agent::config::edit::ConfigEditsBuilder;
+use adam_agent::config::find_adam_home;
+use adam_agent::config::load_global_mcp_servers;
+use adam_agent::config::types::McpServerConfig;
+use adam_agent::config::types::McpServerTransportConfig;
+use adam_agent::mcp::auth::McpOAuthLoginSupport;
+use adam_agent::mcp::auth::compute_auth_statuses;
+use adam_agent::mcp::auth::oauth_login_support;
+use adam_agent::protocol::McpAuthStatus;
+use adam_common::CliConfigOverrides;
+use adam_common::format_env_display::format_env_display;
+use adam_rmcp_client::delete_oauth_tokens;
+use adam_rmcp_client::perform_oauth_login;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use clap::ArgGroup;
-use codex_agent::config::Config;
-use codex_agent::config::edit::ConfigEditsBuilder;
-use codex_agent::config::find_adam_home;
-use codex_agent::config::load_global_mcp_servers;
-use codex_agent::config::types::McpServerConfig;
-use codex_agent::config::types::McpServerTransportConfig;
-use codex_agent::mcp::auth::McpOAuthLoginSupport;
-use codex_agent::mcp::auth::compute_auth_statuses;
-use codex_agent::mcp::auth::oauth_login_support;
-use codex_agent::protocol::McpAuthStatus;
-use codex_common::CliConfigOverrides;
-use codex_common::format_env_display::format_env_display;
-use codex_rmcp_client::delete_oauth_tokens;
-use codex_rmcp_client::perform_oauth_login;
 
 /// Subcommands:
 /// - `list`   — list configured servers (with `--json`)
@@ -64,7 +64,7 @@ pub struct GetArgs {
 }
 
 #[derive(Debug, clap::Parser)]
-#[command(override_usage = "codey mcp add [OPTIONS] <NAME> (--url <URL> | -- <COMMAND>...)")]
+#[command(override_usage = "adam mcp add [OPTIONS] <NAME> (--url <URL> | -- <COMMAND>...)")]
 pub struct AddArgs {
     /// Name for the MCP server configuration.
     pub name: String,
@@ -278,7 +278,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         }
         McpOAuthLoginSupport::Unsupported => {}
         McpOAuthLoginSupport::Unknown(_) => println!(
-            "MCP server may or may not require login. Run `codey mcp login {name}` to login."
+            "MCP server may or may not require login. Run `adam mcp login {name}` to login."
         ),
     }
 
@@ -467,7 +467,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
     }
 
     if entries.is_empty() {
-        println!("No MCP servers configured yet. Try `codey mcp add my-tool -- my-command`.");
+        println!("No MCP servers configured yet. Try `adam mcp add my-tool -- my-command`.");
         return Ok(());
     }
 
@@ -795,7 +795,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
     if let Some(timeout) = server.tool_timeout_sec {
         println!("  tool_timeout_sec: {}", timeout.as_secs_f64());
     }
-    println!("  remove: codey mcp remove {}", get_args.name);
+    println!("  remove: adam mcp remove {}", get_args.name);
 
     Ok(())
 }

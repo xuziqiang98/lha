@@ -1,24 +1,24 @@
 use std::path::Path;
 use std::time::Duration;
 
-use codex_agent::config::ConfigToml;
-use codex_agent::config::edit::ConfigEdit;
-use codex_agent::config::generated_provider_profile_name;
-use codex_agent::config::model_ref::ModelRef;
-use codex_agent::config::models_json::ModelsDialect;
-use codex_agent::config::models_json::ModelsEndpoint;
-use codex_agent::config::models_json::ModelsJson;
-use codex_agent::config::models_json::ModelsProvider;
-use codex_agent::config::state_json::AdamStateStore;
-use codex_agent::default_client::build_reqwest_client;
-use codex_api::ApiError;
-use codex_api::AuthProvider;
-use codex_api::ModelsClient;
-use codex_api::Provider;
-use codex_api::ReqwestTransport;
-use codex_api::TransportError;
-use codex_api::WireApi as ApiConversationDialect;
-use codex_api::provider::RetryConfig;
+use adam_agent::config::ConfigToml;
+use adam_agent::config::edit::ConfigEdit;
+use adam_agent::config::generated_provider_profile_name;
+use adam_agent::config::model_ref::ModelRef;
+use adam_agent::config::models_json::ModelsDialect;
+use adam_agent::config::models_json::ModelsEndpoint;
+use adam_agent::config::models_json::ModelsJson;
+use adam_agent::config::models_json::ModelsProvider;
+use adam_agent::config::state_json::AdamStateStore;
+use adam_agent::default_client::build_reqwest_client;
+use adam_api::ApiError;
+use adam_api::AuthProvider;
+use adam_api::ModelsClient;
+use adam_api::Provider;
+use adam_api::ReqwestTransport;
+use adam_api::TransportError;
+use adam_api::WireApi as ApiConversationDialect;
+use adam_api::provider::RetryConfig;
 use reqwest::StatusCode;
 use reqwest::header::HeaderMap;
 use toml_edit::value;
@@ -480,7 +480,7 @@ pub(crate) fn build_custom_provider_edits_with_existing(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_agent::config::edit::ConfigEditsBuilder;
+    use adam_agent::config::edit::ConfigEditsBuilder;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
     use toml_edit::DocumentMut;

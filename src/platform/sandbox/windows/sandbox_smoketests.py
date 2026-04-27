@@ -39,9 +39,9 @@ def _resolve_codex_cmd() -> List[str]:
 
     raise FileNotFoundError(
         "Codex CLI not found. Build it first, e.g.\n"
-        "  cargo build -p codex-cli --release\n"
+        "  cargo build -p adam-cli --release\n"
         "or for debug:\n"
-        "  cargo build -p codex-cli\n"
+        "  cargo build -p adam-cli\n"
     )
 
 CODEX_CMD = _resolve_codex_cmd()
@@ -381,7 +381,7 @@ def main() -> int:
     rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo hack > .GiT\\config"], WS_ROOT)
     add("WS: protected path case-variation denied", rc != 0 and assert_not_exists(git_variation), f"rc={rc}")
 
-    # 34. WS: policy tamper (.codey artifacts) denied
+    # 34. WS: policy tamper (.adam artifacts) denied
     adam_home = Path(os.environ["USERPROFILE"]) / ".adam"
     cap_sid_target = adam_home / "cap_sid"
     rc, out, err = run_sbx(
@@ -389,9 +389,9 @@ def main() -> int:
         ["cmd", "/c", f"echo tamper > \"{cap_sid_target}\""],
         WS_ROOT,
     )
-    rc2, out2, err2 = run_sbx("workspace-write", ["cmd", "/c", "echo tamper > .codey\\policy.json"], WS_ROOT)
-    add("WS: .codey cap_sid tamper denied", rc != 0, f"rc={rc}, err={err}")
-    add("WS: .codey policy tamper denied", rc2 != 0, f"rc2={rc2}, err={err2}")
+    rc2, out2, err2 = run_sbx("workspace-write", ["cmd", "/c", "echo tamper > .adam\\policy.json"], WS_ROOT)
+    add("WS: .adam cap_sid tamper denied", rc != 0, f"rc={rc}, err={err}")
+    add("WS: .adam policy tamper denied", rc2 != 0, f"rc2={rc2}, err={err2}")
 
     # 35. WS: PATH stub bypass denied (ssh before stubs)
     tools_dir = WS_ROOT / "tools"

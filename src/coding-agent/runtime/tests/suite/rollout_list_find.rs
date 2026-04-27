@@ -3,15 +3,15 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_agent::RolloutRecorder;
-use codex_agent::RolloutRecorderParams;
-use codex_agent::config::ConfigBuilder;
-use codex_agent::find_archived_thread_path_by_id_str;
-use codex_agent::find_thread_path_by_id_str;
-use codex_agent::find_thread_path_by_name_str;
-use codex_agent::protocol::SessionSource;
-use codex_protocol::ThreadId;
-use codex_protocol::models::BaseInstructions;
+use adam_agent::RolloutRecorder;
+use adam_agent::RolloutRecorderParams;
+use adam_agent::config::ConfigBuilder;
+use adam_agent::find_archived_thread_path_by_id_str;
+use adam_agent::find_thread_path_by_id_str;
+use adam_agent::find_thread_path_by_name_str;
+use adam_agent::protocol::SessionSource;
+use adam_protocol::ThreadId;
+use adam_protocol::models::BaseInstructions;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -70,7 +70,7 @@ async fn find_handles_gitignore_covering_adam_home_directory() {
     let repo = TempDir::new().unwrap();
     let adam_home = repo.path().join(".adam");
     std::fs::create_dir_all(&adam_home).unwrap();
-    std::fs::write(repo.path().join(".gitignore"), ".codey/**\n").unwrap();
+    std::fs::write(repo.path().join(".gitignore"), ".adam/**\n").unwrap();
     let id = Uuid::new_v4();
     let expected = write_minimal_rollout_with_id(&adam_home, id);
 

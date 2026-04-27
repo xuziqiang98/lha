@@ -10,34 +10,34 @@ mod event_processor_with_human_output;
 pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
 
+use adam_agent::AuthManager;
+use adam_agent::NewThread;
+use adam_agent::ThreadManager;
+use adam_agent::auth::enforce_login_restrictions;
+use adam_agent::config::Config;
+use adam_agent::config::ConfigBuilder;
+use adam_agent::config::ConfigOverrides;
+use adam_agent::config::find_adam_home;
+use adam_agent::config::load_config_as_toml_with_cli_overrides;
+use adam_agent::config_loader::ConfigLoadError;
+use adam_agent::config_loader::format_config_error_with_source;
+use adam_agent::git_info::get_git_repo_root;
+use adam_agent::protocol::AskForApproval;
+use adam_agent::protocol::Event;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::ReviewRequest;
+use adam_agent::protocol::ReviewTarget;
+use adam_agent::protocol::SessionSource;
+use adam_cloud_requirements::cloud_requirements_loader;
+use adam_llm::CatalogRefreshStrategy;
+use adam_protocol::approvals::ElicitationAction;
+use adam_protocol::config_types::SandboxMode;
+use adam_protocol::user_input::UserInput;
+use adam_utils_absolute_path::AbsolutePathBuf;
 pub use cli::Cli;
 pub use cli::Command;
 pub use cli::ReviewArgs;
-use codex_agent::AuthManager;
-use codex_agent::NewThread;
-use codex_agent::ThreadManager;
-use codex_agent::auth::enforce_login_restrictions;
-use codex_agent::config::Config;
-use codex_agent::config::ConfigBuilder;
-use codex_agent::config::ConfigOverrides;
-use codex_agent::config::find_adam_home;
-use codex_agent::config::load_config_as_toml_with_cli_overrides;
-use codex_agent::config_loader::ConfigLoadError;
-use codex_agent::config_loader::format_config_error_with_source;
-use codex_agent::git_info::get_git_repo_root;
-use codex_agent::protocol::AskForApproval;
-use codex_agent::protocol::Event;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::ReviewRequest;
-use codex_agent::protocol::ReviewTarget;
-use codex_agent::protocol::SessionSource;
-use codex_cloud_requirements::cloud_requirements_loader;
-use codex_llm::CatalogRefreshStrategy;
-use codex_protocol::approvals::ElicitationAction;
-use codex_protocol::config_types::SandboxMode;
-use codex_protocol::user_input::UserInput;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use serde_json::Value;
@@ -59,10 +59,10 @@ use uuid::Uuid;
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
-use codex_agent::default_client::set_default_client_residency_requirement;
-use codex_agent::default_client::set_default_originator;
-use codex_agent::find_thread_path_by_id_str;
-use codex_agent::find_thread_path_by_name_str;
+use adam_agent::default_client::set_default_client_residency_requirement;
+use adam_agent::default_client::set_default_originator;
+use adam_agent::find_thread_path_by_id_str;
+use adam_agent::find_thread_path_by_name_str;
 
 enum InitialOperation {
     UserTurn {
@@ -76,13 +76,13 @@ enum InitialOperation {
 
 #[derive(Clone)]
 struct ThreadEventEnvelope {
-    thread_id: codex_protocol::ThreadId,
-    thread: Arc<codex_agent::CodexThread>,
+    thread_id: adam_protocol::ThreadId,
+    thread: Arc<adam_agent::CodexThread>,
     event: Event,
 }
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
-    if let Err(err) = set_default_originator("codex_exec".to_string()) {
+    if let Err(err) = set_default_originator("adam_exec".to_string()) {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
     }
 
@@ -237,7 +237,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     }
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        codex_agent::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, false)
+        adam_agent::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, false)
     })) {
         Ok(Ok(otel)) => otel,
         Ok(Err(e)) => {
@@ -325,7 +325,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let (initial_operation, prompt_summary) = match (command, prompt, images) {
         (Some(ExecCommand::Review(review_cli)), _, _) => {
             let review_request = build_review_request(review_cli)?;
-            let summary = codex_agent::review_prompts::user_facing_hint(&review_request.target);
+            let summary = adam_agent::review_prompts::user_facing_hint(&review_request.target);
             (InitialOperation::Review { review_request }, summary)
         }
         (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
@@ -511,8 +511,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 }
 
 fn spawn_thread_listener(
-    thread_id: codex_protocol::ThreadId,
-    thread: Arc<codex_agent::CodexThread>,
+    thread_id: adam_protocol::ThreadId,
+    thread: Arc<adam_agent::CodexThread>,
     tx: tokio::sync::mpsc::UnboundedSender<ThreadEventEnvelope>,
 ) {
     tokio::spawn(async move {
@@ -556,11 +556,11 @@ async fn resolve_resume_path(
         } else {
             Some(config.cwd.as_path())
         };
-        match codex_agent::RolloutRecorder::find_latest_thread_path(
+        match adam_agent::RolloutRecorder::find_latest_thread_path(
             &config.adam_home,
             1,
             None,
-            codex_agent::ThreadSortKey::UpdatedAt,
+            adam_agent::ThreadSortKey::UpdatedAt,
             &[],
             None,
             &config.model_provider_id,

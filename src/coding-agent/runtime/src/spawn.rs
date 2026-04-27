@@ -71,7 +71,7 @@ pub(crate) async fn spawn_child_async(
         let parent_pid = libc::getpid();
         cmd.pre_exec(move || {
             if detach_from_tty {
-                codex_utils_pty::process_group::detach_from_tty()?;
+                adam_utils_pty::process_group::detach_from_tty()?;
             }
 
             // This relies on prctl(2), so it only works on Linux.
@@ -79,7 +79,7 @@ pub(crate) async fn spawn_child_async(
             {
                 // This prctl call effectively requests, "deliver SIGTERM when my
                 // current parent dies."
-                codex_utils_pty::process_group::set_parent_death_signal(parent_pid)?;
+                adam_utils_pty::process_group::set_parent_death_signal(parent_pid)?;
             }
             Ok(())
         });

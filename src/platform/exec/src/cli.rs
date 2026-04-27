@@ -1,8 +1,8 @@
+use adam_common::CliConfigOverrides;
 use clap::Args;
 use clap::FromArgMatches;
 use clap::Parser;
 use clap::ValueEnum;
-use codex_common::CliConfigOverrides;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -29,7 +29,7 @@ pub struct Cli {
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
     #[arg(long = "sandbox", short = 's', value_enum)]
-    pub sandbox_mode: Option<codex_common::SandboxModeCliArg>,
+    pub sandbox_mode: Option<adam_common::SandboxModeCliArg>,
 
     /// Configuration profile from config.toml to specify default options.
     #[arg(long = "profile", short = 'p')]
@@ -245,7 +245,7 @@ mod tests {
     fn resume_parses_prompt_after_global_flags() {
         const PROMPT: &str = "echo resume-with-global-flags-after-subcommand";
         let cli = Cli::parse_from([
-            "codex-exec",
+            "adam-exec",
             "resume",
             "--last",
             "--json",

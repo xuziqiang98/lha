@@ -3,15 +3,15 @@ use std::env;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_agent::parse_command;
-use codex_agent::protocol::FileChange;
-use codex_agent::protocol::ReviewDecision;
-use codex_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use codex_mcp_server::CodexToolCallParam;
-use codex_mcp_server::ExecApprovalElicitRequestParams;
-use codex_mcp_server::ExecApprovalResponse;
-use codex_mcp_server::PatchApprovalElicitRequestParams;
-use codex_mcp_server::PatchApprovalResponse;
+use adam_agent::parse_command;
+use adam_agent::protocol::FileChange;
+use adam_agent::protocol::ReviewDecision;
+use adam_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use adam_mcp_server::CodexToolCallParam;
+use adam_mcp_server::ExecApprovalElicitRequestParams;
+use adam_mcp_server::ExecApprovalResponse;
+use adam_mcp_server::PatchApprovalElicitRequestParams;
+use adam_mcp_server::PatchApprovalResponse;
 use mcp_types::ElicitRequest;
 use mcp_types::ElicitRequestParamsRequestedSchema;
 use mcp_types::JSONRPC_VERSION;
@@ -180,7 +180,7 @@ fn create_expected_elicitation_request(
     workdir: &Path,
     codex_mcp_tool_call_id: String,
     codex_event_id: String,
-    thread_id: codex_protocol::ThreadId,
+    thread_id: adam_protocol::ThreadId,
 ) -> anyhow::Result<JSONRPCRequest> {
     let expected_message = format!(
         "Allow Codex to run `{}` in `{}`?",
@@ -441,7 +441,7 @@ fn create_expected_patch_approval_elicitation_request(
     reason: Option<String>,
     codex_mcp_tool_call_id: String,
     codex_event_id: String,
-    thread_id: codex_protocol::ThreadId,
+    thread_id: adam_protocol::ThreadId,
 ) -> anyhow::Result<JSONRPCRequest> {
     let mut message_lines = Vec::new();
     if let Some(r) = &reason {

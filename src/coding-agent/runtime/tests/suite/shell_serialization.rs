@@ -1,8 +1,8 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::expect_used)]
 
+use adam_agent::protocol::SandboxPolicy;
 use anyhow::Result;
-use codex_agent::protocol::SandboxPolicy;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;

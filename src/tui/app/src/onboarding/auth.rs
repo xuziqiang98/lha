@@ -1,14 +1,14 @@
 #![allow(clippy::unwrap_used)]
 
-use codex_agent::AuthManager;
-use codex_agent::auth::AuthCredentialsStoreMode;
-use codex_agent::auth::CLIENT_ID;
-use codex_app_server_protocol::AuthMode;
-use codex_login::DeviceCode;
-use codex_login::ServerOptions;
-use codex_login::ShutdownHandle;
-use codex_login::run_login_server;
-use codex_protocol::config_types::ForcedLoginMethod;
+use adam_agent::AuthManager;
+use adam_agent::auth::AuthCredentialsStoreMode;
+use adam_agent::auth::CLIENT_ID;
+use adam_app_server_protocol::AuthMode;
+use adam_login::DeviceCode;
+use adam_login::ServerOptions;
+use adam_login::ShutdownHandle;
+use adam_login::run_login_server;
+use adam_protocol::config_types::ForcedLoginMethod;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -442,7 +442,7 @@ impl AuthModeWidget {
         let lines = vec![
             "✓ Custom provider configured".fg(Color::Green).into(),
             "".into(),
-            "  Codey will use the provider saved in config.toml.".into(),
+            "  Adam will use the provider saved in config.toml.".into(),
         ];
 
         Paragraph::new(lines)
@@ -945,9 +945,9 @@ mod tests {
 
     use crate::provider_config::build_custom_provider_edits;
     use crate::provider_config::validate_provider_id;
-    use codex_agent::auth::AuthCredentialsStoreMode;
-    use codex_agent::config::CONFIG_TOML_FILE;
-    use codex_agent::config::edit::ConfigEditsBuilder;
+    use adam_agent::auth::AuthCredentialsStoreMode;
+    use adam_agent::config::CONFIG_TOML_FILE;
+    use adam_agent::config::edit::ConfigEditsBuilder;
 
     fn widget_forced_chatgpt() -> (AuthModeWidget, TempDir) {
         let adam_home = TempDir::new().unwrap();

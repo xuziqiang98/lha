@@ -8,9 +8,9 @@ use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use adam_protocol::protocol::McpListToolsResponseEvent;
+use adam_protocol::protocol::SandboxPolicy;
 use async_channel::unbounded;
-use codex_protocol::protocol::McpListToolsResponseEvent;
-use codex_protocol::protocol::SandboxPolicy;
 use mcp_types::Tool as McpTool;
 use tokio_util::sync::CancellationToken;
 

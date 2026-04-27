@@ -5,7 +5,7 @@ use predicates::str::contains;
 use tempfile::TempDir;
 
 fn codex_command(adam_home: &Path) -> Result<assert_cmd::Command> {
-    let mut cmd = assert_cmd::Command::new(codex_utils_cargo_bin::cargo_bin("codey")?);
+    let mut cmd = assert_cmd::Command::new(adam_utils_cargo_bin::cargo_bin("adam")?);
     cmd.env("ADAM_HOME", adam_home);
     Ok(cmd)
 }

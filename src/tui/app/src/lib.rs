@@ -1,41 +1,41 @@
 // Forbid accidental stdout/stderr writes in the *library* portion of the TUI.
-// The standalone `codex-tui` binary prints a short help message before the
+// The standalone `adam-tui` binary prints a short help message before the
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 #![deny(clippy::disallowed_methods)]
+use adam_agent::AuthManager;
+use adam_agent::CodexAuth;
+use adam_agent::INTERACTIVE_SESSION_SOURCES;
+use adam_agent::RolloutRecorder;
+use adam_agent::ThreadSortKey;
+use adam_agent::auth::enforce_login_restrictions;
+use adam_agent::config::Config;
+use adam_agent::config::ConfigBuilder;
+use adam_agent::config::ConfigOverrides;
+use adam_agent::config::find_adam_home;
+use adam_agent::config::load_config_as_toml_with_cli_overrides;
+use adam_agent::config_loader::CloudRequirementsLoader;
+use adam_agent::config_loader::ConfigLoadError;
+use adam_agent::config_loader::format_config_error_with_source;
+use adam_agent::default_client::set_default_client_residency_requirement;
+use adam_agent::find_thread_path_by_id_str;
+use adam_agent::find_thread_path_by_name_str;
+use adam_agent::path_utils;
+use adam_agent::protocol::AskForApproval;
+use adam_agent::read_effective_thread_cwd;
+use adam_agent::terminal::Multiplexer;
+use adam_agent::windows_sandbox::WindowsSandboxLevelExt;
+use adam_app_server_protocol::AuthMode;
+use adam_cloud_requirements::cloud_requirements_loader;
+use adam_protocol::config_types::AltScreenMode;
+use adam_protocol::config_types::SandboxMode;
+use adam_protocol::config_types::WindowsSandboxLevel;
+use adam_state::log_db;
+use adam_utils_absolute_path::AbsolutePathBuf;
 use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
 pub use app::ExitReason;
-use codex_agent::AuthManager;
-use codex_agent::CodexAuth;
-use codex_agent::INTERACTIVE_SESSION_SOURCES;
-use codex_agent::RolloutRecorder;
-use codex_agent::ThreadSortKey;
-use codex_agent::auth::enforce_login_restrictions;
-use codex_agent::config::Config;
-use codex_agent::config::ConfigBuilder;
-use codex_agent::config::ConfigOverrides;
-use codex_agent::config::find_adam_home;
-use codex_agent::config::load_config_as_toml_with_cli_overrides;
-use codex_agent::config_loader::CloudRequirementsLoader;
-use codex_agent::config_loader::ConfigLoadError;
-use codex_agent::config_loader::format_config_error_with_source;
-use codex_agent::default_client::set_default_client_residency_requirement;
-use codex_agent::find_thread_path_by_id_str;
-use codex_agent::find_thread_path_by_name_str;
-use codex_agent::path_utils;
-use codex_agent::protocol::AskForApproval;
-use codex_agent::read_effective_thread_cwd;
-use codex_agent::terminal::Multiplexer;
-use codex_agent::windows_sandbox::WindowsSandboxLevelExt;
-use codex_app_server_protocol::AuthMode;
-use codex_cloud_requirements::cloud_requirements_loader;
-use codex_protocol::config_types::AltScreenMode;
-use codex_protocol::config_types::SandboxMode;
-use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_state::log_db;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use cwd_prompt::CwdPromptAction;
 use cwd_prompt::CwdSelection;
 use std::fs::OpenOptions;
@@ -149,7 +149,7 @@ pub async fn run_main(
     }
 
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
-    let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
+    let overrides_cli = adam_common::CliConfigOverrides { raw_overrides };
     let cli_kv_overrides = match overrides_cli.parse_overrides() {
         // Parse `-c` overrides from the CLI.
         Ok(v) => v,
@@ -203,8 +203,7 @@ pub async fn run_main(
     };
 
     if let Err(err) =
-        codex_agent::personality_migration::maybe_migrate_personality(&adam_home, &config_toml)
-            .await
+        adam_agent::personality_migration::maybe_migrate_personality(&adam_home, &config_toml).await
     {
         tracing::warn!(error = %err, "failed to run personality migration");
     }
@@ -259,7 +258,7 @@ pub async fn run_main(
         std::process::exit(1);
     }
 
-    let log_dir = codex_agent::config::log_dir(&config)?;
+    let log_dir = adam_agent::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
     let mut log_file_opts = OpenOptions::new();
@@ -275,7 +274,7 @@ pub async fn run_main(
         log_file_opts.mode(0o600);
     }
 
-    let log_file = log_file_opts.open(log_dir.join("codex-tui.log"))?;
+    let log_file = log_file_opts.open(log_dir.join("adam-tui.log"))?;
 
     // Wrap file in non‑blocking writer.
     let (non_blocking, _guard) = non_blocking(log_file);
@@ -283,7 +282,7 @@ pub async fn run_main(
     // use RUST_LOG env var, default to info for codex crates.
     let env_filter = || {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new("codex_agent=info,codex_tui=info,codex_rmcp_client=info")
+            EnvFilter::new("adam_agent=info,adam_tui=info,adam_rmcp_client=info")
         })
     };
 
@@ -300,12 +299,12 @@ pub async fn run_main(
         )
         .with_filter(env_filter());
 
-    let feedback = codex_feedback::CodexFeedback::new();
+    let feedback = adam_feedback::CodexFeedback::new();
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        codex_agent::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, true)
+        adam_agent::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, true)
     })) {
         Ok(Ok(otel)) => otel,
         Ok(Err(e)) => {
@@ -328,7 +327,7 @@ pub async fn run_main(
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let log_db_layer = codex_agent::state_db::get_state_db(&config, None)
+    let log_db_layer = adam_agent::state_db::get_state_db(&config, None)
         .await
         .map(|db| log_db::start(db).with_filter(env_filter()));
 
@@ -359,7 +358,7 @@ async fn run_ratatui_app(
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     cloud_requirements: CloudRequirementsLoader,
-    feedback: codex_feedback::CodexFeedback,
+    feedback: adam_feedback::CodexFeedback,
 ) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
 
@@ -390,7 +389,7 @@ async fn run_ratatui_app(
                 UpdatePromptOutcome::RunUpdate(action) => {
                     crate::tui::restore()?;
                     return Ok(AppExitInfo {
-                        token_usage: codex_agent::protocol::TokenUsage::default(),
+                        token_usage: adam_agent::protocol::TokenUsage::default(),
                         thread_id: None,
                         thread_name: None,
                         update_action: Some(action),
@@ -431,7 +430,7 @@ async fn run_ratatui_app(
             session_log::log_session_end();
             let _ = tui.terminal.clear();
             return Ok(AppExitInfo {
-                token_usage: codex_agent::protocol::TokenUsage::default(),
+                token_usage: adam_agent::protocol::TokenUsage::default(),
                 thread_id: None,
                 thread_name: None,
                 update_action: None,
@@ -465,12 +464,12 @@ async fn run_ratatui_app(
         session_log::log_session_end();
         let _ = tui.terminal.clear();
         Ok(AppExitInfo {
-            token_usage: codex_agent::protocol::TokenUsage::default(),
+            token_usage: adam_agent::protocol::TokenUsage::default(),
             thread_id: None,
             thread_name: None,
             update_action: None,
             exit_reason: ExitReason::Fatal(format!(
-                "No saved session found with ID {id_str}. Run `codey {action}` without an ID to choose from existing sessions."
+                "No saved session found with ID {id_str}. Run `adam {action}` without an ID to choose from existing sessions."
             )),
         })
     };
@@ -523,7 +522,7 @@ async fn run_ratatui_app(
                     restore();
                     session_log::log_session_end();
                     return Ok(AppExitInfo {
-                        token_usage: codex_agent::protocol::TokenUsage::default(),
+                        token_usage: adam_agent::protocol::TokenUsage::default(),
                         thread_id: None,
                         thread_name: None,
                         update_action: None,
@@ -581,7 +580,7 @@ async fn run_ratatui_app(
                 restore();
                 session_log::log_session_end();
                 return Ok(AppExitInfo {
-                    token_usage: codex_agent::protocol::TokenUsage::default(),
+                    token_usage: adam_agent::protocol::TokenUsage::default(),
                     thread_id: None,
                     thread_name: None,
                     update_action: None,
@@ -739,7 +738,7 @@ fn determine_alt_screen_mode(no_alt_screen: bool, tui_alternate_screen: AltScree
             AltScreenMode::Always => true,
             AltScreenMode::Never => false,
             AltScreenMode::Auto => {
-                let terminal_info = codex_agent::terminal::terminal_info();
+                let terminal_info = adam_agent::terminal::terminal_info();
                 !matches!(terminal_info.multiplexer, Some(Multiplexer::Zellij { .. }))
             }
         }
@@ -845,19 +844,19 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adam_agent::INTERACTIVE_SESSION_SOURCES;
+    use adam_agent::RolloutRecorder;
+    use adam_agent::ThreadSortKey;
+    use adam_agent::config::ConfigBuilder;
+    use adam_agent::config::ConfigOverrides;
+    use adam_agent::config::ProjectConfig;
+    use adam_agent::protocol::AskForApproval;
+    use adam_protocol::protocol::RolloutItem;
+    use adam_protocol::protocol::RolloutLine;
+    use adam_protocol::protocol::SessionMeta;
+    use adam_protocol::protocol::SessionMetaLine;
+    use adam_protocol::protocol::TurnContextItem;
     use chrono::Utc;
-    use codex_agent::INTERACTIVE_SESSION_SOURCES;
-    use codex_agent::RolloutRecorder;
-    use codex_agent::ThreadSortKey;
-    use codex_agent::config::ConfigBuilder;
-    use codex_agent::config::ConfigOverrides;
-    use codex_agent::config::ProjectConfig;
-    use codex_agent::protocol::AskForApproval;
-    use codex_protocol::protocol::RolloutItem;
-    use codex_protocol::protocol::RolloutLine;
-    use codex_protocol::protocol::SessionMeta;
-    use codex_protocol::protocol::SessionMetaLine;
-    use codex_protocol::protocol::TurnContextItem;
     use serial_test::serial;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -918,7 +917,7 @@ mod tests {
     }
     #[tokio::test]
     async fn untrusted_project_skips_trust_prompt() -> std::io::Result<()> {
-        use codex_protocol::config_types::TrustLevel;
+        use adam_protocol::config_types::TrustLevel;
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
@@ -981,13 +980,13 @@ mod tests {
             timestamp: now.clone(),
             item: RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
-                    id: codex_protocol::ThreadId::default(),
+                    id: adam_protocol::ThreadId::default(),
                     timestamp: now.clone(),
                     cwd: cwd.to_path_buf(),
                     originator: "test".to_string(),
                     cli_version: "0.0.0".to_string(),
-                    rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
-                    source: codex_protocol::protocol::SessionSource::Cli,
+                    rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+                    source: adam_protocol::protocol::SessionSource::Cli,
                     model_provider: Some(provider.to_string()),
                     base_instructions: None,
                     dynamic_tools: None,
@@ -998,8 +997,8 @@ mod tests {
         };
         let user = RolloutLine {
             timestamp: now,
-            item: RolloutItem::EventMsg(codex_protocol::protocol::EventMsg::UserMessage(
-                codex_protocol::protocol::UserMessageEvent {
+            item: RolloutItem::EventMsg(adam_protocol::protocol::EventMsg::UserMessage(
+                adam_protocol::protocol::UserMessageEvent {
                     message: preview.to_string(),
                     images: None,
                     local_images: Vec::new(),

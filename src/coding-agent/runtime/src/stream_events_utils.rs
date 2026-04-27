@@ -2,8 +2,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::items::TurnItem;
+use adam_protocol::config_types::ModeKind;
+use adam_protocol::items::TurnItem;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
@@ -15,11 +15,11 @@ use crate::parse_turn_item;
 use crate::proposed_plan_parser::strip_proposed_plan_blocks;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
-use codex_llm::ToolCallPayload;
-use codex_llm::ToolCallRequest;
-use codex_llm::ToolResultItem;
-use codex_llm::ToolResultPayload;
-use codex_llm::TranscriptItem;
+use adam_llm::ToolCallPayload;
+use adam_llm::ToolCallRequest;
+use adam_llm::ToolResultItem;
+use adam_llm::ToolResultPayload;
+use adam_llm::TranscriptItem;
 use futures::Future;
 use tracing::debug;
 use tracing::instrument;
@@ -174,12 +174,12 @@ pub(crate) async fn handle_non_tool_response_item(
                     .content
                     .iter()
                     .map(|entry| match entry {
-                        codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+                        adam_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
                     })
                     .collect::<String>();
                 let stripped = strip_proposed_plan_blocks(&combined);
                 agent_message.content =
-                    vec![codex_protocol::items::AgentMessageContent::Text { text: stripped }];
+                    vec![adam_protocol::items::AgentMessageContent::Text { text: stripped }];
             }
             Some(turn_item)
         }
@@ -201,7 +201,7 @@ pub(crate) fn last_assistant_message_from_item(
         let combined = content
             .iter()
             .filter_map(|ci| match ci {
-                codex_protocol::models::ContentItem::OutputText { text } => Some(text.as_str()),
+                adam_protocol::models::ContentItem::OutputText { text } => Some(text.as_str()),
                 _ => None,
             })
             .collect::<String>();

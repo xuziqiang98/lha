@@ -1,6 +1,6 @@
 //! Connection manager for Model Context Protocol (MCP) servers.
 //!
-//! The [`McpConnectionManager`] owns one [`codex_rmcp_client::RmcpClient`] per
+//! The [`McpConnectionManager`] owns one [`adam_rmcp_client::RmcpClient`] per
 //! configured server (keyed by the *server name*). It offers convenience
 //! helpers to query the available tools across *all* servers and returns them
 //! in a single aggregated map using the fully-qualified tool name
@@ -16,24 +16,24 @@ use std::time::Duration;
 
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::McpAuthStatusEntry;
+use adam_async_utils::CancelErr;
+use adam_async_utils::OrCancelExt;
+use adam_protocol::approvals::ElicitationRequestEvent;
+use adam_protocol::protocol::Event;
+use adam_protocol::protocol::EventMsg;
+use adam_protocol::protocol::McpStartupCompleteEvent;
+use adam_protocol::protocol::McpStartupFailure;
+use adam_protocol::protocol::McpStartupStatus;
+use adam_protocol::protocol::McpStartupUpdateEvent;
+use adam_protocol::protocol::SandboxPolicy;
+use adam_rmcp_client::ElicitationResponse;
+use adam_rmcp_client::OAuthCredentialsStoreMode;
+use adam_rmcp_client::RmcpClient;
+use adam_rmcp_client::SendElicitation;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use async_channel::Sender;
-use codex_async_utils::CancelErr;
-use codex_async_utils::OrCancelExt;
-use codex_protocol::approvals::ElicitationRequestEvent;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::McpStartupCompleteEvent;
-use codex_protocol::protocol::McpStartupFailure;
-use codex_protocol::protocol::McpStartupStatus;
-use codex_protocol::protocol::McpStartupUpdateEvent;
-use codex_protocol::protocol::SandboxPolicy;
-use codex_rmcp_client::ElicitationResponse;
-use codex_rmcp_client::OAuthCredentialsStoreMode;
-use codex_rmcp_client::RmcpClient;
-use codex_rmcp_client::SendElicitation;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use futures::future::Shared;
@@ -1004,7 +1004,7 @@ fn mcp_init_error_display(
         )
     } else if is_mcp_client_auth_required_error(err) {
         format!(
-            "The {server_name} MCP server is not logged in. Run `codey mcp login {server_name}`."
+            "The {server_name} MCP server is not logged in. Run `adam mcp login {server_name}`."
         )
     } else if is_mcp_client_startup_timeout_error(err) {
         let startup_timeout_secs = match entry {
@@ -1046,7 +1046,7 @@ mod mcp_init_error_display_tests {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::protocol::McpAuthStatus;
+    use adam_protocol::protocol::McpAuthStatus;
     use mcp_types::ToolInputSchema;
     use std::collections::HashSet;
 
@@ -1263,7 +1263,7 @@ mod tests {
         let display = mcp_init_error_display(server_name, None, &err);
 
         let expected = format!(
-            "The {server_name} MCP server is not logged in. Run `codey mcp login {server_name}`."
+            "The {server_name} MCP server is not logged in. Run `adam mcp login {server_name}`."
         );
 
         assert_eq!(expected, display);

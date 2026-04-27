@@ -10,9 +10,9 @@ pub mod sse;
 pub mod telemetry;
 
 pub use crate::requests::headers::build_conversation_headers;
-pub use codex_client::RequestTelemetry;
-pub use codex_client::ReqwestTransport;
-pub use codex_client::TransportError;
+pub use adam_client::RequestTelemetry;
+pub use adam_client::ReqwestTransport;
+pub use adam_client::TransportError;
 
 pub use crate::auth::AuthProvider;
 pub use crate::common::CompactionInput;

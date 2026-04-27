@@ -1,5 +1,5 @@
-use codex_llm_types::Verbosity;
-use codex_llm_types::WebSearchMode;
+use adam_llm_types::Verbosity;
+use adam_llm_types::WebSearchMode;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LlmRuntimeConfig {

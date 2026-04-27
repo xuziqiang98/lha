@@ -3,15 +3,15 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use adam_agent::Cursor;
+use adam_agent::INTERACTIVE_SESSION_SOURCES;
+use adam_agent::RolloutRecorder;
+use adam_agent::ThreadItem;
+use adam_agent::ThreadSortKey;
+use adam_agent::ThreadsPage;
+use adam_protocol::items::TurnItem;
 use chrono::DateTime;
 use chrono::Utc;
-use codex_agent::Cursor;
-use codex_agent::INTERACTIVE_SESSION_SOURCES;
-use codex_agent::RolloutRecorder;
-use codex_agent::ThreadItem;
-use codex_agent::ThreadSortKey;
-use codex_agent::ThreadsPage;
-use codex_protocol::items::TurnItem;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -33,8 +33,8 @@ use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::protocol::SessionMetaLine;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::protocol::SessionMetaLine;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
@@ -750,7 +750,7 @@ fn extract_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
 fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
     head.iter()
         .filter_map(|value| serde_json::from_value::<TranscriptItem>(value.clone()).ok())
-        .find_map(|item| match codex_agent::parse_turn_item(&item) {
+        .find_map(|item| match adam_agent::parse_turn_item(&item) {
             Some(TurnItem::UserMessage(user)) => Some(user.message()),
             _ => None,
         })
@@ -1104,16 +1104,16 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adam_protocol::models::ContentItem;
+    use adam_protocol::models::TranscriptItem;
+    use adam_protocol::protocol::EventMsg;
+    use adam_protocol::protocol::GitInfo;
+    use adam_protocol::protocol::RolloutItem;
+    use adam_protocol::protocol::RolloutLine;
+    use adam_protocol::protocol::SessionMeta;
+    use adam_protocol::protocol::SessionSource;
+    use adam_protocol::protocol::UserMessageEvent;
     use chrono::Duration;
-    use codex_protocol::models::ContentItem;
-    use codex_protocol::models::TranscriptItem;
-    use codex_protocol::protocol::EventMsg;
-    use codex_protocol::protocol::GitInfo;
-    use codex_protocol::protocol::RolloutItem;
-    use codex_protocol::protocol::RolloutLine;
-    use codex_protocol::protocol::SessionMeta;
-    use codex_protocol::protocol::SessionSource;
-    use codex_protocol::protocol::UserMessageEvent;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
@@ -1178,13 +1178,13 @@ mod tests {
                 timestamp: ts.to_rfc3339(),
                 item: RolloutItem::SessionMeta(SessionMetaLine {
                     meta: SessionMeta {
-                        id: codex_protocol::ThreadId::default(),
+                        id: adam_protocol::ThreadId::default(),
                         forked_from_id: None,
                         timestamp: ts.to_rfc3339(),
                         cwd: PathBuf::from(cwd),
                         originator: "user".to_string(),
                         cli_version: "0.0.0".to_string(),
-                        rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+                        rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
                         source: SessionSource::Cli,
                         model_provider: Some(provider.to_string()),
                         base_instructions: None,

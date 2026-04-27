@@ -21,8 +21,8 @@ use crate::seatbelt::create_seatbelt_command_args;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use crate::tools::sandboxing::SandboxablePreference;
-use codex_protocol::config_types::WindowsSandboxLevel;
-pub use codex_protocol::models::SandboxPermissions;
+use adam_protocol::config_types::WindowsSandboxLevel;
+pub use adam_protocol::models::SandboxPermissions;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -59,7 +59,7 @@ pub enum SandboxPreference {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SandboxTransformError {
-    #[error("missing codex-linux-sandbox executable path")]
+    #[error("missing adam-linux-sandbox executable path")]
     MissingLinuxSandboxExecutable,
     #[cfg(not(target_os = "macos"))]
     #[error("seatbelt sandbox is only available on macOS")]
@@ -149,11 +149,11 @@ impl SandboxManager {
                 (
                     full_command,
                     HashMap::new(),
-                    Some("codex-linux-sandbox".to_string()),
+                    Some("adam-linux-sandbox".to_string()),
                 )
             }
             // On Windows, the restricted token sandbox executes in-process via the
-            // codex-windows-sandbox crate. We leave the command unchanged here and
+            // adam-windows-sandbox crate. We leave the command unchanged here and
             // branch during execution based on the sandbox type.
             #[cfg(target_os = "windows")]
             SandboxType::WindowsRestrictedToken => (command, HashMap::new(), None),

@@ -1,11 +1,11 @@
 //! Configuration object accepted by the `codex` MCP tool-call.
 
-use codex_agent::config::Config;
-use codex_agent::config::ConfigOverrides;
-use codex_agent::protocol::AskForApproval;
-use codex_protocol::ThreadId;
-use codex_protocol::config_types::SandboxMode;
-use codex_utils_json_to_toml::json_to_toml;
+use adam_agent::config::Config;
+use adam_agent::config::ConfigOverrides;
+use adam_agent::protocol::AskForApproval;
+use adam_protocol::ThreadId;
+use adam_protocol::config_types::SandboxMode;
+use adam_utils_json_to_toml::json_to_toml;
 use mcp_types::Tool;
 use mcp_types::ToolInputSchema;
 use mcp_types::ToolOutputSchema;
@@ -167,7 +167,7 @@ impl CodexToolCallParam {
             compact_prompt,
         } = self;
 
-        // Build the `ConfigOverrides` recognized by codex-coding-agent.
+        // Build the `ConfigOverrides` recognized by adam-coding-agent.
         let overrides = ConfigOverrides {
             model,
             config_profile: profile,

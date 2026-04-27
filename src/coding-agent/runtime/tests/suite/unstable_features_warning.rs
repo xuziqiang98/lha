@@ -1,15 +1,15 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use codex_agent::AuthManager;
-use codex_agent::CodexAuth;
-use codex_agent::NewThread;
-use codex_agent::ThreadManager;
-use codex_agent::config::CONFIG_TOML_FILE;
-use codex_agent::features::Feature;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::InitialHistory;
-use codex_agent::protocol::WarningEvent;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use adam_agent::AuthManager;
+use adam_agent::CodexAuth;
+use adam_agent::NewThread;
+use adam_agent::ThreadManager;
+use adam_agent::config::CONFIG_TOML_FILE;
+use adam_agent::features::Feature;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::InitialHistory;
+use adam_agent::protocol::WarningEvent;
+use adam_utils_absolute_path::AbsolutePathBuf;
 use core::time::Duration;
 use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;

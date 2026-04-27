@@ -1,8 +1,8 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::TranscriptItem;
+use adam_protocol::models::ContentItem;
+use adam_protocol::models::TranscriptItem;
 
 pub const USER_INSTRUCTIONS_OPEN_TAG_LEGACY: &str = "<user_instructions>";
 pub const USER_INSTRUCTIONS_PREFIX: &str = "# AGENTS.md instructions for ";
@@ -160,7 +160,7 @@ fn parse_skill_field<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::models::TranscriptItem;
+    use adam_protocol::models::TranscriptItem;
     use pretty_assertions::assert_eq;
 
     #[test]

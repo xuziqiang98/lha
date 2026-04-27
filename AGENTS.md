@@ -2,7 +2,7 @@
 
 In this repo, the Rust code lives under `src/`:
 
-- Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-agent`
+- Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `adam-agent`
 - When using format! and you can inline variables into {}, always do that.
 - Install any commands the repo relies on (for example `just`, `rg`, or `cargo-insta`) if they aren't already available before running instructions here.
 - Never add or modify any code related to `CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR` or `CODEX_SANDBOX_ENV_VAR`.
@@ -18,7 +18,7 @@ In this repo, the Rust code lives under `src/`:
 
 Run `just fmt` from the repository root automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
 
-1. Run the test for the specific project that was changed. For example, if changes were made in `src/harness/tui`, run `cargo test -p codex-tui`.
+1. Run the test for the specific project that was changed. For example, if changes were made in `src/harness/tui`, run `cargo test -p adam-tui`.
 2. Once those pass, if any changes were made in common, core, or protocol, run the complete test suite with `cargo test --all-features`. project-specific or individual tests can be run without asking the user, but do ask the user before running the complete test suite.
 
 Before finalizing a large change to the Rust workspace, run `just fix -p <project>` to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace-wide Clippy builds; only run `just fix` without `-p` if you changed shared crates.
@@ -62,13 +62,13 @@ See `src/harness/tui/styles.md`.
 This repo uses snapshot tests (via `insta`), especially in `src/harness/tui`, to validate rendered output. When UI or text output changes intentionally, update the snapshots as follows:
 
 - Run tests to generate any updated snapshots:
-  - `cargo test -p codex-tui`
+  - `cargo test -p adam-tui`
 - Check what’s pending:
-  - `cargo insta pending-snapshots -p codex-tui`
+  - `cargo insta pending-snapshots -p adam-tui`
 - Review changes by reading the generated `*.snap.new` files directly in the repo, or preview a specific file:
-  - `cargo insta show -p codex-tui path/to/file.snap.new`
+  - `cargo insta show -p adam-tui path/to/file.snap.new`
 - Only if you intend to accept all new snapshots in this crate, run:
-  - `cargo insta accept -p codex-tui`
+  - `cargo insta accept -p adam-tui`
 
 If you don’t have the tool:
 
@@ -82,8 +82,8 @@ If you don’t have the tool:
 
 ### Spawning workspace binaries in tests
 
-- Prefer `codex_utils_cargo_bin::cargo_bin("...")` over `assert_cmd::Command::cargo_bin(...)` or `escargot` when tests need to spawn first-party binaries.
-- When locating fixture files or test resources, avoid `env!("CARGO_MANIFEST_DIR")` in test code. Prefer `codex_utils_cargo_bin::find_resource!` so paths continue to resolve after `chdir`.
+- Prefer `adam_utils_cargo_bin::cargo_bin("...")` over `assert_cmd::Command::cargo_bin(...)` or `escargot` when tests need to spawn first-party binaries.
+- When locating fixture files or test resources, avoid `env!("CARGO_MANIFEST_DIR")` in test code. Prefer `adam_utils_cargo_bin::find_resource!` so paths continue to resolve after `chdir`.
 
 ### Integration tests (core)
 

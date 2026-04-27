@@ -5,18 +5,18 @@ use crate::rollout::list::Cursor;
 use crate::rollout::list::ThreadSortKey;
 use crate::rollout::metadata;
 use crate::rollout::recorder::is_unsupported_rollout_schema_anyhow;
+use adam_otel::OtelManager;
+use adam_protocol::ThreadId;
+use adam_protocol::protocol::RolloutItem;
+use adam_protocol::protocol::SessionSource;
+use adam_state::DB_METRIC_COMPARE_ERROR;
+pub use adam_state::LogEntry;
+use adam_state::STATE_DB_FILENAME;
+use adam_state::ThreadMetadataBuilder;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Timelike;
 use chrono::Utc;
-use codex_otel::OtelManager;
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SessionSource;
-use codex_state::DB_METRIC_COMPARE_ERROR;
-pub use codex_state::LogEntry;
-use codex_state::STATE_DB_FILENAME;
-use codex_state::ThreadMetadataBuilder;
 use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
@@ -25,7 +25,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 /// Core-facing handle to the optional SQLite-backed state runtime.
-pub type StateDbHandle = Arc<codex_state::StateRuntime>;
+pub type StateDbHandle = Arc<adam_state::StateRuntime>;
 
 /// Initialize the state runtime when the `sqlite` feature flag is enabled. To only be used
 /// inside `core`. The initialization should not be done anywhere else.
@@ -38,7 +38,7 @@ pub(crate) async fn init_if_enabled(
         return None;
     }
     let existed = tokio::fs::try_exists(&state_path).await.unwrap_or(false);
-    let runtime = match codex_state::StateRuntime::init(
+    let runtime = match adam_state::StateRuntime::init(
         config.adam_home.clone(),
         config.model_provider_id.clone(),
         otel.cloned(),
@@ -81,7 +81,7 @@ pub async fn get_state_db(config: &Config, otel: Option<&OtelManager>) -> Option
     {
         return None;
     }
-    codex_state::StateRuntime::init(
+    adam_state::StateRuntime::init(
         config.adam_home.clone(),
         config.model_provider_id.clone(),
         otel.cloned(),
@@ -98,17 +98,14 @@ pub async fn open_if_present(adam_home: &Path, default_provider: &str) -> Option
     if !tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
         return None;
     }
-    let runtime = codex_state::StateRuntime::init(
-        adam_home.to_path_buf(),
-        default_provider.to_string(),
-        None,
-    )
-    .await
-    .ok()?;
+    let runtime =
+        adam_state::StateRuntime::init(adam_home.to_path_buf(), default_provider.to_string(), None)
+            .await
+            .ok()?;
     Some(runtime)
 }
 
-fn cursor_to_anchor(cursor: Option<&Cursor>) -> Option<codex_state::Anchor> {
+fn cursor_to_anchor(cursor: Option<&Cursor>) -> Option<adam_state::Anchor> {
     let cursor = cursor?;
     let value = serde_json::to_value(cursor).ok()?;
     let cursor_str = value.as_str()?;
@@ -125,13 +122,13 @@ fn cursor_to_anchor(cursor: Option<&Cursor>) -> Option<codex_state::Anchor> {
         return None;
     }
     .with_nanosecond(0)?;
-    Some(codex_state::Anchor { ts, id })
+    Some(adam_state::Anchor { ts, id })
 }
 
 /// List thread ids from SQLite for parity checks without rollout scanning.
 #[allow(clippy::too_many_arguments)]
 pub async fn list_thread_ids_db(
-    context: Option<&codex_state::StateRuntime>,
+    context: Option<&adam_state::StateRuntime>,
     adam_home: &Path,
     page_size: usize,
     cursor: Option<&Cursor>,
@@ -162,8 +159,8 @@ pub async fn list_thread_ids_db(
         .collect();
     let model_providers = model_providers.map(<[String]>::to_vec);
     let sort_key = match sort_key {
-        ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
-        ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
+        ThreadSortKey::CreatedAt => adam_state::SortKey::CreatedAt,
+        ThreadSortKey::UpdatedAt => adam_state::SortKey::UpdatedAt,
     };
     let result = if let Some(cwd_filter) = cwd_filter {
         collect_thread_ids_with_cwd_filter(
@@ -199,10 +196,10 @@ pub async fn list_thread_ids_db(
 
 #[allow(clippy::too_many_arguments)]
 async fn collect_thread_ids_with_cwd_filter(
-    context: &codex_state::StateRuntime,
+    context: &adam_state::StateRuntime,
     page_size: usize,
-    anchor: Option<&codex_state::Anchor>,
-    sort_key: codex_state::SortKey,
+    anchor: Option<&adam_state::Anchor>,
+    sort_key: adam_state::SortKey,
     allowed_sources: &[String],
     model_providers: Option<&[String]>,
     cwd_filter: &Path,
@@ -256,7 +253,7 @@ fn paths_match(a: &Path, b: &Path) -> bool {
 
 /// Look up the rollout path for a thread id using SQLite.
 pub async fn find_rollout_path_by_id(
-    context: Option<&codex_state::StateRuntime>,
+    context: Option<&adam_state::StateRuntime>,
     thread_id: ThreadId,
     archived_only: Option<bool>,
     stage: &str,
@@ -272,7 +269,7 @@ pub async fn find_rollout_path_by_id(
 
 /// Reconcile rollout items into SQLite, falling back to scanning the rollout file.
 pub async fn reconcile_rollout(
-    context: Option<&codex_state::StateRuntime>,
+    context: Option<&adam_state::StateRuntime>,
     rollout_path: &Path,
     default_provider: &str,
     builder: Option<&ThreadMetadataBuilder>,
@@ -321,7 +318,7 @@ pub async fn reconcile_rollout(
 
 /// Apply rollout items incrementally to SQLite.
 pub async fn apply_rollout_items(
-    context: Option<&codex_state::StateRuntime>,
+    context: Option<&adam_state::StateRuntime>,
     rollout_path: &Path,
     _default_provider: &str,
     builder: Option<&ThreadMetadataBuilder>,
@@ -359,7 +356,7 @@ pub fn record_discrepancy(stage: &str, reason: &str) {
     // We access the global metric because the call sites might not have access to the broader
     // OtelManager.
     tracing::warn!("state db record_discrepancy: {stage}{reason}");
-    if let Some(metric) = codex_otel::metrics::global() {
+    if let Some(metric) = adam_otel::metrics::global() {
         let _ = metric.counter(
             DB_METRIC_COMPARE_ERROR,
             1,

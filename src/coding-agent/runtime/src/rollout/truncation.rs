@@ -4,10 +4,10 @@
 //! interpreting them via `event_mapping::parse_turn_item(...)`.
 
 use crate::event_mapping;
-use codex_protocol::items::TurnItem;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
+use adam_protocol::items::TurnItem;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::protocol::EventMsg;
+use adam_protocol::protocol::RolloutItem;
 
 /// Return the indices of user message boundaries in a rollout.
 ///
@@ -74,10 +74,10 @@ pub(crate) fn truncate_rollout_before_nth_user_message_from_start(
 mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
+    use adam_protocol::models::ContentItem;
+    use adam_protocol::models::ReasoningItemReasoningSummary;
+    use adam_protocol::protocol::ThreadRolledBackEvent;
     use assert_matches::assert_matches;
-    use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ReasoningItemReasoningSummary;
-    use codex_protocol::protocol::ThreadRolledBackEvent;
     use pretty_assertions::assert_eq;
 
     fn user_msg(text: &str) -> TranscriptItem {
@@ -122,7 +122,7 @@ mod tests {
                 id: None,
                 call_id: "c1".to_string(),
                 tool_name: "tool".to_string(),
-                payload: codex_llm::ToolCallPayload::JsonArguments {
+                payload: adam_llm::ToolCallPayload::JsonArguments {
                     arguments: "{}".to_string(),
                 },
             },

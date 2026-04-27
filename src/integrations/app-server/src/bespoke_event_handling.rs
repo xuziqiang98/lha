@@ -9,90 +9,90 @@ use crate::codex_message_processor::summary_to_thread;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
-use codex_agent::CodexThread;
-use codex_agent::parse_command::shlex_join;
-use codex_agent::protocol::ApplyPatchApprovalRequestEvent;
-use codex_agent::protocol::CodexErrorInfo as CoreCodexErrorInfo;
-use codex_agent::protocol::Event;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::ExecApprovalRequestEvent;
-use codex_agent::protocol::ExecCommandEndEvent;
-use codex_agent::protocol::FileChange as CoreFileChange;
-use codex_agent::protocol::McpToolCallBeginEvent;
-use codex_agent::protocol::McpToolCallEndEvent;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::ReviewDecision;
-use codex_agent::protocol::TokenCountEvent;
-use codex_agent::protocol::TurnDiffEvent;
-use codex_agent::review_format::format_review_findings_block;
-use codex_agent::review_prompts;
-use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
-use codex_app_server_protocol::AgentMessageDeltaNotification;
-use codex_app_server_protocol::ApplyPatchApprovalParams;
-use codex_app_server_protocol::ApplyPatchApprovalResponse;
-use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
-use codex_app_server_protocol::CollabAgentState as V2CollabAgentStatus;
-use codex_app_server_protocol::CollabAgentTool;
-use codex_app_server_protocol::CollabAgentToolCallStatus as V2CollabToolCallStatus;
-use codex_app_server_protocol::CommandAction as V2ParsedCommand;
-use codex_app_server_protocol::CommandExecutionApprovalDecision;
-use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
-use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
-use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
-use codex_app_server_protocol::CommandExecutionStatus;
-use codex_app_server_protocol::ContextCompactedNotification;
-use codex_app_server_protocol::DeprecationNoticeNotification;
-use codex_app_server_protocol::DynamicToolCallParams;
-use codex_app_server_protocol::ErrorNotification;
-use codex_app_server_protocol::ExecCommandApprovalParams;
-use codex_app_server_protocol::ExecCommandApprovalResponse;
-use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
-use codex_app_server_protocol::FileChangeApprovalDecision;
-use codex_app_server_protocol::FileChangeOutputDeltaNotification;
-use codex_app_server_protocol::FileChangeRequestApprovalParams;
-use codex_app_server_protocol::FileChangeRequestApprovalResponse;
-use codex_app_server_protocol::FileUpdateChange;
-use codex_app_server_protocol::InterruptConversationResponse;
-use codex_app_server_protocol::ItemCompletedNotification;
-use codex_app_server_protocol::ItemStartedNotification;
-use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::McpToolCallError;
-use codex_app_server_protocol::McpToolCallResult;
-use codex_app_server_protocol::McpToolCallStatus;
-use codex_app_server_protocol::PatchApplyStatus;
-use codex_app_server_protocol::PatchChangeKind as V2PatchChangeKind;
-use codex_app_server_protocol::PlanDeltaNotification;
-use codex_app_server_protocol::RawTranscriptItemCompletedNotification;
-use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
-use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
-use codex_app_server_protocol::ReasoningTextDeltaNotification;
-use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ServerRequestPayload;
-use codex_app_server_protocol::TerminalInteractionNotification;
-use codex_app_server_protocol::ThreadItem;
-use codex_app_server_protocol::ThreadNameUpdatedNotification;
-use codex_app_server_protocol::ThreadRollbackResponse;
-use codex_app_server_protocol::ThreadTokenUsage;
-use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
-use codex_app_server_protocol::ToolRequestUserInputOption;
-use codex_app_server_protocol::ToolRequestUserInputParams;
-use codex_app_server_protocol::ToolRequestUserInputQuestion;
-use codex_app_server_protocol::ToolRequestUserInputResponse;
-use codex_app_server_protocol::Turn;
-use codex_app_server_protocol::TurnCompletedNotification;
-use codex_app_server_protocol::TurnDiffUpdatedNotification;
-use codex_app_server_protocol::TurnError;
-use codex_app_server_protocol::TurnInterruptResponse;
-use codex_app_server_protocol::TurnPlanStep;
-use codex_app_server_protocol::TurnPlanUpdatedNotification;
-use codex_app_server_protocol::TurnStatus;
-use codex_app_server_protocol::build_turns_from_event_msgs;
-use codex_protocol::ThreadId;
-use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
-use codex_protocol::plan_tool::UpdatePlanArgs;
-use codex_protocol::protocol::ReviewOutputEvent;
-use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
-use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
+use adam_agent::CodexThread;
+use adam_agent::parse_command::shlex_join;
+use adam_agent::protocol::ApplyPatchApprovalRequestEvent;
+use adam_agent::protocol::CodexErrorInfo as CoreCodexErrorInfo;
+use adam_agent::protocol::Event;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::ExecApprovalRequestEvent;
+use adam_agent::protocol::ExecCommandEndEvent;
+use adam_agent::protocol::FileChange as CoreFileChange;
+use adam_agent::protocol::McpToolCallBeginEvent;
+use adam_agent::protocol::McpToolCallEndEvent;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::ReviewDecision;
+use adam_agent::protocol::TokenCountEvent;
+use adam_agent::protocol::TurnDiffEvent;
+use adam_agent::review_format::format_review_findings_block;
+use adam_agent::review_prompts;
+use adam_app_server_protocol::AccountRateLimitsUpdatedNotification;
+use adam_app_server_protocol::AgentMessageDeltaNotification;
+use adam_app_server_protocol::ApplyPatchApprovalParams;
+use adam_app_server_protocol::ApplyPatchApprovalResponse;
+use adam_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
+use adam_app_server_protocol::CollabAgentState as V2CollabAgentStatus;
+use adam_app_server_protocol::CollabAgentTool;
+use adam_app_server_protocol::CollabAgentToolCallStatus as V2CollabToolCallStatus;
+use adam_app_server_protocol::CommandAction as V2ParsedCommand;
+use adam_app_server_protocol::CommandExecutionApprovalDecision;
+use adam_app_server_protocol::CommandExecutionOutputDeltaNotification;
+use adam_app_server_protocol::CommandExecutionRequestApprovalParams;
+use adam_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use adam_app_server_protocol::CommandExecutionStatus;
+use adam_app_server_protocol::ContextCompactedNotification;
+use adam_app_server_protocol::DeprecationNoticeNotification;
+use adam_app_server_protocol::DynamicToolCallParams;
+use adam_app_server_protocol::ErrorNotification;
+use adam_app_server_protocol::ExecCommandApprovalParams;
+use adam_app_server_protocol::ExecCommandApprovalResponse;
+use adam_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
+use adam_app_server_protocol::FileChangeApprovalDecision;
+use adam_app_server_protocol::FileChangeOutputDeltaNotification;
+use adam_app_server_protocol::FileChangeRequestApprovalParams;
+use adam_app_server_protocol::FileChangeRequestApprovalResponse;
+use adam_app_server_protocol::FileUpdateChange;
+use adam_app_server_protocol::InterruptConversationResponse;
+use adam_app_server_protocol::ItemCompletedNotification;
+use adam_app_server_protocol::ItemStartedNotification;
+use adam_app_server_protocol::JSONRPCErrorError;
+use adam_app_server_protocol::McpToolCallError;
+use adam_app_server_protocol::McpToolCallResult;
+use adam_app_server_protocol::McpToolCallStatus;
+use adam_app_server_protocol::PatchApplyStatus;
+use adam_app_server_protocol::PatchChangeKind as V2PatchChangeKind;
+use adam_app_server_protocol::PlanDeltaNotification;
+use adam_app_server_protocol::RawTranscriptItemCompletedNotification;
+use adam_app_server_protocol::ReasoningSummaryPartAddedNotification;
+use adam_app_server_protocol::ReasoningSummaryTextDeltaNotification;
+use adam_app_server_protocol::ReasoningTextDeltaNotification;
+use adam_app_server_protocol::ServerNotification;
+use adam_app_server_protocol::ServerRequestPayload;
+use adam_app_server_protocol::TerminalInteractionNotification;
+use adam_app_server_protocol::ThreadItem;
+use adam_app_server_protocol::ThreadNameUpdatedNotification;
+use adam_app_server_protocol::ThreadRollbackResponse;
+use adam_app_server_protocol::ThreadTokenUsage;
+use adam_app_server_protocol::ThreadTokenUsageUpdatedNotification;
+use adam_app_server_protocol::ToolRequestUserInputOption;
+use adam_app_server_protocol::ToolRequestUserInputParams;
+use adam_app_server_protocol::ToolRequestUserInputQuestion;
+use adam_app_server_protocol::ToolRequestUserInputResponse;
+use adam_app_server_protocol::Turn;
+use adam_app_server_protocol::TurnCompletedNotification;
+use adam_app_server_protocol::TurnDiffUpdatedNotification;
+use adam_app_server_protocol::TurnError;
+use adam_app_server_protocol::TurnInterruptResponse;
+use adam_app_server_protocol::TurnPlanStep;
+use adam_app_server_protocol::TurnPlanUpdatedNotification;
+use adam_app_server_protocol::TurnStatus;
+use adam_app_server_protocol::build_turns_from_event_msgs;
+use adam_protocol::ThreadId;
+use adam_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
+use adam_protocol::plan_tool::UpdatePlanArgs;
+use adam_protocol::protocol::ReviewOutputEvent;
+use adam_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
+use adam_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::path::PathBuf;
@@ -404,8 +404,8 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::CollabAgentSpawnEnd(end_event) => {
             let has_receiver = end_event.new_thread_id.is_some();
             let status = match &end_event.status {
-                codex_protocol::protocol::AgentStatus::Errored(_)
-                | codex_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
+                adam_protocol::protocol::AgentStatus::Errored(_)
+                | adam_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
                 _ if has_receiver => V2CollabToolCallStatus::Completed,
                 _ => V2CollabToolCallStatus::Failed,
             };
@@ -460,8 +460,8 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::CollabAgentInteractionEnd(end_event) => {
             let status = match &end_event.status {
-                codex_protocol::protocol::AgentStatus::Errored(_)
-                | codex_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
+                adam_protocol::protocol::AgentStatus::Errored(_)
+                | adam_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
                 _ => V2CollabToolCallStatus::Completed,
             };
             let receiver_id = end_event.receiver_thread_id.to_string();
@@ -512,8 +512,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             let status = if end_event.statuses.values().any(|status| {
                 matches!(
                     status,
-                    codex_protocol::protocol::AgentStatus::Errored(_)
-                        | codex_protocol::protocol::AgentStatus::NotFound
+                    adam_protocol::protocol::AgentStatus::Errored(_)
+                        | adam_protocol::protocol::AgentStatus::NotFound
                 )
             }) {
                 V2CollabToolCallStatus::Failed
@@ -565,8 +565,8 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::CollabResumeEnd(end_event) => {
             let status = match &end_event.status {
-                codex_protocol::protocol::AgentStatus::Errored(_)
-                | codex_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
+                adam_protocol::protocol::AgentStatus::Errored(_)
+                | adam_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
                 _ => V2CollabToolCallStatus::Completed,
             };
             let receiver_id = end_event.receiver_thread_id.to_string();
@@ -615,8 +615,8 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::CollabCloseEnd(end_event) => {
             let status = match &end_event.status {
-                codex_protocol::protocol::AgentStatus::Errored(_)
-                | codex_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
+                adam_protocol::protocol::AgentStatus::Errored(_)
+                | adam_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
                 _ => V2CollabToolCallStatus::Completed,
             };
             let receiver_id = end_event.receiver_thread_id.to_string();
@@ -645,7 +645,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::AgentMessageContentDelta(event) => {
-            let codex_protocol::protocol::AgentMessageContentDeltaEvent { item_id, delta, .. } =
+            let adam_protocol::protocol::AgentMessageContentDeltaEvent { item_id, delta, .. } =
                 event;
             let notification = AgentMessageDeltaNotification {
                 thread_id: conversation_id.to_string(),
@@ -1332,7 +1332,7 @@ async fn maybe_emit_raw_transcript_item_completed(
     api_version: ApiVersion,
     conversation_id: ThreadId,
     turn_id: &str,
-    item: codex_protocol::models::TranscriptItem,
+    item: adam_protocol::models::TranscriptItem,
     outgoing: &OutgoingMessageSender,
 ) {
     let ApiVersion::V2 = api_version else {
@@ -1881,18 +1881,18 @@ mod tests {
     use crate::CHANNEL_CAPACITY;
     use crate::outgoing_message::OutgoingMessage;
     use crate::outgoing_message::OutgoingMessageSender;
+    use adam_agent::protocol::CreditsSnapshot;
+    use adam_agent::protocol::McpInvocation;
+    use adam_agent::protocol::RateLimitSnapshot;
+    use adam_agent::protocol::RateLimitWindow;
+    use adam_agent::protocol::TokenUsage;
+    use adam_agent::protocol::TokenUsageInfo;
+    use adam_app_server_protocol::TurnPlanStepStatus;
+    use adam_protocol::plan_tool::PlanItemArg;
+    use adam_protocol::plan_tool::StepStatus;
     use anyhow::Result;
     use anyhow::anyhow;
     use anyhow::bail;
-    use codex_agent::protocol::CreditsSnapshot;
-    use codex_agent::protocol::McpInvocation;
-    use codex_agent::protocol::RateLimitSnapshot;
-    use codex_agent::protocol::RateLimitWindow;
-    use codex_agent::protocol::TokenUsage;
-    use codex_agent::protocol::TokenUsageInfo;
-    use codex_app_server_protocol::TurnPlanStepStatus;
-    use codex_protocol::plan_tool::PlanItemArg;
-    use codex_protocol::plan_tool::StepStatus;
     use mcp_types::CallToolResult;
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;

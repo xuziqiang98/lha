@@ -1,17 +1,17 @@
 use std::sync::Arc;
 
+use adam_llm::AuthContext;
+use adam_llm::AuthSource;
+use adam_llm::Error as LlmError;
+use adam_llm::UnauthorizedRecovery as LlmUnauthorizedRecovery;
+use adam_llm::UnauthorizedRecoveryFailedReason;
 use async_trait::async_trait;
-use codex_llm::AuthContext;
-use codex_llm::AuthSource;
-use codex_llm::Error as LlmError;
-use codex_llm::UnauthorizedRecovery as LlmUnauthorizedRecovery;
-use codex_llm::UnauthorizedRecoveryFailedReason;
 
 use crate::auth::AuthManager;
 use crate::auth::CodexAuth;
 use crate::auth::RefreshTokenError;
 use crate::error::RefreshTokenFailedReason;
-use codex_llm::RuntimeEndpoint;
+use adam_llm::RuntimeEndpoint;
 
 pub(crate) struct AgentAuthSource {
     auth_manager: Option<Arc<AuthManager>>,
@@ -32,7 +32,7 @@ impl AgentAuthSource {
 
 #[async_trait]
 impl AuthSource for AgentAuthSource {
-    async fn current_auth(&self) -> codex_llm::Result<Option<AuthContext>> {
+    async fn current_auth(&self) -> adam_llm::Result<Option<AuthContext>> {
         let auth = match self.auth_manager.as_ref() {
             Some(manager) => manager.auth().await,
             None => None,
@@ -63,7 +63,7 @@ impl LlmUnauthorizedRecovery for AgentUnauthorizedRecovery {
         self.inner.has_next()
     }
 
-    async fn recover(&mut self) -> codex_llm::Result<()> {
+    async fn recover(&mut self) -> adam_llm::Result<()> {
         match self.inner.next().await {
             Ok(()) => Ok(()),
             Err(RefreshTokenError::Permanent(failed)) => {
@@ -80,7 +80,7 @@ impl LlmUnauthorizedRecovery for AgentUnauthorizedRecovery {
 pub(crate) fn auth_context_from_auth(
     auth: Option<CodexAuth>,
     provider: &RuntimeEndpoint,
-) -> codex_llm::Result<Option<AuthContext>> {
+) -> adam_llm::Result<Option<AuthContext>> {
     if let Some(api_key) = provider.api_key()? {
         return Ok(Some(AuthContext {
             bearer_token: Some(api_key),

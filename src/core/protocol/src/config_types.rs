@@ -5,10 +5,10 @@ use strum_macros::Display;
 use ts_rs::TS;
 
 use crate::openai_models::ReasoningEffort;
-pub use codex_llm_types::Personality;
-pub use codex_llm_types::ReasoningSummary;
-pub use codex_llm_types::Verbosity;
-pub use codex_llm_types::WebSearchMode;
+pub use adam_llm_types::Personality;
+pub use adam_llm_types::ReasoningSummary;
+pub use adam_llm_types::Verbosity;
+pub use adam_llm_types::WebSearchMode;
 
 #[derive(
     Deserialize, Debug, Clone, Copy, PartialEq, Default, Serialize, Display, JsonSchema, TS,

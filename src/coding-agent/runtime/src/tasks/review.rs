@@ -1,17 +1,17 @@
 use std::sync::Arc;
 
+use adam_protocol::config_types::WebSearchMode;
+use adam_protocol::items::TurnItem;
+use adam_protocol::models::ContentItem;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::protocol::AgentMessageContentDeltaEvent;
+use adam_protocol::protocol::AgentMessageDeltaEvent;
+use adam_protocol::protocol::Event;
+use adam_protocol::protocol::EventMsg;
+use adam_protocol::protocol::ExitedReviewModeEvent;
+use adam_protocol::protocol::ItemCompletedEvent;
+use adam_protocol::protocol::ReviewOutputEvent;
 use async_trait::async_trait;
-use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::items::TurnItem;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::protocol::AgentMessageContentDeltaEvent;
-use codex_protocol::protocol::AgentMessageDeltaEvent;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ExitedReviewModeEvent;
-use codex_protocol::protocol::ItemCompletedEvent;
-use codex_protocol::protocol::ReviewOutputEvent;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
@@ -20,7 +20,7 @@ use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::state::TaskKind;
-use codex_protocol::user_input::UserInput;
+use adam_protocol::user_input::UserInput;
 
 use super::SessionTask;
 use super::SessionTaskContext;

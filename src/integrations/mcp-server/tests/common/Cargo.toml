@@ -9,9 +9,9 @@ path = "lib.rs"
 
 [dependencies]
 anyhow = { workspace = true }
-codex-agent = { workspace = true }
-codex-mcp-server = { workspace = true }
-codex-utils-cargo-bin = { workspace = true }
+adam-agent = { workspace = true }
+adam-mcp-server = { workspace = true }
+adam-utils-cargo-bin = { workspace = true }
 mcp-types = { workspace = true }
 os_info = { workspace = true }
 pretty_assertions = { workspace = true }

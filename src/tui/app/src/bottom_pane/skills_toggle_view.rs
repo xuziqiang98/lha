@@ -22,7 +22,7 @@ use crate::render::renderable::Renderable;
 use crate::skills_helpers::match_skill;
 use crate::skills_helpers::truncate_skill_name;
 use crate::style::user_message_style;
-use codex_agent::protocol::Op;
+use adam_agent::protocol::Op;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;

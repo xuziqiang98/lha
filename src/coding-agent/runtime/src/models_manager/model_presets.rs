@@ -1,8 +1,8 @@
 use crate::auth::AuthMode;
-use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::openai_models::ModelUpgrade;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::openai_models::ReasoningEffortPreset;
+use adam_protocol::openai_models::ModelPreset;
+use adam_protocol::openai_models::ModelUpgrade;
+use adam_protocol::openai_models::ReasoningEffort;
+use adam_protocol::openai_models::ReasoningEffortPreset;
 use indoc::indoc;
 use once_cell::sync::Lazy;
 

@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use codex_agent::config::set_project_trust_level;
-use codex_agent::git_info::resolve_root_git_project_for_trust;
-use codex_protocol::config_types::TrustLevel;
+use adam_agent::config::set_project_trust_level;
+use adam_agent::git_info::resolve_root_git_project_for_trust;
+use adam_protocol::config_types::TrustLevel;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;

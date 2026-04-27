@@ -1,15 +1,15 @@
 [package]
-name = "codex-llm-types"
+name = "adam-llm-types"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "codex_llm_types"
+name = "adam_llm_types"
 path = "src/lib.rs"
 
 [dependencies]
-codex-git = { workspace = true }
+adam-git = { workspace = true }
 mcp-types = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

@@ -17,18 +17,18 @@ use crate::rollout::truncation;
 use crate::skills::SkillsManager;
 use crate::subagents::AgentControl;
 use crate::subagents::status::is_final;
-use codex_llm::CatalogRefreshStrategy;
-use codex_llm::RuntimeEndpoint;
-use codex_protocol::ThreadId;
-use codex_protocol::config_types::CollaborationModeMask;
-use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::protocol::AgentStatus;
-use codex_protocol::protocol::InitialHistory;
-use codex_protocol::protocol::McpServerRefreshConfig;
-use codex_protocol::protocol::Op;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SessionSource;
+use adam_llm::CatalogRefreshStrategy;
+use adam_llm::RuntimeEndpoint;
+use adam_protocol::ThreadId;
+use adam_protocol::config_types::CollaborationModeMask;
+use adam_protocol::openai_models::ModelInfo;
+use adam_protocol::openai_models::ModelPreset;
+use adam_protocol::protocol::AgentStatus;
+use adam_protocol::protocol::InitialHistory;
+use adam_protocol::protocol::McpServerRefreshConfig;
+use adam_protocol::protocol::Op;
+use adam_protocol::protocol::RolloutItem;
+use adam_protocol::protocol::SessionSource;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -312,7 +312,7 @@ impl ThreadManager {
     pub async fn start_thread_with_tools(
         &self,
         config: Config,
-        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        dynamic_tools: Vec<adam_protocol::dynamic_tools::DynamicToolSpec>,
     ) -> CodexResult<NewThread> {
         self.state
             .spawn_thread(
@@ -524,7 +524,7 @@ impl ThreadManagerState {
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
-        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        dynamic_tools: Vec<adam_protocol::dynamic_tools::DynamicToolSpec>,
     ) -> CodexResult<NewThread> {
         self.spawn_thread_with_source(
             config,
@@ -544,7 +544,7 @@ impl ThreadManagerState {
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
         session_source: SessionSource,
-        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        dynamic_tools: Vec<adam_protocol::dynamic_tools::DynamicToolSpec>,
     ) -> CodexResult<NewThread> {
         let CodexSpawnOk {
             codex, thread_id, ..
@@ -752,10 +752,10 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
 mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
+    use adam_protocol::models::ContentItem;
+    use adam_protocol::models::ReasoningItemReasoningSummary;
+    use adam_protocol::models::TranscriptItem;
     use assert_matches::assert_matches;
-    use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ReasoningItemReasoningSummary;
-    use codex_protocol::models::TranscriptItem;
     use pretty_assertions::assert_eq;
 
     fn user_msg(text: &str) -> TranscriptItem {
@@ -799,7 +799,7 @@ mod tests {
                 id: None,
                 call_id: "c1".to_string(),
                 tool_name: "tool".to_string(),
-                payload: codex_llm::ToolCallPayload::JsonArguments {
+                payload: adam_llm::ToolCallPayload::JsonArguments {
                     arguments: "{}".to_string(),
                 },
             },

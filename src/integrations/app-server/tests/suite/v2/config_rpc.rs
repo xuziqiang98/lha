@@ -1,28 +1,28 @@
+use adam_agent::config::set_project_trust_level;
+use adam_agent::config_loader::SYSTEM_CONFIG_TOML_FILE_UNIX;
+use adam_app_server_protocol::AskForApproval;
+use adam_app_server_protocol::ConfigBatchWriteParams;
+use adam_app_server_protocol::ConfigEdit;
+use adam_app_server_protocol::ConfigLayerSource;
+use adam_app_server_protocol::ConfigReadParams;
+use adam_app_server_protocol::ConfigReadResponse;
+use adam_app_server_protocol::ConfigValueWriteParams;
+use adam_app_server_protocol::ConfigWriteResponse;
+use adam_app_server_protocol::JSONRPCError;
+use adam_app_server_protocol::JSONRPCResponse;
+use adam_app_server_protocol::MergeStrategy;
+use adam_app_server_protocol::RequestId;
+use adam_app_server_protocol::SandboxMode;
+use adam_app_server_protocol::ToolsV2;
+use adam_app_server_protocol::WriteStatus;
+use adam_protocol::config_types::TrustLevel;
+use adam_protocol::openai_models::ReasoningEffort;
+use adam_utils_absolute_path::AbsolutePathBuf;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::test_path_buf_with_windows;
 use app_test_support::test_tmp_path_buf;
 use app_test_support::to_response;
-use codex_agent::config::set_project_trust_level;
-use codex_agent::config_loader::SYSTEM_CONFIG_TOML_FILE_UNIX;
-use codex_app_server_protocol::AskForApproval;
-use codex_app_server_protocol::ConfigBatchWriteParams;
-use codex_app_server_protocol::ConfigEdit;
-use codex_app_server_protocol::ConfigLayerSource;
-use codex_app_server_protocol::ConfigReadParams;
-use codex_app_server_protocol::ConfigReadResponse;
-use codex_app_server_protocol::ConfigValueWriteParams;
-use codex_app_server_protocol::ConfigWriteResponse;
-use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::MergeStrategy;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::SandboxMode;
-use codex_app_server_protocol::ToolsV2;
-use codex_app_server_protocol::WriteStatus;
-use codex_protocol::config_types::TrustLevel;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
@@ -487,7 +487,7 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
 }
 
 fn assert_layers_user_then_optional_system(
-    layers: &[codex_app_server_protocol::ConfigLayer],
+    layers: &[adam_app_server_protocol::ConfigLayer],
     user_file: AbsolutePathBuf,
 ) -> Result<()> {
     if cfg!(unix) {
@@ -506,7 +506,7 @@ fn assert_layers_user_then_optional_system(
 }
 
 fn assert_layers_managed_user_then_optional_system(
-    layers: &[codex_app_server_protocol::ConfigLayer],
+    layers: &[adam_app_server_protocol::ConfigLayer],
     managed_file: AbsolutePathBuf,
     user_file: AbsolutePathBuf,
 ) -> Result<()> {

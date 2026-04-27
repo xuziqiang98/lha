@@ -1,4 +1,4 @@
-# codex-execpolicy
+# adam-execpolicy
 
 ## Overview
 
@@ -35,7 +35,7 @@ codex execpolicy check --rules path/to/policy.rules git status
 - You can also run the standalone dev binary directly during development:
 
 ```bash
-cargo run -p codex-execpolicy -- check --rules path/to/policy.rules git status
+cargo run -p adam-execpolicy -- check --rules path/to/policy.rules git status
 ```
 
 - Example outcomes:

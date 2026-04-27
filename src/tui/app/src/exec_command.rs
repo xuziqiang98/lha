@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_agent::parse_command::extract_shell_command;
+use adam_agent::parse_command::extract_shell_command;
 use dirs::home_dir;
 use shlex::try_join;
 

@@ -2,9 +2,9 @@
 
 use std::os::unix::fs::PermissionsExt;
 
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::Op;
-use codex_protocol::user_input::UserInput;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::Op;
+use adam_protocol::user_input::UserInput;
 use core_test_support::fs_wait;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;

@@ -9,20 +9,20 @@ use crate::metrics::names::WEBSOCKET_EVENT_DURATION_METRIC;
 use crate::metrics::names::WEBSOCKET_REQUEST_COUNT_METRIC;
 use crate::metrics::names::WEBSOCKET_REQUEST_DURATION_METRIC;
 use crate::otel_provider::traceparent_context_from_env;
+use adam_api::ApiError;
+use adam_api::ResponseEvent;
+use adam_app_server_protocol::AuthMode;
+use adam_llm_types::TranscriptItem;
+use adam_protocol::ThreadId;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::openai_models::ReasoningEffort;
+use adam_protocol::protocol::AskForApproval;
+use adam_protocol::protocol::ReviewDecision;
+use adam_protocol::protocol::SandboxPolicy;
+use adam_protocol::protocol::SessionSource;
+use adam_protocol::user_input::UserInput;
 use chrono::SecondsFormat;
 use chrono::Utc;
-use codex_api::ApiError;
-use codex_api::ResponseEvent;
-use codex_app_server_protocol::AuthMode;
-use codex_llm_types::TranscriptItem;
-use codex_protocol::ThreadId;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::user_input::UserInput;
 use eventsource_stream::Event as StreamEvent;
 use eventsource_stream::EventStreamError as StreamError;
 use reqwest::Error;
@@ -674,14 +674,14 @@ impl OtelManager {
                 }
             }
             TranscriptItem::ToolCall { payload, .. } => match payload {
-                codex_llm_types::ToolCallPayload::JsonArguments { .. } => "function_call".into(),
-                codex_llm_types::ToolCallPayload::TextInput { .. } => "custom_tool_call".into(),
+                adam_llm_types::ToolCallPayload::JsonArguments { .. } => "function_call".into(),
+                adam_llm_types::ToolCallPayload::TextInput { .. } => "custom_tool_call".into(),
             },
             TranscriptItem::ToolResult { payload, .. } => match payload {
-                codex_llm_types::ToolResultPayload::Structured { .. } => {
+                adam_llm_types::ToolResultPayload::Structured { .. } => {
                     "function_call_output".into()
                 }
-                codex_llm_types::ToolResultPayload::Text { .. } => "custom_tool_call_output".into(),
+                adam_llm_types::ToolResultPayload::Text { .. } => "custom_tool_call_output".into(),
             },
             TranscriptItem::Unknown { .. } => "unknown".into(),
         }

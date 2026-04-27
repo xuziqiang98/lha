@@ -1,4 +1,4 @@
-//! Root of the `codex-coding-agent` library.
+//! Root of the `adam-coding-agent` library.
 
 // Prevent accidental direct writes to stdout/stderr in library code. All
 // user-visible output must go through the appropriate abstraction (e.g.,
@@ -66,7 +66,7 @@ mod truncate;
 mod unified_exec;
 pub mod web_search;
 pub mod windows_sandbox;
-pub use codex_protocol::protocol::InitialHistory;
+pub use adam_protocol::protocol::InitialHistory;
 pub use thread_manager::NewThread;
 pub use thread_manager::ThreadManager;
 #[deprecated(note = "use ThreadManager")]
@@ -119,9 +119,9 @@ mod user_notification;
 mod user_shell_command;
 pub mod util;
 
+pub use adam_agent_runtime as core_runtime;
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use client::WEB_SEARCH_ELIGIBLE_HEADER;
-pub use codex_agent_runtime as core_runtime;
 pub use command_safety::is_dangerous_command;
 pub use command_safety::is_safe_command;
 pub use exec_policy::ExecPolicyError;
@@ -129,15 +129,15 @@ pub use exec_policy::check_execpolicy_for_warnings;
 pub use exec_policy::load_exec_policy;
 pub use safety::get_platform_sandbox;
 pub use tools::spec::parse_tool_input_schema;
-// Re-export the protocol types from the standalone `codex-protocol` crate so existing
-// `codex_agent::protocol::...` references continue to work across the workspace.
-pub use codex_protocol::protocol;
+// Re-export the protocol types from the standalone `adam-protocol` crate so existing
+// `adam_agent::protocol::...` references continue to work across the workspace.
+pub use adam_protocol::protocol;
 // Re-export protocol config enums to ensure call sites can use the same types
 // as those in the protocol crate when constructing protocol messages.
-pub use codex_protocol::config_types as protocol_config_types;
+pub use adam_protocol::config_types as protocol_config_types;
 
+pub use adam_protocol::models::ContentItem;
 pub use client_common::REVIEW_PROMPT;
-pub use codex_protocol::models::ContentItem;
 pub use compact::content_items_to_text;
 pub use event_mapping::parse_turn_item;
 pub mod compact;

@@ -1,31 +1,31 @@
+use adam_arg0::arg0_dispatch_or_else;
+use adam_chatgpt::apply_command::ApplyCommand;
+use adam_chatgpt::apply_command::run_apply_command;
+use adam_cli::LandlockCommand;
+use adam_cli::SeatbeltCommand;
+use adam_cli::WindowsCommand;
+use adam_cli::login::read_api_key_from_stdin;
+use adam_cli::login::run_login_status;
+use adam_cli::login::run_login_with_api_key;
+use adam_cli::login::run_login_with_chatgpt;
+use adam_cli::login::run_login_with_device_code;
+use adam_cli::login::run_logout;
+use adam_cloud_tasks::Cli as CloudTasksCli;
+use adam_common::CliConfigOverrides;
+use adam_exec::Cli as ExecCli;
+use adam_exec::Command as ExecCommand;
+use adam_exec::ReviewArgs;
+use adam_execpolicy::ExecPolicyCheckCommand;
+use adam_responses_api_proxy::Args as ResponsesApiProxyArgs;
+use adam_tui::AppExitInfo;
+use adam_tui::Cli as TuiCli;
+use adam_tui::ExitReason;
+use adam_tui::update_action::UpdateAction;
 use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
 use clap_complete::generate;
-use codex_arg0::arg0_dispatch_or_else;
-use codex_chatgpt::apply_command::ApplyCommand;
-use codex_chatgpt::apply_command::run_apply_command;
-use codex_cli::LandlockCommand;
-use codex_cli::SeatbeltCommand;
-use codex_cli::WindowsCommand;
-use codex_cli::login::read_api_key_from_stdin;
-use codex_cli::login::run_login_status;
-use codex_cli::login::run_login_with_api_key;
-use codex_cli::login::run_login_with_chatgpt;
-use codex_cli::login::run_login_with_device_code;
-use codex_cli::login::run_logout;
-use codex_cloud_tasks::Cli as CloudTasksCli;
-use codex_common::CliConfigOverrides;
-use codex_exec::Cli as ExecCli;
-use codex_exec::Command as ExecCommand;
-use codex_exec::ReviewArgs;
-use codex_execpolicy::ExecPolicyCheckCommand;
-use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
-use codex_tui::AppExitInfo;
-use codex_tui::Cli as TuiCli;
-use codex_tui::ExitReason;
-use codex_tui::update_action::UpdateAction;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -37,13 +37,13 @@ mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
 
-use codex_agent::config::Config;
-use codex_agent::config::ConfigOverrides;
-use codex_agent::config::edit::ConfigEditsBuilder;
-use codex_agent::config::find_adam_home;
-use codex_agent::features::Stage;
-use codex_agent::features::is_known_feature_key;
-use codex_agent::terminal::TerminalName;
+use adam_agent::config::Config;
+use adam_agent::config::ConfigOverrides;
+use adam_agent::config::edit::ConfigEditsBuilder;
+use adam_agent::config::find_adam_home;
+use adam_agent::features::Stage;
+use adam_agent::features::is_known_feature_key;
+use adam_agent::terminal::TerminalName;
 
 /// Codex CLI
 ///
@@ -56,9 +56,9 @@ use codex_agent::terminal::TerminalName;
     subcommand_negates_reqs = true,
     // The executable is sometimes invoked via a platform‑specific name like
     // `codex-x86_64-unknown-linux-musl`, but the help output should always use
-    // the generic `codey` command name that users run.
-    bin_name = "codey",
-    override_usage = "codey [OPTIONS] [PROMPT]\n       codey [OPTIONS] <COMMAND> [ARGS]"
+    // the generic `adam` command name that users run.
+    bin_name = "adam",
+    override_usage = "adam [OPTIONS] [PROMPT]\n       adam [OPTIONS] <COMMAND> [ARGS]"
 )]
 struct MultitoolCli {
     #[clap(flatten)]
@@ -220,7 +220,7 @@ struct LoginCommand {
 
     #[arg(
         long = "with-api-key",
-        help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | codey login --with-api-key`)"
+        help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | adam login --with-api-key`)"
     )]
     with_api_key: bool,
 
@@ -333,11 +333,11 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
 
     let mut lines = vec![format!(
         "{}",
-        codex_agent::protocol::FinalOutput::from(token_usage)
+        adam_agent::protocol::FinalOutput::from(token_usage)
     )];
 
     if let Some(resume_cmd) =
-        codex_agent::util::resume_command(thread_name.as_deref(), conversation_id)
+        adam_agent::util::resume_command(thread_name.as_deref(), conversation_id)
     {
         let command = if color_enabled {
             resume_cmd.cyan().to_string()
@@ -465,8 +465,8 @@ struct FeatureSetArgs {
     feature: String,
 }
 
-fn stage_str(stage: codex_agent::features::Stage) -> &'static str {
-    use codex_agent::features::Stage;
+fn stage_str(stage: adam_agent::features::Stage) -> &'static str {
+    use adam_agent::features::Stage;
     match stage {
         Stage::UnderDevelopment => "under development",
         Stage::Experimental { .. } => "experimental",
@@ -509,19 +509,19 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
+            adam_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::Review(review_args)) => {
-            let mut exec_cli = ExecCli::try_parse_from(["codey", "exec"])?;
+            let mut exec_cli = ExecCli::try_parse_from(["adam", "exec"])?;
             exec_cli.command = Some(ExecCommand::Review(review_args));
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
+            adam_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::McpServer) => {
-            codex_mcp_server::run_main(codex_linux_sandbox_exe, root_config_overrides).await?;
+            adam_mcp_server::run_main(codex_linux_sandbox_exe, root_config_overrides).await?;
         }
         Some(Subcommand::Mcp(mut mcp_cli)) => {
             // Propagate any root-level config overrides (e.g. `-c key=value`).
@@ -530,22 +530,22 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::AppServer(app_server_cli)) => match app_server_cli.subcommand {
             None => {
-                codex_app_server::run_main(
+                adam_app_server::run_main(
                     codex_linux_sandbox_exe,
                     root_config_overrides,
-                    codex_agent::config_loader::LoaderOverrides::default(),
+                    adam_agent::config_loader::LoaderOverrides::default(),
                     app_server_cli.analytics_default_enabled,
                 )
                 .await?;
             }
             Some(AppServerSubcommand::GenerateTs(gen_cli)) => {
-                codex_app_server_protocol::generate_ts(
+                adam_app_server_protocol::generate_ts(
                     &gen_cli.out_dir,
                     gen_cli.prettier.as_deref(),
                 )?;
             }
             Some(AppServerSubcommand::GenerateJsonSchema(gen_cli)) => {
-                codex_app_server_protocol::generate_json(&gen_cli.out_dir)?;
+                adam_app_server_protocol::generate_json(&gen_cli.out_dir)?;
             }
         },
         Some(Subcommand::Resume(ResumeCommand {
@@ -601,7 +601,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                         .await;
                     } else if login_cli.api_key.is_some() {
                         eprintln!(
-                            "The --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | codey login --with-api-key`."
+                            "The --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | adam login --with-api-key`."
                         );
                         std::process::exit(1);
                     } else if login_cli.with_api_key {
@@ -628,7 +628,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 &mut cloud_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            codex_cloud_tasks::run_main(cloud_cli, codex_linux_sandbox_exe).await?;
+            adam_cloud_tasks::run_main(cloud_cli, codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::Sandbox(sandbox_args)) => match sandbox_args.cmd {
             SandboxCommand::Macos(mut seatbelt_cli) => {
@@ -636,7 +636,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     &mut seatbelt_cli.config_overrides,
                     root_config_overrides.clone(),
                 );
-                codex_cli::debug_sandbox::run_command_under_seatbelt(
+                adam_cli::debug_sandbox::run_command_under_seatbelt(
                     seatbelt_cli,
                     codex_linux_sandbox_exe,
                 )
@@ -647,7 +647,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     &mut landlock_cli.config_overrides,
                     root_config_overrides.clone(),
                 );
-                codex_cli::debug_sandbox::run_command_under_landlock(
+                adam_cli::debug_sandbox::run_command_under_landlock(
                     landlock_cli,
                     codex_linux_sandbox_exe,
                 )
@@ -658,7 +658,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     &mut windows_cli.config_overrides,
                     root_config_overrides.clone(),
                 );
-                codex_cli::debug_sandbox::run_command_under_windows(
+                adam_cli::debug_sandbox::run_command_under_windows(
                     windows_cli,
                     codex_linux_sandbox_exe,
                 )
@@ -676,12 +676,11 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             run_apply_command(apply_cli, None).await?;
         }
         Some(Subcommand::ResponsesApiProxy(args)) => {
-            tokio::task::spawn_blocking(move || codex_responses_api_proxy::run_main(args))
-                .await??;
+            tokio::task::spawn_blocking(move || adam_responses_api_proxy::run_main(args)).await??;
         }
         Some(Subcommand::StdioToUds(cmd)) => {
             let socket_path = cmd.socket_path;
-            tokio::task::spawn_blocking(move || codex_stdio_to_uds::run(socket_path.as_path()))
+            tokio::task::spawn_blocking(move || adam_stdio_to_uds::run(socket_path.as_path()))
                 .await??;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
@@ -710,10 +709,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     overrides,
                 )
                 .await?;
-                let mut rows = Vec::with_capacity(codex_agent::features::FEATURES.len());
+                let mut rows = Vec::with_capacity(adam_agent::features::FEATURES.len());
                 let mut name_width = 0;
                 let mut stage_width = 0;
-                for def in codex_agent::features::FEATURES.iter() {
+                for def in adam_agent::features::FEATURES.iter() {
                     let name = def.key;
                     let stage = stage_str(def.stage);
                     let enabled = config.features.enabled(def.id);
@@ -772,7 +771,7 @@ fn maybe_print_under_development_feature_warning(
         return;
     }
 
-    let Some(spec) = codex_agent::features::FEATURES
+    let Some(spec) = adam_agent::features::FEATURES
         .iter()
         .find(|spec| spec.key == feature)
     else {
@@ -782,7 +781,7 @@ fn maybe_print_under_development_feature_warning(
         return;
     }
 
-    let config_path = adam_home.join(codex_agent::config::CONFIG_TOML_FILE);
+    let config_path = adam_home.join(adam_agent::config::CONFIG_TOML_FILE);
     eprintln!(
         "Under-development features enabled: {feature}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {}.",
         config_path.display()
@@ -809,7 +808,7 @@ async fn run_interactive_tui(
         interactive.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));
     }
 
-    let terminal_info = codex_agent::terminal::terminal_info();
+    let terminal_info = adam_agent::terminal::terminal_info();
     if terminal_info.name == TerminalName::Dumb {
         if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
             return Ok(AppExitInfo::fatal(
@@ -827,7 +826,7 @@ async fn run_interactive_tui(
         }
     }
 
-    codex_tui::run_main(interactive, codex_linux_sandbox_exe).await
+    adam_tui::run_main(interactive, codex_linux_sandbox_exe).await
 }
 
 fn confirm(prompt: &str) -> std::io::Result<bool> {
@@ -938,16 +937,16 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
 
 fn print_completion(cmd: CompletionCommand) {
     let mut app = MultitoolCli::command();
-    let name = "codey";
+    let name = "adam";
     generate(cmd.shell, &mut app, name, &mut std::io::stdout());
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adam_agent::protocol::TokenUsage;
+    use adam_protocol::ThreadId;
     use assert_matches::assert_matches;
-    use codex_agent::protocol::TokenUsage;
-    use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
 
     fn finalize_resume_from_args(args: &[&str]) -> TuiCli {
@@ -1004,13 +1003,13 @@ mod tests {
     #[test]
     fn exec_resume_last_accepts_prompt_positional() {
         let cli =
-            MultitoolCli::try_parse_from(["codey", "exec", "--json", "resume", "--last", "2+2"])
+            MultitoolCli::try_parse_from(["adam", "exec", "--json", "resume", "--last", "2+2"])
                 .expect("parse should succeed");
 
         let Some(Subcommand::Exec(exec)) = cli.subcommand else {
             panic!("expected exec subcommand");
         };
-        let Some(codex_exec::Command::Resume(args)) = exec.command else {
+        let Some(adam_exec::Command::Resume(args)) = exec.command else {
             panic!("expected exec resume");
         };
 
@@ -1065,7 +1064,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run codey resume 123e4567-e89b-12d3-a456-426614174000"
+                "To continue this session, run adam resume 123e4567-e89b-12d3-a456-426614174000"
                     .to_string(),
             ]
         );
@@ -1090,7 +1089,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run codey resume my-thread".to_string(),
+                "To continue this session, run adam resume my-thread".to_string(),
             ]
         );
     }
@@ -1098,7 +1097,7 @@ mod tests {
     #[test]
     fn resume_model_flag_applies_when_no_root_flags() {
         let interactive =
-            finalize_resume_from_args(["codey", "resume", "-m", "gpt-5.1-test"].as_ref());
+            finalize_resume_from_args(["adam", "resume", "-m", "gpt-5.1-test"].as_ref());
 
         assert_eq!(interactive.model.as_deref(), Some("gpt-5.1-test"));
         assert!(interactive.resume_picker);
@@ -1108,7 +1107,7 @@ mod tests {
 
     #[test]
     fn resume_picker_logic_none_and_not_last() {
-        let interactive = finalize_resume_from_args(["codey", "resume"].as_ref());
+        let interactive = finalize_resume_from_args(["adam", "resume"].as_ref());
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
@@ -1117,7 +1116,7 @@ mod tests {
 
     #[test]
     fn resume_picker_logic_last() {
-        let interactive = finalize_resume_from_args(["codey", "resume", "--last"].as_ref());
+        let interactive = finalize_resume_from_args(["adam", "resume", "--last"].as_ref());
         assert!(!interactive.resume_picker);
         assert!(interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
@@ -1126,7 +1125,7 @@ mod tests {
 
     #[test]
     fn resume_picker_logic_with_session_id() {
-        let interactive = finalize_resume_from_args(["codey", "resume", "1234"].as_ref());
+        let interactive = finalize_resume_from_args(["adam", "resume", "1234"].as_ref());
         assert!(!interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id.as_deref(), Some("1234"));
@@ -1135,7 +1134,7 @@ mod tests {
 
     #[test]
     fn resume_all_flag_sets_show_all() {
-        let interactive = finalize_resume_from_args(["codey", "resume", "--all"].as_ref());
+        let interactive = finalize_resume_from_args(["adam", "resume", "--all"].as_ref());
         assert!(interactive.resume_picker);
         assert!(interactive.resume_show_all);
     }
@@ -1144,7 +1143,7 @@ mod tests {
     fn resume_merges_option_flags_and_full_auto() {
         let interactive = finalize_resume_from_args(
             [
-                "codey",
+                "adam",
                 "resume",
                 "sid",
                 "--full-auto",
@@ -1169,11 +1168,11 @@ mod tests {
         assert_eq!(interactive.config_profile.as_deref(), Some("my-profile"));
         assert_matches!(
             interactive.sandbox_mode,
-            Some(codex_common::SandboxModeCliArg::WorkspaceWrite)
+            Some(adam_common::SandboxModeCliArg::WorkspaceWrite)
         );
         assert_matches!(
             interactive.approval_policy,
-            Some(codex_common::ApprovalModeCliArg::OnRequest)
+            Some(adam_common::ApprovalModeCliArg::OnRequest)
         );
         assert!(interactive.full_auto);
         assert_eq!(
@@ -1199,7 +1198,7 @@ mod tests {
     fn resume_merges_dangerously_bypass_flag() {
         let interactive = finalize_resume_from_args(
             [
-                "codey",
+                "adam",
                 "resume",
                 "--dangerously-bypass-approvals-and-sandbox",
             ]
@@ -1213,7 +1212,7 @@ mod tests {
 
     #[test]
     fn fork_picker_logic_none_and_not_last() {
-        let interactive = finalize_fork_from_args(["codey", "fork"].as_ref());
+        let interactive = finalize_fork_from_args(["adam", "fork"].as_ref());
         assert!(interactive.fork_picker);
         assert!(!interactive.fork_last);
         assert_eq!(interactive.fork_session_id, None);
@@ -1222,7 +1221,7 @@ mod tests {
 
     #[test]
     fn fork_picker_logic_last() {
-        let interactive = finalize_fork_from_args(["codey", "fork", "--last"].as_ref());
+        let interactive = finalize_fork_from_args(["adam", "fork", "--last"].as_ref());
         assert!(!interactive.fork_picker);
         assert!(interactive.fork_last);
         assert_eq!(interactive.fork_session_id, None);
@@ -1231,7 +1230,7 @@ mod tests {
 
     #[test]
     fn fork_picker_logic_with_session_id() {
-        let interactive = finalize_fork_from_args(["codey", "fork", "1234"].as_ref());
+        let interactive = finalize_fork_from_args(["adam", "fork", "1234"].as_ref());
         assert!(!interactive.fork_picker);
         assert!(!interactive.fork_last);
         assert_eq!(interactive.fork_session_id.as_deref(), Some("1234"));
@@ -1240,27 +1239,27 @@ mod tests {
 
     #[test]
     fn fork_all_flag_sets_show_all() {
-        let interactive = finalize_fork_from_args(["codey", "fork", "--all"].as_ref());
+        let interactive = finalize_fork_from_args(["adam", "fork", "--all"].as_ref());
         assert!(interactive.fork_picker);
         assert!(interactive.fork_show_all);
     }
 
     #[test]
     fn app_server_analytics_default_disabled_without_flag() {
-        let app_server = app_server_from_args(["codey", "app-server"].as_ref());
+        let app_server = app_server_from_args(["adam", "app-server"].as_ref());
         assert!(!app_server.analytics_default_enabled);
     }
 
     #[test]
     fn app_server_analytics_default_enabled_with_flag() {
         let app_server =
-            app_server_from_args(["codey", "app-server", "--analytics-default-enabled"].as_ref());
+            app_server_from_args(["adam", "app-server", "--analytics-default-enabled"].as_ref());
         assert!(app_server.analytics_default_enabled);
     }
 
     #[test]
     fn features_enable_parses_feature_name() {
-        let cli = MultitoolCli::try_parse_from(["codey", "features", "enable", "unified_exec"])
+        let cli = MultitoolCli::try_parse_from(["adam", "features", "enable", "unified_exec"])
             .expect("parse should succeed");
         let Some(Subcommand::Features(FeaturesCli { sub })) = cli.subcommand else {
             panic!("expected features subcommand");
@@ -1273,7 +1272,7 @@ mod tests {
 
     #[test]
     fn features_disable_parses_feature_name() {
-        let cli = MultitoolCli::try_parse_from(["codey", "features", "disable", "shell_tool"])
+        let cli = MultitoolCli::try_parse_from(["adam", "features", "disable", "shell_tool"])
             .expect("parse should succeed");
         let Some(Subcommand::Features(FeaturesCli { sub })) = cli.subcommand else {
             panic!("expected features subcommand");

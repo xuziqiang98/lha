@@ -1,33 +1,33 @@
 use std::sync::Arc;
 
+use adam_agent::AuthManager;
+use adam_agent::config::Config;
+use adam_agent::default_client::build_reqwest_client;
+use adam_agent::models_manager::manager::ModelsManager;
+use adam_agent::protocol::SessionSource;
+use adam_llm::AuthContext;
+use adam_llm::AuthSource;
+use adam_llm::DefaultRuntimeClientFactory;
+use adam_llm::RuntimeBuildSpec;
+use adam_llm::RuntimeClient;
+use adam_llm::RuntimeClientFactory;
+use adam_llm::RuntimeEndpoint;
+use adam_llm::RuntimeSession;
+use adam_llm::TurnEventStream;
+use adam_llm::TurnRequest;
+use adam_otel::OtelManager;
+use adam_protocol::ThreadId;
+use adam_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use adam_protocol::openai_models::ModelInfo;
+use adam_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use async_trait::async_trait;
-use codex_agent::AuthManager;
-use codex_agent::config::Config;
-use codex_agent::default_client::build_reqwest_client;
-use codex_agent::models_manager::manager::ModelsManager;
-use codex_agent::protocol::SessionSource;
-use codex_llm::AuthContext;
-use codex_llm::AuthSource;
-use codex_llm::DefaultRuntimeClientFactory;
-use codex_llm::RuntimeBuildSpec;
-use codex_llm::RuntimeClient;
-use codex_llm::RuntimeClientFactory;
-use codex_llm::RuntimeEndpoint;
-use codex_llm::RuntimeSession;
-use codex_llm::TurnEventStream;
-use codex_llm::TurnRequest;
-use codex_otel::OtelManager;
-use codex_protocol::ThreadId;
-use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 
 #[derive(Default)]
 struct NoAuthSource;
 
 #[async_trait]
 impl AuthSource for NoAuthSource {
-    async fn current_auth(&self) -> codex_llm::Result<Option<AuthContext>> {
+    async fn current_auth(&self) -> adam_llm::Result<Option<AuthContext>> {
         Ok(None)
     }
 }
@@ -57,7 +57,7 @@ impl TestRuntimeClient {
         let mut endpoint = endpoint;
         if !config
             .features
-            .enabled(codex_agent::features::Feature::ResponsesWebsockets)
+            .enabled(adam_agent::features::Feature::ResponsesWebsockets)
         {
             endpoint.set_realtime_turn_streaming_enabled(false);
         }
@@ -75,7 +75,7 @@ impl TestRuntimeClient {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             model_verbosity: config.model_verbosity,
             web_search_mode: config.web_search_mode,
-            experimental_beta_feature_keys: codex_agent::features::FEATURES
+            experimental_beta_feature_keys: adam_agent::features::FEATURES
                 .iter()
                 .filter_map(|spec| {
                     if spec.stage.experimental_menu_description().is_some()
@@ -123,7 +123,7 @@ impl TestRuntimeClient {
 }
 
 impl TestRuntimeSession {
-    pub async fn run_turn(&mut self, turn: &TurnRequest) -> codex_llm::Result<TurnEventStream> {
+    pub async fn run_turn(&mut self, turn: &TurnRequest) -> adam_llm::Result<TurnEventStream> {
         self.inner.run_turn(turn).await
     }
 }
@@ -135,10 +135,10 @@ fn session_source_to_origin_tag(session_source: &SessionSource) -> String {
         SessionSource::Exec => "exec".to_string(),
         SessionSource::Mcp => "mcp".to_string(),
         SessionSource::SubAgent(sub) => match sub {
-            codex_agent::protocol::SubAgentSource::Review => "review".to_string(),
-            codex_agent::protocol::SubAgentSource::Compact => "compact".to_string(),
-            codex_agent::protocol::SubAgentSource::ThreadSpawn { .. } => "thread_spawn".to_string(),
-            codex_agent::protocol::SubAgentSource::Other(label) => label.to_lowercase(),
+            adam_agent::protocol::SubAgentSource::Review => "review".to_string(),
+            adam_agent::protocol::SubAgentSource::Compact => "compact".to_string(),
+            adam_agent::protocol::SubAgentSource::ThreadSpawn { .. } => "thread_spawn".to_string(),
+            adam_agent::protocol::SubAgentSource::Other(label) => label.to_lowercase(),
         },
         SessionSource::Unknown => "unknown".to_string(),
     }

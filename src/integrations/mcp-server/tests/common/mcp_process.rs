@@ -9,8 +9,8 @@ use tokio::process::Child;
 use tokio::process::ChildStdin;
 use tokio::process::ChildStdout;
 
+use adam_mcp_server::CodexToolCallParam;
 use anyhow::Context;
-use codex_mcp_server::CodexToolCallParam;
 
 use mcp_types::CallToolRequestParams;
 use mcp_types::ClientCapabilities;
@@ -53,8 +53,8 @@ impl McpProcess {
         adam_home: &Path,
         env_overrides: &[(&str, Option<&str>)],
     ) -> anyhow::Result<Self> {
-        let program = codex_utils_cargo_bin::cargo_bin("codex-mcp-server")
-            .context("should find binary for codex-mcp-server")?;
+        let program = adam_utils_cargo_bin::cargo_bin("adam-mcp-server")
+            .context("should find binary for adam-mcp-server")?;
         let mut cmd = Command::new(program);
 
         cmd.stdin(Stdio::piped());
@@ -77,7 +77,7 @@ impl McpProcess {
         let mut process = cmd
             .kill_on_drop(true)
             .spawn()
-            .context("codex-mcp-server proc should start")?;
+            .context("adam-mcp-server proc should start")?;
         let stdin = process
             .stdin
             .take()
@@ -138,13 +138,13 @@ impl McpProcess {
         let initialized = self.read_jsonrpc_message().await?;
         let os_info = os_info::get();
         let build_version = env!("CARGO_PKG_VERSION");
-        let originator = codex_agent::default_client::originator().value;
+        let originator = adam_agent::default_client::originator().value;
         let user_agent = format!(
             "{originator}/{build_version} ({} {}; {}) {} (elicitation test; 0.0.0)",
             os_info.os_type(),
             os_info.version(),
             os_info.architecture().unwrap_or("unknown"),
-            codex_agent::terminal::user_agent()
+            adam_agent::terminal::user_agent()
         );
         assert_eq!(
             JSONRPCMessage::Response(JSONRPCResponse {
@@ -157,7 +157,7 @@ impl McpProcess {
                         },
                     },
                     "serverInfo": {
-                        "name": "codex-mcp-server",
+                        "name": "adam-mcp-server",
                         "title": "Codex",
                         "version": build_version,
                         "user_agent": user_agent

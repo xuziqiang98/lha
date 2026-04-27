@@ -1,10 +1,10 @@
+use adam_execpolicy::execpolicycheck::ExecPolicyCheckCommand;
 use anyhow::Result;
 use clap::Parser;
-use codex_execpolicy::execpolicycheck::ExecPolicyCheckCommand;
 
 /// CLI for evaluating exec policies
 #[derive(Parser)]
-#[command(name = "codex-execpolicy")]
+#[command(name = "adam-execpolicy")]
 enum Cli {
     /// Evaluate a command against a policy.
     Check(ExecPolicyCheckCommand),

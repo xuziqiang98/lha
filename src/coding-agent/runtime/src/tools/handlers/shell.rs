@@ -1,6 +1,6 @@
+use adam_protocol::models::ShellCommandToolCallParams;
+use adam_protocol::models::ShellToolCallParams;
 use async_trait::async_trait;
-use codex_protocol::models::ShellCommandToolCallParams;
-use codex_protocol::models::ShellToolCallParams;
 use std::sync::Arc;
 
 use crate::codex::TurnContext;
@@ -245,7 +245,7 @@ impl ShellHandler {
             .requires_escalated_permissions()
             && !matches!(
                 turn.approval_policy,
-                codex_protocol::protocol::AskForApproval::OnRequest
+                adam_protocol::protocol::AskForApproval::OnRequest
             )
         {
             let approval_policy = turn.approval_policy;
@@ -328,7 +328,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use codex_protocol::models::ShellCommandToolCallParams;
+    use adam_protocol::models::ShellCommandToolCallParams;
     use pretty_assertions::assert_eq;
 
     use crate::codex::make_session_and_context;

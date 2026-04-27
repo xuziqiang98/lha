@@ -41,51 +41,51 @@ use crate::resume_picker::SessionSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
-use codex_agent::AuthManager;
-use codex_agent::CodexAuth;
-use codex_agent::ThreadManager;
-use codex_agent::config::Config;
-use codex_agent::config::ConfigBuilder;
-use codex_agent::config::ConfigOverrides;
-use codex_agent::config::ConfigToml;
-use codex_agent::config::display_model_provider_ref;
-use codex_agent::config::edit::ConfigEdit;
-use codex_agent::config::edit::ConfigEditsBuilder;
-use codex_agent::config::model_ref::ModelRef;
-use codex_agent::config::state_json::AdamStateStore;
-use codex_agent::config_loader::ConfigLayerStackOrdering;
-use codex_agent::features::Feature;
-use codex_agent::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
-use codex_agent::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
-use codex_agent::protocol::AskForApproval;
-use codex_agent::protocol::Event;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::FinalOutput;
-use codex_agent::protocol::ListSkillsResponseEvent;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::ReviewRequest;
-use codex_agent::protocol::SandboxPolicy;
-use codex_agent::protocol::SessionSource;
-use codex_agent::protocol::SkillErrorInfo;
-use codex_agent::protocol::SubAgentSource;
-use codex_agent::protocol::TokenUsage;
+use adam_agent::AuthManager;
+use adam_agent::CodexAuth;
+use adam_agent::ThreadManager;
+use adam_agent::config::Config;
+use adam_agent::config::ConfigBuilder;
+use adam_agent::config::ConfigOverrides;
+use adam_agent::config::ConfigToml;
+use adam_agent::config::display_model_provider_ref;
+use adam_agent::config::edit::ConfigEdit;
+use adam_agent::config::edit::ConfigEditsBuilder;
+use adam_agent::config::model_ref::ModelRef;
+use adam_agent::config::state_json::AdamStateStore;
+use adam_agent::config_loader::ConfigLayerStackOrdering;
+use adam_agent::features::Feature;
+use adam_agent::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
+use adam_agent::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
+use adam_agent::protocol::AskForApproval;
+use adam_agent::protocol::Event;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::FinalOutput;
+use adam_agent::protocol::ListSkillsResponseEvent;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::ReviewRequest;
+use adam_agent::protocol::SandboxPolicy;
+use adam_agent::protocol::SessionSource;
+use adam_agent::protocol::SkillErrorInfo;
+use adam_agent::protocol::SubAgentSource;
+use adam_agent::protocol::TokenUsage;
 #[cfg(target_os = "windows")]
-use codex_agent::windows_sandbox::WindowsSandboxLevelExt;
-use codex_ansi_escape::ansi_escape_line;
-use codex_app_server_protocol::ConfigLayerSource;
-use codex_llm::CatalogRefreshStrategy;
-use codex_llm::RuntimeEndpoint;
-use codex_otel::OtelManager;
-use codex_protocol::ThreadId;
-use codex_protocol::config_types::Personality;
+use adam_agent::windows_sandbox::WindowsSandboxLevelExt;
+use adam_ansi_escape::ansi_escape_line;
+use adam_app_server_protocol::ConfigLayerSource;
+use adam_llm::CatalogRefreshStrategy;
+use adam_llm::RuntimeEndpoint;
+use adam_otel::OtelManager;
+use adam_protocol::ThreadId;
+use adam_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
-use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::items::TurnItem;
-use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::openai_models::ModelUpgrade;
-use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::protocol::SessionConfiguredEvent;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use adam_protocol::config_types::WindowsSandboxLevel;
+use adam_protocol::items::TurnItem;
+use adam_protocol::openai_models::ModelPreset;
+use adam_protocol::openai_models::ModelUpgrade;
+use adam_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use adam_protocol::protocol::SessionConfiguredEvent;
+use adam_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -164,7 +164,7 @@ fn session_summary(
     }
 
     let usage_line = FinalOutput::from(token_usage).to_string();
-    let resume_command = codex_agent::util::resume_command(thread_name.as_deref(), thread_id);
+    let resume_command = adam_agent::util::resume_command(thread_name.as_deref(), thread_id);
     Some(SessionSummary {
         usage_line,
         resume_command,
@@ -555,7 +555,7 @@ pub(crate) struct App {
     /// This is used after a confirmed thread rollback to ensure scrollback reflects the trimmed
     /// transcript cells.
     pub(crate) backtrack_render_pending: bool,
-    pub(crate) feedback: codex_feedback::CodexFeedback,
+    pub(crate) feedback: adam_feedback::CodexFeedback,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
 
@@ -864,7 +864,7 @@ impl App {
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
         tui: &mut tui::Tui,
-        cfg: codex_agent::config::Config,
+        cfg: adam_agent::config::Config,
     ) -> crate::chatwidget::ChatWidgetInit {
         crate::chatwidget::ChatWidgetInit {
             config: cfg,
@@ -1615,7 +1615,7 @@ impl App {
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         session_selection: SessionSelection,
-        feedback: codex_feedback::CodexFeedback,
+        feedback: adam_feedback::CodexFeedback,
         is_first_run: bool,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
@@ -1664,7 +1664,7 @@ impl App {
             auth_ref.and_then(CodexAuth::get_account_email),
             auth_ref.map(CodexAuth::api_auth_mode),
             config.otel.log_user_prompt,
-            codex_agent::terminal::user_agent(),
+            adam_agent::terminal::user_agent(),
             SessionSource::Cli,
         );
 
@@ -1809,8 +1809,8 @@ impl App {
                 != WindowsSandboxLevel::Disabled
                 && matches!(
                     app.config.sandbox_policy.get(),
-                    codex_agent::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_agent::protocol::SandboxPolicy::ReadOnly
+                    adam_agent::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                        | adam_agent::protocol::SandboxPolicy::ReadOnly
                 )
                 && !app
                     .config
@@ -2370,8 +2370,7 @@ impl App {
 
                     // If the elevated setup already ran on this machine, don't prompt for
                     // elevation again - just flip the config to use the elevated path.
-                    if codex_agent::windows_sandbox::sandbox_setup_is_complete(adam_home.as_path())
-                    {
+                    if adam_agent::windows_sandbox::sandbox_setup_is_complete(adam_home.as_path()) {
                         tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
                             preset,
                             mode: WindowsSandboxEnableMode::Elevated,
@@ -2383,7 +2382,7 @@ impl App {
                     self.windows_sandbox.setup_started_at = Some(Instant::now());
                     let otel_manager = self.otel_manager.clone();
                     tokio::task::spawn_blocking(move || {
-                        let result = codex_agent::windows_sandbox::run_elevated_setup(
+                        let result = adam_agent::windows_sandbox::run_elevated_setup(
                             &policy,
                             policy_cwd.as_path(),
                             command_cwd.as_path(),
@@ -2406,7 +2405,7 @@ impl App {
                                 let mut code_tag: Option<String> = None;
                                 let mut message_tag: Option<String> = None;
                                 if let Some((code, message)) =
-                                    codex_agent::windows_sandbox::elevated_setup_failure_details(
+                                    adam_agent::windows_sandbox::elevated_setup_failure_details(
                                         &err,
                                     )
                                 {
@@ -2639,8 +2638,8 @@ impl App {
                 #[cfg(target_os = "windows")]
                 let policy_is_workspace_write_or_ro = matches!(
                     &policy,
-                    codex_agent::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_agent::protocol::SandboxPolicy::ReadOnly
+                    adam_agent::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                        | adam_agent::protocol::SandboxPolicy::ReadOnly
                 );
 
                 if let Err(err) = self.config.sandbox_policy.set(policy.clone()) {
@@ -2650,7 +2649,7 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 #[cfg(target_os = "windows")]
-                if !matches!(&policy, codex_agent::protocol::SandboxPolicy::ReadOnly)
+                if !matches!(&policy, adam_agent::protocol::SandboxPolicy::ReadOnly)
                     || WindowsSandboxLevel::from_config(&self.config)
                         != WindowsSandboxLevel::Disabled
                 {
@@ -3042,7 +3041,7 @@ impl App {
         (!model.starts_with("codex-auto-")).then(|| Self::reasoning_label(reasoning_effort))
     }
 
-    pub(crate) fn token_usage(&self) -> codex_agent::protocol::TokenUsage {
+    pub(crate) fn token_usage(&self) -> adam_agent::protocol::TokenUsage {
         self.chat_widget.token_usage()
     }
 
@@ -3209,11 +3208,11 @@ impl App {
         cwd: PathBuf,
         env_map: std::collections::HashMap<String, String>,
         logs_base_dir: PathBuf,
-        sandbox_policy: codex_agent::protocol::SandboxPolicy,
+        sandbox_policy: adam_agent::protocol::SandboxPolicy,
         tx: AppEventSender,
     ) {
         tokio::task::spawn_blocking(move || {
-            let result = codex_windows_sandbox::apply_world_writable_scan_and_denies(
+            let result = adam_windows_sandbox::apply_world_writable_scan_and_denies(
                 &logs_base_dir,
                 &cwd,
                 &env_map,
@@ -3261,34 +3260,34 @@ mod tests {
     use crate::provider_config::ApiProviderDialect;
     use crate::provider_config::CustomProviderConfig;
     use crate::provider_config::persist_custom_provider_files;
-    use codex_agent::AuthManager;
-    use codex_agent::CodexAuth;
-    use codex_agent::ThreadManager;
-    use codex_agent::config::ConfigBuilder;
-    use codex_agent::config::ConfigOverrides;
-    use codex_agent::config::ConfigToml;
-    use codex_agent::config::models_json::ModelsDialect;
-    use codex_agent::config::models_json::ModelsEndpoint;
-    use codex_agent::config::models_json::ModelsJson;
-    use codex_agent::config::models_json::ModelsProvider;
-    use codex_agent::features::Feature;
-    use codex_agent::models_manager::manager::ModelsManager;
-    use codex_agent::protocol::AskForApproval;
-    use codex_agent::protocol::Event;
-    use codex_agent::protocol::EventMsg;
-    use codex_agent::protocol::ExecCommandSource;
-    use codex_agent::protocol::ReviewRequest;
-    use codex_agent::protocol::ReviewTarget;
-    use codex_agent::protocol::SandboxPolicy;
-    use codex_agent::protocol::SessionConfiguredEvent;
-    use codex_agent::protocol::SessionSource;
-    use codex_agent::protocol::ThreadRolledBackEvent;
-    use codex_agent::protocol::TurnCompleteEvent;
-    use codex_agent::protocol::TurnStartedEvent;
-    use codex_otel::OtelManager;
-    use codex_protocol::ThreadId;
-    use codex_protocol::config_types::ModeKind;
-    use codex_protocol::user_input::TextElement;
+    use adam_agent::AuthManager;
+    use adam_agent::CodexAuth;
+    use adam_agent::ThreadManager;
+    use adam_agent::config::ConfigBuilder;
+    use adam_agent::config::ConfigOverrides;
+    use adam_agent::config::ConfigToml;
+    use adam_agent::config::models_json::ModelsDialect;
+    use adam_agent::config::models_json::ModelsEndpoint;
+    use adam_agent::config::models_json::ModelsJson;
+    use adam_agent::config::models_json::ModelsProvider;
+    use adam_agent::features::Feature;
+    use adam_agent::models_manager::manager::ModelsManager;
+    use adam_agent::protocol::AskForApproval;
+    use adam_agent::protocol::Event;
+    use adam_agent::protocol::EventMsg;
+    use adam_agent::protocol::ExecCommandSource;
+    use adam_agent::protocol::ReviewRequest;
+    use adam_agent::protocol::ReviewTarget;
+    use adam_agent::protocol::SandboxPolicy;
+    use adam_agent::protocol::SessionConfiguredEvent;
+    use adam_agent::protocol::SessionSource;
+    use adam_agent::protocol::ThreadRolledBackEvent;
+    use adam_agent::protocol::TurnCompleteEvent;
+    use adam_agent::protocol::TurnStartedEvent;
+    use adam_otel::OtelManager;
+    use adam_protocol::ThreadId;
+    use adam_protocol::config_types::ModeKind;
+    use adam_protocol::user_input::TextElement;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
@@ -4003,7 +4002,7 @@ mod tests {
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
-            feedback: codex_feedback::CodexFeedback::new(),
+            feedback: adam_feedback::CodexFeedback::new(),
             pending_update_action: None,
             suppress_shutdown_complete: false,
             windows_sandbox: WindowsSandboxState::default(),
@@ -4058,7 +4057,7 @@ mod tests {
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
                 backtrack: BacktrackState::default(),
                 backtrack_render_pending: false,
-                feedback: codex_feedback::CodexFeedback::new(),
+                feedback: adam_feedback::CodexFeedback::new(),
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
                 windows_sandbox: WindowsSandboxState::default(),
@@ -4102,7 +4101,7 @@ mod tests {
         let provider = models_json
             .providers
             .entry(provider_id.to_string())
-            .or_insert_with(ModelsProvider::default);
+            .or_default();
         provider.name = Some(provider_id.to_string());
         let endpoint = provider
             .endpoints
@@ -4160,7 +4159,7 @@ mod tests {
     }
 
     fn all_model_presets() -> Vec<ModelPreset> {
-        codex_agent::models_manager::model_presets::all_model_presets().clone()
+        adam_agent::models_manager::model_presets::all_model_presets().clone()
     }
 
     fn model_migration_copy_to_plain_text(
@@ -4514,7 +4513,7 @@ mod tests {
         );
         assert_eq!(
             summary.resume_command,
-            Some("codey resume 123e4567-e89b-12d3-a456-426614174000".to_string())
+            Some("adam resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
     }
 
@@ -4532,7 +4531,7 @@ mod tests {
             .expect("summary");
         assert_eq!(
             summary.resume_command,
-            Some("codey resume my-session".to_string())
+            Some("adam resume my-session".to_string())
         );
     }
 

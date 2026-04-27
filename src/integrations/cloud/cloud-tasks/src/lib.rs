@@ -7,9 +7,9 @@ mod ui;
 pub mod util;
 pub use cli::Cli;
 
+use adam_cloud_tasks_client::TaskStatus;
 use anyhow::anyhow;
 use chrono::Utc;
-use codex_cloud_tasks_client::TaskStatus;
 use owo_colors::OwoColorize;
 use owo_colors::Stream;
 use std::cmp::Ordering;
@@ -28,12 +28,12 @@ use util::format_relative_time;
 use util::set_user_agent_suffix;
 
 struct ApplyJob {
-    task_id: codex_cloud_tasks_client::TaskId,
+    task_id: adam_cloud_tasks_client::TaskId,
     diff_override: Option<String>,
 }
 
 struct BackendContext {
-    backend: Arc<dyn codex_cloud_tasks_client::CloudBackend>,
+    backend: Arc<dyn adam_cloud_tasks_client::CloudBackend>,
     base_url: String,
 }
 
@@ -49,17 +49,17 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
 
     if use_mock {
         return Ok(BackendContext {
-            backend: Arc::new(codex_cloud_tasks_client::MockClient),
+            backend: Arc::new(adam_cloud_tasks_client::MockClient),
             base_url,
         });
     }
 
-    let ua = codex_agent::default_client::get_codex_user_agent();
-    let mut http = codex_cloud_tasks_client::HttpClient::new(base_url.clone())?.with_user_agent(ua);
+    let ua = adam_agent::default_client::get_codex_user_agent();
+    let mut http = adam_cloud_tasks_client::HttpClient::new(base_url.clone())?.with_user_agent(ua);
     let style = if base_url.contains("/backend-api") {
         "wham"
     } else {
-        "codex-api"
+        "adam-api"
     };
     append_error_log(format!("startup: base_url={base_url} path_style={style}"));
 
@@ -119,11 +119,11 @@ struct RealGitInfo;
 #[async_trait::async_trait]
 impl GitInfoProvider for RealGitInfo {
     async fn default_branch_name(&self, path: &std::path::Path) -> Option<String> {
-        codex_agent::git_info::default_branch_name(path).await
+        adam_agent::git_info::default_branch_name(path).await
     }
 
     async fn current_branch_name(&self, path: &std::path::Path) -> Option<String> {
-        codex_agent::git_info::current_branch_name(path).await
+        adam_agent::git_info::current_branch_name(path).await
     }
 }
 
@@ -166,7 +166,7 @@ async fn run_exec_command(args: crate::cli::ExecCommand) -> anyhow::Result<()> {
     let prompt = resolve_query_input(query)?;
     let env_id = resolve_environment_id(&ctx, &environment).await?;
     let git_ref = resolve_git_ref(branch.as_ref()).await;
-    let created = codex_cloud_tasks_client::CloudBackend::create_task(
+    let created = adam_cloud_tasks_client::CloudBackend::create_task(
         &*ctx.backend,
         &env_id,
         &prompt,
@@ -252,7 +252,7 @@ fn resolve_query_input(query_arg: Option<String>) -> anyhow::Result<String> {
     }
 }
 
-fn parse_task_id(raw: &str) -> anyhow::Result<codex_cloud_tasks_client::TaskId> {
+fn parse_task_id(raw: &str) -> anyhow::Result<adam_cloud_tasks_client::TaskId> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         anyhow::bail!("task id must not be empty");
@@ -270,7 +270,7 @@ fn parse_task_id(raw: &str) -> anyhow::Result<codex_cloud_tasks_client::TaskId> 
     if id.is_empty() {
         anyhow::bail!("task id must not be empty");
     }
-    Ok(codex_cloud_tasks_client::TaskId(id.to_string()))
+    Ok(adam_cloud_tasks_client::TaskId(id.to_string()))
 }
 
 #[derive(Clone, Debug)]
@@ -295,14 +295,14 @@ fn cmp_attempt(lhs: &AttemptDiffData, rhs: &AttemptDiffData) -> Ordering {
 }
 
 async fn collect_attempt_diffs(
-    backend: &dyn codex_cloud_tasks_client::CloudBackend,
-    task_id: &codex_cloud_tasks_client::TaskId,
+    backend: &dyn adam_cloud_tasks_client::CloudBackend,
+    task_id: &adam_cloud_tasks_client::TaskId,
 ) -> anyhow::Result<Vec<AttemptDiffData>> {
     let text =
-        codex_cloud_tasks_client::CloudBackend::get_task_text(backend, task_id.clone()).await?;
+        adam_cloud_tasks_client::CloudBackend::get_task_text(backend, task_id.clone()).await?;
     let mut attempts = Vec::new();
     if let Some(diff) =
-        codex_cloud_tasks_client::CloudBackend::get_task_diff(backend, task_id.clone()).await?
+        adam_cloud_tasks_client::CloudBackend::get_task_diff(backend, task_id.clone()).await?
     {
         attempts.push(AttemptDiffData {
             placement: text.attempt_placement,
@@ -311,7 +311,7 @@ async fn collect_attempt_diffs(
         });
     }
     if let Some(turn_id) = text.turn_id {
-        let siblings = codex_cloud_tasks_client::CloudBackend::list_sibling_attempts(
+        let siblings = adam_cloud_tasks_client::CloudBackend::list_sibling_attempts(
             backend,
             task_id.clone(),
             turn_id,
@@ -366,7 +366,7 @@ fn task_status_label(status: &TaskStatus) -> &'static str {
     }
 }
 
-fn summary_line(summary: &codex_cloud_tasks_client::DiffSummary, colorize: bool) -> String {
+fn summary_line(summary: &adam_cloud_tasks_client::DiffSummary, colorize: bool) -> String {
     if summary.files_changed == 0 && summary.lines_added == 0 && summary.lines_removed == 0 {
         let base = "no diff";
         return if colorize {
@@ -406,7 +406,7 @@ fn summary_line(summary: &codex_cloud_tasks_client::DiffSummary, colorize: bool)
 }
 
 fn format_task_status_lines(
-    task: &codex_cloud_tasks_client::TaskSummary,
+    task: &adam_cloud_tasks_client::TaskSummary,
     now: chrono::DateTime<Utc>,
     colorize: bool,
 ) -> Vec<String> {
@@ -473,7 +473,7 @@ fn format_task_status_lines(
 }
 
 fn format_task_list_lines(
-    tasks: &[codex_cloud_tasks_client::TaskSummary],
+    tasks: &[adam_cloud_tasks_client::TaskSummary],
     base_url: &str,
     now: chrono::DateTime<Utc>,
     colorize: bool,
@@ -495,7 +495,7 @@ async fn run_status_command(args: crate::cli::StatusCommand) -> anyhow::Result<(
     let ctx = init_backend("codex_cloud_tasks_status").await?;
     let task_id = parse_task_id(&args.task_id)?;
     let summary =
-        codex_cloud_tasks_client::CloudBackend::get_task_summary(&*ctx.backend, task_id).await?;
+        adam_cloud_tasks_client::CloudBackend::get_task_summary(&*ctx.backend, task_id).await?;
     let now = Utc::now();
     let colorize = supports_color::on(SupportStream::Stdout).is_some();
     for line in format_task_status_lines(&summary, now, colorize) {
@@ -514,7 +514,7 @@ async fn run_list_command(args: crate::cli::ListCommand) -> anyhow::Result<()> {
     } else {
         None
     };
-    let page = codex_cloud_tasks_client::CloudBackend::list_tasks(
+    let page = adam_cloud_tasks_client::CloudBackend::list_tasks(
         &*ctx.backend,
         env_filter.as_deref(),
         Some(args.limit),
@@ -588,7 +588,7 @@ async fn run_apply_command(args: crate::cli::ApplyCommand) -> anyhow::Result<()>
     let task_id = parse_task_id(&args.task_id)?;
     let attempts = collect_attempt_diffs(&*ctx.backend, &task_id).await?;
     let selected = select_attempt(&attempts, args.attempt)?;
-    let outcome = codex_cloud_tasks_client::CloudBackend::apply_task(
+    let outcome = adam_cloud_tasks_client::CloudBackend::apply_task(
         &*ctx.backend,
         task_id,
         Some(selected.diff.clone()),
@@ -597,24 +597,24 @@ async fn run_apply_command(args: crate::cli::ApplyCommand) -> anyhow::Result<()>
     println!("{}", outcome.message);
     if !matches!(
         outcome.status,
-        codex_cloud_tasks_client::ApplyStatus::Success
+        adam_cloud_tasks_client::ApplyStatus::Success
     ) {
         std::process::exit(1);
     }
     Ok(())
 }
 
-fn level_from_status(status: codex_cloud_tasks_client::ApplyStatus) -> app::ApplyResultLevel {
+fn level_from_status(status: adam_cloud_tasks_client::ApplyStatus) -> app::ApplyResultLevel {
     match status {
-        codex_cloud_tasks_client::ApplyStatus::Success => app::ApplyResultLevel::Success,
-        codex_cloud_tasks_client::ApplyStatus::Partial => app::ApplyResultLevel::Partial,
-        codex_cloud_tasks_client::ApplyStatus::Error => app::ApplyResultLevel::Error,
+        adam_cloud_tasks_client::ApplyStatus::Success => app::ApplyResultLevel::Success,
+        adam_cloud_tasks_client::ApplyStatus::Partial => app::ApplyResultLevel::Partial,
+        adam_cloud_tasks_client::ApplyStatus::Error => app::ApplyResultLevel::Error,
     }
 }
 
 fn spawn_preflight(
     app: &mut app::App,
-    backend: &Arc<dyn codex_cloud_tasks_client::CloudBackend>,
+    backend: &Arc<dyn adam_cloud_tasks_client::CloudBackend>,
     tx: &UnboundedSender<app::AppEvent>,
     frame_tx: &UnboundedSender<Instant>,
     title: String,
@@ -639,7 +639,7 @@ fn spawn_preflight(
             task_id,
             diff_override,
         } = job;
-        let result = codex_cloud_tasks_client::CloudBackend::apply_task_preflight(
+        let result = adam_cloud_tasks_client::CloudBackend::apply_task_preflight(
             &*backend,
             task_id.clone(),
             diff_override,
@@ -676,7 +676,7 @@ fn spawn_preflight(
 
 fn spawn_apply(
     app: &mut app::App,
-    backend: &Arc<dyn codex_cloud_tasks_client::CloudBackend>,
+    backend: &Arc<dyn adam_cloud_tasks_client::CloudBackend>,
     tx: &UnboundedSender<app::AppEvent>,
     frame_tx: &UnboundedSender<Instant>,
     job: ApplyJob,
@@ -700,7 +700,7 @@ fn spawn_apply(
             task_id,
             diff_override,
         } = job;
-        let result = codex_cloud_tasks_client::CloudBackend::apply_task(
+        let result = adam_cloud_tasks_client::CloudBackend::apply_task(
             &*backend,
             task_id.clone(),
             diff_override,
@@ -800,7 +800,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
     append_error_log(format!(
         "startup: wham_force_internal={} ua={}",
         force_internal,
-        codex_agent::default_client::get_codex_user_agent()
+        adam_agent::default_client::get_codex_user_agent()
     ));
     // Non-blocking initial load so the in-box spinner can animate
     app.status = "Loading tasks…".to_string();
@@ -925,7 +925,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                 if let Some(page) = app.new_task.as_mut() {
                     if page.composer.flush_paste_burst_if_due() { needs_redraw = true; }
                     if page.composer.is_in_paste_burst() {
-                        let _ = frame_tx.send(Instant::now() + codex_tui::ComposerInput::recommended_flush_delay());
+                        let _ = frame_tx.send(Instant::now() + adam_tui::ComposerInput::recommended_flush_delay());
                     }
                 }
                 // Keep spinner pulsing only while loading.
@@ -1158,7 +1158,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                         let tx = tx.clone();
                                         let task_id = id.clone();
                                         tokio::spawn(async move {
-                                            match codex_cloud_tasks_client::CloudBackend::list_sibling_attempts(
+                                            match adam_cloud_tasks_client::CloudBackend::list_sibling_attempts(
                                                 &*backend,
                                                 task_id.clone(),
                                                 turn_id,
@@ -1287,7 +1287,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                             match result {
                                 Ok(outcome) => {
                                     app.status = outcome.message.clone();
-                                    if matches!(outcome.status, codex_cloud_tasks_client::ApplyStatus::Success) {
+                                    if matches!(outcome.status, adam_cloud_tasks_client::ApplyStatus::Success) {
                                         app.apply_modal = None;
                                         app.diff_overlay = None;
                                         // Refresh tasks after successful apply
@@ -1486,7 +1486,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                 _ => {
                                     if page.submitting {
                                         // Ignore input while submitting
-                                    } else if let codex_tui::ComposerAction::Submitted(text) = page.composer.input(key) {
+                                    } else if let adam_tui::ComposerAction::Submitted(text) = page.composer.input(key) {
                                             // Submit only if we have an env id
                                             if let Some(env) = page.env_id.clone() {
                                                 append_error_log(format!(
@@ -1502,7 +1502,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                                 tokio::spawn(async move {
                                                     let git_ref = resolve_git_ref(None).await;
 
-                                                    let result = codex_cloud_tasks_client::CloudBackend::create_task(&*backend, &env, &text, &git_ref, false, best_of_n).await;
+                                                    let result = adam_cloud_tasks_client::CloudBackend::create_task(&*backend, &env, &text, &git_ref, false, best_of_n).await;
                                                     let evt = match result {
                                                         Ok(ok) => app::AppEvent::NewTaskSubmitted(Ok(ok)),
                                                         Err(e) => app::AppEvent::NewTaskSubmitted(Err(format!("{e}"))),
@@ -1516,7 +1516,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                     needs_redraw = true;
                                     // If paste‑burst is active, schedule a micro‑flush frame.
                                     if page.composer.is_in_paste_burst() {
-                                        let _ = frame_tx.send(Instant::now() + codex_tui::ComposerInput::recommended_flush_delay());
+                                        let _ = frame_tx.send(Instant::now() + adam_tui::ComposerInput::recommended_flush_delay());
                                     }
                                     // Always schedule an immediate redraw for key edits in the composer.
                                     let _ = frame_tx.send(Instant::now());
@@ -1855,12 +1855,12 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                             let diff_id = id.clone();
                                             let diff_title = title.clone();
                                             tokio::spawn(async move {
-                                                match codex_cloud_tasks_client::CloudBackend::get_task_diff(&*backend, diff_id.clone()).await {
+                                                match adam_cloud_tasks_client::CloudBackend::get_task_diff(&*backend, diff_id.clone()).await {
                                                     Ok(Some(diff)) => {
                                                         let _ = tx.send(app::AppEvent::DetailsDiffLoaded { id: diff_id, title: diff_title, diff });
                                                     }
                                                     Ok(None) => {
-                                                        match codex_cloud_tasks_client::CloudBackend::get_task_text(&*backend, diff_id.clone()).await {
+                                                        match adam_cloud_tasks_client::CloudBackend::get_task_text(&*backend, diff_id.clone()).await {
                                                             Ok(text) => {
                                                                 let evt = app::AppEvent::DetailsMessagesLoaded {
                                                                     id: diff_id,
@@ -1881,7 +1881,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                                     }
                                                     Err(e) => {
                                                         append_error_log(format!("get_task_diff failed for {}: {e}", diff_id.0));
-                                                        match codex_cloud_tasks_client::CloudBackend::get_task_text(&*backend, diff_id.clone()).await {
+                                                        match adam_cloud_tasks_client::CloudBackend::get_task_text(&*backend, diff_id.clone()).await {
                                                             Ok(text) => {
                                                                 let evt = app::AppEvent::DetailsMessagesLoaded {
                                                                     id: diff_id,
@@ -1910,7 +1910,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                             let msg_id = id;
                                             let msg_title = title;
                                             tokio::spawn(async move {
-                                                if let Ok(text) = codex_cloud_tasks_client::CloudBackend::get_task_text(&*backend, msg_id.clone()).await {
+                                                if let Ok(text) = adam_cloud_tasks_client::CloudBackend::get_task_text(&*backend, msg_id.clone()).await {
                                                     let evt = app::AppEvent::DetailsMessagesLoaded {
                                                         id: msg_id,
                                                         title: msg_title,
@@ -1937,7 +1937,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                     }
 
                                     if let Some(task) = app.tasks.get(app.selected).cloned() {
-                                        match codex_cloud_tasks_client::CloudBackend::get_task_diff(&*backend, task.id.clone()).await {
+                                        match adam_cloud_tasks_client::CloudBackend::get_task_diff(&*backend, task.id.clone()).await {
                                             Ok(Some(diff)) => {
                                                 let diff_override = Some(diff.clone());
                                                 let task_id = task.id.clone();
@@ -2120,13 +2120,13 @@ fn pretty_lines_from_error(raw: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::resolve_git_ref_with_git_info;
-    use codex_cloud_tasks_client::DiffSummary;
-    use codex_cloud_tasks_client::MockClient;
-    use codex_cloud_tasks_client::TaskId;
-    use codex_cloud_tasks_client::TaskStatus;
-    use codex_cloud_tasks_client::TaskSummary;
-    use codex_tui::ComposerAction;
-    use codex_tui::ComposerInput;
+    use adam_cloud_tasks_client::DiffSummary;
+    use adam_cloud_tasks_client::MockClient;
+    use adam_cloud_tasks_client::TaskId;
+    use adam_cloud_tasks_client::TaskStatus;
+    use adam_cloud_tasks_client::TaskSummary;
+    use adam_tui::ComposerAction;
+    use adam_tui::ComposerInput;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;

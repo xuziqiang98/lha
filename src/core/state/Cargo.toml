@@ -1,5 +1,5 @@
 [package]
-name = "codex-state"
+name = "adam-state"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,8 +8,8 @@ license.workspace = true
 anyhow = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
-codex-otel = { workspace = true }
-codex-protocol = { workspace = true }
+adam-otel = { workspace = true }
+adam-protocol = { workspace = true }
 dirs = { workspace = true }
 owo-colors = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

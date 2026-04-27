@@ -38,22 +38,22 @@ use crate::exec_events::TurnFailedEvent;
 use crate::exec_events::TurnStartedEvent;
 use crate::exec_events::Usage;
 use crate::exec_events::WebSearchItem;
-use codex_agent::config::Config;
-use codex_agent::protocol;
-use codex_agent::protocol::AgentStatus as CoreAgentStatus;
-use codex_agent::protocol::CollabAgentInteractionBeginEvent;
-use codex_agent::protocol::CollabAgentInteractionEndEvent;
-use codex_agent::protocol::CollabAgentSpawnBeginEvent;
-use codex_agent::protocol::CollabAgentSpawnEndEvent;
-use codex_agent::protocol::CollabCloseBeginEvent;
-use codex_agent::protocol::CollabCloseEndEvent;
-use codex_agent::protocol::CollabResumeBeginEvent;
-use codex_agent::protocol::CollabResumeEndEvent;
-use codex_agent::protocol::CollabWaitingBeginEvent;
-use codex_agent::protocol::CollabWaitingEndEvent;
-use codex_protocol::models::WebSearchAction;
-use codex_protocol::plan_tool::StepStatus;
-use codex_protocol::plan_tool::UpdatePlanArgs;
+use adam_agent::config::Config;
+use adam_agent::protocol;
+use adam_agent::protocol::AgentStatus as CoreAgentStatus;
+use adam_agent::protocol::CollabAgentInteractionBeginEvent;
+use adam_agent::protocol::CollabAgentInteractionEndEvent;
+use adam_agent::protocol::CollabAgentSpawnBeginEvent;
+use adam_agent::protocol::CollabAgentSpawnEndEvent;
+use adam_agent::protocol::CollabCloseBeginEvent;
+use adam_agent::protocol::CollabCloseEndEvent;
+use adam_agent::protocol::CollabResumeBeginEvent;
+use adam_agent::protocol::CollabResumeEndEvent;
+use adam_agent::protocol::CollabWaitingBeginEvent;
+use adam_agent::protocol::CollabWaitingEndEvent;
+use adam_protocol::models::WebSearchAction;
+use adam_protocol::plan_tool::StepStatus;
+use adam_protocol::plan_tool::UpdatePlanArgs;
 use serde_json::Value as JsonValue;
 use tracing::error;
 use tracing::warn;
@@ -67,7 +67,7 @@ pub struct EventProcessorWithJsonOutput {
     running_patch_applies: HashMap<String, protocol::PatchApplyBeginEvent>,
     // Tracks the todo list for the current turn (at most one per turn).
     running_todo_list: Option<RunningTodoList>,
-    last_total_token_usage: Option<codex_agent::protocol::TokenUsage>,
+    last_total_token_usage: Option<adam_agent::protocol::TokenUsage>,
     running_mcp_tool_calls: HashMap<String, RunningMcpToolCall>,
     running_collab_tool_calls: HashMap<String, RunningCollabToolCall>,
     running_web_search_calls: HashMap<String, String>,
@@ -124,7 +124,7 @@ impl EventProcessorWithJsonOutput {
             protocol::EventMsg::ThreadNameUpdated(_) => Vec::new(),
             protocol::EventMsg::AgentMessage(ev) => self.handle_agent_message(ev),
             protocol::EventMsg::ItemCompleted(protocol::ItemCompletedEvent {
-                item: codex_protocol::items::TurnItem::Plan(item),
+                item: adam_protocol::items::TurnItem::Plan(item),
                 ..
             }) => {
                 self.last_proposed_plan = Some(item.text.clone());

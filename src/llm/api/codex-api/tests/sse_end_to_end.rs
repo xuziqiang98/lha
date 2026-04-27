@@ -1,22 +1,22 @@
 use std::time::Duration;
 
+use adam_api::AggregateStreamExt;
+use adam_api::AuthProvider;
+use adam_api::Provider;
+use adam_api::ResponseEvent;
+use adam_api::ResponsesClient;
+use adam_api::WireApi;
+use adam_api::requests::responses::Compression;
+use adam_client::HttpTransport;
+use adam_client::Request;
+use adam_client::Response;
+use adam_client::StreamResponse;
+use adam_client::TransportError;
+use adam_llm_types::ContentItem;
+use adam_llm_types::TranscriptItem;
 use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
-use codex_api::AggregateStreamExt;
-use codex_api::AuthProvider;
-use codex_api::Provider;
-use codex_api::ResponseEvent;
-use codex_api::ResponsesClient;
-use codex_api::WireApi;
-use codex_api::requests::responses::Compression;
-use codex_client::HttpTransport;
-use codex_client::Request;
-use codex_client::Response;
-use codex_client::StreamResponse;
-use codex_client::TransportError;
-use codex_llm_types::ContentItem;
-use codex_llm_types::TranscriptItem;
 use futures::StreamExt;
 use http::HeaderMap;
 use http::StatusCode;
@@ -68,7 +68,7 @@ fn provider(name: &str, wire: WireApi) -> Provider {
         query_params: None,
         wire,
         headers: HeaderMap::new(),
-        retry: codex_api::provider::RetryConfig {
+        retry: adam_api::provider::RetryConfig {
             max_attempts: 1,
             base_delay: Duration::from_millis(1),
             retry_429: false,

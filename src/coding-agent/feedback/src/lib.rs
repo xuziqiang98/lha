@@ -11,9 +11,9 @@ use std::sync::Mutex;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use adam_protocol::ThreadId;
+use adam_protocol::protocol::SessionSource;
 use anyhow::Result;
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::SessionSource;
 use serde::Deserialize;
 use serde::Serialize;
 use time::OffsetDateTime;

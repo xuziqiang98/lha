@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn config_schema_matches_fixture() {
-        let fixture_path = codex_utils_cargo_bin::find_resource!("config.schema.json")
+        let fixture_path = adam_utils_cargo_bin::find_resource!("config.schema.json")
             .expect("resolve config schema fixture path");
         let fixture = std::fs::read_to_string(fixture_path).expect("read config schema fixture");
         let fixture_value: serde_json::Value =

@@ -1,12 +1,12 @@
 use crate::exec_command::relativize_to_home;
 use crate::text_formatting;
+use adam_agent::AuthManager;
+use adam_agent::CodexAuth;
+use adam_agent::config::Config;
+use adam_agent::project_doc::discover_project_doc_paths;
+use adam_protocol::account::PlanType;
 use chrono::DateTime;
 use chrono::Local;
-use codex_agent::AuthManager;
-use codex_agent::CodexAuth;
-use codex_agent::config::Config;
-use codex_agent::project_doc::discover_project_doc_paths;
-use codex_protocol::account::PlanType;
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 

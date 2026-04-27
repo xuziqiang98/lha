@@ -3,20 +3,20 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use adam_agent::CodexAuth;
+use adam_agent::CodexThread;
+use adam_agent::ThreadManager;
+use adam_agent::config::Config;
+use adam_agent::features::Feature;
+use adam_agent::protocol::AskForApproval;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::SandboxPolicy;
+use adam_agent::protocol::SessionConfiguredEvent;
+use adam_llm::built_in_runtime_endpoints;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::user_input::UserInput;
 use anyhow::Result;
-use codex_agent::CodexAuth;
-use codex_agent::CodexThread;
-use codex_agent::ThreadManager;
-use codex_agent::config::Config;
-use codex_agent::features::Feature;
-use codex_agent::protocol::AskForApproval;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::SandboxPolicy;
-use codex_agent::protocol::SessionConfiguredEvent;
-use codex_llm::built_in_runtime_endpoints;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 use tempfile::TempDir;
 use wiremock::MockServer;
@@ -179,7 +179,7 @@ impl TestCodexBuilder {
 
         let new_conversation = match resume_from {
             Some(path) => {
-                let auth_manager = codex_agent::AuthManager::from_auth_for_testing(auth);
+                let auth_manager = adam_agent::AuthManager::from_auth_for_testing(auth);
                 thread_manager
                     .resume_thread_from_rollout(config.clone(), path, auth_manager)
                     .await?
@@ -211,7 +211,7 @@ impl TestCodexBuilder {
         for hook in self.pre_build_hooks.drain(..) {
             hook(home.path());
         }
-        if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codey") {
+        if let Ok(path) = adam_utils_cargo_bin::cargo_bin("adam") {
             config.codex_linux_sandbox_exe = Some(path);
         }
 

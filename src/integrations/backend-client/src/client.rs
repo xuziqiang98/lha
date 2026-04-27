@@ -5,13 +5,13 @@ use crate::types::PaginatedListTaskListItem;
 use crate::types::RateLimitStatusPayload;
 use crate::types::RateLimitWindowSnapshot;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
+use adam_agent::auth::CodexAuth;
+use adam_agent::default_client::get_codex_user_agent;
+use adam_protocol::account::PlanType as AccountPlanType;
+use adam_protocol::protocol::CreditsSnapshot;
+use adam_protocol::protocol::RateLimitSnapshot;
+use adam_protocol::protocol::RateLimitWindow;
 use anyhow::Result;
-use codex_agent::auth::CodexAuth;
-use codex_agent::default_client::get_codex_user_agent;
-use codex_protocol::account::PlanType as AccountPlanType;
-use codex_protocol::protocol::CreditsSnapshot;
-use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::RateLimitWindow;
 use reqwest::header::AUTHORIZATION;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
@@ -112,7 +112,7 @@ impl Client {
         if let Some(ua) = &self.user_agent {
             h.insert(USER_AGENT, ua.clone());
         } else {
-            h.insert(USER_AGENT, HeaderValue::from_static("codex-cli"));
+            h.insert(USER_AGENT, HeaderValue::from_static("adam-cli"));
         }
         if let Some(token) = &self.bearer_token {
             let value = format!("Bearer {token}");

@@ -1,19 +1,19 @@
 #![cfg(not(target_os = "windows"))]
 
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::ItemCompletedEvent;
+use adam_agent::protocol::ItemStartedEvent;
+use adam_agent::protocol::Op;
+use adam_protocol::config_types::CollaborationMode;
+use adam_protocol::config_types::ModeKind;
+use adam_protocol::config_types::Settings;
+use adam_protocol::items::AgentMessageContent;
+use adam_protocol::items::TurnItem;
+use adam_protocol::models::WebSearchAction;
+use adam_protocol::user_input::ByteRange;
+use adam_protocol::user_input::TextElement;
+use adam_protocol::user_input::UserInput;
 use anyhow::Ok;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::ItemCompletedEvent;
-use codex_agent::protocol::ItemStartedEvent;
-use codex_agent::protocol::Op;
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::Settings;
-use codex_protocol::items::AgentMessageContent;
-use codex_protocol::items::TurnItem;
-use codex_protocol::models::WebSearchAction;
-use codex_protocol::user_input::ByteRange;
-use codex_protocol::user_input::TextElement;
-use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_message_item_added;
@@ -136,7 +136,7 @@ async fn assistant_message_item_is_emitted() -> anyhow::Result<()> {
     .await;
 
     assert_eq!(started.id, completed.id);
-    let Some(codex_protocol::items::AgentMessageContent::Text { text }) = completed.content.first()
+    let Some(adam_protocol::items::AgentMessageContent::Text { text }) = completed.content.first()
     else {
         panic!("expected agent message text content");
     };
@@ -373,11 +373,11 @@ async fn plan_mode_emits_plan_item_from_proposed_plan_block() -> anyhow::Result<
             }],
             final_output_json_schema: None,
             cwd: std::env::current_dir()?,
-            approval_policy: codex_agent::protocol::AskForApproval::Never,
-            sandbox_policy: codex_agent::protocol::SandboxPolicy::DangerFullAccess,
+            approval_policy: adam_agent::protocol::AskForApproval::Never,
+            sandbox_policy: adam_agent::protocol::SandboxPolicy::DangerFullAccess,
             model: session_configured.model.clone(),
             effort: None,
-            summary: codex_protocol::config_types::ReasoningSummary::Auto,
+            summary: adam_protocol::config_types::ReasoningSummary::Auto,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
         })
@@ -448,11 +448,11 @@ async fn plan_mode_strips_plan_from_agent_messages() -> anyhow::Result<()> {
             }],
             final_output_json_schema: None,
             cwd: std::env::current_dir()?,
-            approval_policy: codex_agent::protocol::AskForApproval::Never,
-            sandbox_policy: codex_agent::protocol::SandboxPolicy::DangerFullAccess,
+            approval_policy: adam_agent::protocol::AskForApproval::Never,
+            sandbox_policy: adam_agent::protocol::SandboxPolicy::DangerFullAccess,
             model: session_configured.model.clone(),
             effort: None,
-            summary: codex_protocol::config_types::ReasoningSummary::Auto,
+            summary: adam_protocol::config_types::ReasoningSummary::Auto,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
         })
@@ -544,11 +544,11 @@ async fn plan_mode_handles_missing_plan_close_tag() -> anyhow::Result<()> {
             }],
             final_output_json_schema: None,
             cwd: std::env::current_dir()?,
-            approval_policy: codex_agent::protocol::AskForApproval::Never,
-            sandbox_policy: codex_agent::protocol::SandboxPolicy::DangerFullAccess,
+            approval_policy: adam_agent::protocol::AskForApproval::Never,
+            sandbox_policy: adam_agent::protocol::SandboxPolicy::DangerFullAccess,
             model: session_configured.model.clone(),
             effort: None,
-            summary: codex_protocol::config_types::ReasoningSummary::Auto,
+            summary: adam_protocol::config_types::ReasoningSummary::Auto,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
         })

@@ -1,3 +1,3 @@
-pub(crate) use codex_llm::ChatRoleCompatibilityHandle;
-pub(crate) use codex_llm::ChatRoleCompatibilityKey;
-pub(crate) use codex_llm::ChatRoleCompatibilityState;
+pub(crate) use adam_llm::ChatRoleCompatibilityHandle;
+pub(crate) use adam_llm::ChatRoleCompatibilityKey;
+pub(crate) use adam_llm::ChatRoleCompatibilityState;

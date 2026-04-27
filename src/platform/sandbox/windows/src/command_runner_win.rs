@@ -1,18 +1,18 @@
 #![cfg(target_os = "windows")]
 
+use adam_windows_sandbox::allow_null_device;
+use adam_windows_sandbox::convert_string_sid_to_sid;
+use adam_windows_sandbox::create_process_as_user;
+use adam_windows_sandbox::create_readonly_token_with_cap_from;
+use adam_windows_sandbox::create_workspace_write_token_with_cap_from;
+use adam_windows_sandbox::get_current_token_for_restriction;
+use adam_windows_sandbox::hide_current_user_profile_dir;
+use adam_windows_sandbox::log_note;
+use adam_windows_sandbox::parse_policy;
+use adam_windows_sandbox::to_wide;
+use adam_windows_sandbox::SandboxPolicy;
 use anyhow::Context;
 use anyhow::Result;
-use codex_windows_sandbox::allow_null_device;
-use codex_windows_sandbox::convert_string_sid_to_sid;
-use codex_windows_sandbox::create_process_as_user;
-use codex_windows_sandbox::create_readonly_token_with_cap_from;
-use codex_windows_sandbox::create_workspace_write_token_with_cap_from;
-use codex_windows_sandbox::get_current_token_for_restriction;
-use codex_windows_sandbox::hide_current_user_profile_dir;
-use codex_windows_sandbox::log_note;
-use codex_windows_sandbox::parse_policy;
-use codex_windows_sandbox::to_wide;
-use codex_windows_sandbox::SandboxPolicy;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -44,7 +44,7 @@ mod read_acl_mutex;
 #[derive(Debug, Deserialize)]
 struct RunnerRequest {
     policy_json_or_preset: String,
-    // Writable location for logs (sandbox user's .codey).
+    // Writable location for logs (sandbox user's .adam).
     adam_home: PathBuf,
     // Real user's ADAM_HOME for shared data (caps, config).
     real_adam_home: PathBuf,

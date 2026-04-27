@@ -1,5 +1,5 @@
-use codex_llm::TranscriptItem;
-use codex_llm_types::ContentItem;
+use adam_llm::TranscriptItem;
+use adam_llm_types::ContentItem;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputQueue {

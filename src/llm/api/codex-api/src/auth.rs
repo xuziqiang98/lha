@@ -1,4 +1,4 @@
-use codex_client::Request;
+use adam_client::Request;
 
 use crate::provider::WireApi;
 

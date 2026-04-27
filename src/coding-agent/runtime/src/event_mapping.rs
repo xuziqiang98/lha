@@ -1,19 +1,19 @@
-use codex_protocol::items::AgentMessageContent;
-use codex_protocol::items::AgentMessageItem;
-use codex_protocol::items::ReasoningItem;
-use codex_protocol::items::TurnItem;
-use codex_protocol::items::UserMessageItem;
-use codex_protocol::items::WebSearchItem;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::models::ReasoningItemReasoningSummary;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::models::WebSearchAction;
-use codex_protocol::models::is_image_close_tag_text;
-use codex_protocol::models::is_image_open_tag_text;
-use codex_protocol::models::is_local_image_close_tag_text;
-use codex_protocol::models::is_local_image_open_tag_text;
-use codex_protocol::user_input::UserInput;
+use adam_protocol::items::AgentMessageContent;
+use adam_protocol::items::AgentMessageItem;
+use adam_protocol::items::ReasoningItem;
+use adam_protocol::items::TurnItem;
+use adam_protocol::items::UserMessageItem;
+use adam_protocol::items::WebSearchItem;
+use adam_protocol::models::ContentItem;
+use adam_protocol::models::ReasoningItemContent;
+use adam_protocol::models::ReasoningItemReasoningSummary;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::models::WebSearchAction;
+use adam_protocol::models::is_image_close_tag_text;
+use adam_protocol::models::is_image_open_tag_text;
+use adam_protocol::models::is_local_image_close_tag_text;
+use adam_protocol::models::is_local_image_open_tag_text;
+use adam_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -152,15 +152,15 @@ where
 #[cfg(test)]
 mod tests {
     use super::parse_turn_item;
-    use codex_protocol::items::AgentMessageContent;
-    use codex_protocol::items::TurnItem;
-    use codex_protocol::items::WebSearchItem;
-    use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ReasoningItemContent;
-    use codex_protocol::models::ReasoningItemReasoningSummary;
-    use codex_protocol::models::TranscriptItem;
-    use codex_protocol::models::WebSearchAction;
-    use codex_protocol::user_input::UserInput;
+    use adam_protocol::items::AgentMessageContent;
+    use adam_protocol::items::TurnItem;
+    use adam_protocol::items::WebSearchItem;
+    use adam_protocol::models::ContentItem;
+    use adam_protocol::models::ReasoningItemContent;
+    use adam_protocol::models::ReasoningItemReasoningSummary;
+    use adam_protocol::models::TranscriptItem;
+    use adam_protocol::models::WebSearchAction;
+    use adam_protocol::user_input::UserInput;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn skips_local_image_label_text() {
         let image_url = "data:image/png;base64,abc".to_string();
-        let label = codex_protocol::models::local_image_open_tag_text(1);
+        let label = adam_protocol::models::local_image_open_tag_text(1);
         let user_text = "Please review this image.".to_string();
 
         let item = TranscriptItem::Message {
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn skips_unnamed_image_label_text() {
         let image_url = "data:image/png;base64,abc".to_string();
-        let label = codex_protocol::models::image_open_tag_text();
+        let label = adam_protocol::models::image_open_tag_text();
         let user_text = "Please review this image.".to_string();
 
         let item = TranscriptItem::Message {
@@ -259,7 +259,7 @@ mod tests {
                     image_url: image_url.clone(),
                 },
                 ContentItem::InputText {
-                    text: codex_protocol::models::image_close_tag_text(),
+                    text: adam_protocol::models::image_close_tag_text(),
                 },
                 ContentItem::InputText {
                     text: user_text.clone(),

@@ -24,7 +24,7 @@ prefix_rule(
 "#,
     )?;
 
-    let output = Command::new(codex_utils_cargo_bin::cargo_bin("codey")?)
+    let output = Command::new(adam_utils_cargo_bin::cargo_bin("adam")?)
         .env("ADAM_HOME", adam_home.path())
         .args([
             "execpolicy",
@@ -81,7 +81,7 @@ prefix_rule(
 "#,
     )?;
 
-    let output = Command::new(codex_utils_cargo_bin::cargo_bin("codey")?)
+    let output = Command::new(adam_utils_cargo_bin::cargo_bin("adam")?)
         .env("ADAM_HOME", adam_home.path())
         .args([
             "execpolicy",

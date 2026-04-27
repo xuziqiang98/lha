@@ -2,18 +2,18 @@
 
 use std::collections::HashMap;
 
-use codex_agent::features::Feature;
-use codex_agent::protocol::AskForApproval;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::SandboxPolicy;
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::Settings;
-use codex_protocol::request_user_input::RequestUserInputAnswer;
-use codex_protocol::request_user_input::RequestUserInputResponse;
-use codex_protocol::user_input::UserInput;
+use adam_agent::features::Feature;
+use adam_agent::protocol::AskForApproval;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::SandboxPolicy;
+use adam_protocol::config_types::CollaborationMode;
+use adam_protocol::config_types::ModeKind;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::config_types::Settings;
+use adam_protocol::request_user_input::RequestUserInputAnswer;
+use adam_protocol::request_user_input::RequestUserInputResponse;
+use adam_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;

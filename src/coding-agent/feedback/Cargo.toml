@@ -1,12 +1,12 @@
 [package]
-name = "codex-feedback"
+name = "adam-feedback"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-codex-protocol = { workspace = true }
+adam-protocol = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 time = { workspace = true, features = ["formatting"] }

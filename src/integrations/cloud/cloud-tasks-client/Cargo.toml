@@ -1,11 +1,11 @@
 [package]
-name = "codex-cloud-tasks-client"
+name = "adam-cloud-tasks-client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "codex_cloud_tasks_client"
+name = "adam_cloud_tasks_client"
 path = "src/lib.rs"
 
 [lints]
@@ -13,7 +13,7 @@ workspace = true
 
 [features]
 default = ["online"]
-online = ["dep:codex-backend-client"]
+online = ["dep:adam-backend-client"]
 mock = []
 
 [dependencies]
@@ -24,5 +24,5 @@ diffy = "0.4.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2.0.17"
-codex-backend-client = { path = "../../backend-client", optional = true }
-codex-git = { workspace = true }
+adam-backend-client = { path = "../../backend-client", optional = true }
+adam-git = { workspace = true }

@@ -7,9 +7,9 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_protocol::ThreadId;
-use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_protocol::models::BaseInstructions;
+use adam_protocol::ThreadId;
+use adam_protocol::dynamic_tools::DynamicToolSpec;
+use adam_protocol::models::BaseInstructions;
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
@@ -37,15 +37,15 @@ use crate::default_client::originator;
 use crate::git_info::collect_git_info;
 use crate::state_db;
 use crate::state_db::StateDbHandle;
-use codex_protocol::protocol::InitialHistory;
-use codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3;
-use codex_protocol::protocol::ResumedHistory;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::SessionMeta;
-use codex_protocol::protocol::SessionMetaLine;
-use codex_protocol::protocol::SessionSource;
-use codex_state::ThreadMetadataBuilder;
+use adam_protocol::protocol::InitialHistory;
+use adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3;
+use adam_protocol::protocol::ResumedHistory;
+use adam_protocol::protocol::RolloutItem;
+use adam_protocol::protocol::RolloutLine;
+use adam_protocol::protocol::SessionMeta;
+use adam_protocol::protocol::SessionMetaLine;
+use adam_protocol::protocol::SessionSource;
+use adam_state::ThreadMetadataBuilder;
 
 #[derive(Debug)]
 pub(crate) struct UnsupportedRolloutSchema {

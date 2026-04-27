@@ -1,4 +1,4 @@
-# `codex-coding-agent` config loader
+# `adam-coding-agent` config loader
 
 This module is the canonical place to **load and describe Codex configuration layers** (user config, CLI/session overrides, managed config, and MDM-managed preferences) and to produce:
 
@@ -8,7 +8,7 @@ This module is the canonical place to **load and describe Codex configuration la
 
 ## Public surface
 
-Exported from `codex_agent::config_loader`:
+Exported from `adam_agent::config_loader`:
 
 - `load_config_layers_state(adam_home, cwd_opt, cli_overrides, overrides, cloud_requirements) -> ConfigLayerStack`
 - `ConfigLayerStack`
@@ -38,8 +38,8 @@ computing the effective config and origins metadata. This is what
 Most callers want the effective config plus metadata:
 
 ```rust
-use codex_agent::config_loader::{load_config_layers_state, LoaderOverrides};
-use codex_utils_absolute_path::AbsolutePathBuf;
+use adam_agent::config_loader::{load_config_layers_state, LoaderOverrides};
+use adam_utils_absolute_path::AbsolutePathBuf;
 use toml::Value as TomlValue;
 
 let cli_overrides: Vec<(String, TomlValue)> = Vec::new();

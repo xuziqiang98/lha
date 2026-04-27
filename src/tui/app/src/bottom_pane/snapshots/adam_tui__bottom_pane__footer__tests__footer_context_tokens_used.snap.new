@@ -1,0 +1,6 @@
+---
+source: src/tui/app/src/bottom_pane/footer.rs
+assertion_line: 933
+expression: terminal.backend()
+---
+"  gpt-5.4 high · 123K used · ~/Workspace/adam                                   "

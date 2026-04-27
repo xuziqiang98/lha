@@ -17,14 +17,14 @@ use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mod
 use crate::models_manager::model_info;
 use crate::models_manager::model_presets::builtin_model_presets;
 use crate::runtime_builder::auth_context_from_auth;
-pub use codex_llm::CatalogRefreshStrategy as RefreshStrategy;
-use codex_llm::RuntimeEndpoint;
-use codex_llm::fetch_remote_models;
-use codex_protocol::config_types::CollaborationModeMask;
-use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::openai_models::ModelsResponse;
-use codex_protocol::openai_models::ReasoningEffort;
+pub use adam_llm::CatalogRefreshStrategy as RefreshStrategy;
+use adam_llm::RuntimeEndpoint;
+use adam_llm::fetch_remote_models;
+use adam_protocol::config_types::CollaborationModeMask;
+use adam_protocol::openai_models::ModelInfo;
+use adam_protocol::openai_models::ModelPreset;
+use adam_protocol::openai_models::ModelsResponse;
+use adam_protocol::openai_models::ReasoningEffort;
 use http::HeaderMap;
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
@@ -339,7 +339,7 @@ impl ModelsManager {
 
     async fn fetch_and_update_models(&self) -> CoreResult<()> {
         let _timer =
-            codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
+            adam_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
         if !Self::provider_uses_model_catalog(&self.provider_snapshot()) {
             self.clear_remote_model_state().await;
             return Ok(());
@@ -398,7 +398,7 @@ impl ModelsManager {
     /// Attempt to satisfy the refresh from the cache when it matches the provider and TTL.
     async fn try_load_cache(&self) -> bool {
         let _timer =
-            codex_otel::start_global_timer("codex.remote_models.load_cache.duration_ms", &[]);
+            adam_otel::start_global_timer("codex.remote_models.load_cache.duration_ms", &[]);
         if !Self::provider_uses_model_catalog(&self.provider_snapshot()) {
             self.clear_remote_model_state().await;
             return false;
@@ -1158,8 +1158,8 @@ mod tests {
     use crate::auth::AuthCredentialsStoreMode;
     use crate::config::ConfigBuilder;
     use crate::features::Feature;
+    use adam_protocol::openai_models::ModelsResponse;
     use chrono::Utc;
-    use codex_protocol::openai_models::ModelsResponse;
     use core_test_support::responses::mount_models_once;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -1856,18 +1856,18 @@ mod tests {
 
     #[test]
     fn models_cache_path_uses_readable_prefix_and_hash() {
-        let path = models_cache_path(std::path::Path::new("/tmp/codey"), "mock/provider:beta");
+        let path = models_cache_path(std::path::Path::new("/tmp/adam"), "mock/provider:beta");
         assert_eq!(
             path,
             PathBuf::from(
-                "/tmp/codey/remote_models/mock_provider_beta__70b0afe22d/models_cache.json"
+                "/tmp/adam/remote_models/mock_provider_beta__70b0afe22d/models_cache.json"
             )
         );
     }
 
     #[test]
     fn models_cache_path_avoids_variant_collisions() {
-        let base = std::path::Path::new("/tmp/codey");
+        let base = std::path::Path::new("/tmp/adam");
         let plain = models_cache_path(base, "acme_chat");
         let variant = models_cache_path(base, "acme.chat");
 

@@ -1,29 +1,29 @@
 # Agent Runtime Layer
 
-`codex-agent-runtime` is the reusable, product-neutral agent SDK that sits between `codex-llm` and product runtimes such as `codex-coding-agent`.
+`adam-agent-runtime` is the reusable, product-neutral agent SDK that sits between `adam-llm` and product runtimes such as `adam-coding-agent`.
 
 ## Layering
 
 The intended stack is:
 
-`codex-llm` -> `codex-agent-core` -> `codex-agent-runtime` -> product runtime
+`adam-llm` -> `adam-agent-core` -> `adam-agent-runtime` -> product runtime
 
-- `codex-llm` is the model/runtime SDK boundary.
-- `codex-agent-core` is the low-level turn-stream kernel.
-- `codex-agent-runtime` is the stateful session SDK.
-- `codex-coding-agent` is one product-specific runtime built on top of those layers.
+- `adam-llm` is the model/runtime SDK boundary.
+- `adam-agent-core` is the low-level turn-stream kernel.
+- `adam-agent-runtime` is the stateful session SDK.
+- `adam-coding-agent` is one product-specific runtime built on top of those layers.
 
-## What `codex-agent-runtime` owns
+## What `adam-agent-runtime` owns
 
 - Session lifecycle and status
 - In-memory transcript state
-- Turn execution built on `codex-agent-core`
+- Turn execution built on `adam-agent-core`
 - Generic event streaming
 - Generic tool registration and execution
 - Steering and follow-up input queues
 - Session snapshots for adapters and callers
 
-## What stays out of `codex-agent-runtime`
+## What stays out of `adam-agent-runtime`
 
 - Rollout persistence and thread indexing
 - SQLite-backed session state
@@ -31,48 +31,48 @@ The intended stack is:
 - Approval, sandbox, exec-policy, and coding tool UX
 - Skills, project-doc injection, review flows, and subagents
 
-`codex-agent-runtime` also should not depend on `codex-llm` compatibility bridges
+`adam-agent-runtime` also should not depend on `adam-llm` compatibility bridges
 that reconstruct provider-facing transcript items. Session/runtime code should
 append semantic transcript items directly from tool calls and tool results.
 It should also treat tool names such as `local_shell` as ordinary semantic tool
 identifiers; product-specific interpretation and defaulting stays in higher
 layers.
 
-Those concerns remain in `codex-coding-agent` or other higher-level crates.
+Those concerns remain in `adam-coding-agent` or other higher-level crates.
 
 ## Current migration shape
 
 The current migration path is:
 
-1. Build new generic agents directly on `codex-agent-runtime`.
-2. Keep `codex-coding-agent` as the compatibility/product layer.
+1. Build new generic agents directly on `adam-agent-runtime`.
+2. Keep `adam-coding-agent` as the compatibility/product layer.
 3. Gradually move generic runtime behavior out of `src/coding-agent/runtime` and into `src/core/agent-runtime`.
 
 This lets the workspace expose a small reusable agent SDK without forcing an all-at-once product rewrite.
 
-Recent cleanup in `codex-llm` also keeps its public API focused on semantic
+Recent cleanup in `adam-llm` also keeps its public API focused on semantic
 runtime types. Tool-call/transcript reconstruction helpers are expected to live
 with the semantic types or with higher-level adapters rather than as public
 runtime bridge APIs.
 
 ## Minimal SDK shape
 
-A downstream crate can build a minimal in-memory agent using `codex-llm` and `codex-agent-runtime` without importing `codex_protocol::*` directly:
+A downstream crate can build a minimal in-memory agent using `adam-llm` and `adam-agent-runtime` without importing `adam_protocol::*` directly:
 
 ```rust
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use codex_agent_runtime::AgentBuilder;
-use codex_agent_runtime::SessionInput;
-use codex_llm::RuntimeCapabilities;
-use codex_llm::RuntimeMetadata;
-use codex_llm::SemanticConversationCompactor;
-use codex_llm::SemanticRuntime;
-use codex_llm::SemanticRuntimeSession;
-use codex_llm::TurnEvent;
-use codex_llm::TurnEventStream;
-use codex_llm::TurnRequest;
+use adam_agent_runtime::AgentBuilder;
+use adam_agent_runtime::SessionInput;
+use adam_llm::RuntimeCapabilities;
+use adam_llm::RuntimeMetadata;
+use adam_llm::SemanticConversationCompactor;
+use adam_llm::SemanticRuntime;
+use adam_llm::SemanticRuntimeSession;
+use adam_llm::TurnEvent;
+use adam_llm::TurnEventStream;
+use adam_llm::TurnRequest;
 use tokio::sync::mpsc;
 
 struct FakeRuntime;
@@ -82,7 +82,7 @@ impl SemanticConversationCompactor for FakeRuntime {
     async fn compact_conversation_history(
         &self,
         input: &TurnRequest,
-    ) -> codex_llm::Result<Vec<codex_llm::TranscriptItem>> {
+    ) -> adam_llm::Result<Vec<adam_llm::TranscriptItem>> {
         Ok(input.conversation.clone())
     }
 }
@@ -120,7 +120,7 @@ struct FakeRuntimeSession;
 
 #[async_trait]
 impl SemanticRuntimeSession for FakeRuntimeSession {
-    async fn run_turn(&mut self, _input: &TurnRequest) -> codex_llm::Result<TurnEventStream> {
+    async fn run_turn(&mut self, _input: &TurnRequest) -> adam_llm::Result<TurnEventStream> {
         let (tx, rx) = mpsc::channel(8);
         tokio::spawn(async move {
             let _ = tx

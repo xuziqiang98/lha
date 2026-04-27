@@ -3,8 +3,8 @@
 
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigToml;
-use codex_app_server_protocol::ConfigLayerSource;
-use codex_utils_absolute_path::AbsolutePathBufGuard;
+use adam_app_server_protocol::ConfigLayerSource;
+use adam_utils_absolute_path::AbsolutePathBufGuard;
 use serde_path_to_error::Path as SerdePath;
 use serde_path_to_error::Segment as SerdeSegment;
 use std::fmt;

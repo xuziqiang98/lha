@@ -1,6 +1,6 @@
-use codex_protocol::config_types::CollaborationModeMask;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::openai_models::ReasoningEffort;
+use adam_protocol::config_types::CollaborationModeMask;
+use adam_protocol::config_types::ModeKind;
+use adam_protocol::openai_models::ReasoningEffort;
 
 const COLLABORATION_MODE_PLAN: &str = include_str!("../../templates/collaboration_mode/plan.md");
 const COLLABORATION_MODE_CODE: &str = include_str!("../../templates/collaboration_mode/code.md");

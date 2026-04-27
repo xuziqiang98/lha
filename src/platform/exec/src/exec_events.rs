@@ -1,4 +1,4 @@
-use codex_protocol::models::WebSearchAction;
+use adam_protocol::models::WebSearchAction;
 use mcp_types::ContentBlock as McpContentBlock;
 use serde::Deserialize;
 use serde::Serialize;

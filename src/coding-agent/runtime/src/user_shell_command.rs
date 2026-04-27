@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::TranscriptItem;
+use adam_protocol::models::ContentItem;
+use adam_protocol::models::TranscriptItem;
 
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;

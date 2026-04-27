@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use codex_agent::CodexThread;
-use codex_agent::NewThread;
-use codex_agent::ThreadManager;
-use codex_agent::config::Config;
-use codex_agent::protocol::Event;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::Op;
+use adam_agent::CodexThread;
+use adam_agent::NewThread;
+use adam_agent::ThreadManager;
+use adam_agent::config::Config;
+use adam_agent::protocol::Event;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::Op;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -44,10 +44,10 @@ pub(crate) fn spawn_agent(
         };
 
         // Forward the captured `SessionConfigured` event so it can be rendered in the UI.
-        let ev = codex_agent::protocol::Event {
+        let ev = adam_agent::protocol::Event {
             // The `id` does not matter for rendering, so we can use a fake value.
             id: "".to_string(),
-            msg: codex_agent::protocol::EventMsg::SessionConfigured(session_configured),
+            msg: adam_agent::protocol::EventMsg::SessionConfigured(session_configured),
         };
         app_event_tx_clone.send(AppEvent::CodexEvent(ev));
 
@@ -74,7 +74,7 @@ pub(crate) fn spawn_agent(
 /// events and accepts Ops for submission.
 pub(crate) fn spawn_agent_from_existing(
     thread: std::sync::Arc<CodexThread>,
-    session_configured: codex_agent::protocol::SessionConfiguredEvent,
+    session_configured: adam_agent::protocol::SessionConfiguredEvent,
     app_event_tx: AppEventSender,
 ) -> UnboundedSender<Op> {
     let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
@@ -82,9 +82,9 @@ pub(crate) fn spawn_agent_from_existing(
     let app_event_tx_clone = app_event_tx;
     tokio::spawn(async move {
         // Forward the captured `SessionConfigured` event so it can be rendered in the UI.
-        let ev = codex_agent::protocol::Event {
+        let ev = adam_agent::protocol::Event {
             id: "".to_string(),
-            msg: codex_agent::protocol::EventMsg::SessionConfigured(session_configured),
+            msg: adam_agent::protocol::EventMsg::SessionConfigured(session_configured),
         };
         app_event_tx_clone.send(AppEvent::CodexEvent(ev));
 

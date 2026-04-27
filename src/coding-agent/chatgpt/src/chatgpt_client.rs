@@ -1,5 +1,5 @@
-use codex_agent::config::Config;
-use codex_agent::default_client::create_client;
+use adam_agent::config::Config;
+use adam_agent::default_client::create_client;
 
 use crate::chatgpt_token::get_chatgpt_token_data;
 use crate::chatgpt_token::init_chatgpt_token_from_auth;

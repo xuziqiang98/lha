@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
-use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::Result;
-use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::ServerRequestPayload;
+use adam_app_server_protocol::JSONRPCErrorError;
+use adam_app_server_protocol::RequestId;
+use adam_app_server_protocol::Result;
+use adam_app_server_protocol::ServerNotification;
+use adam_app_server_protocol::ServerRequest;
+use adam_app_server_protocol::ServerRequestPayload;
 use serde::Serialize;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -17,7 +17,7 @@ use tracing::warn;
 use crate::error_code::INTERNAL_ERROR_CODE;
 
 #[cfg(test)]
-use codex_protocol::account::PlanType;
+use adam_protocol::account::PlanType;
 
 /// Sends messages to the client and manages request callbacks.
 pub(crate) struct OutgoingMessageSender {
@@ -190,14 +190,14 @@ pub(crate) struct OutgoingError {
 
 #[cfg(test)]
 mod tests {
-    use codex_app_server_protocol::AccountLoginCompletedNotification;
-    use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
-    use codex_app_server_protocol::AccountUpdatedNotification;
-    use codex_app_server_protocol::AuthMode;
-    use codex_app_server_protocol::ConfigWarningNotification;
-    use codex_app_server_protocol::LoginChatGptCompleteNotification;
-    use codex_app_server_protocol::RateLimitSnapshot;
-    use codex_app_server_protocol::RateLimitWindow;
+    use adam_app_server_protocol::AccountLoginCompletedNotification;
+    use adam_app_server_protocol::AccountRateLimitsUpdatedNotification;
+    use adam_app_server_protocol::AccountUpdatedNotification;
+    use adam_app_server_protocol::AuthMode;
+    use adam_app_server_protocol::ConfigWarningNotification;
+    use adam_app_server_protocol::LoginChatGptCompleteNotification;
+    use adam_app_server_protocol::RateLimitSnapshot;
+    use adam_app_server_protocol::RateLimitWindow;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use uuid::Uuid;

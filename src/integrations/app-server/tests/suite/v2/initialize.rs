@@ -1,10 +1,10 @@
+use adam_app_server_protocol::ClientInfo;
+use adam_app_server_protocol::InitializeResponse;
+use adam_app_server_protocol::JSONRPCMessage;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
-use codex_app_server_protocol::ClientInfo;
-use codex_app_server_protocol::InitializeResponse;
-use codex_app_server_protocol::JSONRPCMessage;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;

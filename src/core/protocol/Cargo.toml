@@ -1,22 +1,22 @@
 [package]
-name = "codex-protocol"
+name = "adam-protocol"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "codex_protocol"
+name = "adam_protocol"
 path = "src/lib.rs"
 
 [lints]
 workspace = true
 
 [dependencies]
-codex-git = { workspace = true }
-codex-execpolicy = { workspace = true }
-codex-llm-types = { workspace = true }
-codex-utils-absolute-path = { workspace = true }
-codex-utils-image = { workspace = true }
+adam-git = { workspace = true }
+adam-execpolicy = { workspace = true }
+adam-llm-types = { workspace = true }
+adam-utils-absolute-path = { workspace = true }
+adam-utils-image = { workspace = true }
 icu_decimal = { workspace = true }
 icu_locale_core = { workspace = true }
 icu_provider = { workspace = true, features = ["sync"] }

@@ -148,7 +148,7 @@ impl OtelProvider {
     }
 
     pub fn codex_export_filter(meta: &tracing::Metadata<'_>) -> bool {
-        meta.target().starts_with("codex_otel")
+        meta.target().starts_with("adam_otel")
     }
 
     pub fn metrics(&self) -> Option<&MetricsClient> {

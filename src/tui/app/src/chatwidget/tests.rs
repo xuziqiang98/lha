@@ -1,6 +1,6 @@
 //! Exercises `ChatWidget` event handling and rendering invariants.
 //!
-//! These tests treat the widget as the adapter between `codex_agent::protocol::EventMsg` inputs and
+//! These tests treat the widget as the adapter between `adam_agent::protocol::EventMsg` inputs and
 //! the TUI output. Many assertions are snapshot-based so that layout regressions and status/header
 //! changes show up as stable, reviewable diffs.
 
@@ -14,78 +14,78 @@ use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
 use crate::transcript_view::TranscriptView;
 use crate::tui::FrameRequester;
+use adam_agent::AuthManager;
+use adam_agent::CodexAuth;
+use adam_agent::auth::AuthCredentialsStoreMode;
+use adam_agent::config::Config;
+use adam_agent::config::ConfigBuilder;
+use adam_agent::config::Constrained;
+use adam_agent::config::ConstraintError;
+use adam_agent::config::model_ref::ModelRef;
+use adam_agent::config::state_json::AdamStateStore;
+use adam_agent::config_loader::RequirementSource;
+use adam_agent::features::Feature;
+use adam_agent::models_manager::manager::ModelsManager;
+use adam_agent::protocol::AgentMessageDeltaEvent;
+use adam_agent::protocol::AgentMessageEvent;
+use adam_agent::protocol::AgentReasoningDeltaEvent;
+use adam_agent::protocol::AgentReasoningEvent;
+use adam_agent::protocol::ApplyPatchApprovalRequestEvent;
+use adam_agent::protocol::BackgroundEventEvent;
+use adam_agent::protocol::CreditsSnapshot;
+use adam_agent::protocol::Event;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::ExecApprovalRequestEvent;
+use adam_agent::protocol::ExecCommandBeginEvent;
+use adam_agent::protocol::ExecCommandEndEvent;
+use adam_agent::protocol::ExecCommandSource;
+use adam_agent::protocol::ExecPolicyAmendment;
+use adam_agent::protocol::ExitedReviewModeEvent;
+use adam_agent::protocol::FileChange;
+use adam_agent::protocol::ItemCompletedEvent;
+use adam_agent::protocol::McpStartupCompleteEvent;
+use adam_agent::protocol::McpStartupStatus;
+use adam_agent::protocol::McpStartupUpdateEvent;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::PatchApplyBeginEvent;
+use adam_agent::protocol::PatchApplyEndEvent;
+use adam_agent::protocol::RateLimitWindow;
+use adam_agent::protocol::ReviewRequest;
+use adam_agent::protocol::ReviewTarget;
+use adam_agent::protocol::SessionSource;
+use adam_agent::protocol::StreamErrorEvent;
+use adam_agent::protocol::TerminalInteractionEvent;
+use adam_agent::protocol::TokenCountEvent;
+use adam_agent::protocol::TokenUsage;
+use adam_agent::protocol::TokenUsageInfo;
+use adam_agent::protocol::TurnCompleteEvent;
+use adam_agent::protocol::TurnStartedEvent;
+use adam_agent::protocol::UndoCompletedEvent;
+use adam_agent::protocol::UndoStartedEvent;
+use adam_agent::protocol::ViewImageToolCallEvent;
+use adam_agent::protocol::WarningEvent;
+use adam_common::approval_presets::builtin_approval_presets;
+use adam_otel::OtelManager;
+use adam_protocol::ThreadId;
+use adam_protocol::account::PlanType;
+use adam_protocol::config_types::CollaborationMode;
+use adam_protocol::config_types::ModeKind;
+use adam_protocol::config_types::Personality;
+use adam_protocol::config_types::Settings;
+use adam_protocol::items::ContextCompactionItem;
+use adam_protocol::items::TurnItem;
+use adam_protocol::openai_models::ModelPreset;
+use adam_protocol::openai_models::ReasoningEffortPreset;
+use adam_protocol::parse_command::ParsedCommand;
+use adam_protocol::plan_tool::PlanItemArg;
+use adam_protocol::plan_tool::StepStatus;
+use adam_protocol::plan_tool::UpdatePlanArgs;
+use adam_protocol::protocol::CodexErrorInfo;
+use adam_protocol::user_input::TextElement;
+use adam_protocol::user_input::UserInput;
+use adam_utils_absolute_path::AbsolutePathBuf;
+use adam_utils_sleep_inhibitor::SleepInhibitor;
 use assert_matches::assert_matches;
-use codex_agent::AuthManager;
-use codex_agent::CodexAuth;
-use codex_agent::auth::AuthCredentialsStoreMode;
-use codex_agent::config::Config;
-use codex_agent::config::ConfigBuilder;
-use codex_agent::config::Constrained;
-use codex_agent::config::ConstraintError;
-use codex_agent::config::model_ref::ModelRef;
-use codex_agent::config::state_json::AdamStateStore;
-use codex_agent::config_loader::RequirementSource;
-use codex_agent::features::Feature;
-use codex_agent::models_manager::manager::ModelsManager;
-use codex_agent::protocol::AgentMessageDeltaEvent;
-use codex_agent::protocol::AgentMessageEvent;
-use codex_agent::protocol::AgentReasoningDeltaEvent;
-use codex_agent::protocol::AgentReasoningEvent;
-use codex_agent::protocol::ApplyPatchApprovalRequestEvent;
-use codex_agent::protocol::BackgroundEventEvent;
-use codex_agent::protocol::CreditsSnapshot;
-use codex_agent::protocol::Event;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::ExecApprovalRequestEvent;
-use codex_agent::protocol::ExecCommandBeginEvent;
-use codex_agent::protocol::ExecCommandEndEvent;
-use codex_agent::protocol::ExecCommandSource;
-use codex_agent::protocol::ExecPolicyAmendment;
-use codex_agent::protocol::ExitedReviewModeEvent;
-use codex_agent::protocol::FileChange;
-use codex_agent::protocol::ItemCompletedEvent;
-use codex_agent::protocol::McpStartupCompleteEvent;
-use codex_agent::protocol::McpStartupStatus;
-use codex_agent::protocol::McpStartupUpdateEvent;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::PatchApplyBeginEvent;
-use codex_agent::protocol::PatchApplyEndEvent;
-use codex_agent::protocol::RateLimitWindow;
-use codex_agent::protocol::ReviewRequest;
-use codex_agent::protocol::ReviewTarget;
-use codex_agent::protocol::SessionSource;
-use codex_agent::protocol::StreamErrorEvent;
-use codex_agent::protocol::TerminalInteractionEvent;
-use codex_agent::protocol::TokenCountEvent;
-use codex_agent::protocol::TokenUsage;
-use codex_agent::protocol::TokenUsageInfo;
-use codex_agent::protocol::TurnCompleteEvent;
-use codex_agent::protocol::TurnStartedEvent;
-use codex_agent::protocol::UndoCompletedEvent;
-use codex_agent::protocol::UndoStartedEvent;
-use codex_agent::protocol::ViewImageToolCallEvent;
-use codex_agent::protocol::WarningEvent;
-use codex_common::approval_presets::builtin_approval_presets;
-use codex_otel::OtelManager;
-use codex_protocol::ThreadId;
-use codex_protocol::account::PlanType;
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::Settings;
-use codex_protocol::items::ContextCompactionItem;
-use codex_protocol::items::TurnItem;
-use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::openai_models::ReasoningEffortPreset;
-use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::plan_tool::PlanItemArg;
-use codex_protocol::plan_tool::StepStatus;
-use codex_protocol::plan_tool::UpdatePlanArgs;
-use codex_protocol::protocol::CodexErrorInfo;
-use codex_protocol::user_input::TextElement;
-use codex_protocol::user_input::UserInput;
-use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_sleep_inhibitor::SleepInhibitor;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -124,7 +124,7 @@ async fn test_config() -> Config {
 
 fn stable_snapshot_cwd() -> PathBuf {
     let mut cwd = home_dir().expect("home directory");
-    cwd.push("Workspace/codey/src/tui/app");
+    cwd.push("Workspace/adam/src/tui/app");
     cwd
 }
 
@@ -161,7 +161,7 @@ async fn resumed_initial_messages_render_history() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_agent::protocol::SessionConfiguredEvent {
+    let configured = adam_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -241,7 +241,7 @@ async fn session_configured_updates_footer_reasoning_effort_immediately() {
         initial_user_message: None,
         enhanced_keys_supported: false,
         auth_manager,
-        feedback: codex_feedback::CodexFeedback::new(),
+        feedback: adam_feedback::CodexFeedback::new(),
         is_first_run: true,
         model: Some(resolved_model.clone()),
         otel_manager,
@@ -273,7 +273,7 @@ async fn session_configured_updates_footer_reasoning_effort_immediately() {
     );
 
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_agent::protocol::SessionConfiguredEvent {
+    let configured = adam_agent::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
         thread_name: None,
@@ -438,7 +438,7 @@ async fn history_insertions_are_thread_scoped_after_session_configuration() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     let thread_id = ThreadId::new();
-    let configured = codex_agent::protocol::SessionConfiguredEvent {
+    let configured = adam_agent::protocol::SessionConfiguredEvent {
         session_id: thread_id,
         forked_from_id: None,
         thread_name: None,
@@ -484,7 +484,7 @@ async fn session_configured_suppression_updates_footer_without_requesting_redraw
     chat.suppress_session_configured_redraw = true;
     drain_draw_requests(&mut draw_rx).await;
 
-    let configured = codex_agent::protocol::SessionConfiguredEvent {
+    let configured = adam_agent::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
         thread_name: None,
@@ -550,7 +550,7 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_agent::protocol::SessionConfiguredEvent {
+    let configured = adam_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -603,7 +603,7 @@ async fn status_hides_zero_context_compact_count() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_agent::protocol::SessionConfiguredEvent {
+    let configured = adam_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -638,7 +638,7 @@ async fn status_shows_live_context_compact_count() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_agent::protocol::SessionConfiguredEvent {
+    let configured = adam_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -685,7 +685,7 @@ async fn status_counts_multiple_live_context_compactions_in_same_turn() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_agent::protocol::SessionConfiguredEvent {
+    let configured = adam_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -740,7 +740,7 @@ async fn status_resume_restores_context_compact_count_from_replay() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_agent::protocol::SessionConfiguredEvent {
+    let configured = adam_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -788,7 +788,7 @@ async fn status_resume_restores_multiple_same_turn_context_compactions_from_repl
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_agent::protocol::SessionConfiguredEvent {
+    let configured = adam_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -837,7 +837,7 @@ async fn status_fork_resume_counts_only_child_thread_compactions() {
     let conversation_id = ThreadId::new();
     let parent_thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_agent::protocol::SessionConfiguredEvent {
+    let configured = adam_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: Some(parent_thread_id),
         thread_name: None,
@@ -855,19 +855,19 @@ async fn status_fork_resume_counts_only_child_thread_compactions() {
                 turn_id: "turn-parent-1".to_string(),
                 item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
             }),
-            EventMsg::ContextCompacted(codex_agent::protocol::ContextCompactedEvent {}),
+            EventMsg::ContextCompacted(adam_agent::protocol::ContextCompactedEvent {}),
             EventMsg::ItemCompleted(ItemCompletedEvent {
                 thread_id: parent_thread_id,
                 turn_id: "turn-parent-2".to_string(),
                 item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
             }),
-            EventMsg::ContextCompacted(codex_agent::protocol::ContextCompactedEvent {}),
+            EventMsg::ContextCompacted(adam_agent::protocol::ContextCompactedEvent {}),
             EventMsg::ItemCompleted(ItemCompletedEvent {
                 thread_id: conversation_id,
                 turn_id: "turn-child-1".to_string(),
                 item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
             }),
-            EventMsg::ContextCompacted(codex_agent::protocol::ContextCompactedEvent {}),
+            EventMsg::ContextCompacted(adam_agent::protocol::ContextCompactedEvent {}),
         ]),
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -893,7 +893,7 @@ async fn legacy_context_compacted_event_increments_count() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_agent::protocol::SessionConfiguredEvent {
+    let configured = adam_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -917,7 +917,7 @@ async fn legacy_context_compacted_event_increments_count() {
 
     chat.handle_codex_event(Event {
         id: "compact-1".into(),
-        msg: EventMsg::ContextCompacted(codex_agent::protocol::ContextCompactedEvent {}),
+        msg: EventMsg::ContextCompacted(adam_agent::protocol::ContextCompactedEvent {}),
     });
 
     let cells = drain_insert_history(&mut rx);
@@ -942,7 +942,7 @@ async fn legacy_context_compacted_event_does_not_double_count_after_structured_e
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_agent::protocol::SessionConfiguredEvent {
+    let configured = adam_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -974,7 +974,7 @@ async fn legacy_context_compacted_event_does_not_double_count_after_structured_e
     });
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::ContextCompacted(codex_agent::protocol::ContextCompactedEvent {}),
+        msg: EventMsg::ContextCompacted(adam_agent::protocol::ContextCompactedEvent {}),
     });
     drain_insert_history(&mut rx);
 
@@ -993,7 +993,7 @@ async fn legacy_context_compacted_event_does_not_double_count_multiple_same_turn
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_agent::protocol::SessionConfiguredEvent {
+    let configured = adam_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -1026,7 +1026,7 @@ async fn legacy_context_compacted_event_does_not_double_count_multiple_same_turn
         });
         chat.handle_codex_event(Event {
             id: "turn-1".into(),
-            msg: EventMsg::ContextCompacted(codex_agent::protocol::ContextCompactedEvent {}),
+            msg: EventMsg::ContextCompacted(adam_agent::protocol::ContextCompactedEvent {}),
         });
     }
     drain_insert_history(&mut rx);
@@ -1046,7 +1046,7 @@ async fn status_resume_does_not_double_count_structured_and_legacy_compactions()
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_agent::protocol::SessionConfiguredEvent {
+    let configured = adam_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -1064,7 +1064,7 @@ async fn status_resume_does_not_double_count_structured_and_legacy_compactions()
                 turn_id: "turn-1".to_string(),
                 item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
             }),
-            EventMsg::ContextCompacted(codex_agent::protocol::ContextCompactedEvent {}),
+            EventMsg::ContextCompacted(adam_agent::protocol::ContextCompactedEvent {}),
         ]),
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -1090,7 +1090,7 @@ async fn status_resume_restores_legacy_only_context_compactions() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = codex_agent::protocol::SessionConfiguredEvent {
+    let configured = adam_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -1103,8 +1103,8 @@ async fn status_resume_restores_legacy_only_context_compactions() {
         history_log_id: 0,
         history_entry_count: 0,
         initial_messages: Some(vec![
-            EventMsg::ContextCompacted(codex_agent::protocol::ContextCompactedEvent {}),
-            EventMsg::ContextCompacted(codex_agent::protocol::ContextCompactedEvent {}),
+            EventMsg::ContextCompacted(adam_agent::protocol::ContextCompactedEvent {}),
+            EventMsg::ContextCompacted(adam_agent::protocol::ContextCompactedEvent {}),
         ]),
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -1130,7 +1130,7 @@ async fn submission_preserves_text_elements_and_local_images() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_agent::protocol::SessionConfiguredEvent {
+    let configured = adam_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -1258,7 +1258,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
     // must be renumbered to match the combined local image list.
     chat.handle_codex_event(Event {
         id: "interrupt".into(),
-        msg: EventMsg::TurnAborted(codex_agent::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(adam_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -1612,7 +1612,7 @@ async fn helpers_are_available_and_do_not_panic() {
         initial_user_message: None,
         enhanced_keys_supported: false,
         auth_manager,
-        feedback: codex_feedback::CodexFeedback::new(),
+        feedback: adam_feedback::CodexFeedback::new(),
         is_first_run: true,
         model: Some(resolved_model),
         otel_manager,
@@ -1775,7 +1775,7 @@ async fn make_chatwidget_manual_with_scrollback_mode(
         plan_item_active: false,
         last_separator_elapsed_secs: None,
         last_rendered_width: std::cell::Cell::new(None),
-        feedback: codex_feedback::CodexFeedback::new(),
+        feedback: adam_feedback::CodexFeedback::new(),
         current_rollout_path: None,
         external_editor_state: ExternalEditorState::Closed,
     };
@@ -1900,7 +1900,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         plan_item_active: false,
         last_separator_elapsed_secs: None,
         last_rendered_width: std::cell::Cell::new(None),
-        feedback: codex_feedback::CodexFeedback::new(),
+        feedback: adam_feedback::CodexFeedback::new(),
         current_rollout_path: None,
         external_editor_state: ExternalEditorState::Closed,
     };
@@ -1942,7 +1942,7 @@ fn set_chatgpt_auth(chat: &mut ChatWidget) {
 
 fn set_openai_provider(chat: &mut ChatWidget) {
     chat.config.model_provider_id = "openai".to_string();
-    chat.config.model_provider = codex_llm::RuntimeEndpoint::openai();
+    chat.config.model_provider = adam_llm::RuntimeEndpoint::openai();
     chat.thread_manager = Arc::new(ThreadManager::new(
         chat.config.adam_home.clone(),
         chat.auth_manager.clone(),
@@ -2778,7 +2778,7 @@ fn begin_exec_with_source(
     // Build the full command vec and parse it using core's parser,
     // then convert to protocol variants for the event payload.
     let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
-    let parsed_cmd: Vec<ParsedCommand> = codex_agent::parse_command::parse_command(&command);
+    let parsed_cmd: Vec<ParsedCommand> = adam_agent::parse_command::parse_command(&command);
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let interaction_input = None;
     let event = ExecCommandBeginEvent {
@@ -3128,7 +3128,7 @@ async fn exec_end_without_begin_uses_event_command() {
         "-lc".to_string(),
         "echo orphaned".to_string(),
     ];
-    let parsed_cmd = codex_agent::parse_command::parse_command(&command);
+    let parsed_cmd = adam_agent::parse_command::parse_command(&command);
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     chat.handle_codex_event(Event {
         id: "call-orphan".to_string(),
@@ -3267,7 +3267,7 @@ async fn unified_exec_wait_after_final_agent_message_snapshot() {
         &mut chat,
         "call-wait",
         "proc-1",
-        "cargo test -p codex-coding-agent",
+        "cargo test -p adam-coding-agent",
     );
     terminal_interaction(&mut chat, "call-wait-stdin", "proc-1", "");
 
@@ -3307,7 +3307,7 @@ async fn unified_exec_wait_before_streamed_agent_message_snapshot() {
         &mut chat,
         "call-wait-stream",
         "proc-1",
-        "cargo test -p codex-coding-agent",
+        "cargo test -p adam-coding-agent",
     );
     terminal_interaction(&mut chat, "call-wait-stream-stdin", "proc-1", "");
 
@@ -3398,7 +3398,7 @@ async fn unified_exec_wait_status_renders_command_in_single_details_row() {
         &mut chat,
         "call-wait-ui",
         "proc-ui",
-        "cargo test -p codex-coding-agent -- --exact",
+        "cargo test -p adam-coding-agent -- --exact",
     );
 
     terminal_interaction(&mut chat, "call-wait-ui-stdin", "proc-ui", "");
@@ -3655,7 +3655,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         initial_user_message: None,
         enhanced_keys_supported: false,
         auth_manager,
-        feedback: codex_feedback::CodexFeedback::new(),
+        feedback: adam_feedback::CodexFeedback::new(),
         is_first_run: true,
         model: Some(resolved_model.clone()),
         otel_manager,
@@ -3699,7 +3699,7 @@ async fn experimental_mode_plan_applies_on_startup() {
         initial_user_message: None,
         enhanced_keys_supported: false,
         auth_manager,
-        feedback: codex_feedback::CodexFeedback::new(),
+        feedback: adam_feedback::CodexFeedback::new(),
         is_first_run: true,
         model: Some(resolved_model.clone()),
         otel_manager,
@@ -3747,7 +3747,7 @@ async fn experimental_mode_plan_preserves_configured_effort_on_startup() {
         initial_user_message: None,
         enhanced_keys_supported: false,
         auth_manager,
-        feedback: codex_feedback::CodexFeedback::new(),
+        feedback: adam_feedback::CodexFeedback::new(),
         is_first_run: true,
         model: Some(resolved_model.clone()),
         otel_manager,
@@ -4203,12 +4203,12 @@ async fn review_commit_picker_shows_subjects_without_timestamps() {
 
     // Show commit picker with synthetic entries.
     let entries = vec![
-        codex_agent::git_info::CommitLogEntry {
+        adam_agent::git_info::CommitLogEntry {
             sha: "1111111deadbeef".to_string(),
             timestamp: 0,
             subject: "Add new feature X".to_string(),
         },
-        codex_agent::git_info::CommitLogEntry {
+        adam_agent::git_info::CommitLogEntry {
             sha: "2222222cafebabe".to_string(),
             timestamp: 0,
             subject: "Fix bug Y".to_string(),
@@ -4327,7 +4327,7 @@ async fn interrupt_exec_marks_failed_snapshot() {
     // cause the active exec cell to be finalized as failed and flushed.
     chat.handle_codex_event(Event {
         id: "call-int".into(),
-        msg: EventMsg::TurnAborted(codex_agent::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(adam_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -4361,7 +4361,7 @@ async fn interrupted_turn_error_message_snapshot() {
     // Abort the turn (like pressing Esc) and drain inserted history.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
-        msg: EventMsg::TurnAborted(codex_agent::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(adam_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -6030,7 +6030,7 @@ async fn interrupt_restores_queued_messages_into_composer() {
     // Deliver a TurnAborted event with Interrupted reason (as if Esc was pressed).
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_agent::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(adam_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -6068,7 +6068,7 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_agent::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(adam_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -6096,7 +6096,7 @@ async fn interrupt_preserves_unified_exec_processes() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_agent::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(adam_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -6123,7 +6123,7 @@ async fn interrupt_preserves_unified_exec_wait_streak_snapshot() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_agent::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(adam_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -6212,7 +6212,7 @@ async fn ui_snapshots_small_heights_task_running() {
 // task (status indicator active) while an approval request is shown.
 #[tokio::test]
 async fn status_widget_and_approval_modal_snapshot() {
-    use codex_agent::protocol::ExecApprovalRequestEvent;
+    use adam_agent::protocol::ExecApprovalRequestEvent;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     // Begin a running task so the status indicator would be active.
@@ -6591,7 +6591,7 @@ async fn apply_patch_approval_sends_op_with_submission_id() {
     while let Ok(app_ev) = rx.try_recv() {
         if let AppEvent::CodexOp(Op::PatchApproval { id, decision }) = app_ev {
             assert_eq!(id, "sub-123");
-            assert_matches!(decision, codex_agent::protocol::ReviewDecision::Approved);
+            assert_matches!(decision, adam_agent::protocol::ReviewDecision::Approved);
             found = true;
             break;
         }
@@ -6639,7 +6639,7 @@ async fn apply_patch_full_flow_integration_like() {
     match forwarded {
         Op::PatchApproval { id, decision } => {
             assert_eq!(id, "sub-xyz");
-            assert_matches!(decision, codex_agent::protocol::ReviewDecision::Approved);
+            assert_matches!(decision, adam_agent::protocol::ReviewDecision::Approved);
         }
         other => panic!("unexpected op forwarded: {other:?}"),
     }

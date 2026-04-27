@@ -6,11 +6,11 @@ use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
 
-use codex_llm_types::ContentItem;
-use codex_llm_types::ToolCallPayload;
-use codex_llm_types::ToolResultContentItem;
-use codex_llm_types::ToolResultPayload;
-use codex_llm_types::TranscriptItem;
+use adam_llm_types::ContentItem;
+use adam_llm_types::ToolCallPayload;
+use adam_llm_types::ToolResultContentItem;
+use adam_llm_types::ToolResultPayload;
+use adam_llm_types::TranscriptItem;
 
 const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 const DEFAULT_MAX_TOKENS: u32 = 8_192;
@@ -331,9 +331,9 @@ mod tests {
     use super::*;
     use crate::provider::RetryConfig;
     use crate::provider::WireApi;
-    use codex_llm_types::ToolCallPayload;
-    use codex_llm_types::ToolResultPayload;
-    use codex_llm_types::TranscriptItem;
+    use adam_llm_types::ToolCallPayload;
+    use adam_llm_types::ToolResultPayload;
+    use adam_llm_types::TranscriptItem;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 

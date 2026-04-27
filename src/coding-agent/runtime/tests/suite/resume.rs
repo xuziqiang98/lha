@@ -1,9 +1,9 @@
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::Op;
+use adam_protocol::user_input::ByteRange;
+use adam_protocol::user_input::TextElement;
+use adam_protocol::user_input::UserInput;
 use anyhow::Result;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::Op;
-use codex_protocol::user_input::ByteRange;
-use codex_protocol::user_input::TextElement;
-use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_reasoning_item;

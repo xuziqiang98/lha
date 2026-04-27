@@ -1,19 +1,19 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
-use codex_agent::AuthManager;
-use codex_agent::CodexAuth;
-use codex_agent::ContentItem;
-use codex_agent::features::Feature;
-use codex_agent::models_manager::manager::ModelsManager;
-use codex_agent::protocol::SessionSource;
-use codex_llm::RuntimeEndpoint;
-use codex_llm::TurnEvent;
-use codex_llm::TurnRequest;
-use codex_otel::OtelManager;
-use codex_otel::metrics::MetricsClient;
-use codex_otel::metrics::MetricsConfig;
-use codex_protocol::ThreadId;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::models::TranscriptItem;
+use adam_agent::AuthManager;
+use adam_agent::CodexAuth;
+use adam_agent::ContentItem;
+use adam_agent::features::Feature;
+use adam_agent::models_manager::manager::ModelsManager;
+use adam_agent::protocol::SessionSource;
+use adam_llm::RuntimeEndpoint;
+use adam_llm::TurnEvent;
+use adam_llm::TurnRequest;
+use adam_otel::OtelManager;
+use adam_otel::metrics::MetricsClient;
+use adam_otel::metrics::MetricsConfig;
+use adam_protocol::ThreadId;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::models::TranscriptItem;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::WebSocketTestServer;
@@ -242,7 +242,7 @@ async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness
     let metrics = MetricsClient::new(
         MetricsConfig::in_memory(
             "test",
-            "codex-coding-agent",
+            "adam-coding-agent",
             env!("CARGO_PKG_VERSION"),
             exporter,
         )

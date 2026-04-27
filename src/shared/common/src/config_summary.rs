@@ -1,4 +1,4 @@
-use codex_agent::config::Config;
+use adam_agent::config::Config;
 
 use crate::sandbox_summary::summarize_sandbox_policy;
 

@@ -10,26 +10,26 @@
 
 use std::path::PathBuf;
 
-use codex_agent::protocol::Event;
-use codex_agent::protocol::RateLimitSnapshot;
-use codex_chatgpt::connectors::AppInfo;
-use codex_common::approval_presets::ApprovalPreset;
-use codex_file_search::FileMatch;
-use codex_protocol::ThreadId;
-use codex_protocol::openai_models::ModelPreset;
+use adam_agent::protocol::Event;
+use adam_agent::protocol::RateLimitSnapshot;
+use adam_chatgpt::connectors::AppInfo;
+use adam_common::approval_presets::ApprovalPreset;
+use adam_file_search::FileMatch;
+use adam_protocol::ThreadId;
+use adam_protocol::openai_models::ModelPreset;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::changelog::ChangelogOutput;
 use crate::history_cell::HistoryCell;
 use crate::provider_config::CustomProviderConfig;
 
-use codex_agent::features::Feature;
-use codex_agent::protocol::AskForApproval;
-use codex_agent::protocol::ReviewRequest;
-use codex_agent::protocol::SandboxPolicy;
-use codex_protocol::config_types::CollaborationModeMask;
-use codex_protocol::config_types::Personality;
-use codex_protocol::openai_models::ReasoningEffort;
+use adam_agent::features::Feature;
+use adam_agent::protocol::AskForApproval;
+use adam_agent::protocol::ReviewRequest;
+use adam_agent::protocol::SandboxPolicy;
+use adam_protocol::config_types::CollaborationModeMask;
+use adam_protocol::config_types::Personality;
+use adam_protocol::openai_models::ReasoningEffort;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -85,7 +85,7 @@ pub(crate) enum AppEvent {
 
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
-    CodexOp(codex_agent::protocol::Op),
+    CodexOp(adam_agent::protocol::Op),
 
     /// Start a review using the current slash/TUI behavior.
     StartReview {

@@ -1,1 +1,1 @@
-pub use codex_llm_types::PlanType;
+pub use adam_llm_types::PlanType;

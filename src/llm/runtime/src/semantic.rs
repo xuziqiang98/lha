@@ -662,7 +662,7 @@ fn next_item_handle(next_synthetic_handle: &mut usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_llm_types::ContentItem;
+    use adam_llm_types::ContentItem;
 
     #[test]
     fn tool_call_request_is_derived_from_function_call_items() {

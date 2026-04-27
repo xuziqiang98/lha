@@ -2,11 +2,11 @@
 
 use crate::update_action;
 use crate::update_action::UpdateAction;
+use adam_agent::config::Config;
+use adam_agent::default_client::create_client;
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
-use codex_agent::config::Config;
-use codex_agent::default_client::create_client;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::Path;
@@ -197,7 +197,7 @@ fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_agent::config::ConfigBuilder;
+    use adam_agent::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 

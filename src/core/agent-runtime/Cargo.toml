@@ -1,12 +1,12 @@
 [package]
 edition.workspace = true
 license.workspace = true
-name = "codex-agent-runtime"
+name = "adam-agent-runtime"
 version.workspace = true
 
 [lib]
 doctest = false
-name = "codex_agent_runtime"
+name = "adam_agent_runtime"
 path = "src/lib.rs"
 
 [lints]
@@ -15,9 +15,9 @@ workspace = true
 [dependencies]
 async-channel = { workspace = true }
 async-trait = { workspace = true }
-codex-agent-core = { workspace = true }
-codex-llm = { workspace = true }
-codex-llm-types = { workspace = true }
+adam-agent-core = { workspace = true }
+adam-llm = { workspace = true }
+adam-llm-types = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync"] }

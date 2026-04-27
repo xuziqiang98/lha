@@ -77,7 +77,7 @@
   },
   "properties": {
     "callId": {
-      "description": "Use to correlate this with [codex_agent::protocol::PatchApplyBeginEvent] and [codex_agent::protocol::PatchApplyEndEvent].",
+      "description": "Use to correlate this with [adam_agent::protocol::PatchApplyBeginEvent] and [adam_agent::protocol::PatchApplyEndEvent].",
       "type": "string"
     },
     "conversationId": {

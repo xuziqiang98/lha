@@ -36,50 +36,50 @@ use crate::terminal;
 use crate::truncate::TruncationPolicy;
 use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
+use adam_agent_core::kernel::AgentKernel;
+use adam_agent_core::kernel::TurnEventProcessor;
+use adam_agent_core::kernel::TurnEventUpdate;
+use adam_agent_core::kernel::TurnStreamOutcome;
+use adam_llm::DefaultRuntimeClientFactory;
+use adam_llm::RuntimeEndpoint;
+use adam_llm::RuntimeSession;
+use adam_llm::ToolResultItem;
+use adam_llm::TurnEvent;
+use adam_llm::TurnRequest;
+use adam_protocol::ThreadId;
+use adam_protocol::approvals::ExecPolicyAmendment;
+use adam_protocol::config_types::ModeKind;
+use adam_protocol::config_types::Settings;
+use adam_protocol::config_types::WebSearchMode;
+use adam_protocol::dynamic_tools::DynamicToolResponse;
+use adam_protocol::dynamic_tools::DynamicToolSpec;
+use adam_protocol::items::PlanItem;
+use adam_protocol::items::TurnItem;
+use adam_protocol::items::UserMessageItem;
+use adam_protocol::models::BaseInstructions;
+use adam_protocol::models::format_allow_prefixes;
+use adam_protocol::openai_models::ModelInfo;
+use adam_protocol::protocol::FileChange;
+use adam_protocol::protocol::GhostSnapshotRecord;
+use adam_protocol::protocol::GhostSnapshotStatus;
+use adam_protocol::protocol::HasLegacyEvent;
+use adam_protocol::protocol::ItemCompletedEvent;
+use adam_protocol::protocol::ItemStartedEvent;
+use adam_protocol::protocol::RawTranscriptItemEvent;
+use adam_protocol::protocol::ReviewRequest;
+use adam_protocol::protocol::RolloutItem;
+use adam_protocol::protocol::SessionSource;
+use adam_protocol::protocol::SubAgentSource;
+use adam_protocol::protocol::TurnAbortReason;
+use adam_protocol::protocol::TurnContextItem;
+use adam_protocol::protocol::TurnStartedEvent;
+use adam_protocol::request_user_input::RequestUserInputArgs;
+use adam_protocol::request_user_input::RequestUserInputResponse;
+use adam_rmcp_client::ElicitationResponse;
+use adam_rmcp_client::OAuthCredentialsStoreMode;
 use async_channel::Receiver;
 use async_channel::Sender;
 use async_trait::async_trait;
-use codex_agent_core::kernel::AgentKernel;
-use codex_agent_core::kernel::TurnEventProcessor;
-use codex_agent_core::kernel::TurnEventUpdate;
-use codex_agent_core::kernel::TurnStreamOutcome;
-use codex_llm::DefaultRuntimeClientFactory;
-use codex_llm::RuntimeEndpoint;
-use codex_llm::RuntimeSession;
-use codex_llm::ToolResultItem;
-use codex_llm::TurnEvent;
-use codex_llm::TurnRequest;
-use codex_protocol::ThreadId;
-use codex_protocol::approvals::ExecPolicyAmendment;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::Settings;
-use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::dynamic_tools::DynamicToolResponse;
-use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_protocol::items::PlanItem;
-use codex_protocol::items::TurnItem;
-use codex_protocol::items::UserMessageItem;
-use codex_protocol::models::BaseInstructions;
-use codex_protocol::models::format_allow_prefixes;
-use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::GhostSnapshotRecord;
-use codex_protocol::protocol::GhostSnapshotStatus;
-use codex_protocol::protocol::HasLegacyEvent;
-use codex_protocol::protocol::ItemCompletedEvent;
-use codex_protocol::protocol::ItemStartedEvent;
-use codex_protocol::protocol::RawTranscriptItemEvent;
-use codex_protocol::protocol::ReviewRequest;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
-use codex_protocol::protocol::TurnAbortReason;
-use codex_protocol::protocol::TurnContextItem;
-use codex_protocol::protocol::TurnStartedEvent;
-use codex_protocol::request_user_input::RequestUserInputArgs;
-use codex_protocol::request_user_input::RequestUserInputResponse;
-use codex_rmcp_client::ElicitationResponse;
-use codex_rmcp_client::OAuthCredentialsStoreMode;
 use mcp_types::CallToolResult;
 use mcp_types::ListResourceTemplatesRequestParams;
 use mcp_types::ListResourceTemplatesResult;
@@ -208,21 +208,21 @@ use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::user_notification::UserNotification;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
-use codex_async_utils::OrCancelExt;
-use codex_otel::OtelManager;
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::DeveloperInstructions;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::models::transcript_item_from_user_input;
-use codex_protocol::protocol::CodexErrorInfo;
-use codex_protocol::protocol::InitialHistory;
-use codex_protocol::user_input::UserInput;
-use codex_utils_readiness::Readiness;
-use codex_utils_readiness::ReadinessFlag;
+use adam_async_utils::OrCancelExt;
+use adam_otel::OtelManager;
+use adam_protocol::config_types::CollaborationMode;
+use adam_protocol::config_types::Personality;
+use adam_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use adam_protocol::config_types::WindowsSandboxLevel;
+use adam_protocol::models::ContentItem;
+use adam_protocol::models::DeveloperInstructions;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::models::transcript_item_from_user_input;
+use adam_protocol::protocol::CodexErrorInfo;
+use adam_protocol::protocol::InitialHistory;
+use adam_protocol::user_input::UserInput;
+use adam_utils_readiness::Readiness;
+use adam_utils_readiness::ReadinessFlag;
 use tokio::sync::watch;
 
 /// The high-level interface to the Codex system.
@@ -762,7 +762,7 @@ impl Session {
     #[allow(clippy::too_many_arguments)]
     fn make_turn_context(
         auth_manager: Option<Arc<AuthManager>>,
-        runtime_factory: Arc<dyn codex_llm::RuntimeClientFactory>,
+        runtime_factory: Arc<dyn adam_llm::RuntimeClientFactory>,
         otel_manager: &OtelManager,
         provider: RuntimeEndpoint,
         session_configuration: &SessionConfiguration,
@@ -2723,32 +2723,32 @@ mod handlers {
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
-    use codex_protocol::custom_prompts::CustomPrompt;
-    use codex_protocol::protocol::CodexErrorInfo;
-    use codex_protocol::protocol::ErrorEvent;
-    use codex_protocol::protocol::Event;
-    use codex_protocol::protocol::EventMsg;
-    use codex_protocol::protocol::ListCustomPromptsResponseEvent;
-    use codex_protocol::protocol::ListSkillsResponseEvent;
-    use codex_protocol::protocol::McpServerRefreshConfig;
-    use codex_protocol::protocol::Op;
-    use codex_protocol::protocol::ReviewDecision;
-    use codex_protocol::protocol::ReviewRequest;
-    use codex_protocol::protocol::SkillsListEntry;
-    use codex_protocol::protocol::ThreadNameUpdatedEvent;
-    use codex_protocol::protocol::ThreadRolledBackEvent;
-    use codex_protocol::protocol::TurnAbortReason;
-    use codex_protocol::protocol::WarningEvent;
-    use codex_protocol::request_user_input::RequestUserInputResponse;
+    use adam_protocol::custom_prompts::CustomPrompt;
+    use adam_protocol::protocol::CodexErrorInfo;
+    use adam_protocol::protocol::ErrorEvent;
+    use adam_protocol::protocol::Event;
+    use adam_protocol::protocol::EventMsg;
+    use adam_protocol::protocol::ListCustomPromptsResponseEvent;
+    use adam_protocol::protocol::ListSkillsResponseEvent;
+    use adam_protocol::protocol::McpServerRefreshConfig;
+    use adam_protocol::protocol::Op;
+    use adam_protocol::protocol::ReviewDecision;
+    use adam_protocol::protocol::ReviewRequest;
+    use adam_protocol::protocol::SkillsListEntry;
+    use adam_protocol::protocol::ThreadNameUpdatedEvent;
+    use adam_protocol::protocol::ThreadRolledBackEvent;
+    use adam_protocol::protocol::TurnAbortReason;
+    use adam_protocol::protocol::WarningEvent;
+    use adam_protocol::request_user_input::RequestUserInputResponse;
 
     use crate::context_manager::is_user_turn_boundary;
-    use codex_protocol::config_types::CollaborationMode;
-    use codex_protocol::config_types::ModeKind;
-    use codex_protocol::config_types::Settings;
-    use codex_protocol::dynamic_tools::DynamicToolResponse;
-    use codex_protocol::user_input::UserInput;
-    use codex_rmcp_client::ElicitationAction;
-    use codex_rmcp_client::ElicitationResponse;
+    use adam_protocol::config_types::CollaborationMode;
+    use adam_protocol::config_types::ModeKind;
+    use adam_protocol::config_types::Settings;
+    use adam_protocol::dynamic_tools::DynamicToolResponse;
+    use adam_protocol::user_input::UserInput;
+    use adam_rmcp_client::ElicitationAction;
+    use adam_rmcp_client::ElicitationResponse;
     use mcp_types::RequestId;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -2883,12 +2883,12 @@ mod handlers {
         sess: &Arc<Session>,
         server_name: String,
         request_id: RequestId,
-        decision: codex_protocol::approvals::ElicitationAction,
+        decision: adam_protocol::approvals::ElicitationAction,
     ) {
         let action = match decision {
-            codex_protocol::approvals::ElicitationAction::Accept => ElicitationAction::Accept,
-            codex_protocol::approvals::ElicitationAction::Decline => ElicitationAction::Decline,
-            codex_protocol::approvals::ElicitationAction::Cancel => ElicitationAction::Cancel,
+            adam_protocol::approvals::ElicitationAction::Accept => ElicitationAction::Accept,
+            adam_protocol::approvals::ElicitationAction::Decline => ElicitationAction::Decline,
+            adam_protocol::approvals::ElicitationAction::Cancel => ElicitationAction::Cancel,
         };
         // When accepting, send an empty object as content to satisfy MCP servers
         // that expect non-null content on Accept. For Decline/Cancel, content is None.
@@ -3002,7 +3002,7 @@ mod handlers {
                     crate::protocol::GetHistoryEntryResponseEvent {
                         offset,
                         log_id,
-                        entry: entry_opt.map(|e| codex_protocol::message_history::HistoryEntry {
+                        entry: entry_opt.map(|e| adam_protocol::message_history::HistoryEntry {
                             conversation_id: e.session_id,
                             ts: e.ts,
                             text: e.text,
@@ -4343,11 +4343,11 @@ async fn maybe_emit_pending_agent_message_start(
 }
 
 /// Agent messages are text-only today; concatenate all text entries.
-fn agent_message_text(item: &codex_protocol::items::AgentMessageItem) -> String {
+fn agent_message_text(item: &adam_protocol::items::AgentMessageItem) -> String {
     item.content
         .iter()
         .map(|entry| match entry {
-            codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+            adam_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
         })
         .collect()
 }
@@ -4482,7 +4482,7 @@ async fn maybe_complete_plan_item_from_message(
 async fn emit_agent_message_in_plan_mode(
     sess: &Session,
     turn_context: &TurnContext,
-    agent_message: codex_protocol::items::AgentMessageItem,
+    agent_message: adam_protocol::items::AgentMessageItem,
     state: &mut PlanModeStreamState,
 ) {
     let agent_message_id = agent_message.id.clone();
@@ -4503,7 +4503,7 @@ async fn emit_agent_message_in_plan_mode(
             .pending_agent_message_items
             .remove(&agent_message_id)
             .unwrap_or_else(|| {
-                TurnItem::AgentMessage(codex_protocol::items::AgentMessageItem {
+                TurnItem::AgentMessage(adam_protocol::items::AgentMessageItem {
                     id: agent_message_id.clone(),
                     content: Vec::new(),
                 })
@@ -4910,7 +4910,7 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
 
     async fn finish(
         self,
-        state: codex_agent_core::kernel::TurnStreamState,
+        state: adam_agent_core::kernel::TurnStreamState,
     ) -> Result<TurnStreamOutcome, Self::Error> {
         let needs_follow_up = if self.cancellation_token.is_cancelled() {
             false
@@ -4945,7 +4945,7 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
         CodexErr::TurnAborted
     }
 
-    fn llm_error(&self, err: codex_llm::Error) -> Self::Error {
+    fn llm_error(&self, err: adam_llm::Error) -> Self::Error {
         err.into()
     }
 
@@ -5070,9 +5070,9 @@ mod tests {
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
 
-    use codex_llm::ToolCallPayload;
-    use codex_llm::ToolResultPayload;
-    use codex_protocol::ThreadId;
+    use adam_llm::ToolCallPayload;
+    use adam_llm::ToolResultPayload;
+    use adam_protocol::ThreadId;
 
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
@@ -5095,11 +5095,11 @@ mod tests {
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::registry::ToolHandler;
     use crate::turn_diff_tracker::TurnDiffTracker;
-    use codex_app_server_protocol::AppInfo;
-    use codex_app_server_protocol::AuthMode;
-    use codex_protocol::models::ContentItem;
-    use codex_protocol::models::TranscriptItem;
-    use codex_protocol::models::tool_result_payload_from_call_tool_result;
+    use adam_app_server_protocol::AppInfo;
+    use adam_app_server_protocol::AuthMode;
+    use adam_protocol::models::ContentItem;
+    use adam_protocol::models::TranscriptItem;
+    use adam_protocol::models::tool_result_payload_from_call_tool_result;
     use std::path::Path;
     use std::time::Duration;
     use tokio::time::sleep;
@@ -6023,7 +6023,7 @@ mod tests {
                 unlimited: false,
                 balance: Some("10.00".to_string()),
             }),
-            plan_type: Some(codex_protocol::account::PlanType::Plus),
+            plan_type: Some(adam_protocol::account::PlanType::Plus),
         };
         state.set_rate_limits(initial.clone());
 
@@ -6110,7 +6110,7 @@ mod tests {
                 unlimited: false,
                 balance: Some("15.00".to_string()),
             }),
-            plan_type: Some(codex_protocol::account::PlanType::Plus),
+            plan_type: Some(adam_protocol::account::PlanType::Plus),
         };
         state.set_rate_limits(initial.clone());
 
@@ -6122,7 +6122,7 @@ mod tests {
             }),
             secondary: None,
             credits: None,
-            plan_type: Some(codex_protocol::account::PlanType::Pro),
+            plan_type: Some(adam_protocol::account::PlanType::Pro),
         };
         state.set_rate_limits(update.clone());
 
@@ -6899,7 +6899,7 @@ model = "openai.main:custom-model"
         let last = history_items.last().expect("warning recorded");
 
         match last {
-            codex_protocol::models::TranscriptItem::Message { role, content, .. } => {
+            adam_protocol::models::TranscriptItem::Message { role, content, .. } => {
                 assert_eq!(role, "user");
                 assert_eq!(
                     content,
@@ -7066,7 +7066,7 @@ model = "openai.main:custom-model"
         // recorded in history for the model.
         assert!(
             history.raw_items().iter().any(|item| {
-                let codex_protocol::models::TranscriptItem::Message { role, content, .. } = item
+                let adam_protocol::models::TranscriptItem::Message { role, content, .. } = item
                 else {
                     return false;
                 };
@@ -7115,7 +7115,7 @@ model = "openai.main:custom-model"
             },
         };
 
-        let request = codex_llm::ToolCallRequest::from_transcript_item(item.clone())
+        let request = adam_llm::ToolCallRequest::from_transcript_item(item.clone())
             .expect("tool call request");
         let call = ToolRouter::build_tool_call(session.as_ref(), request)
             .await

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use codex_agent::config::Config;
-use codex_agent::features::Feature;
+use adam_agent::config::Config;
+use adam_agent::features::Feature;
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -9,11 +9,11 @@ use crate::chatgpt_client::chatgpt_get_request_with_timeout;
 use crate::chatgpt_token::get_chatgpt_token_data;
 use crate::chatgpt_token::init_chatgpt_token_from_auth;
 
-pub use codex_agent::connectors::AppInfo;
-pub use codex_agent::connectors::connector_display_label;
-use codex_agent::connectors::connector_install_url;
-pub use codex_agent::connectors::list_accessible_connectors_from_mcp_tools;
-use codex_agent::connectors::merge_connectors;
+pub use adam_agent::connectors::AppInfo;
+pub use adam_agent::connectors::connector_display_label;
+use adam_agent::connectors::connector_install_url;
+pub use adam_agent::connectors::list_accessible_connectors_from_mcp_tools;
+use adam_agent::connectors::merge_connectors;
 
 #[derive(Debug, Deserialize)]
 struct DirectoryListResponse {

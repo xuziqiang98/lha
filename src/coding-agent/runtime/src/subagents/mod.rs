@@ -3,7 +3,7 @@ mod guards;
 pub(crate) mod role;
 pub(crate) mod status;
 
-pub(crate) use codex_protocol::protocol::AgentStatus;
+pub(crate) use adam_protocol::protocol::AgentStatus;
 pub(crate) use control::AgentControl;
 pub(crate) use control::SpawnAgentOptions;
 pub(crate) use guards::exceeds_thread_spawn_depth_limit;

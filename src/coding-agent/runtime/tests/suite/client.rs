@@ -1,37 +1,37 @@
-use codex_agent::AuthManager;
-use codex_agent::CodexAuth;
-use codex_agent::ContentItem;
-use codex_agent::NewThread;
-use codex_agent::ThreadManager;
-use codex_agent::auth::AuthCredentialsStoreMode;
-use codex_agent::default_client::originator;
-use codex_agent::error::CodexErr;
-use codex_agent::models_manager::manager::ModelsManager;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::ItemCompletedEvent;
-use codex_agent::protocol::ItemStartedEvent;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::SessionSource;
-use codex_llm::RuntimeEndpoint;
-use codex_llm::ToolCallPayload;
-use codex_llm::TurnEvent;
-use codex_llm::TurnRequest;
-use codex_llm::built_in_runtime_endpoints;
-use codex_otel::OtelManager;
-use codex_protocol::ThreadId;
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::Settings;
-use codex_protocol::config_types::Verbosity;
-use codex_protocol::items::TurnItem;
-use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::models::ReasoningItemReasoningSummary;
-use codex_protocol::models::ToolResultPayload;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::models::WebSearchAction;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::user_input::UserInput;
+use adam_agent::AuthManager;
+use adam_agent::CodexAuth;
+use adam_agent::ContentItem;
+use adam_agent::NewThread;
+use adam_agent::ThreadManager;
+use adam_agent::auth::AuthCredentialsStoreMode;
+use adam_agent::default_client::originator;
+use adam_agent::error::CodexErr;
+use adam_agent::models_manager::manager::ModelsManager;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::ItemCompletedEvent;
+use adam_agent::protocol::ItemStartedEvent;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::SessionSource;
+use adam_llm::RuntimeEndpoint;
+use adam_llm::ToolCallPayload;
+use adam_llm::TurnEvent;
+use adam_llm::TurnRequest;
+use adam_llm::built_in_runtime_endpoints;
+use adam_otel::OtelManager;
+use adam_protocol::ThreadId;
+use adam_protocol::config_types::CollaborationMode;
+use adam_protocol::config_types::ModeKind;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::config_types::Settings;
+use adam_protocol::config_types::Verbosity;
+use adam_protocol::items::TurnItem;
+use adam_protocol::models::ReasoningItemContent;
+use adam_protocol::models::ReasoningItemReasoningSummary;
+use adam_protocol::models::ToolResultPayload;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::models::WebSearchAction;
+use adam_protocol::openai_models::ReasoningEffort;
+use adam_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses::ev_completed_with_tokens;
@@ -265,7 +265,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let prior_user = TranscriptItem::Message {
         id: None,
         role: "user".to_string(),
-        content: vec![codex_protocol::models::ContentItem::InputText {
+        content: vec![adam_protocol::models::ContentItem::InputText {
             text: "resumed user message".to_string(),
         }],
         end_turn: None,
@@ -286,7 +286,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let prior_system = TranscriptItem::Message {
         id: None,
         role: "system".to_string(),
-        content: vec![codex_protocol::models::ContentItem::OutputText {
+        content: vec![adam_protocol::models::ContentItem::OutputText {
             text: "resumed system instruction".to_string(),
         }],
         end_turn: None,
@@ -307,7 +307,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let prior_item = TranscriptItem::Message {
         id: None,
         role: "assistant".to_string(),
-        content: vec![codex_protocol::models::ContentItem::OutputText {
+        content: vec![adam_protocol::models::ContentItem::OutputText {
             text: "resumed assistant message".to_string(),
         }],
         end_turn: None,
@@ -604,7 +604,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
 
     let auth_manager =
         match CodexAuth::from_auth_storage(adam_home.path(), AuthCredentialsStoreMode::File) {
-            Ok(Some(auth)) => codex_agent::AuthManager::from_auth_for_testing(auth),
+            Ok(Some(auth)) => adam_agent::AuthManager::from_auth_for_testing(auth),
             Ok(None) => panic!("No CodexAuth found in adam_home"),
             Err(e) => panic!("Failed to load CodexAuth: {e}"),
         };
@@ -1416,7 +1416,7 @@ async fn messages_api_filters_unsupported_freeform_tools() {
         .with_model("gpt-5.1-codex")
         .with_config(move |config| {
             config.model_provider = model_provider;
-            config.web_search_mode = Some(codex_protocol::config_types::WebSearchMode::Disabled);
+            config.web_search_mode = Some(adam_protocol::config_types::WebSearchMode::Disabled);
         })
         .build(&server)
         .await

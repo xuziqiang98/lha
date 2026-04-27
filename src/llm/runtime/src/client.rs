@@ -2,35 +2,35 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use codex_api::AggregateStreamExt;
-use codex_api::ChatClient as ApiChatClient;
-use codex_api::ChatRequestBuilder as ApiChatRequestBuilder;
-use codex_api::CompactClient as ApiCompactClient;
-use codex_api::CompactionInput as ApiCompactionInput;
-use codex_api::DeveloperRoleHandling;
-use codex_api::MessagesClient as ApiMessagesClient;
-use codex_api::MessagesRequestBuilder as ApiMessagesRequestBuilder;
-use codex_api::Prompt as ApiPrompt;
-use codex_api::RequestTelemetry;
-use codex_api::ReqwestTransport;
-use codex_api::ResponseAppendWsRequest;
-use codex_api::ResponseCreateWsRequest;
-use codex_api::ResponseStream as ApiResponseStream;
-use codex_api::ResponsesClient as ApiResponsesClient;
-use codex_api::ResponsesOptions as ApiResponsesOptions;
-use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
-use codex_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
-use codex_api::SseTelemetry;
-use codex_api::TransportError;
-use codex_api::WebsocketTelemetry;
-use codex_api::build_conversation_headers;
-use codex_api::common::Reasoning;
-use codex_api::common::ResponsesWsRequest;
-use codex_api::create_text_param_for_request;
-use codex_api::error::ApiError;
-use codex_api::requests::responses::Compression;
-use codex_llm_types::ContentItem;
-use codex_otel::OtelManager;
+use adam_api::AggregateStreamExt;
+use adam_api::ChatClient as ApiChatClient;
+use adam_api::ChatRequestBuilder as ApiChatRequestBuilder;
+use adam_api::CompactClient as ApiCompactClient;
+use adam_api::CompactionInput as ApiCompactionInput;
+use adam_api::DeveloperRoleHandling;
+use adam_api::MessagesClient as ApiMessagesClient;
+use adam_api::MessagesRequestBuilder as ApiMessagesRequestBuilder;
+use adam_api::Prompt as ApiPrompt;
+use adam_api::RequestTelemetry;
+use adam_api::ReqwestTransport;
+use adam_api::ResponseAppendWsRequest;
+use adam_api::ResponseCreateWsRequest;
+use adam_api::ResponseStream as ApiResponseStream;
+use adam_api::ResponsesClient as ApiResponsesClient;
+use adam_api::ResponsesOptions as ApiResponsesOptions;
+use adam_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
+use adam_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
+use adam_api::SseTelemetry;
+use adam_api::TransportError;
+use adam_api::WebsocketTelemetry;
+use adam_api::build_conversation_headers;
+use adam_api::common::Reasoning;
+use adam_api::common::ResponsesWsRequest;
+use adam_api::create_text_param_for_request;
+use adam_api::error::ApiError;
+use adam_api::requests::responses::Compression;
+use adam_llm_types::ContentItem;
+use adam_otel::OtelManager;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
 use futures::StreamExt;
@@ -466,7 +466,7 @@ impl LlmClientSession {
 
     async fn websocket_connection(
         &mut self,
-        api_provider: codex_api::Provider,
+        api_provider: adam_api::Provider,
         api_auth: crate::auth::LlmAuthProvider,
         options: &ApiResponsesOptions,
     ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
@@ -640,7 +640,7 @@ impl LlmClientSession {
         if let Some(path) = &self.state.runtime_config.sse_fixture_path {
             warn!(path, "Streaming from fixture");
             let stream =
-                codex_api::stream_from_fixture(path, self.state.endpoint.stream_idle_timeout())?;
+                adam_api::stream_from_fixture(path, self.state.endpoint.stream_idle_timeout())?;
             return Ok(map_response_stream(stream, self.state.otel_manager.clone()));
         }
 
@@ -781,8 +781,8 @@ fn build_chat_request(
     conversation_id: &str,
     origin_tag: Option<&str>,
     developer_role_handling: DeveloperRoleHandling,
-    provider: &codex_api::Provider,
-) -> std::result::Result<codex_api::ChatRequest, Error> {
+    provider: &adam_api::Provider,
+) -> std::result::Result<adam_api::ChatRequest, Error> {
     ApiChatRequestBuilder::new(model, &prompt.instructions, &prompt.input, &prompt.tools)
         .conversation_id(Some(conversation_id.to_string()))
         .origin_tag(origin_tag.map(ToOwned::to_owned))
@@ -1234,7 +1234,7 @@ impl WebsocketTelemetry for ApiTelemetry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_llm_types::ReasoningItemContent;
+    use adam_llm_types::ReasoningItemContent;
     use serde_json::json;
 
     #[test]

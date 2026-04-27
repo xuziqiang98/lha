@@ -15,7 +15,7 @@ exec *args:
 
 # Run the CLI version of the file-search crate.
 file-search *args:
-    cargo run --bin codex-file-search -- "$@"
+    cargo run --bin adam-file-search -- "$@"
 
 # format code
 fmt:
@@ -40,18 +40,18 @@ test:
 
 # Regenerate the json schema for config.toml from the current config types.
 write-config-schema:
-    cargo run -p codex-coding-agent --bin codex-write-config-schema
+    cargo run -p adam-coding-agent --bin adam-write-config-schema
 
 write-models-schema:
-    cargo run -p codex-coding-agent --bin codex-write-models-schema
+    cargo run -p adam-coding-agent --bin adam-write-models-schema
 
 write-state-schema:
-    cargo run -p codex-coding-agent --bin codex-write-state-schema
+    cargo run -p adam-coding-agent --bin adam-write-state-schema
 
 # Regenerate vendored app-server protocol schema artifacts.
 write-app-server-schema:
-    cargo run -p codex-app-server-protocol --bin write_schema_fixtures
+    cargo run -p adam-app-server-protocol --bin write_schema_fixtures
 
 # Tail logs from the state SQLite database
 log *args:
-    if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p codex-state --bin logs_client -- "$@"
+    if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p adam-state --bin logs_client -- "$@"

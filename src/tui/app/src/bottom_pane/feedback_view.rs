@@ -19,7 +19,7 @@ use crate::app_event::FeedbackCategory;
 use crate::app_event_sender::AppEventSender;
 use crate::history_cell;
 use crate::render::renderable::Renderable;
-use codex_agent::protocol::SessionSource;
+use adam_agent::protocol::SessionSource;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -32,7 +32,7 @@ use super::textarea::TextAreaState;
 pub(crate) struct FeedbackNoteView {
     category: FeedbackCategory,
     adam_home: PathBuf,
-    snapshot: codex_feedback::CodexLogSnapshot,
+    snapshot: adam_feedback::CodexLogSnapshot,
     rollout_path: Option<PathBuf>,
     app_event_tx: AppEventSender,
     include_logs: bool,
@@ -47,7 +47,7 @@ impl FeedbackNoteView {
     pub(crate) fn new(
         category: FeedbackCategory,
         adam_home: PathBuf,
-        snapshot: codex_feedback::CodexLogSnapshot,
+        snapshot: adam_feedback::CodexLogSnapshot,
         rollout_path: Option<PathBuf>,
         app_event_tx: AppEventSender,
         include_logs: bool,
@@ -493,7 +493,7 @@ mod tests {
     fn make_view(category: FeedbackCategory) -> FeedbackNoteView {
         let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
+        let snapshot = adam_feedback::CodexFeedback::new().snapshot(None);
         FeedbackNoteView::new(category, std::env::temp_dir(), snapshot, None, tx, true)
     }
 
@@ -530,7 +530,7 @@ mod tests {
         let adam_home = tempfile::TempDir::new().expect("tempdir");
         let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
+        let snapshot = adam_feedback::CodexFeedback::new().snapshot(None);
         let mut view = FeedbackNoteView::new(
             FeedbackCategory::Bug,
             adam_home.path().to_path_buf(),
@@ -558,6 +558,6 @@ mod tests {
         assert!(rendered.contains("Thanks for the feedback!"));
         assert!(!rendered.contains("github.com"));
         assert!(!rendered.contains("open an issue"));
-        assert!(!rendered.contains("#codex-feedback"));
+        assert!(!rendered.contains("#adam-feedback"));
     }
 }

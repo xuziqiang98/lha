@@ -10,56 +10,56 @@ use tokio::process::Child;
 use tokio::process::ChildStdin;
 use tokio::process::ChildStdout;
 
+use adam_agent::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
+use adam_app_server_protocol::AddConversationListenerParams;
+use adam_app_server_protocol::AppsListParams;
+use adam_app_server_protocol::ArchiveConversationParams;
+use adam_app_server_protocol::CancelLoginAccountParams;
+use adam_app_server_protocol::CancelLoginChatGptParams;
+use adam_app_server_protocol::ClientInfo;
+use adam_app_server_protocol::ClientNotification;
+use adam_app_server_protocol::CollaborationModeListParams;
+use adam_app_server_protocol::ConfigBatchWriteParams;
+use adam_app_server_protocol::ConfigReadParams;
+use adam_app_server_protocol::ConfigValueWriteParams;
+use adam_app_server_protocol::FeedbackUploadParams;
+use adam_app_server_protocol::ForkConversationParams;
+use adam_app_server_protocol::GetAccountParams;
+use adam_app_server_protocol::GetAuthStatusParams;
+use adam_app_server_protocol::InitializeParams;
+use adam_app_server_protocol::InterruptConversationParams;
+use adam_app_server_protocol::JSONRPCError;
+use adam_app_server_protocol::JSONRPCErrorError;
+use adam_app_server_protocol::JSONRPCMessage;
+use adam_app_server_protocol::JSONRPCNotification;
+use adam_app_server_protocol::JSONRPCRequest;
+use adam_app_server_protocol::JSONRPCResponse;
+use adam_app_server_protocol::ListConversationsParams;
+use adam_app_server_protocol::LoginAccountParams;
+use adam_app_server_protocol::LoginApiKeyParams;
+use adam_app_server_protocol::ModelListParams;
+use adam_app_server_protocol::NewConversationParams;
+use adam_app_server_protocol::RemoveConversationListenerParams;
+use adam_app_server_protocol::RequestId;
+use adam_app_server_protocol::ResumeConversationParams;
+use adam_app_server_protocol::ReviewStartParams;
+use adam_app_server_protocol::SendUserMessageParams;
+use adam_app_server_protocol::SendUserTurnParams;
+use adam_app_server_protocol::ServerRequest;
+use adam_app_server_protocol::SetDefaultModelParams;
+use adam_app_server_protocol::ThreadArchiveParams;
+use adam_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
+use adam_app_server_protocol::ThreadForkParams;
+use adam_app_server_protocol::ThreadListParams;
+use adam_app_server_protocol::ThreadLoadedListParams;
+use adam_app_server_protocol::ThreadReadParams;
+use adam_app_server_protocol::ThreadResumeParams;
+use adam_app_server_protocol::ThreadRollbackParams;
+use adam_app_server_protocol::ThreadStartParams;
+use adam_app_server_protocol::ThreadUnarchiveParams;
+use adam_app_server_protocol::TurnInterruptParams;
+use adam_app_server_protocol::TurnStartParams;
 use anyhow::Context;
-use codex_agent::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
-use codex_app_server_protocol::AddConversationListenerParams;
-use codex_app_server_protocol::AppsListParams;
-use codex_app_server_protocol::ArchiveConversationParams;
-use codex_app_server_protocol::CancelLoginAccountParams;
-use codex_app_server_protocol::CancelLoginChatGptParams;
-use codex_app_server_protocol::ClientInfo;
-use codex_app_server_protocol::ClientNotification;
-use codex_app_server_protocol::CollaborationModeListParams;
-use codex_app_server_protocol::ConfigBatchWriteParams;
-use codex_app_server_protocol::ConfigReadParams;
-use codex_app_server_protocol::ConfigValueWriteParams;
-use codex_app_server_protocol::FeedbackUploadParams;
-use codex_app_server_protocol::ForkConversationParams;
-use codex_app_server_protocol::GetAccountParams;
-use codex_app_server_protocol::GetAuthStatusParams;
-use codex_app_server_protocol::InitializeParams;
-use codex_app_server_protocol::InterruptConversationParams;
-use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::JSONRPCRequest;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::ListConversationsParams;
-use codex_app_server_protocol::LoginAccountParams;
-use codex_app_server_protocol::LoginApiKeyParams;
-use codex_app_server_protocol::ModelListParams;
-use codex_app_server_protocol::NewConversationParams;
-use codex_app_server_protocol::RemoveConversationListenerParams;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ResumeConversationParams;
-use codex_app_server_protocol::ReviewStartParams;
-use codex_app_server_protocol::SendUserMessageParams;
-use codex_app_server_protocol::SendUserTurnParams;
-use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::SetDefaultModelParams;
-use codex_app_server_protocol::ThreadArchiveParams;
-use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
-use codex_app_server_protocol::ThreadForkParams;
-use codex_app_server_protocol::ThreadListParams;
-use codex_app_server_protocol::ThreadLoadedListParams;
-use codex_app_server_protocol::ThreadReadParams;
-use codex_app_server_protocol::ThreadResumeParams;
-use codex_app_server_protocol::ThreadRollbackParams;
-use codex_app_server_protocol::ThreadStartParams;
-use codex_app_server_protocol::ThreadUnarchiveParams;
-use codex_app_server_protocol::TurnInterruptParams;
-use codex_app_server_protocol::TurnStartParams;
 use tokio::process::Command;
 
 pub struct McpProcess {
@@ -90,8 +90,8 @@ impl McpProcess {
         adam_home: &Path,
         env_overrides: &[(&str, Option<&str>)],
     ) -> anyhow::Result<Self> {
-        let program = codex_utils_cargo_bin::cargo_bin("codex-app-server")
-            .context("should find binary for codex-app-server")?;
+        let program = adam_utils_cargo_bin::cargo_bin("adam-app-server")
+            .context("should find binary for adam-app-server")?;
         let mut cmd = Command::new(program);
 
         cmd.stdin(Stdio::piped());
@@ -115,7 +115,7 @@ impl McpProcess {
         let mut process = cmd
             .kill_on_drop(true)
             .spawn()
-            .context("codex-mcp-server proc should start")?;
+            .context("adam-mcp-server proc should start")?;
         let stdin = process
             .stdin
             .take()

@@ -1,8 +1,8 @@
 use crate::error::CodexErr;
 use crate::error::Result;
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
+use adam_protocol::ThreadId;
+use adam_protocol::protocol::SessionSource;
+use adam_protocol::protocol::SubAgentSource;
 use rand::prelude::IndexedRandom;
 use std::collections::HashMap;
 use std::collections::HashSet;

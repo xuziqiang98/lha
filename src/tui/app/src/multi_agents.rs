@@ -1,4 +1,4 @@
-use codex_protocol::ThreadId;
+use adam_protocol::ThreadId;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentPickerThreadEntry {
     pub(crate) agent_nickname: Option<String>,

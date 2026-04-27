@@ -6,10 +6,10 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use adam_llm::ToolDescriptor;
+use adam_llm::ToolResultItem;
+use adam_utils_readiness::Readiness;
 use async_trait::async_trait;
-use codex_llm::ToolDescriptor;
-use codex_llm::ToolResultItem;
-use codex_utils_readiness::Readiness;
 use tracing::warn;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

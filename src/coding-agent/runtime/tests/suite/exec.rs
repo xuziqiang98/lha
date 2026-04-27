@@ -3,19 +3,19 @@
 use std::collections::HashMap;
 use std::string::ToString;
 
-use codex_agent::exec::ExecParams;
-use codex_agent::exec::ExecToolCallOutput;
-use codex_agent::exec::SandboxType;
-use codex_agent::exec::process_exec_tool_call;
-use codex_agent::protocol::SandboxPolicy;
-use codex_agent::sandboxing::SandboxPermissions;
-use codex_agent::spawn::CODEX_SANDBOX_ENV_VAR;
-use codex_protocol::config_types::WindowsSandboxLevel;
+use adam_agent::exec::ExecParams;
+use adam_agent::exec::ExecToolCallOutput;
+use adam_agent::exec::SandboxType;
+use adam_agent::exec::process_exec_tool_call;
+use adam_agent::protocol::SandboxPolicy;
+use adam_agent::sandboxing::SandboxPermissions;
+use adam_agent::spawn::CODEX_SANDBOX_ENV_VAR;
+use adam_protocol::config_types::WindowsSandboxLevel;
 use tempfile::TempDir;
 
-use codex_agent::error::Result;
+use adam_agent::error::Result;
 
-use codex_agent::get_platform_sandbox;
+use adam_agent::get_platform_sandbox;
 
 fn skip_test() -> bool {
     if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {

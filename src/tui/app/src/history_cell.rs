@@ -39,22 +39,22 @@ use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
+use adam_agent::config::Config;
+use adam_agent::config::types::McpServerTransportConfig;
+use adam_agent::protocol::FileChange;
+use adam_agent::protocol::McpAuthStatus;
+use adam_agent::protocol::McpInvocation;
+use adam_agent::protocol::SessionConfiguredEvent;
+use adam_agent::web_search::web_search_detail;
+use adam_common::format_env_display::format_env_display;
+use adam_otel::RuntimeMetricsSummary;
+use adam_protocol::models::WebSearchAction;
+use adam_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use adam_protocol::plan_tool::PlanItemArg;
+use adam_protocol::plan_tool::StepStatus;
+use adam_protocol::plan_tool::UpdatePlanArgs;
+use adam_protocol::user_input::TextElement;
 use base64::Engine;
-use codex_agent::config::Config;
-use codex_agent::config::types::McpServerTransportConfig;
-use codex_agent::protocol::FileChange;
-use codex_agent::protocol::McpAuthStatus;
-use codex_agent::protocol::McpInvocation;
-use codex_agent::protocol::SessionConfiguredEvent;
-use codex_agent::web_search::web_search_detail;
-use codex_common::format_env_display::format_env_display;
-use codex_otel::RuntimeMetricsSummary;
-use codex_protocol::models::WebSearchAction;
-use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::plan_tool::PlanItemArg;
-use codex_protocol::plan_tool::StepStatus;
-use codex_protocol::plan_tool::UpdatePlanArgs;
-use codex_protocol::user_input::TextElement;
 use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
@@ -712,9 +712,9 @@ fn exec_snippet(command: &[String]) -> String {
 
 pub fn new_approval_decision_cell(
     command: Vec<String>,
-    decision: codex_agent::protocol::ReviewDecision,
+    decision: adam_agent::protocol::ReviewDecision,
 ) -> Box<dyn HistoryCell> {
-    use codex_agent::protocol::ReviewDecision::*;
+    use adam_agent::protocol::ReviewDecision::*;
 
     let (symbol, summary): (Span<'static>, Vec<Span<'static>>) = match decision {
         Approved => {
@@ -1115,10 +1115,10 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
 
-        // Title line rendered inside the box: ">_ Codey (vX)"
+        // Title line rendered inside the box: ">_ Adam (vX)"
         let title_spans: Vec<Span<'static>> = vec![
             Span::from(">_ ").dim(),
-            Span::from("Codey").bold(),
+            Span::from("Adam").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{})", self.version)).dim(),
         ];
@@ -2137,21 +2137,21 @@ mod tests {
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
-    use codex_agent::config::Config;
-    use codex_agent::config::ConfigBuilder;
-    use codex_agent::config::types::McpServerConfig;
-    use codex_agent::config::types::McpServerTransportConfig;
-    use codex_agent::protocol::McpAuthStatus;
-    use codex_otel::RuntimeMetricTotals;
-    use codex_otel::RuntimeMetricsSummary;
-    use codex_protocol::models::WebSearchAction;
-    use codex_protocol::parse_command::ParsedCommand;
+    use adam_agent::config::Config;
+    use adam_agent::config::ConfigBuilder;
+    use adam_agent::config::types::McpServerConfig;
+    use adam_agent::config::types::McpServerTransportConfig;
+    use adam_agent::protocol::McpAuthStatus;
+    use adam_otel::RuntimeMetricTotals;
+    use adam_otel::RuntimeMetricsSummary;
+    use adam_protocol::models::WebSearchAction;
+    use adam_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::collections::HashMap;
 
-    use codex_agent::protocol::ExecCommandSource;
+    use adam_agent::protocol::ExecCommandSource;
     use mcp_types::CallToolResult;
     use mcp_types::ContentBlock;
     use mcp_types::ImageContent;

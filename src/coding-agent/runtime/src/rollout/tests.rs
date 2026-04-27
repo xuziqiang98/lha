@@ -27,22 +27,22 @@ use crate::rollout::list::get_threads;
 use crate::rollout::list::read_effective_thread_cwd;
 use crate::rollout::list::read_head_for_summary;
 use crate::rollout::rollout_date_parts;
+use adam_protocol::ThreadId;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::models::ContentItem;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::protocol::AskForApproval;
+use adam_protocol::protocol::EventMsg;
+use adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3;
+use adam_protocol::protocol::RolloutItem;
+use adam_protocol::protocol::RolloutLine;
+use adam_protocol::protocol::SandboxPolicy;
+use adam_protocol::protocol::SessionMeta;
+use adam_protocol::protocol::SessionMetaLine;
+use adam_protocol::protocol::SessionSource;
+use adam_protocol::protocol::TurnContextItem;
+use adam_protocol::protocol::UserMessageEvent;
 use anyhow::Result;
-use codex_protocol::ThreadId;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::SessionMeta;
-use codex_protocol::protocol::SessionMetaLine;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::TurnContextItem;
-use codex_protocol::protocol::UserMessageEvent;
 
 const NO_SOURCE_FILTER: &[SessionSource] = &[];
 const TEST_PROVIDER: &str = "test-provider";
@@ -391,7 +391,7 @@ async fn load_rollout_items_accepts_v3_schema_version() {
 
     assert!(matches!(
         history,
-        codex_protocol::protocol::InitialHistory::Resumed(_)
+        adam_protocol::protocol::InitialHistory::Resumed(_)
     ));
 }
 
@@ -1196,7 +1196,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 cwd: ".".into(),
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
-                rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+                rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
                 source: SessionSource::VSCode,
                 model_provider: Some("test-provider".into()),
                 base_instructions: None,

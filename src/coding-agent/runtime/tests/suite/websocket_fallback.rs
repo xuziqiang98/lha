@@ -1,5 +1,5 @@
+use adam_agent::features::Feature;
 use anyhow::Result;
-use codex_agent::features::Feature;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;

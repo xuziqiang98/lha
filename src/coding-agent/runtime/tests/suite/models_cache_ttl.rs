@@ -1,26 +1,26 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use adam_agent::CodexAuth;
+use adam_agent::config::model_provider_cache_key;
+use adam_agent::features::Feature;
+use adam_agent::models_manager::manager::RefreshStrategy;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::SandboxPolicy;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::openai_models::ConfigShellToolType;
+use adam_protocol::openai_models::ModelInfo;
+use adam_protocol::openai_models::ModelVisibility;
+use adam_protocol::openai_models::ModelsResponse;
+use adam_protocol::openai_models::ReasoningEffort;
+use adam_protocol::openai_models::ReasoningEffortPreset;
+use adam_protocol::openai_models::TruncationPolicyConfig;
+use adam_protocol::user_input::UserInput;
 use anyhow::Result;
 use chrono::DateTime;
 use chrono::TimeZone;
 use chrono::Utc;
-use codex_agent::CodexAuth;
-use codex_agent::config::model_provider_cache_key;
-use codex_agent::features::Feature;
-use codex_agent::models_manager::manager::RefreshStrategy;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::SandboxPolicy;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::openai_models::ConfigShellToolType;
-use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ModelVisibility;
-use codex_protocol::openai_models::ModelsResponse;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::openai_models::ReasoningEffortPreset;
-use codex_protocol::openai_models::TruncationPolicyConfig;
-use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -96,7 +96,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
             }],
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
-            approval_policy: codex_agent::protocol::AskForApproval::Never,
+            approval_policy: adam_agent::protocol::AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: test.session_configured.model.clone(),
             effort: None,

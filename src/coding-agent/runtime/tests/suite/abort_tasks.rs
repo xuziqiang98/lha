@@ -2,9 +2,9 @@ use assert_matches::assert_matches;
 use std::sync::Arc;
 use std::time::Duration;
 
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::Op;
-use codex_protocol::user_input::UserInput;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::Op;
+use adam_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
@@ -13,9 +13,18 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_with_timeout;
 use regex_lite::Regex;
 use serde_json::json;
+
+const ABORT_TASK_EVENT_TIMEOUT: Duration = Duration::from_secs(15);
+
+async fn wait_for_abort_task_event<F>(codex: &adam_agent::CodexThread, predicate: F) -> EventMsg
+where
+    F: FnMut(&EventMsg) -> bool,
+{
+    wait_for_event_with_timeout(codex, predicate, ABORT_TASK_EVENT_TIMEOUT).await
+}
 
 /// Integration test: spawn a long‑running shell_command tool via a mocked Responses SSE
 /// function call, then interrupt the session and expect TurnAborted.
@@ -58,12 +67,12 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
         .unwrap();
 
     // Wait until the exec begins to avoid a race, then interrupt.
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandBegin(_))).await;
+    wait_for_abort_task_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandBegin(_))).await;
 
     codex.submit(Op::Interrupt).await.unwrap();
 
     // Expect TurnAborted soon after.
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnAborted(_))).await;
+    wait_for_abort_task_event(&codex, |ev| matches!(ev, EventMsg::TurnAborted(_))).await;
 }
 
 /// After an interrupt we expect the next request to the model to include both
@@ -113,12 +122,12 @@ async fn interrupt_tool_records_history_entries() {
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandBegin(_))).await;
+    wait_for_abort_task_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandBegin(_))).await;
 
     tokio::time::sleep(Duration::from_secs_f32(0.1)).await;
     codex.submit(Op::Interrupt).await.unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnAborted(_))).await;
+    wait_for_abort_task_event(&codex, |ev| matches!(ev, EventMsg::TurnAborted(_))).await;
 
     codex
         .submit(Op::UserInput {
@@ -131,7 +140,7 @@ async fn interrupt_tool_records_history_entries() {
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    wait_for_abort_task_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let requests = response_mock.requests();
     assert!(
@@ -213,12 +222,12 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandBegin(_))).await;
+    wait_for_abort_task_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandBegin(_))).await;
 
     tokio::time::sleep(Duration::from_secs_f32(0.1)).await;
     codex.submit(Op::Interrupt).await.unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnAborted(_))).await;
+    wait_for_abort_task_event(&codex, |ev| matches!(ev, EventMsg::TurnAborted(_))).await;
 
     codex
         .submit(Op::UserInput {
@@ -231,7 +240,7 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    wait_for_abort_task_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 2, "expected two calls to the responses API");

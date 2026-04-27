@@ -1,11 +1,11 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use adam_agent::protocol::AskForApproval;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::SandboxPolicy;
+use adam_protocol::user_input::UserInput;
 use anyhow::Result;
-use codex_agent::protocol::AskForApproval;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::SandboxPolicy;
-use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -77,14 +77,14 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: codex_protocol::config_types::ReasoningSummary::Auto,
+            summary: adam_protocol::config_types::ReasoningSummary::Auto,
             collaboration_mode: None,
             personality: None,
         })
         .await?;
 
     core_test_support::wait_for_event(test.codex.as_ref(), |event| {
-        matches!(event, codex_agent::protocol::EventMsg::TurnComplete(_))
+        matches!(event, adam_agent::protocol::EventMsg::TurnComplete(_))
     })
     .await;
 
@@ -124,7 +124,7 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
         .await?;
     let response =
         core_test_support::wait_for_event_match(test.codex.as_ref(), |event| match event {
-            codex_agent::protocol::EventMsg::ListSkillsResponse(response) => Some(response.clone()),
+            adam_agent::protocol::EventMsg::ListSkillsResponse(response) => Some(response.clone()),
             _ => None,
         })
         .await;
@@ -192,7 +192,7 @@ async fn list_skills_includes_system_cache_entries() -> Result<()> {
         .await?;
     let response =
         core_test_support::wait_for_event_match(test.codex.as_ref(), |event| match event {
-            codex_agent::protocol::EventMsg::ListSkillsResponse(response) => Some(response.clone()),
+            adam_agent::protocol::EventMsg::ListSkillsResponse(response) => Some(response.clone()),
             _ => None,
         })
         .await;
@@ -209,7 +209,7 @@ async fn list_skills_includes_system_cache_entries() -> Result<()> {
         .iter()
         .find(|skill| skill.name == SYSTEM_SKILL_NAME)
         .expect("expected system skill to be present");
-    assert_eq!(skill.scope, codex_protocol::protocol::SkillScope::System);
+    assert_eq!(skill.scope, adam_protocol::protocol::SkillScope::System);
     let path_str = skill.path.to_string_lossy().replace('\\', "/");
     let expected_path_suffix = format!("/skills/.system/{SYSTEM_SKILL_NAME}/SKILL.md");
     assert!(

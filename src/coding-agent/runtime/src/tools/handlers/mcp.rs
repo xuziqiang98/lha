@@ -8,7 +8,7 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use codex_llm::ToolResultPayload;
+use adam_llm::ToolResultPayload;
 
 pub struct McpHandler;
 

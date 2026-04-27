@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use adam_otel::OtelManager;
 use async_trait::async_trait;
-use codex_otel::OtelManager;
 use reqwest::Client as HttpClient;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::mpsc;

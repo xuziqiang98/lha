@@ -3,28 +3,28 @@
 // unified exec is not supported on Windows OS
 use std::sync::Arc;
 
+use adam_agent::CodexAuth;
+use adam_agent::config::Config;
+use adam_agent::features::Feature;
+use adam_agent::models_manager::manager::ModelsManager;
+use adam_agent::models_manager::manager::RefreshStrategy;
+use adam_agent::protocol::AskForApproval;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::ExecCommandSource;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::SandboxPolicy;
+use adam_llm::built_in_runtime_endpoints;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::openai_models::ConfigShellToolType;
+use adam_protocol::openai_models::ModelInfo;
+use adam_protocol::openai_models::ModelPreset;
+use adam_protocol::openai_models::ModelVisibility;
+use adam_protocol::openai_models::ModelsResponse;
+use adam_protocol::openai_models::ReasoningEffort;
+use adam_protocol::openai_models::ReasoningEffortPreset;
+use adam_protocol::openai_models::TruncationPolicyConfig;
+use adam_protocol::user_input::UserInput;
 use anyhow::Result;
-use codex_agent::CodexAuth;
-use codex_agent::config::Config;
-use codex_agent::features::Feature;
-use codex_agent::models_manager::manager::ModelsManager;
-use codex_agent::models_manager::manager::RefreshStrategy;
-use codex_agent::protocol::AskForApproval;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::ExecCommandSource;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::SandboxPolicy;
-use codex_llm::built_in_runtime_endpoints;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::openai_models::ConfigShellToolType;
-use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::openai_models::ModelVisibility;
-use codex_protocol::openai_models::ModelsResponse;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::openai_models::ReasoningEffortPreset;
-use codex_protocol::openai_models::TruncationPolicyConfig;
-use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -428,7 +428,7 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
     provider.base_url = Some(format!("{}/v1", server.uri()));
     let manager = ModelsManager::with_provider(
         adam_home.path().to_path_buf(),
-        codex_agent::auth::AuthManager::from_auth_for_testing(auth),
+        adam_agent::auth::AuthManager::from_auth_for_testing(auth),
         "mock-provider",
         provider,
     );
@@ -492,7 +492,7 @@ async fn remote_models_merge_adds_new_high_priority_first() -> Result<()> {
     provider.base_url = Some(format!("{}/v1", server.uri()));
     let manager = ModelsManager::with_provider(
         adam_home.path().to_path_buf(),
-        codex_agent::auth::AuthManager::from_auth_for_testing(auth),
+        adam_agent::auth::AuthManager::from_auth_for_testing(auth),
         "mock-provider",
         provider,
     );
@@ -540,7 +540,7 @@ async fn remote_models_merge_replaces_overlapping_model() -> Result<()> {
     provider.base_url = Some(format!("{}/v1", server.uri()));
     let manager = ModelsManager::with_provider(
         adam_home.path().to_path_buf(),
-        codex_agent::auth::AuthManager::from_auth_for_testing(auth),
+        adam_agent::auth::AuthManager::from_auth_for_testing(auth),
         "mock-provider",
         provider,
     );
@@ -585,7 +585,7 @@ async fn remote_models_merge_preserves_bundled_models_on_empty_response() -> Res
     provider.base_url = Some(format!("{}/v1", server.uri()));
     let manager = ModelsManager::with_provider(
         adam_home.path().to_path_buf(),
-        codex_agent::auth::AuthManager::from_auth_for_testing(auth),
+        adam_agent::auth::AuthManager::from_auth_for_testing(auth),
         "mock-provider",
         provider,
     );
@@ -632,7 +632,7 @@ async fn remote_models_request_times_out_after_5s() -> Result<()> {
     provider.base_url = Some(format!("{}/v1", server.uri()));
     let manager = ModelsManager::with_provider(
         adam_home.path().to_path_buf(),
-        codex_agent::auth::AuthManager::from_auth_for_testing(auth),
+        adam_agent::auth::AuthManager::from_auth_for_testing(auth),
         "mock-provider",
         provider,
     );
@@ -700,7 +700,7 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     provider.base_url = Some(format!("{}/v1", server.uri()));
     let manager = ModelsManager::with_provider(
         adam_home.path().to_path_buf(),
-        codex_agent::auth::AuthManager::from_auth_for_testing(auth),
+        adam_agent::auth::AuthManager::from_auth_for_testing(auth),
         "mock-provider",
         provider,
     );

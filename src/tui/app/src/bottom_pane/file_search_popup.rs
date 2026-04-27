@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use codex_file_search::FileMatch;
+use adam_file_search::FileMatch;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;

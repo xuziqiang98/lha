@@ -5,9 +5,9 @@ use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::provider::WireApi;
 use crate::telemetry::run_with_request_telemetry;
-use codex_client::HttpTransport;
-use codex_client::RequestTelemetry;
-use codex_llm_types::TranscriptItem;
+use adam_client::HttpTransport;
+use adam_client::RequestTelemetry;
+use adam_llm_types::TranscriptItem;
 use http::HeaderMap;
 use http::Method;
 use serde::Deserialize;
@@ -90,11 +90,11 @@ struct CompactHistoryResponse {
 mod tests {
     use super::*;
     use crate::provider::RetryConfig;
+    use adam_client::Request;
+    use adam_client::Response;
+    use adam_client::StreamResponse;
+    use adam_client::TransportError;
     use async_trait::async_trait;
-    use codex_client::Request;
-    use codex_client::Response;
-    use codex_client::StreamResponse;
-    use codex_client::TransportError;
     use http::HeaderMap;
     use std::time::Duration;
 

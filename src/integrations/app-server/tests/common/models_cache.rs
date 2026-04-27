@@ -1,8 +1,8 @@
+use adam_protocol::openai_models::ModelInfo;
+use adam_protocol::openai_models::ModelVisibility;
+use adam_protocol::openai_models::ModelsResponse;
 use chrono::DateTime;
 use chrono::Utc;
-use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ModelVisibility;
-use codex_protocol::openai_models::ModelsResponse;
 use serde_json::json;
 use std::path::Path;
 

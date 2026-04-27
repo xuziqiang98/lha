@@ -584,7 +584,7 @@ pub struct FuzzyFileSearchParams {
     pub cancellation_token: Option<String>,
 }
 
-/// Superset of [`codex_file_search::FileMatch`]
+/// Superset of [`adam_file_search::FileMatch`]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 pub struct FuzzyFileSearchResult {
     pub root: String,
@@ -654,11 +654,11 @@ client_notification_definitions! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adam_protocol::ThreadId;
+    use adam_protocol::account::PlanType;
+    use adam_protocol::parse_command::ParsedCommand;
+    use adam_protocol::protocol::AskForApproval;
     use anyhow::Result;
-    use codex_protocol::ThreadId;
-    use codex_protocol::account::PlanType;
-    use codex_protocol::parse_command::ParsedCommand;
-    use codex_protocol::protocol::AskForApproval;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;

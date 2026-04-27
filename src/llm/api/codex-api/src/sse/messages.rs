@@ -5,12 +5,12 @@ use crate::proposed_plan_parser::ProposedPlanParser;
 use crate::proposed_plan_parser::ProposedPlanSegment;
 use crate::proposed_plan_parser::extract_proposed_plan_text;
 use crate::telemetry::SseTelemetry;
-use codex_client::ByteStream;
-use codex_client::StreamResponse;
-use codex_llm_types::ContentItem;
-use codex_llm_types::TokenUsage;
-use codex_llm_types::ToolCallPayload;
-use codex_llm_types::TranscriptItem;
+use adam_client::ByteStream;
+use adam_client::StreamResponse;
+use adam_llm_types::ContentItem;
+use adam_llm_types::TokenUsage;
+use adam_llm_types::ToolCallPayload;
+use adam_llm_types::TranscriptItem;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use serde::Deserialize;
@@ -462,7 +462,7 @@ fn next_assistant_item_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_llm_types::TranscriptItem;
+    use adam_llm_types::TranscriptItem;
     use futures::TryStreamExt;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc;
@@ -471,7 +471,7 @@ mod tests {
     fn build_stream(body: &str) -> ByteStream {
         let reader = std::io::Cursor::new(body.to_string());
         let stream = ReaderStream::new(reader)
-            .map_err(|err| codex_client::TransportError::Network(err.to_string()));
+            .map_err(|err| adam_client::TransportError::Network(err.to_string()));
         Box::pin(stream)
     }
 

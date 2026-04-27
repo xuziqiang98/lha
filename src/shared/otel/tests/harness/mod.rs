@@ -1,6 +1,6 @@
-use codex_otel::metrics::MetricsClient;
-use codex_otel::metrics::MetricsConfig;
-use codex_otel::metrics::Result;
+use adam_otel::metrics::MetricsClient;
+use adam_otel::metrics::MetricsConfig;
+use adam_otel::metrics::Result;
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use opentelemetry_sdk::metrics::data::AggregatedMetrics;
@@ -15,7 +15,7 @@ pub(crate) fn build_metrics_with_defaults(
     let exporter = InMemoryMetricExporter::default();
     let mut config = MetricsConfig::in_memory(
         "test",
-        "codex-cli",
+        "adam-cli",
         env!("CARGO_PKG_VERSION"),
         exporter.clone(),
     );

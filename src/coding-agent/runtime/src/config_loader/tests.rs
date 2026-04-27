@@ -15,11 +15,11 @@ use crate::config_loader::config_requirements::ConfigRequirementsWithSources;
 use crate::config_loader::config_requirements::RequirementSource;
 use crate::config_loader::fingerprint::version_for_toml;
 use crate::config_loader::load_requirements_toml;
-use codex_protocol::config_types::TrustLevel;
-use codex_protocol::protocol::AskForApproval;
+use adam_protocol::config_types::TrustLevel;
+use adam_protocol::protocol::AskForApproval;
 #[cfg(target_os = "macos")]
-use codex_protocol::protocol::SandboxPolicy;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use adam_protocol::protocol::SandboxPolicy;
+use adam_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::Path;
@@ -126,7 +126,7 @@ async fn returns_config_error_for_schema_error_in_user_config() {
         .expect_err("expected error");
 
     let config_error = config_error_from_io(&err);
-    let _guard = codex_utils_absolute_path::AbsolutePathBufGuard::new(tmp.path());
+    let _guard = adam_utils_absolute_path::AbsolutePathBufGuard::new(tmp.path());
     let expected_config_error =
         super::diagnostics::config_error_from_config_toml(&config_path, contents)
             .expect("schema error");
@@ -140,7 +140,7 @@ fn schema_error_points_to_feature_value() {
     let config_path = tmp.path().join(CONFIG_TOML_FILE);
     std::fs::write(&config_path, contents).expect("write config");
 
-    let _guard = codex_utils_absolute_path::AbsolutePathBufGuard::new(tmp.path());
+    let _guard = adam_utils_absolute_path::AbsolutePathBufGuard::new(tmp.path());
     let error = super::diagnostics::config_error_from_config_toml(&config_path, contents)
         .expect("schema error");
 
@@ -1129,11 +1129,11 @@ mod requirements_exec_policy_tests {
     use crate::config_loader::ConfigRequirementsToml;
     use crate::config_loader::RequirementSource;
     use crate::exec_policy::load_exec_policy;
-    use codex_app_server_protocol::ConfigLayerSource;
-    use codex_execpolicy::Decision;
-    use codex_execpolicy::Evaluation;
-    use codex_execpolicy::RuleMatch;
-    use codex_utils_absolute_path::AbsolutePathBuf;
+    use adam_app_server_protocol::ConfigLayerSource;
+    use adam_execpolicy::Decision;
+    use adam_execpolicy::Evaluation;
+    use adam_execpolicy::RuleMatch;
+    use adam_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::path::Path;
     use tempfile::tempdir;

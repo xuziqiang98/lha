@@ -1,21 +1,21 @@
+use adam_app_server_protocol::JSONRPCResponse;
+use adam_app_server_protocol::RequestId;
+use adam_app_server_protocol::ServerRequest;
+use adam_app_server_protocol::ThreadStartParams;
+use adam_app_server_protocol::ThreadStartResponse;
+use adam_app_server_protocol::TurnStartParams;
+use adam_app_server_protocol::TurnStartResponse;
+use adam_app_server_protocol::UserInput as V2UserInput;
+use adam_protocol::config_types::CollaborationMode;
+use adam_protocol::config_types::ModeKind;
+use adam_protocol::config_types::Settings;
+use adam_protocol::openai_models::ReasoningEffort;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_request_user_input_sse_response;
 use app_test_support::to_response;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::ThreadStartParams;
-use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::TurnStartParams;
-use codex_app_server_protocol::TurnStartResponse;
-use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::Settings;
-use codex_protocol::openai_models::ReasoningEffort;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -113,7 +113,7 @@ async fn request_user_input_round_trip() -> Result<()> {
 
 fn create_config_toml(adam_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
     let features = std::collections::BTreeMap::from([(
-        codex_agent::features::Feature::CollaborationModes,
+        adam_agent::features::Feature::CollaborationModes,
         true,
     )]);
     app_test_support::write_mock_responses_config_toml_with_options(

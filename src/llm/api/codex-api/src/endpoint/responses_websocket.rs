@@ -7,7 +7,7 @@ use crate::provider::Provider;
 use crate::sse::responses::ResponsesStreamEvent;
 use crate::sse::responses::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
-use codex_client::TransportError;
+use adam_client::TransportError;
 use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;

@@ -1,4 +1,4 @@
-use codex_llm::Error as LlmError;
+use adam_llm::Error as LlmError;
 
 use crate::error::CodexErr;
 use crate::error::ModelCapError;
@@ -44,16 +44,16 @@ impl From<LlmError> for CodexErr {
             LlmError::UnauthorizedRecoveryFailed { reason, message } => {
                 CodexErr::RefreshTokenFailed(RefreshTokenFailedError::new(
                     match reason {
-                        codex_llm::UnauthorizedRecoveryFailedReason::Expired => {
+                        adam_llm::UnauthorizedRecoveryFailedReason::Expired => {
                             RefreshTokenFailedReason::Expired
                         }
-                        codex_llm::UnauthorizedRecoveryFailedReason::Exhausted => {
+                        adam_llm::UnauthorizedRecoveryFailedReason::Exhausted => {
                             RefreshTokenFailedReason::Exhausted
                         }
-                        codex_llm::UnauthorizedRecoveryFailedReason::Revoked => {
+                        adam_llm::UnauthorizedRecoveryFailedReason::Revoked => {
                             RefreshTokenFailedReason::Revoked
                         }
-                        codex_llm::UnauthorizedRecoveryFailedReason::Other => {
+                        adam_llm::UnauthorizedRecoveryFailedReason::Other => {
                             RefreshTokenFailedReason::Other
                         }
                     },
@@ -85,16 +85,16 @@ impl From<LlmError> for CodexErr {
     }
 }
 
-fn map_plan_type(plan_type: codex_protocol::account::PlanType) -> PlanType {
+fn map_plan_type(plan_type: adam_protocol::account::PlanType) -> PlanType {
     match plan_type {
-        codex_protocol::account::PlanType::Free => PlanType::Known(KnownPlan::Free),
-        codex_protocol::account::PlanType::Go => PlanType::Known(KnownPlan::Go),
-        codex_protocol::account::PlanType::Plus => PlanType::Known(KnownPlan::Plus),
-        codex_protocol::account::PlanType::Pro => PlanType::Known(KnownPlan::Pro),
-        codex_protocol::account::PlanType::Team => PlanType::Known(KnownPlan::Team),
-        codex_protocol::account::PlanType::Business => PlanType::Known(KnownPlan::Business),
-        codex_protocol::account::PlanType::Enterprise => PlanType::Known(KnownPlan::Enterprise),
-        codex_protocol::account::PlanType::Edu => PlanType::Known(KnownPlan::Edu),
-        codex_protocol::account::PlanType::Unknown => PlanType::Unknown("unknown".to_string()),
+        adam_protocol::account::PlanType::Free => PlanType::Known(KnownPlan::Free),
+        adam_protocol::account::PlanType::Go => PlanType::Known(KnownPlan::Go),
+        adam_protocol::account::PlanType::Plus => PlanType::Known(KnownPlan::Plus),
+        adam_protocol::account::PlanType::Pro => PlanType::Known(KnownPlan::Pro),
+        adam_protocol::account::PlanType::Team => PlanType::Known(KnownPlan::Team),
+        adam_protocol::account::PlanType::Business => PlanType::Known(KnownPlan::Business),
+        adam_protocol::account::PlanType::Enterprise => PlanType::Known(KnownPlan::Enterprise),
+        adam_protocol::account::PlanType::Edu => PlanType::Known(KnownPlan::Edu),
+        adam_protocol::account::PlanType::Unknown => PlanType::Unknown("unknown".to_string()),
     }
 }

@@ -1,6 +1,6 @@
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
-use codex_protocol::models::TranscriptItem;
+use adam_protocol::models::TranscriptItem;
 
 /// Whether a rollout `item` should be persisted in rollout files.
 #[inline]
@@ -50,8 +50,8 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
             // them on resume without bloating rollouts with every item lifecycle.
             matches!(
                 event.item,
-                codex_protocol::items::TurnItem::Plan(_)
-                    | codex_protocol::items::TurnItem::ContextCompaction(_)
+                adam_protocol::items::TurnItem::Plan(_)
+                    | adam_protocol::items::TurnItem::ContextCompaction(_)
             )
         }
         EventMsg::Error(_)
@@ -118,10 +118,10 @@ mod tests {
     use super::should_persist_event_msg;
     use crate::protocol::EventMsg;
     use crate::protocol::ItemCompletedEvent;
-    use codex_protocol::ThreadId;
-    use codex_protocol::items::ContextCompactionItem;
-    use codex_protocol::items::PlanItem;
-    use codex_protocol::items::TurnItem;
+    use adam_protocol::ThreadId;
+    use adam_protocol::items::ContextCompactionItem;
+    use adam_protocol::items::PlanItem;
+    use adam_protocol::items::TurnItem;
     use pretty_assertions::assert_eq;
 
     #[test]

@@ -3,24 +3,24 @@ use crate::rollout;
 use crate::rollout::list::parse_timestamp_uuid_from_filename;
 use crate::rollout::recorder::RolloutRecorder;
 use crate::rollout::recorder::is_unsupported_rollout_schema_anyhow;
+use adam_otel::OtelManager;
+use adam_protocol::ThreadId;
+use adam_protocol::protocol::AskForApproval;
+use adam_protocol::protocol::RolloutItem;
+use adam_protocol::protocol::SandboxPolicy;
+use adam_protocol::protocol::SessionMetaLine;
+use adam_protocol::protocol::SessionSource;
+use adam_state::BackfillStats;
+use adam_state::DB_ERROR_METRIC;
+use adam_state::DB_METRIC_BACKFILL;
+use adam_state::DB_METRIC_BACKFILL_DURATION_MS;
+use adam_state::ExtractionOutcome;
+use adam_state::ThreadMetadataBuilder;
+use adam_state::apply_rollout_item;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Timelike;
 use chrono::Utc;
-use codex_otel::OtelManager;
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::SessionMetaLine;
-use codex_protocol::protocol::SessionSource;
-use codex_state::BackfillStats;
-use codex_state::DB_ERROR_METRIC;
-use codex_state::DB_METRIC_BACKFILL;
-use codex_state::DB_METRIC_BACKFILL_DURATION_MS;
-use codex_state::ExtractionOutcome;
-use codex_state::ThreadMetadataBuilder;
-use codex_state::apply_rollout_item;
 use std::cmp::Reverse;
 use std::path::Path;
 use std::path::PathBuf;
@@ -127,7 +127,7 @@ pub(crate) async fn extract_metadata_from_rollout(
 }
 
 pub(crate) async fn backfill_sessions(
-    runtime: &codex_state::StateRuntime,
+    runtime: &adam_state::StateRuntime,
     config: &Config,
     otel: Option<&OtelManager>,
 ) {
@@ -284,18 +284,18 @@ async fn collect_rollout_paths(root: &Path) -> std::io::Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adam_protocol::ThreadId;
+    use adam_protocol::protocol::CompactedItem;
+    use adam_protocol::protocol::RolloutItem;
+    use adam_protocol::protocol::RolloutLine;
+    use adam_protocol::protocol::SessionMeta;
+    use adam_protocol::protocol::SessionMetaLine;
+    use adam_protocol::protocol::SessionSource;
+    use adam_state::ThreadMetadataBuilder;
     use chrono::DateTime;
     use chrono::NaiveDateTime;
     use chrono::Timelike;
     use chrono::Utc;
-    use codex_protocol::ThreadId;
-    use codex_protocol::protocol::CompactedItem;
-    use codex_protocol::protocol::RolloutItem;
-    use codex_protocol::protocol::RolloutLine;
-    use codex_protocol::protocol::SessionMeta;
-    use codex_protocol::protocol::SessionMetaLine;
-    use codex_protocol::protocol::SessionSource;
-    use codex_state::ThreadMetadataBuilder;
     use pretty_assertions::assert_eq;
     use std::fs::File;
     use std::io::Write;
@@ -318,7 +318,7 @@ mod tests {
             cwd: dir.path().to_path_buf(),
             originator: "cli".to_string(),
             cli_version: "0.0.0".to_string(),
-            rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+            rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
             source: SessionSource::default(),
             model_provider: Some("openai".to_string()),
             base_instructions: None,

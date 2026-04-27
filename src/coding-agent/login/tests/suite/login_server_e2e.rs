@@ -5,11 +5,11 @@ use std::net::TcpListener;
 use std::thread;
 use std::time::Duration;
 
+use adam_agent::auth::AuthCredentialsStoreMode;
+use adam_login::ServerOptions;
+use adam_login::run_login_server;
 use anyhow::Result;
 use base64::Engine;
-use codex_agent::auth::AuthCredentialsStoreMode;
-use codex_login::ServerOptions;
-use codex_login::run_login_server;
 use core_test_support::skip_if_no_network;
 use tempfile::tempdir;
 
@@ -112,7 +112,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
     let opts = ServerOptions {
         adam_home: server_home,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-        client_id: codex_login::CLIENT_ID.to_string(),
+        client_id: adam_login::CLIENT_ID.to_string(),
         issuer,
         port: 0,
         open_browser: false,
@@ -173,7 +173,7 @@ async fn creates_missing_adam_home_dir() -> Result<()> {
     let opts = ServerOptions {
         adam_home: server_home,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-        client_id: codex_login::CLIENT_ID.to_string(),
+        client_id: adam_login::CLIENT_ID.to_string(),
         issuer,
         port: 0,
         open_browser: false,
@@ -212,7 +212,7 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
     let opts = ServerOptions {
         adam_home: adam_home.clone(),
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-        client_id: codex_login::CLIENT_ID.to_string(),
+        client_id: adam_login::CLIENT_ID.to_string(),
         issuer,
         port: 0,
         open_browser: false,
@@ -268,7 +268,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
     let first_opts = ServerOptions {
         adam_home: first_adam_home,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-        client_id: codex_login::CLIENT_ID.to_string(),
+        client_id: adam_login::CLIENT_ID.to_string(),
         issuer: issuer.clone(),
         port: 0,
         open_browser: false,
@@ -288,7 +288,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
     let second_opts = ServerOptions {
         adam_home: second_adam_home,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-        client_id: codex_login::CLIENT_ID.to_string(),
+        client_id: adam_login::CLIENT_ID.to_string(),
         issuer,
         port: login_port,
         open_browser: false,

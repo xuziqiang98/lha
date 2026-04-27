@@ -2,23 +2,23 @@
 
 use std::fs;
 
+use adam_agent::CodexAuth;
+use adam_agent::features::Feature;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::ItemCompletedEvent;
+use adam_agent::protocol::ItemStartedEvent;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::RolloutItem;
+use adam_agent::protocol::RolloutLine;
+use adam_protocol::config_types::CollaborationMode;
+use adam_protocol::config_types::ModeKind;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::config_types::Settings;
+use adam_protocol::items::TurnItem;
+use adam_protocol::models::ContentItem;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::user_input::UserInput;
 use anyhow::Result;
-use codex_agent::CodexAuth;
-use codex_agent::features::Feature;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::ItemCompletedEvent;
-use codex_agent::protocol::ItemStartedEvent;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::RolloutItem;
-use codex_agent::protocol::RolloutLine;
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::Settings;
-use codex_protocol::items::TurnItem;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
@@ -472,8 +472,8 @@ async fn remote_compact_backfills_latest_plan_into_replacement_history() -> Resu
             }],
             final_output_json_schema: None,
             cwd: std::env::current_dir()?,
-            approval_policy: codex_agent::protocol::AskForApproval::Never,
-            sandbox_policy: codex_agent::protocol::SandboxPolicy::DangerFullAccess,
+            approval_policy: adam_agent::protocol::AskForApproval::Never,
+            sandbox_policy: adam_agent::protocol::SandboxPolicy::DangerFullAccess,
             model: harness.test().session_configured.model.clone(),
             effort: None,
             summary: ReasoningSummary::Auto,
@@ -589,8 +589,8 @@ async fn remote_compact_backfills_recent_skills_into_replacement_history() -> Re
             ],
             final_output_json_schema: None,
             cwd: harness.test().cwd_path().to_path_buf(),
-            approval_policy: codex_agent::protocol::AskForApproval::Never,
-            sandbox_policy: codex_agent::protocol::SandboxPolicy::DangerFullAccess,
+            approval_policy: adam_agent::protocol::AskForApproval::Never,
+            sandbox_policy: adam_agent::protocol::SandboxPolicy::DangerFullAccess,
             model: harness.test().session_configured.model.clone(),
             effort: None,
             summary: ReasoningSummary::Auto,

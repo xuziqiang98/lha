@@ -31,85 +31,85 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::version::CODEX_CLI_VERSION;
-use codex_agent::config::Config;
-use codex_agent::config::ConstraintResult;
-use codex_agent::config::types::Notifications;
-use codex_agent::features::FEATURES;
-use codex_agent::features::Feature;
-use codex_agent::git_info::current_branch_name;
-use codex_agent::git_info::local_git_branches;
-use codex_agent::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
-use codex_agent::protocol::AgentMessageDeltaEvent;
-use codex_agent::protocol::AgentMessageEvent;
-use codex_agent::protocol::AgentReasoningDeltaEvent;
-use codex_agent::protocol::AgentReasoningEvent;
-use codex_agent::protocol::AgentReasoningRawContentDeltaEvent;
-use codex_agent::protocol::AgentReasoningRawContentEvent;
-use codex_agent::protocol::ApplyPatchApprovalRequestEvent;
-use codex_agent::protocol::BackgroundEventEvent;
-use codex_agent::protocol::CodexErrorInfo;
-use codex_agent::protocol::CollabAgentSpawnBeginEvent;
-use codex_agent::protocol::CreditsSnapshot;
-use codex_agent::protocol::DeprecationNoticeEvent;
-use codex_agent::protocol::ErrorEvent;
-use codex_agent::protocol::Event;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::ExecApprovalRequestEvent;
-use codex_agent::protocol::ExecCommandBeginEvent;
-use codex_agent::protocol::ExecCommandEndEvent;
-use codex_agent::protocol::ExecCommandOutputDeltaEvent;
-use codex_agent::protocol::ExecCommandSource;
-use codex_agent::protocol::ExitedReviewModeEvent;
-use codex_agent::protocol::ListCustomPromptsResponseEvent;
-use codex_agent::protocol::ListSkillsResponseEvent;
-use codex_agent::protocol::McpListToolsResponseEvent;
-use codex_agent::protocol::McpStartupCompleteEvent;
-use codex_agent::protocol::McpStartupStatus;
-use codex_agent::protocol::McpStartupUpdateEvent;
-use codex_agent::protocol::McpToolCallBeginEvent;
-use codex_agent::protocol::McpToolCallEndEvent;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::PatchApplyBeginEvent;
-use codex_agent::protocol::RateLimitSnapshot;
-use codex_agent::protocol::ReviewRequest;
-use codex_agent::protocol::ReviewTarget;
-use codex_agent::protocol::SkillMetadata as ProtocolSkillMetadata;
-use codex_agent::protocol::StreamErrorEvent;
-use codex_agent::protocol::TerminalInteractionEvent;
-use codex_agent::protocol::TokenUsage;
-use codex_agent::protocol::TokenUsageInfo;
-use codex_agent::protocol::TurnAbortReason;
-use codex_agent::protocol::TurnCompleteEvent;
-use codex_agent::protocol::TurnDiffEvent;
-use codex_agent::protocol::UndoCompletedEvent;
-use codex_agent::protocol::UndoStartedEvent;
-use codex_agent::protocol::UserMessageEvent;
-use codex_agent::protocol::ViewImageToolCallEvent;
-use codex_agent::protocol::WarningEvent;
-use codex_agent::protocol::WebSearchBeginEvent;
-use codex_agent::protocol::WebSearchEndEvent;
-use codex_agent::skills::model::SkillMetadata;
+use adam_agent::config::Config;
+use adam_agent::config::ConstraintResult;
+use adam_agent::config::types::Notifications;
+use adam_agent::features::FEATURES;
+use adam_agent::features::Feature;
+use adam_agent::git_info::current_branch_name;
+use adam_agent::git_info::local_git_branches;
+use adam_agent::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
+use adam_agent::protocol::AgentMessageDeltaEvent;
+use adam_agent::protocol::AgentMessageEvent;
+use adam_agent::protocol::AgentReasoningDeltaEvent;
+use adam_agent::protocol::AgentReasoningEvent;
+use adam_agent::protocol::AgentReasoningRawContentDeltaEvent;
+use adam_agent::protocol::AgentReasoningRawContentEvent;
+use adam_agent::protocol::ApplyPatchApprovalRequestEvent;
+use adam_agent::protocol::BackgroundEventEvent;
+use adam_agent::protocol::CodexErrorInfo;
+use adam_agent::protocol::CollabAgentSpawnBeginEvent;
+use adam_agent::protocol::CreditsSnapshot;
+use adam_agent::protocol::DeprecationNoticeEvent;
+use adam_agent::protocol::ErrorEvent;
+use adam_agent::protocol::Event;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::ExecApprovalRequestEvent;
+use adam_agent::protocol::ExecCommandBeginEvent;
+use adam_agent::protocol::ExecCommandEndEvent;
+use adam_agent::protocol::ExecCommandOutputDeltaEvent;
+use adam_agent::protocol::ExecCommandSource;
+use adam_agent::protocol::ExitedReviewModeEvent;
+use adam_agent::protocol::ListCustomPromptsResponseEvent;
+use adam_agent::protocol::ListSkillsResponseEvent;
+use adam_agent::protocol::McpListToolsResponseEvent;
+use adam_agent::protocol::McpStartupCompleteEvent;
+use adam_agent::protocol::McpStartupStatus;
+use adam_agent::protocol::McpStartupUpdateEvent;
+use adam_agent::protocol::McpToolCallBeginEvent;
+use adam_agent::protocol::McpToolCallEndEvent;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::PatchApplyBeginEvent;
+use adam_agent::protocol::RateLimitSnapshot;
+use adam_agent::protocol::ReviewRequest;
+use adam_agent::protocol::ReviewTarget;
+use adam_agent::protocol::SkillMetadata as ProtocolSkillMetadata;
+use adam_agent::protocol::StreamErrorEvent;
+use adam_agent::protocol::TerminalInteractionEvent;
+use adam_agent::protocol::TokenUsage;
+use adam_agent::protocol::TokenUsageInfo;
+use adam_agent::protocol::TurnAbortReason;
+use adam_agent::protocol::TurnCompleteEvent;
+use adam_agent::protocol::TurnDiffEvent;
+use adam_agent::protocol::UndoCompletedEvent;
+use adam_agent::protocol::UndoStartedEvent;
+use adam_agent::protocol::UserMessageEvent;
+use adam_agent::protocol::ViewImageToolCallEvent;
+use adam_agent::protocol::WarningEvent;
+use adam_agent::protocol::WebSearchBeginEvent;
+use adam_agent::protocol::WebSearchEndEvent;
+use adam_agent::skills::model::SkillMetadata;
 #[cfg(target_os = "windows")]
-use codex_agent::windows_sandbox::WindowsSandboxLevelExt;
-use codex_backend_client::Client as BackendClient;
-use codex_chatgpt::connectors;
-use codex_otel::OtelManager;
-use codex_protocol::ThreadId;
-use codex_protocol::account::PlanType;
-use codex_protocol::approvals::ElicitationRequestEvent;
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::CollaborationModeMask;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::Settings;
+use adam_agent::windows_sandbox::WindowsSandboxLevelExt;
+use adam_backend_client::Client as BackendClient;
+use adam_chatgpt::connectors;
+use adam_otel::OtelManager;
+use adam_protocol::ThreadId;
+use adam_protocol::account::PlanType;
+use adam_protocol::approvals::ElicitationRequestEvent;
+use adam_protocol::config_types::CollaborationMode;
+use adam_protocol::config_types::CollaborationModeMask;
+use adam_protocol::config_types::ModeKind;
+use adam_protocol::config_types::Personality;
+use adam_protocol::config_types::Settings;
 #[cfg(target_os = "windows")]
-use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::models::local_image_label_text;
-use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::request_user_input::RequestUserInputEvent;
-use codex_protocol::user_input::TextElement;
-use codex_protocol::user_input::UserInput;
-use codex_utils_sleep_inhibitor::SleepInhibitor;
+use adam_protocol::config_types::WindowsSandboxLevel;
+use adam_protocol::models::local_image_label_text;
+use adam_protocol::parse_command::ParsedCommand;
+use adam_protocol::request_user_input::RequestUserInputEvent;
+use adam_protocol::user_input::TextElement;
+use adam_protocol::user_input::UserInput;
+use adam_utils_sleep_inhibitor::SleepInhibitor;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -209,19 +209,19 @@ use self::skills::find_skill_mentions_with_tool_mentions;
 use crate::streaming::controller::PlanStreamController;
 use crate::streaming::controller::StreamController;
 
+use adam_agent::AuthManager;
+use adam_agent::CodexAuth;
+use adam_agent::ThreadManager;
+use adam_agent::auth::AuthMode;
+use adam_agent::protocol::AskForApproval;
+use adam_agent::protocol::SandboxPolicy;
+use adam_common::approval_presets::ApprovalPreset;
+use adam_common::approval_presets::builtin_approval_presets;
+use adam_file_search::FileMatch;
+use adam_protocol::openai_models::ModelPreset;
+use adam_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use adam_protocol::plan_tool::UpdatePlanArgs;
 use chrono::Local;
-use codex_agent::AuthManager;
-use codex_agent::CodexAuth;
-use codex_agent::ThreadManager;
-use codex_agent::auth::AuthMode;
-use codex_agent::protocol::AskForApproval;
-use codex_agent::protocol::SandboxPolicy;
-use codex_common::approval_presets::ApprovalPreset;
-use codex_common::approval_presets::builtin_approval_presets;
-use codex_file_search::FileMatch;
-use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
@@ -391,7 +391,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) initial_user_message: Option<UserMessage>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
-    pub(crate) feedback: codex_feedback::CodexFeedback,
+    pub(crate) feedback: adam_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
     pub(crate) model: Option<String>,
     pub(crate) otel_manager: OtelManager,
@@ -480,7 +480,7 @@ pub(crate) enum TranscriptHostMode {
 /// intent (`Op` submissions and `AppEvent` requests).
 ///
 /// It is not responsible for running the agent itself; it reflects progress by updating UI state
-/// and by sending requests back to codex-coding-agent.
+/// and by sending requests back to adam-coding-agent.
 ///
 /// Quit/interrupt behavior intentionally spans layers: the bottom pane owns local input routing
 /// (which view gets Ctrl+C), while `ChatWidget` owns process-level decisions such as interrupting
@@ -538,7 +538,7 @@ pub(crate) struct ChatWidget {
     turn_sleep_inhibitor: SleepInhibitor,
     task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
-    /// Tracks whether codex-coding-agent currently considers an agent turn to be in progress.
+    /// Tracks whether adam-coding-agent currently considers an agent turn to be in progress.
     ///
     /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
     /// can update the status header without accidentally clearing the spinner for an active turn.
@@ -623,7 +623,7 @@ pub(crate) struct ChatWidget {
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
-    feedback: codex_feedback::CodexFeedback,
+    feedback: adam_feedback::CodexFeedback,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
     external_editor_state: ExternalEditorState,
@@ -884,7 +884,7 @@ impl ChatWidget {
     }
 
     // --- Small event handlers ---
-    fn on_session_configured(&mut self, event: codex_agent::protocol::SessionConfiguredEvent) {
+    fn on_session_configured(&mut self, event: adam_agent::protocol::SessionConfiguredEvent) {
         let request_redraw = !self.suppress_session_configured_redraw;
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
@@ -928,7 +928,7 @@ impl ChatWidget {
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
-        // Ask codex-coding-agent to enumerate custom prompts for this session.
+        // Ask adam-coding-agent to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
         self.submit_op(Op::ListSkills {
             cwds: Vec::new(),
@@ -945,7 +945,7 @@ impl ChatWidget {
         }
     }
 
-    fn on_thread_name_updated(&mut self, event: codex_agent::protocol::ThreadNameUpdatedEvent) {
+    fn on_thread_name_updated(&mut self, event: adam_agent::protocol::ThreadNameUpdatedEvent) {
         if self.thread_id == Some(event.thread_id) {
             self.thread_name = event.thread_name;
             self.request_redraw();
@@ -1728,7 +1728,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_patch_apply_end(&mut self, event: codex_agent::protocol::PatchApplyEndEvent) {
+    fn on_patch_apply_end(&mut self, event: adam_agent::protocol::PatchApplyEndEvent) {
         let ev2 = event.clone();
         self.defer_or_handle(
             |q| q.push_patch_end(event),
@@ -1890,9 +1890,9 @@ impl ChatWidget {
 
     fn on_get_history_entry_response(
         &mut self,
-        event: codex_agent::protocol::GetHistoryEntryResponseEvent,
+        event: adam_agent::protocol::GetHistoryEntryResponseEvent,
     ) {
-        let codex_agent::protocol::GetHistoryEntryResponseEvent {
+        let adam_agent::protocol::GetHistoryEntryResponseEvent {
             offset,
             log_id,
             entry,
@@ -2129,7 +2129,7 @@ impl ChatWidget {
 
     pub(crate) fn handle_patch_apply_end_now(
         &mut self,
-        event: codex_agent::protocol::PatchApplyEndEvent,
+        event: adam_agent::protocol::PatchApplyEndEvent,
     ) {
         // If the patch was successful, just let the "Edited" block stand.
         // Otherwise, add a failure block.
@@ -2447,7 +2447,7 @@ impl ChatWidget {
         widget.sync_personality_command_enabled();
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
-            codex_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+            adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                 && matches!(
                     WindowsSandboxLevel::from_config(&widget.config),
                     WindowsSandboxLevel::RestrictedToken
@@ -2600,8 +2600,8 @@ impl ChatWidget {
     /// Create a ChatWidget attached to an existing conversation (e.g., a fork).
     pub(crate) fn new_from_existing(
         common: ChatWidgetInit,
-        conversation: std::sync::Arc<codex_agent::CodexThread>,
-        session_configured: codex_agent::protocol::SessionConfiguredEvent,
+        conversation: std::sync::Arc<adam_agent::CodexThread>,
+        session_configured: adam_agent::protocol::SessionConfiguredEvent,
     ) -> Self {
         let ChatWidgetInit {
             config,
@@ -2734,7 +2734,7 @@ impl ChatWidget {
         widget.sync_personality_command_enabled();
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
-            codex_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+            adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                 && matches!(
                     WindowsSandboxLevel::from_config(&widget.config),
                     WindowsSandboxLevel::RestrictedToken
@@ -3031,7 +3031,7 @@ impl ChatWidget {
                     let windows_degraded_sandbox_enabled =
                         matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
                     if !windows_degraded_sandbox_enabled
-                        || !codex_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                        || !adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                     {
                         // This command should not be visible/recognized outside degraded mode,
                         // but guard anyway in case something dispatches it directly.
@@ -3076,7 +3076,7 @@ impl ChatWidget {
                 self.request_quit_without_confirmation();
             }
             SlashCommand::Logout => {
-                if let Err(e) = codex_agent::auth::logout(
+                if let Err(e) = adam_agent::auth::logout(
                     &self.config.adam_home,
                     self.config.cli_auth_credentials_store_mode,
                 ) {
@@ -3136,11 +3136,11 @@ impl ChatWidget {
                 }
             }
             SlashCommand::TestApproval => {
-                use codex_agent::protocol::EventMsg;
+                use adam_agent::protocol::EventMsg;
                 use std::collections::HashMap;
 
-                use codex_agent::protocol::ApplyPatchApprovalRequestEvent;
-                use codex_agent::protocol::FileChange;
+                use adam_agent::protocol::ApplyPatchApprovalRequestEvent;
+                use adam_agent::protocol::FileChange;
 
                 self.app_event_tx.send(AppEvent::CodexEvent(Event {
                     id: "1".to_string(),
@@ -3190,7 +3190,7 @@ impl ChatWidget {
         let trimmed = args.trim();
         match cmd {
             SlashCommand::Rename if !trimmed.is_empty() => {
-                let Some(name) = codex_agent::util::normalize_thread_name(trimmed) else {
+                let Some(name) = adam_agent::util::normalize_thread_name(trimmed) else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
                     return;
                 };
@@ -3235,7 +3235,7 @@ impl ChatWidget {
             "Type a name and press Enter".to_string(),
             None,
             Box::new(move |name: String| {
-                let Some(name) = codex_agent::util::normalize_thread_name(&name) else {
+                let Some(name) = adam_agent::util::normalize_thread_name(&name) else {
                     tx.send_history_cell(Box::new(history_cell::new_error_event(
                         "Thread name cannot be empty.".to_string(),
                     )));
@@ -3656,7 +3656,7 @@ impl ChatWidget {
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_) => {}
             EventMsg::ItemCompleted(event) => {
-                if let codex_protocol::items::TurnItem::ContextCompaction(_) = &event.item {
+                if let adam_protocol::items::TurnItem::ContextCompaction(_) = &event.item {
                     // Replay omits the outer event id, but legacy compact events still follow
                     // structured compaction events in order. Reserve a suppression slot even for
                     // parent-thread compactions so fork replay does not misattribute them.
@@ -3677,7 +3677,7 @@ impl ChatWidget {
                         }
                     }
                 }
-                if let codex_protocol::items::TurnItem::Plan(plan_item) = event.item {
+                if let adam_protocol::items::TurnItem::Plan(plan_item) = event.item {
                     self.on_plan_item_completed(plan_item.text);
                 }
             }
@@ -3734,7 +3734,7 @@ impl ChatWidget {
         self.is_review_mode = true;
         let hint = review
             .user_facing_hint
-            .unwrap_or_else(|| codex_agent::review_prompts::user_facing_hint(&review.target));
+            .unwrap_or_else(|| adam_agent::review_prompts::user_facing_hint(&review.target));
         let banner = format!(">> Code review started: {hint} <<");
         self.add_to_history(history_cell::new_review_status_line(banner));
         self.request_redraw();
@@ -4401,7 +4401,7 @@ impl ChatWidget {
 
         let header = self.model_menu_header(
             "Select Model and Effort",
-            "Access legacy models by running codey -m <model_name> or in your config.toml",
+            "Access legacy models by running adam -m <model_name> or in your config.toml",
         );
         self.bottom_pane.show_selection_view(SelectionViewParams {
             footer_hint: Some("Press enter to select reasoning effort, or esc to dismiss.".into()),
@@ -4719,7 +4719,7 @@ impl ChatWidget {
         #[cfg(not(target_os = "windows"))]
         let windows_degraded_sandbox_enabled = false;
 
-        let show_elevate_sandbox_hint = codex_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+        let show_elevate_sandbox_hint = adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
             && windows_degraded_sandbox_enabled
             && presets.iter().any(|preset| preset.id == "auto");
 
@@ -4760,8 +4760,8 @@ impl ChatWidget {
                         == WindowsSandboxLevel::Disabled
                     {
                         let preset_clone = preset.clone();
-                        if codex_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                            && codex_agent::windows_sandbox::sandbox_setup_is_complete(
+                        if adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                            && adam_agent::windows_sandbox::sandbox_setup_is_complete(
                                 self.config.adam_home.as_path(),
                             )
                         {
@@ -4906,7 +4906,7 @@ impl ChatWidget {
         }
         let cwd = self.config.cwd.clone();
         let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
-        match codex_windows_sandbox::apply_world_writable_scan_and_denies(
+        match adam_windows_sandbox::apply_world_writable_scan_and_denies(
             self.config.adam_home.as_path(),
             cwd.as_path(),
             &env_map,
@@ -5111,7 +5111,7 @@ impl ChatWidget {
     pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, preset: ApprovalPreset) {
         use ratatui_macros::line;
 
-        if !codex_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED {
+        if !adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED {
             // Legacy flow (pre-NUX): explain the experimental sandbox and let the user enable it
             // directly (no elevation prompts).
             let mut header = ColumnRenderable::new();
@@ -5473,7 +5473,7 @@ impl ChatWidget {
             Feature::WindowsSandbox | Feature::WindowsSandboxElevated
         ) {
             self.bottom_pane.set_windows_degraded_sandbox_active(
-                codex_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                     && matches!(
                         WindowsSandboxLevel::from_config(&self.config),
                         WindowsSandboxLevel::RestrictedToken
@@ -5899,8 +5899,8 @@ impl ChatWidget {
     }
 
     fn rename_confirmation_cell(name: &str, thread_id: Option<ThreadId>) -> PlainHistoryCell {
-        let resume_cmd = codex_agent::util::resume_command(Some(name), thread_id)
-            .unwrap_or_else(|| format!("codey resume {name}"));
+        let resume_cmd = adam_agent::util::resume_command(Some(name), thread_id)
+            .unwrap_or_else(|| format!("adam resume {name}"));
         let name = name.to_string();
         let line = vec![
             "• ".into(),
@@ -6367,7 +6367,7 @@ impl ChatWidget {
     }
 
     pub(crate) async fn show_review_commit_picker(&mut self, cwd: &Path) {
-        let commits = codex_agent::git_info::recent_commits(cwd, 100).await;
+        let commits = adam_agent::git_info::recent_commits(cwd, 100).await;
 
         let mut items: Vec<SelectionItem> = Vec::with_capacity(commits.len());
         for entry in commits {
@@ -6763,7 +6763,7 @@ async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimi
 #[cfg(test)]
 pub(crate) fn show_review_commit_picker_with_entries(
     chat: &mut ChatWidget,
-    entries: Vec<codex_agent::git_info::CommitLogEntry>,
+    entries: Vec<adam_agent::git_info::CommitLogEntry>,
 ) {
     let mut items: Vec<SelectionItem> = Vec::with_capacity(entries.len());
     for entry in entries {

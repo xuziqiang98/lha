@@ -1,15 +1,15 @@
 [package]
-name = "codex-tui"
+name = "adam-tui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "codex-tui"
+name = "adam-tui"
 path = "src/main.rs"
 
 [lib]
-name = "codex_tui"
+name = "adam_tui"
 path = "src/lib.rs"
 
 [features]
@@ -26,28 +26,28 @@ anyhow = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
-codex-ansi-escape = { workspace = true }
-codex-api = { workspace = true }
-codex-app-server-protocol = { workspace = true }
-codex-arg0 = { workspace = true }
-codex-backend-client = { workspace = true }
-codex-chatgpt = { workspace = true }
-codex-cloud-requirements = { workspace = true }
-codex-common = { workspace = true, features = [
+adam-ansi-escape = { workspace = true }
+adam-api = { workspace = true }
+adam-app-server-protocol = { workspace = true }
+adam-arg0 = { workspace = true }
+adam-backend-client = { workspace = true }
+adam-chatgpt = { workspace = true }
+adam-cloud-requirements = { workspace = true }
+adam-common = { workspace = true, features = [
     "cli",
     "elapsed",
     "sandbox_summary",
 ] }
-codex-agent = { workspace = true }
-codex-llm = { workspace = true }
-codex-feedback = { workspace = true }
-codex-file-search = { workspace = true }
-codex-login = { workspace = true }
-codex-otel = { workspace = true }
-codex-protocol = { workspace = true }
-codex-state = { workspace = true }
-codex-utils-absolute-path = { workspace = true }
-codex-utils-sleep-inhibitor = { workspace = true }
+adam-agent = { workspace = true }
+adam-llm = { workspace = true }
+adam-feedback = { workspace = true }
+adam-file-search = { workspace = true }
+adam-login = { workspace = true }
+adam-otel = { workspace = true }
+adam-protocol = { workspace = true }
+adam-state = { workspace = true }
+adam-utils-absolute-path = { workspace = true }
+adam-utils-sleep-inhibitor = { workspace = true }
 color-eyre = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
 derive_more = { workspace = true, features = ["is_variant"] }
@@ -103,7 +103,7 @@ url = { workspace = true }
 uuid = { workspace = true }
 walkdir = { workspace = true }
 
-codex-windows-sandbox = { workspace = true }
+adam-windows-sandbox = { workspace = true }
 tokio-util = { workspace = true, features = ["time"] }
 
 [target.'cfg(unix)'.dependencies]
@@ -124,10 +124,10 @@ arboard = { workspace = true }
 
 
 [dev-dependencies]
-codex-cli = { workspace = true }
-codex-agent = { workspace = true, features = ["test-support"] }
-codex-utils-cargo-bin = { workspace = true }
-codex-utils-pty = { workspace = true }
+adam-cli = { workspace = true }
+adam-agent = { workspace = true, features = ["test-support"] }
+adam-utils-cargo-bin = { workspace = true }
+adam-utils-pty = { workspace = true }
 assert_matches = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 insta = { workspace = true }

@@ -1,0 +1,13 @@
+---
+source: src/harness/tui/src/bottom_pane/chat_composer.rs
+expression: terminal.backend()
+---
+"                                                                                                                        "
+"› Test                                                                                                                  "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"  gpt-5.4 high · 98% left · ~/Workspace/adam                                                                Code mode  "

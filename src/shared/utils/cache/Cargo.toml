@@ -1,5 +1,5 @@
 [package]
-name = "codex-utils-cache"
+name = "adam-utils-cache"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

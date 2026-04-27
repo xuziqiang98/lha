@@ -1,8 +1,8 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, unused_imports)]
 
+use adam_agent::CODEX_APPLY_PATCH_ARG1;
 use anyhow::Context;
 use assert_cmd::prelude::*;
-use codex_agent::CODEX_APPLY_PATCH_ARG1;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_completed;
@@ -14,7 +14,7 @@ use std::process::Command;
 use tempfile::tempdir;
 
 /// While we may add an `apply-patch` subcommand to the `codex` CLI multitool
-/// at some point, we must ensure that the smaller `codex-exec` CLI can still
+/// at some point, we must ensure that the smaller `adam-exec` CLI can still
 /// emulate the `apply_patch` CLI.
 #[test]
 fn test_standalone_exec_cli_can_use_apply_patch() -> anyhow::Result<()> {
@@ -23,7 +23,7 @@ fn test_standalone_exec_cli_can_use_apply_patch() -> anyhow::Result<()> {
     let absolute_path = tmp.path().join(relative_path);
     fs::write(&absolute_path, "original content\n")?;
 
-    Command::new(codex_utils_cargo_bin::cargo_bin("codex-exec")?)
+    Command::new(adam_utils_cargo_bin::cargo_bin("adam-exec")?)
         .arg(CODEX_APPLY_PATCH_ARG1)
         .arg(
             r#"*** Begin Patch

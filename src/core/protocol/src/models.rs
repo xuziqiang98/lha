@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use codex_utils_image::load_and_resize_to_fit;
+use adam_utils_image::load_and_resize_to_fit;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
 use serde::Deserialize;
@@ -16,16 +16,16 @@ use crate::protocol::NetworkAccess;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
 use crate::user_input::UserInput;
-use codex_execpolicy::Policy;
-pub use codex_llm_types::BASE_INSTRUCTIONS_DEFAULT;
-pub use codex_llm_types::BaseInstructions;
-pub use codex_llm_types::ContentItem;
-pub use codex_llm_types::ReasoningItemContent;
-pub use codex_llm_types::ReasoningItemReasoningSummary;
-pub use codex_llm_types::ToolResultContentItem;
-pub use codex_llm_types::ToolResultPayload;
-pub use codex_llm_types::TranscriptItem;
-use codex_utils_image::error::ImageProcessingError;
+use adam_execpolicy::Policy;
+pub use adam_llm_types::BASE_INSTRUCTIONS_DEFAULT;
+pub use adam_llm_types::BaseInstructions;
+pub use adam_llm_types::ContentItem;
+pub use adam_llm_types::ReasoningItemContent;
+pub use adam_llm_types::ReasoningItemReasoningSummary;
+pub use adam_llm_types::ToolResultContentItem;
+pub use adam_llm_types::ToolResultPayload;
+pub use adam_llm_types::TranscriptItem;
+use adam_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 
 /// Controls whether a command should use the session sandbox or bypass it.
@@ -610,16 +610,16 @@ pub struct ShellCommandToolCallParams {
     pub justification: Option<String>,
 }
 
-// (Moved event mapping logic into codex-coding-agent to avoid coupling protocol to UI-facing events.)
+// (Moved event mapping logic into adam-coding-agent to avoid coupling protocol to UI-facing events.)
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config_types::SandboxMode;
     use crate::protocol::AskForApproval;
+    use adam_execpolicy::Policy;
+    use adam_llm_types::TranscriptItem;
     use anyhow::Result;
-    use codex_execpolicy::Policy;
-    use codex_llm_types::TranscriptItem;
     use mcp_types::ImageContent;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
@@ -694,7 +694,7 @@ mod tests {
         exec_policy
             .add_prefix_rule(
                 &["git".to_string(), "pull".to_string()],
-                codex_execpolicy::Decision::Allow,
+                adam_execpolicy::Decision::Allow,
             )
             .expect("add rule");
         let instructions = DeveloperInstructions::from_permissions_with_network(
@@ -755,7 +755,7 @@ mod tests {
             exec_policy
                 .add_prefix_rule(
                     &[format!("tool-{i:03}"), "x".repeat(500)],
-                    codex_execpolicy::Decision::Allow,
+                    adam_execpolicy::Decision::Allow,
                 )
                 .expect("add rule");
         }

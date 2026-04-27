@@ -1,11 +1,11 @@
 [package]
-name = "codex-backend-openapi-models"
+name = "adam-backend-openapi-models"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "codex_backend_openapi_models"
+name = "adam_backend_openapi_models"
 path = "src/lib.rs"
 
 # Important: generated code often violates our workspace lints.

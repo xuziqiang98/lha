@@ -32,7 +32,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 use crate::text_encoding::bytes_to_string_smart;
-use codex_utils_pty::process_group::kill_child_process_group;
+use adam_utils_pty::process_group::kill_child_process_group;
 
 pub const DEFAULT_EXEC_COMMAND_TIMEOUT_MS: u64 = 10_000;
 
@@ -64,7 +64,7 @@ pub struct ExecParams {
     pub expiration: ExecExpiration,
     pub env: HashMap<String, String>,
     pub sandbox_permissions: SandboxPermissions,
-    pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
+    pub windows_sandbox_level: adam_protocol::config_types::WindowsSandboxLevel,
     pub justification: Option<String>,
     pub arg0: Option<String>,
 }
@@ -148,7 +148,7 @@ pub async fn process_exec_tool_call(
             SandboxType::None
         }
         _ => get_platform_sandbox(
-            windows_sandbox_level != codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            windows_sandbox_level != adam_protocol::config_types::WindowsSandboxLevel::Disabled,
         )
         .unwrap_or(SandboxType::None),
     };
@@ -263,7 +263,7 @@ fn windowsapps_path_kind(path: &str) -> &'static str {
 #[cfg(target_os = "windows")]
 fn record_windows_sandbox_spawn_failure(
     command_path: Option<&str>,
-    windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
+    windows_sandbox_level: adam_protocol::config_types::WindowsSandboxLevel,
     err: &str,
 ) {
     let Some(error_code) = extract_create_process_as_user_error_code(err) else {
@@ -278,13 +278,13 @@ fn record_windows_sandbox_spawn_failure(
     let path_kind = windowsapps_path_kind(path);
     let level = if matches!(
         windows_sandbox_level,
-        codex_protocol::config_types::WindowsSandboxLevel::Elevated
+        adam_protocol::config_types::WindowsSandboxLevel::Elevated
     ) {
         "elevated"
     } else {
         "legacy"
     };
-    if let Some(metrics) = codex_otel::metrics::global() {
+    if let Some(metrics) = adam_otel::metrics::global() {
         let _ = metrics.counter(
             "codex.windows_sandbox.createprocessasuserw_failed",
             1,
@@ -304,9 +304,9 @@ async fn exec_windows_sandbox(
     sandbox_policy: &SandboxPolicy,
 ) -> Result<RawExecToolCallOutput> {
     use crate::config::find_adam_home;
-    use codex_protocol::config_types::WindowsSandboxLevel;
-    use codex_windows_sandbox::run_windows_sandbox_capture;
-    use codex_windows_sandbox::run_windows_sandbox_capture_elevated;
+    use adam_protocol::config_types::WindowsSandboxLevel;
+    use adam_windows_sandbox::run_windows_sandbox_capture;
+    use adam_windows_sandbox::run_windows_sandbox_capture_elevated;
 
     let ExecParams {
         command,
@@ -1049,7 +1049,7 @@ mod tests {
             expiration: 500.into(),
             env,
             sandbox_permissions: SandboxPermissions::UseDefault,
-            windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            windows_sandbox_level: adam_protocol::config_types::WindowsSandboxLevel::Disabled,
             justification: None,
             arg0: None,
         };
@@ -1095,7 +1095,7 @@ mod tests {
             expiration: ExecExpiration::Cancellation(cancel_token),
             env,
             sandbox_permissions: SandboxPermissions::UseDefault,
-            windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            windows_sandbox_level: adam_protocol::config_types::WindowsSandboxLevel::Disabled,
             justification: None,
             arg0: None,
         };

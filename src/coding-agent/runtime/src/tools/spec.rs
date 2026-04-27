@@ -9,16 +9,16 @@ use crate::tools::handlers::collab::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolRegistryBuilder;
-use codex_llm::FunctionToolDescriptor as ResponsesApiTool;
-use codex_llm::ToolDescriptor;
-use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
-use codex_protocol::openai_models::ApplyPatchToolType;
-use codex_protocol::openai_models::ConfigShellToolType;
-use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
+use adam_llm::FunctionToolDescriptor as ResponsesApiTool;
+use adam_llm::ToolDescriptor;
+use adam_protocol::config_types::WebSearchMode;
+use adam_protocol::dynamic_tools::DynamicToolSpec;
+use adam_protocol::models::VIEW_IMAGE_TOOL_NAME;
+use adam_protocol::openai_models::ApplyPatchToolType;
+use adam_protocol::openai_models::ConfigShellToolType;
+use adam_protocol::openai_models::ModelInfo;
+use adam_protocol::protocol::SessionSource;
+use adam_protocol::protocol::SubAgentSource;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -27,9 +27,9 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-pub use codex_llm::ToolInputSchema as JsonSchema;
+pub use adam_llm::ToolInputSchema as JsonSchema;
 #[cfg_attr(not(test), allow(dead_code))]
-pub type AdditionalProperties = codex_llm::AdditionalProperties;
+pub type AdditionalProperties = adam_llm::AdditionalProperties;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
@@ -81,7 +81,7 @@ impl ToolsConfig {
             ConfigShellToolType::Disabled
         } else if features.enabled(Feature::UnifiedExec) {
             // If ConPTY not supported (for old Windows versions), fallback on ShellCommand.
-            if codex_utils_pty::conpty_supported() {
+            if adam_utils_pty::conpty_supported() {
                 ConfigShellToolType::UnifiedExec
             } else {
                 ConfigShellToolType::ShellCommand
@@ -1894,7 +1894,7 @@ mod tests {
     use crate::config::test_config;
     use crate::models_manager::manager::ModelsManager;
     use crate::tools::registry::ConfiguredToolSpec;
-    use codex_llm::FreeformToolDescriptor;
+    use adam_llm::FreeformToolDescriptor;
     use mcp_types::ToolInputSchema;
     use pretty_assertions::assert_eq;
 

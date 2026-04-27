@@ -5,12 +5,12 @@ use std::fs;
 use std::time::Duration;
 use std::time::Instant;
 
+use adam_agent::features::Feature;
+use adam_agent::protocol::AskForApproval;
+use adam_agent::protocol::SandboxPolicy;
+use adam_agent::sandboxing::SandboxPermissions;
 use anyhow::Context;
 use anyhow::Result;
-use codex_agent::features::Feature;
-use codex_agent::protocol::AskForApproval;
-use codex_agent::protocol::SandboxPolicy;
-use codex_agent::sandboxing::SandboxPermissions;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;

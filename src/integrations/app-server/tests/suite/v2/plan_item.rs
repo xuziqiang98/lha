@@ -1,26 +1,26 @@
+use adam_agent::features::Feature;
+use adam_app_server_protocol::ItemCompletedNotification;
+use adam_app_server_protocol::ItemStartedNotification;
+use adam_app_server_protocol::JSONRPCMessage;
+use adam_app_server_protocol::JSONRPCResponse;
+use adam_app_server_protocol::PlanDeltaNotification;
+use adam_app_server_protocol::RequestId;
+use adam_app_server_protocol::ThreadItem;
+use adam_app_server_protocol::ThreadStartParams;
+use adam_app_server_protocol::ThreadStartResponse;
+use adam_app_server_protocol::TurnCompletedNotification;
+use adam_app_server_protocol::TurnStartParams;
+use adam_app_server_protocol::TurnStartResponse;
+use adam_app_server_protocol::TurnStatus;
+use adam_app_server_protocol::UserInput as V2UserInput;
+use adam_protocol::config_types::CollaborationMode;
+use adam_protocol::config_types::ModeKind;
+use adam_protocol::config_types::Settings;
 use anyhow::Result;
 use anyhow::anyhow;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::to_response;
-use codex_agent::features::Feature;
-use codex_app_server_protocol::ItemCompletedNotification;
-use codex_app_server_protocol::ItemStartedNotification;
-use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::PlanDeltaNotification;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ThreadItem;
-use codex_app_server_protocol::ThreadStartParams;
-use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::TurnCompletedNotification;
-use codex_app_server_protocol::TurnStartParams;
-use codex_app_server_protocol::TurnStartResponse;
-use codex_app_server_protocol::TurnStatus;
-use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::Settings;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -121,7 +121,7 @@ async fn plan_mode_without_proposed_plan_does_not_emit_plan_item() -> Result<()>
     Ok(())
 }
 
-async fn start_plan_mode_turn(mcp: &mut McpProcess) -> Result<codex_app_server_protocol::Turn> {
+async fn start_plan_mode_turn(mcp: &mut McpProcess) -> Result<adam_app_server_protocol::Turn> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),

@@ -22,13 +22,13 @@ use super::recorder::validate_rollout_line_schema_version;
 use crate::path_utils;
 use crate::protocol::EventMsg;
 use crate::state_db;
-use codex_file_search as file_search;
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::SessionMetaLine;
-use codex_protocol::protocol::SessionSource;
+use adam_file_search as file_search;
+use adam_protocol::ThreadId;
+use adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3;
+use adam_protocol::protocol::RolloutItem;
+use adam_protocol::protocol::RolloutLine;
+use adam_protocol::protocol::SessionMetaLine;
+use adam_protocol::protocol::SessionSource;
 use tracing::warn;
 
 /// Returned page of thread (thread) summaries.

@@ -1,5 +1,5 @@
 [package]
-name = "codex-backend-client"
+name = "adam-backend-client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,9 +13,9 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-codex-backend-openapi-models = { path = "../../resources/codex-backend-openapi-models" }
-codex-protocol = { workspace = true }
-codex-agent = { workspace = true }
+adam-backend-openapi-models = { path = "../../resources/codex-backend-openapi-models" }
+adam-protocol = { workspace = true }
+adam-agent = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = "1"

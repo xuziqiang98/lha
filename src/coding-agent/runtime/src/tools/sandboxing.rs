@@ -12,9 +12,9 @@ use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
 use crate::sandboxing::SandboxTransformError;
 use crate::state::SessionServices;
-use codex_protocol::approvals::ExecPolicyAmendment;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::ReviewDecision;
+use adam_protocol::approvals::ExecPolicyAmendment;
+use adam_protocol::protocol::AskForApproval;
+use adam_protocol::protocol::ReviewDecision;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -274,7 +274,7 @@ pub(crate) struct SandboxAttempt<'a> {
     pub(crate) manager: &'a SandboxManager,
     pub(crate) sandbox_cwd: &'a Path,
     pub codex_linux_sandbox_exe: Option<&'a std::path::PathBuf>,
-    pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
+    pub windows_sandbox_level: adam_protocol::config_types::WindowsSandboxLevel,
 }
 
 impl<'a> SandboxAttempt<'a> {
@@ -296,7 +296,7 @@ impl<'a> SandboxAttempt<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::protocol::NetworkAccess;
+    use adam_protocol::protocol::NetworkAccess;
     use pretty_assertions::assert_eq;
 
     #[test]

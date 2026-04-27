@@ -21,8 +21,8 @@ use windows::Win32::System::Com::CoUninitialize;
 use windows::Win32::System::Com::CLSCTX_INPROC_SERVER;
 use windows::Win32::System::Com::COINIT_APARTMENTTHREADED;
 
-use codex_windows_sandbox::SetupErrorCode;
-use codex_windows_sandbox::SetupFailure;
+use adam_windows_sandbox::SetupErrorCode;
+use adam_windows_sandbox::SetupFailure;
 
 // This is the stable identifier we use to find/update the rule idempotently.
 // It intentionally does not change between installs.

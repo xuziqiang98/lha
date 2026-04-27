@@ -1,8 +1,8 @@
 use crate::session::SessionId;
 use crate::session::SubmissionId;
 use crate::status::SessionStatus;
-use codex_llm::RuntimeMetadata;
-use codex_llm::TranscriptItem;
+use adam_llm::RuntimeMetadata;
+use adam_llm::TranscriptItem;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveTurnSnapshot {

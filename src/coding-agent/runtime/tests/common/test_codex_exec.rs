@@ -1,5 +1,5 @@
 #![allow(clippy::expect_used)]
-use codex_agent::auth::CODEX_API_KEY_ENV_VAR;
+use adam_agent::auth::CODEX_API_KEY_ENV_VAR;
 use std::path::Path;
 use tempfile::TempDir;
 use wiremock::MockServer;
@@ -12,8 +12,7 @@ pub struct TestCodexExecBuilder {
 impl TestCodexExecBuilder {
     pub fn cmd(&self) -> assert_cmd::Command {
         let mut cmd = assert_cmd::Command::new(
-            codex_utils_cargo_bin::cargo_bin("codex-exec")
-                .expect("should find binary for codex-exec"),
+            adam_utils_cargo_bin::cargo_bin("adam-exec").expect("should find binary for adam-exec"),
         );
         cmd.current_dir(self.cwd.path())
             .env("ADAM_HOME", self.home.path())

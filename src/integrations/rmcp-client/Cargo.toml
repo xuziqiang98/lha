@@ -1,5 +1,5 @@
 [package]
-name = "codex-rmcp-client"
+name = "adam-rmcp-client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,9 +13,9 @@ axum = { workspace = true, default-features = false, features = [
     "http1",
     "tokio",
 ] }
-codex-keyring-store = { workspace = true }
-codex-protocol = { workspace = true }
-codex-utils-home-dir = { workspace = true }
+adam-keyring-store = { workspace = true }
+adam-protocol = { workspace = true }
+adam-utils-home-dir = { workspace = true }
 futures = { workspace = true, default-features = false, features = ["std"] }
 keyring = { workspace = true, features = ["crypto-rust"] }
 mcp-types = { path = "../mcp-types" }
@@ -56,7 +56,7 @@ webbrowser = { workspace = true }
 which = { workspace = true }
 
 [dev-dependencies]
-codex-utils-cargo-bin = { workspace = true }
+adam-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }

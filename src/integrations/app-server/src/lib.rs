@@ -1,13 +1,13 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
-use codex_agent::AuthManager;
-use codex_agent::config::Config;
-use codex_agent::config::ConfigBuilder;
-use codex_agent::config_loader::CloudRequirementsLoader;
-use codex_agent::config_loader::ConfigLayerStackOrdering;
-use codex_agent::config_loader::LoaderOverrides;
-use codex_cloud_requirements::cloud_requirements_loader;
-use codex_common::CliConfigOverrides;
+use adam_agent::AuthManager;
+use adam_agent::config::Config;
+use adam_agent::config::ConfigBuilder;
+use adam_agent::config_loader::CloudRequirementsLoader;
+use adam_agent::config_loader::ConfigLayerStackOrdering;
+use adam_agent::config_loader::LoaderOverrides;
+use adam_cloud_requirements::cloud_requirements_loader;
+use adam_common::CliConfigOverrides;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
@@ -16,16 +16,16 @@ use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
-use codex_agent::ExecPolicyError;
-use codex_agent::check_execpolicy_for_warnings;
-use codex_agent::config_loader::ConfigLoadError;
-use codex_agent::config_loader::TextRange as CoreTextRange;
-use codex_app_server_protocol::ConfigLayerSource;
-use codex_app_server_protocol::ConfigWarningNotification;
-use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::TextPosition as AppTextPosition;
-use codex_app_server_protocol::TextRange as AppTextRange;
-use codex_feedback::CodexFeedback;
+use adam_agent::ExecPolicyError;
+use adam_agent::check_execpolicy_for_warnings;
+use adam_agent::config_loader::ConfigLoadError;
+use adam_agent::config_loader::TextRange as CoreTextRange;
+use adam_app_server_protocol::ConfigLayerSource;
+use adam_app_server_protocol::ConfigWarningNotification;
+use adam_app_server_protocol::JSONRPCMessage;
+use adam_app_server_protocol::TextPosition as AppTextPosition;
+use adam_app_server_protocol::TextRange as AppTextRange;
+use adam_feedback::CodexFeedback;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
@@ -218,7 +218,7 @@ pub async fn run_main(
             let effective_toml = config.config_layer_stack.effective_config();
             match effective_toml.try_into() {
                 Ok(config_toml) => {
-                    if let Err(err) = codex_agent::personality_migration::maybe_migrate_personality(
+                    if let Err(err) = adam_agent::personality_migration::maybe_migrate_personality(
                         &config.adam_home,
                         &config_toml,
                     )
@@ -286,10 +286,10 @@ pub async fn run_main(
 
     let feedback = CodexFeedback::new();
 
-    let otel = codex_agent::otel_init::build_provider(
+    let otel = adam_agent::otel_init::build_provider(
         &config,
         env!("CARGO_PKG_VERSION"),
-        Some("codex_app_server"),
+        Some("adam_app_server"),
         default_analytics_enabled,
     )
     .map_err(|e| {

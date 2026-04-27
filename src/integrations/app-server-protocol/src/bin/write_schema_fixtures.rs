@@ -22,7 +22,7 @@ fn main() -> Result<()> {
         .schema_root
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("schema"));
 
-    codex_app_server_protocol::write_schema_fixtures(&schema_root, args.prettier.as_deref())
+    adam_app_server_protocol::write_schema_fixtures(&schema_root, args.prettier.as_deref())
         .with_context(|| {
             format!(
                 "failed to regenerate schema fixtures under {}",

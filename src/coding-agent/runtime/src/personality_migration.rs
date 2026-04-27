@@ -7,8 +7,8 @@ use crate::rollout::list::ThreadListLayout;
 use crate::rollout::list::ThreadSortKey;
 use crate::rollout::list::get_threads_in_root;
 use crate::state_db;
-use codex_protocol::config_types::Personality;
-use codex_protocol::protocol::SessionSource;
+use adam_protocol::config_types::Personality;
+use adam_protocol::protocol::SessionSource;
 use std::io;
 use std::path::Path;
 use tokio::fs::OpenOptions;
@@ -138,14 +138,14 @@ async fn create_marker(marker_path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::ThreadId;
-    use codex_protocol::protocol::EventMsg;
-    use codex_protocol::protocol::RolloutItem;
-    use codex_protocol::protocol::RolloutLine;
-    use codex_protocol::protocol::SessionMeta;
-    use codex_protocol::protocol::SessionMetaLine;
-    use codex_protocol::protocol::SessionSource;
-    use codex_protocol::protocol::UserMessageEvent;
+    use adam_protocol::ThreadId;
+    use adam_protocol::protocol::EventMsg;
+    use adam_protocol::protocol::RolloutItem;
+    use adam_protocol::protocol::RolloutLine;
+    use adam_protocol::protocol::SessionMeta;
+    use adam_protocol::protocol::SessionMetaLine;
+    use adam_protocol::protocol::SessionSource;
+    use adam_protocol::protocol::UserMessageEvent;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
     use tokio::io::AsyncWriteExt;
@@ -176,7 +176,7 @@ mod tests {
                 cwd: std::path::PathBuf::from("."),
                 originator: "test_originator".to_string(),
                 cli_version: "test_version".to_string(),
-                rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+                rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
                 source: SessionSource::Cli,
                 model_provider: None,
                 base_instructions: None,

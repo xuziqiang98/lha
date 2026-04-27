@@ -3,15 +3,15 @@ use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
+use adam_async_utils::CancelErr;
+use adam_protocol::ThreadId;
+use adam_protocol::protocol::CodexErrorInfo;
+use adam_protocol::protocol::ErrorEvent;
+use adam_protocol::protocol::RateLimitSnapshot;
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::Local;
 use chrono::Utc;
-use codex_async_utils::CancelErr;
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::CodexErrorInfo;
-use codex_protocol::protocol::ErrorEvent;
-use codex_protocol::protocol::RateLimitSnapshot;
 use reqwest::StatusCode;
 use serde_json;
 use std::io;
@@ -149,7 +149,7 @@ pub enum CodexErr {
     #[error("sandbox error: {0}")]
     Sandbox(#[from] SandboxErr),
 
-    #[error("codex-linux-sandbox was required but not provided")]
+    #[error("adam-linux-sandbox was required but not provided")]
     LandlockSandboxExecutableNotProvided,
 
     #[error("unsupported operation: {0}")]
@@ -633,11 +633,11 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
 mod tests {
     use super::*;
     use crate::exec::StreamOutput;
+    use adam_protocol::protocol::RateLimitWindow;
     use chrono::DateTime;
     use chrono::Duration as ChronoDuration;
     use chrono::TimeZone;
     use chrono::Utc;
-    use codex_protocol::protocol::RateLimitWindow;
     use pretty_assertions::assert_eq;
     use reqwest::Response;
     use reqwest::ResponseBuilderExt;

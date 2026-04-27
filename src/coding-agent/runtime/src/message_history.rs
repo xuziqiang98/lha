@@ -38,7 +38,7 @@ use tokio::io::AsyncReadExt;
 use crate::config::Config;
 use crate::config::types::HistoryPersistence;
 
-use codex_protocol::ThreadId;
+use adam_protocol::ThreadId;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
@@ -404,7 +404,7 @@ fn history_log_id(_metadata: &std::fs::Metadata) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::config::ConfigBuilder;
-    use codex_protocol::ThreadId;
+    use adam_protocol::ThreadId;
     use pretty_assertions::assert_eq;
     use std::fs::File;
     use std::io::Write;

@@ -5,12 +5,12 @@ use crate::proposed_plan_parser::ProposedPlanParser;
 use crate::proposed_plan_parser::ProposedPlanSegment;
 use crate::proposed_plan_parser::extract_proposed_plan_text;
 use crate::telemetry::SseTelemetry;
-use codex_client::StreamResponse;
-use codex_llm_types::ContentItem;
-use codex_llm_types::ReasoningContentItem;
-use codex_llm_types::TokenUsage;
-use codex_llm_types::ToolCallPayload;
-use codex_llm_types::TranscriptItem;
+use adam_client::StreamResponse;
+use adam_llm_types::ContentItem;
+use adam_llm_types::ReasoningContentItem;
+use adam_llm_types::TokenUsage;
+use adam_llm_types::ToolCallPayload;
+use adam_llm_types::TranscriptItem;
 use eventsource_stream::Eventsource;
 use futures::Stream;
 use futures::StreamExt;
@@ -62,7 +62,7 @@ pub async fn process_chat_sse<S>(
     idle_timeout: Duration,
     telemetry: Option<std::sync::Arc<dyn SseTelemetry>>,
 ) where
-    S: Stream<Item = Result<bytes::Bytes, codex_client::TransportError>> + Unpin,
+    S: Stream<Item = Result<bytes::Bytes, adam_client::TransportError>> + Unpin,
 {
     let mut stream = stream.eventsource();
 
@@ -555,8 +555,8 @@ async fn emit_buffered_plan_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adam_llm_types::TranscriptItem;
     use assert_matches::assert_matches;
-    use codex_llm_types::TranscriptItem;
     use futures::Stream;
     use futures::TryStreamExt;
     use pretty_assertions::assert_eq;
@@ -585,7 +585,7 @@ mod tests {
 
     async fn collect_events(body: &str) -> Vec<ResponseEvent> {
         let reader = ReaderStream::new(std::io::Cursor::new(body.to_string()))
-            .map_err(|err| codex_client::TransportError::Network(err.to_string()));
+            .map_err(|err| adam_client::TransportError::Network(err.to_string()));
         collect_events_from_stream(reader, Duration::from_millis(1000)).await
     }
 
@@ -600,13 +600,13 @@ mod tests {
             futures::future::pending::<()>().await;
         });
         let reader = ReaderStream::new(reader)
-            .map_err(|err| codex_client::TransportError::Network(err.to_string()));
+            .map_err(|err| adam_client::TransportError::Network(err.to_string()));
         collect_events_from_stream(reader, idle_timeout).await
     }
 
     async fn collect_events_from_stream<S>(stream: S, idle_timeout: Duration) -> Vec<ResponseEvent>
     where
-        S: Stream<Item = Result<bytes::Bytes, codex_client::TransportError>>
+        S: Stream<Item = Result<bytes::Bytes, adam_client::TransportError>>
             + Send
             + Unpin
             + 'static,

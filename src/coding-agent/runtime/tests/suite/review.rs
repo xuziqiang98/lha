@@ -1,22 +1,22 @@
-use codex_agent::CodexThread;
-use codex_agent::ContentItem;
-use codex_agent::REVIEW_PROMPT;
-use codex_agent::config::Config;
-use codex_agent::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::ExitedReviewModeEvent;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::ReviewCodeLocation;
-use codex_agent::protocol::ReviewFinding;
-use codex_agent::protocol::ReviewLineRange;
-use codex_agent::protocol::ReviewOutputEvent;
-use codex_agent::protocol::ReviewRequest;
-use codex_agent::protocol::ReviewTarget;
-use codex_agent::protocol::RolloutItem;
-use codex_agent::protocol::RolloutLine;
-use codex_agent::review_format::render_review_output_text;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::user_input::UserInput;
+use adam_agent::CodexThread;
+use adam_agent::ContentItem;
+use adam_agent::REVIEW_PROMPT;
+use adam_agent::config::Config;
+use adam_agent::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::ExitedReviewModeEvent;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::ReviewCodeLocation;
+use adam_agent::protocol::ReviewFinding;
+use adam_agent::protocol::ReviewLineRange;
+use adam_agent::protocol::ReviewOutputEvent;
+use adam_agent::protocol::ReviewRequest;
+use adam_agent::protocol::ReviewTarget;
+use adam_agent::protocol::RolloutItem;
+use adam_agent::protocol::RolloutLine;
+use adam_agent::review_format::render_review_output_text;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::user_input::UserInput;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_sse_sequence;
@@ -528,7 +528,7 @@ async fn review_input_isolated_from_parent_history() {
         let user = TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
-            content: vec![codex_protocol::models::ContentItem::InputText {
+            content: vec![adam_protocol::models::ContentItem::InputText {
                 text: "parent: earlier user message".to_string(),
             }],
             end_turn: None,
@@ -547,7 +547,7 @@ async fn review_input_isolated_from_parent_history() {
         let assistant = TranscriptItem::Message {
             id: None,
             role: "assistant".to_string(),
-            content: vec![codex_protocol::models::ContentItem::OutputText {
+            content: vec![adam_protocol::models::ContentItem::OutputText {
                 text: "parent: assistant reply".to_string(),
             }],
             end_turn: None,

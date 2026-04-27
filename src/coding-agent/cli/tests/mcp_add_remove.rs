@@ -1,14 +1,14 @@
 use std::path::Path;
 
+use adam_agent::config::load_global_mcp_servers;
+use adam_agent::config::types::McpServerTransportConfig;
 use anyhow::Result;
-use codex_agent::config::load_global_mcp_servers;
-use codex_agent::config::types::McpServerTransportConfig;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 fn codex_command(adam_home: &Path) -> Result<assert_cmd::Command> {
-    let mut cmd = assert_cmd::Command::new(codex_utils_cargo_bin::cargo_bin("codey")?);
+    let mut cmd = assert_cmd::Command::new(adam_utils_cargo_bin::cargo_bin("adam")?);
     cmd.env("ADAM_HOME", adam_home);
     Ok(cmd)
 }

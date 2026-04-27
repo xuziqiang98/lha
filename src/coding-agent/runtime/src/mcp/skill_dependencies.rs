@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::request_user_input::RequestUserInputArgs;
-use codex_protocol::request_user_input::RequestUserInputQuestion;
-use codex_protocol::request_user_input::RequestUserInputQuestionOption;
-use codex_protocol::request_user_input::RequestUserInputResponse;
-use codex_rmcp_client::perform_oauth_login;
+use adam_protocol::protocol::AskForApproval;
+use adam_protocol::protocol::SandboxPolicy;
+use adam_protocol::request_user_input::RequestUserInputArgs;
+use adam_protocol::request_user_input::RequestUserInputQuestion;
+use adam_protocol::request_user_input::RequestUserInputQuestionOption;
+use adam_protocol::request_user_input::RequestUserInputResponse;
+use adam_rmcp_client::perform_oauth_login;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -418,7 +418,7 @@ fn mcp_dependency_to_server_config(
 mod tests {
     use super::*;
     use crate::skills::model::SkillDependencies;
-    use codex_protocol::protocol::SkillScope;
+    use adam_protocol::protocol::SkillScope;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 

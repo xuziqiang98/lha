@@ -1,7 +1,7 @@
 #![cfg(unix)]
-use codex_agent::protocol::SandboxPolicy;
-use codex_agent::spawn::StdioPolicy;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use adam_agent::protocol::SandboxPolicy;
+use adam_agent::spawn::StdioPolicy;
+use adam_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::future::Future;
 use std::io;
@@ -20,7 +20,7 @@ async fn spawn_command_under_sandbox(
     stdio_policy: StdioPolicy,
     env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
-    use codex_agent::seatbelt::spawn_command_under_seatbelt;
+    use adam_agent::seatbelt::spawn_command_under_seatbelt;
     spawn_command_under_seatbelt(
         command,
         command_cwd,
@@ -41,8 +41,8 @@ async fn spawn_command_under_sandbox(
     stdio_policy: StdioPolicy,
     env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
-    use codex_agent::landlock::spawn_command_under_linux_sandbox;
-    let codex_linux_sandbox_exe = codex_utils_cargo_bin::cargo_bin("codex-exec")
+    use adam_agent::landlock::spawn_command_under_linux_sandbox;
+    let codex_linux_sandbox_exe = adam_utils_cargo_bin::cargo_bin("adam-exec")
         .map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?;
     spawn_command_under_linux_sandbox(
         codex_linux_sandbox_exe,

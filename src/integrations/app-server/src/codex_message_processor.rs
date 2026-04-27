@@ -5,208 +5,208 @@ use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::models::supported_models;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
+use adam_agent::AuthManager;
+use adam_agent::CodexAuth;
+use adam_agent::CodexThread;
+use adam_agent::Cursor as RolloutCursor;
+use adam_agent::InitialHistory;
+use adam_agent::NewThread;
+use adam_agent::RolloutRecorder;
+use adam_agent::SessionMeta;
+use adam_agent::ThreadConfigSnapshot;
+use adam_agent::ThreadManager;
+use adam_agent::ThreadSortKey as CoreThreadSortKey;
+use adam_agent::auth::CLIENT_ID;
+use adam_agent::auth::login_with_api_key;
+use adam_agent::auth::login_with_chatgpt_auth_tokens;
+use adam_agent::config::Config;
+use adam_agent::config::ConfigOverrides;
+use adam_agent::config::ConfigService;
+use adam_agent::config::ConfigToml;
+use adam_agent::config::edit::ConfigEdit;
+use adam_agent::config::edit::ConfigEditsBuilder;
+use adam_agent::config::model_ref::ModelRef;
+use adam_agent::config::state_json::AdamStateStore;
+use adam_agent::config::types::McpServerTransportConfig;
+use adam_agent::config_loader::CloudRequirementsLoader;
+use adam_agent::default_client::get_codex_user_agent;
+use adam_agent::error::CodexErr;
+use adam_agent::exec::ExecParams;
+use adam_agent::exec_env::create_env;
+use adam_agent::features::Feature;
+use adam_agent::find_archived_thread_path_by_id_str;
+use adam_agent::find_thread_path_by_id_str;
+use adam_agent::git_info::git_diff_to_remote;
+use adam_agent::is_unsupported_rollout_schema_error;
+use adam_agent::mcp::collect_mcp_snapshot;
+use adam_agent::mcp::group_tools_by_server;
+use adam_agent::parse_cursor;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::ReviewDelivery as CoreReviewDelivery;
+use adam_agent::protocol::ReviewRequest;
+use adam_agent::protocol::ReviewTarget as CoreReviewTarget;
+use adam_agent::protocol::SessionConfiguredEvent;
+use adam_agent::read_head_for_summary;
+use adam_agent::read_session_meta_line;
+use adam_agent::rollout_date_parts;
+use adam_agent::sandboxing::SandboxPermissions;
+use adam_agent::state_db::get_state_db;
+use adam_agent::token_data::parse_id_token;
+use adam_agent::windows_sandbox::WindowsSandboxLevelExt;
+use adam_app_server_protocol::Account;
+use adam_app_server_protocol::AccountLoginCompletedNotification;
+use adam_app_server_protocol::AccountUpdatedNotification;
+use adam_app_server_protocol::AddConversationListenerParams;
+use adam_app_server_protocol::AddConversationSubscriptionResponse;
+use adam_app_server_protocol::AppsListParams;
+use adam_app_server_protocol::AppsListResponse;
+use adam_app_server_protocol::ArchiveConversationParams;
+use adam_app_server_protocol::ArchiveConversationResponse;
+use adam_app_server_protocol::AskForApproval;
+use adam_app_server_protocol::AuthMode;
+use adam_app_server_protocol::AuthStatusChangeNotification;
+use adam_app_server_protocol::CancelLoginAccountParams;
+use adam_app_server_protocol::CancelLoginAccountResponse;
+use adam_app_server_protocol::CancelLoginAccountStatus;
+use adam_app_server_protocol::CancelLoginChatGptResponse;
+use adam_app_server_protocol::ClientRequest;
+use adam_app_server_protocol::CollaborationModeListParams;
+use adam_app_server_protocol::CollaborationModeListResponse;
+use adam_app_server_protocol::CommandExecParams;
+use adam_app_server_protocol::ConversationGitInfo;
+use adam_app_server_protocol::ConversationSummary;
+use adam_app_server_protocol::DynamicToolSpec as ApiDynamicToolSpec;
+use adam_app_server_protocol::ExecOneOffCommandResponse;
+use adam_app_server_protocol::FeedbackUploadParams;
+use adam_app_server_protocol::FeedbackUploadResponse;
+use adam_app_server_protocol::ForkConversationParams;
+use adam_app_server_protocol::ForkConversationResponse;
+use adam_app_server_protocol::FuzzyFileSearchParams;
+use adam_app_server_protocol::FuzzyFileSearchResponse;
+use adam_app_server_protocol::GetAccountParams;
+use adam_app_server_protocol::GetAccountRateLimitsResponse;
+use adam_app_server_protocol::GetAccountResponse;
+use adam_app_server_protocol::GetAuthStatusParams;
+use adam_app_server_protocol::GetAuthStatusResponse;
+use adam_app_server_protocol::GetConversationSummaryParams;
+use adam_app_server_protocol::GetConversationSummaryResponse;
+use adam_app_server_protocol::GetUserAgentResponse;
+use adam_app_server_protocol::GetUserSavedConfigResponse;
+use adam_app_server_protocol::GitDiffToRemoteResponse;
+use adam_app_server_protocol::GitInfo as ApiGitInfo;
+use adam_app_server_protocol::InputItem as WireInputItem;
+use adam_app_server_protocol::InterruptConversationParams;
+use adam_app_server_protocol::JSONRPCErrorError;
+use adam_app_server_protocol::ListConversationsParams;
+use adam_app_server_protocol::ListConversationsResponse;
+use adam_app_server_protocol::ListMcpServerStatusParams;
+use adam_app_server_protocol::ListMcpServerStatusResponse;
+use adam_app_server_protocol::LoginAccountParams;
+use adam_app_server_protocol::LoginAccountResponse;
+use adam_app_server_protocol::LoginApiKeyParams;
+use adam_app_server_protocol::LoginApiKeyResponse;
+use adam_app_server_protocol::LoginChatGptCompleteNotification;
+use adam_app_server_protocol::LoginChatGptResponse;
+use adam_app_server_protocol::LogoutAccountResponse;
+use adam_app_server_protocol::LogoutChatGptResponse;
+use adam_app_server_protocol::McpServerOauthLoginCompletedNotification;
+use adam_app_server_protocol::McpServerOauthLoginParams;
+use adam_app_server_protocol::McpServerOauthLoginResponse;
+use adam_app_server_protocol::McpServerRefreshResponse;
+use adam_app_server_protocol::McpServerStatus;
+use adam_app_server_protocol::ModelListParams;
+use adam_app_server_protocol::ModelListResponse;
+use adam_app_server_protocol::NewConversationParams;
+use adam_app_server_protocol::NewConversationResponse;
+use adam_app_server_protocol::RemoveConversationListenerParams;
+use adam_app_server_protocol::RemoveConversationSubscriptionResponse;
+use adam_app_server_protocol::RequestId;
+use adam_app_server_protocol::ResumeConversationParams;
+use adam_app_server_protocol::ResumeConversationResponse;
+use adam_app_server_protocol::ReviewDelivery as ApiReviewDelivery;
+use adam_app_server_protocol::ReviewStartParams;
+use adam_app_server_protocol::ReviewStartResponse;
+use adam_app_server_protocol::ReviewTarget as ApiReviewTarget;
+use adam_app_server_protocol::SandboxMode;
+use adam_app_server_protocol::SendUserMessageParams;
+use adam_app_server_protocol::SendUserMessageResponse;
+use adam_app_server_protocol::SendUserTurnParams;
+use adam_app_server_protocol::SendUserTurnResponse;
+use adam_app_server_protocol::ServerNotification;
+use adam_app_server_protocol::SessionConfiguredNotification;
+use adam_app_server_protocol::SetDefaultModelParams;
+use adam_app_server_protocol::SetDefaultModelResponse;
+use adam_app_server_protocol::SkillsConfigWriteParams;
+use adam_app_server_protocol::SkillsConfigWriteResponse;
+use adam_app_server_protocol::SkillsListParams;
+use adam_app_server_protocol::SkillsListResponse;
+use adam_app_server_protocol::Thread;
+use adam_app_server_protocol::ThreadArchiveParams;
+use adam_app_server_protocol::ThreadArchiveResponse;
+use adam_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
+use adam_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
+use adam_app_server_protocol::ThreadForkParams;
+use adam_app_server_protocol::ThreadForkResponse;
+use adam_app_server_protocol::ThreadItem;
+use adam_app_server_protocol::ThreadListParams;
+use adam_app_server_protocol::ThreadListResponse;
+use adam_app_server_protocol::ThreadLoadedListParams;
+use adam_app_server_protocol::ThreadLoadedListResponse;
+use adam_app_server_protocol::ThreadReadParams;
+use adam_app_server_protocol::ThreadReadResponse;
+use adam_app_server_protocol::ThreadResumeParams;
+use adam_app_server_protocol::ThreadResumeResponse;
+use adam_app_server_protocol::ThreadRollbackParams;
+use adam_app_server_protocol::ThreadSetNameParams;
+use adam_app_server_protocol::ThreadSetNameResponse;
+use adam_app_server_protocol::ThreadSortKey;
+use adam_app_server_protocol::ThreadSourceKind;
+use adam_app_server_protocol::ThreadStartParams;
+use adam_app_server_protocol::ThreadStartResponse;
+use adam_app_server_protocol::ThreadStartedNotification;
+use adam_app_server_protocol::ThreadUnarchiveParams;
+use adam_app_server_protocol::ThreadUnarchiveResponse;
+use adam_app_server_protocol::Turn;
+use adam_app_server_protocol::TurnError;
+use adam_app_server_protocol::TurnInterruptParams;
+use adam_app_server_protocol::TurnStartParams;
+use adam_app_server_protocol::TurnStartResponse;
+use adam_app_server_protocol::TurnStartedNotification;
+use adam_app_server_protocol::TurnStatus;
+use adam_app_server_protocol::UserInfoResponse;
+use adam_app_server_protocol::UserInput as V2UserInput;
+use adam_app_server_protocol::UserSavedConfig;
+use adam_app_server_protocol::build_turns_from_event_msgs;
+use adam_backend_client::Client as BackendClient;
+use adam_chatgpt::connectors;
+use adam_feedback::CodexFeedback;
+use adam_llm::CatalogRefreshStrategy;
+use adam_llm::RuntimeEndpoint;
+use adam_login::ServerOptions as LoginServerOptions;
+use adam_login::ShutdownHandle;
+use adam_login::run_login_server;
+use adam_protocol::ThreadId;
+use adam_protocol::config_types::ForcedLoginMethod;
+use adam_protocol::config_types::Personality;
+use adam_protocol::config_types::WindowsSandboxLevel;
+use adam_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
+use adam_protocol::items::TurnItem;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::protocol::AgentStatus;
+use adam_protocol::protocol::GitInfo as CoreGitInfo;
+use adam_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
+use adam_protocol::protocol::McpServerRefreshConfig;
+use adam_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
+use adam_protocol::protocol::RolloutItem;
+use adam_protocol::protocol::SessionMetaLine;
+use adam_protocol::protocol::USER_MESSAGE_BEGIN;
+use adam_protocol::user_input::UserInput as CoreInputItem;
+use adam_rmcp_client::perform_oauth_login_return_url;
+use adam_utils_json_to_toml::json_to_toml;
 use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
-use codex_agent::AuthManager;
-use codex_agent::CodexAuth;
-use codex_agent::CodexThread;
-use codex_agent::Cursor as RolloutCursor;
-use codex_agent::InitialHistory;
-use codex_agent::NewThread;
-use codex_agent::RolloutRecorder;
-use codex_agent::SessionMeta;
-use codex_agent::ThreadConfigSnapshot;
-use codex_agent::ThreadManager;
-use codex_agent::ThreadSortKey as CoreThreadSortKey;
-use codex_agent::auth::CLIENT_ID;
-use codex_agent::auth::login_with_api_key;
-use codex_agent::auth::login_with_chatgpt_auth_tokens;
-use codex_agent::config::Config;
-use codex_agent::config::ConfigOverrides;
-use codex_agent::config::ConfigService;
-use codex_agent::config::ConfigToml;
-use codex_agent::config::edit::ConfigEdit;
-use codex_agent::config::edit::ConfigEditsBuilder;
-use codex_agent::config::model_ref::ModelRef;
-use codex_agent::config::state_json::AdamStateStore;
-use codex_agent::config::types::McpServerTransportConfig;
-use codex_agent::config_loader::CloudRequirementsLoader;
-use codex_agent::default_client::get_codex_user_agent;
-use codex_agent::error::CodexErr;
-use codex_agent::exec::ExecParams;
-use codex_agent::exec_env::create_env;
-use codex_agent::features::Feature;
-use codex_agent::find_archived_thread_path_by_id_str;
-use codex_agent::find_thread_path_by_id_str;
-use codex_agent::git_info::git_diff_to_remote;
-use codex_agent::is_unsupported_rollout_schema_error;
-use codex_agent::mcp::collect_mcp_snapshot;
-use codex_agent::mcp::group_tools_by_server;
-use codex_agent::parse_cursor;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::ReviewDelivery as CoreReviewDelivery;
-use codex_agent::protocol::ReviewRequest;
-use codex_agent::protocol::ReviewTarget as CoreReviewTarget;
-use codex_agent::protocol::SessionConfiguredEvent;
-use codex_agent::read_head_for_summary;
-use codex_agent::read_session_meta_line;
-use codex_agent::rollout_date_parts;
-use codex_agent::sandboxing::SandboxPermissions;
-use codex_agent::state_db::get_state_db;
-use codex_agent::token_data::parse_id_token;
-use codex_agent::windows_sandbox::WindowsSandboxLevelExt;
-use codex_app_server_protocol::Account;
-use codex_app_server_protocol::AccountLoginCompletedNotification;
-use codex_app_server_protocol::AccountUpdatedNotification;
-use codex_app_server_protocol::AddConversationListenerParams;
-use codex_app_server_protocol::AddConversationSubscriptionResponse;
-use codex_app_server_protocol::AppsListParams;
-use codex_app_server_protocol::AppsListResponse;
-use codex_app_server_protocol::ArchiveConversationParams;
-use codex_app_server_protocol::ArchiveConversationResponse;
-use codex_app_server_protocol::AskForApproval;
-use codex_app_server_protocol::AuthMode;
-use codex_app_server_protocol::AuthStatusChangeNotification;
-use codex_app_server_protocol::CancelLoginAccountParams;
-use codex_app_server_protocol::CancelLoginAccountResponse;
-use codex_app_server_protocol::CancelLoginAccountStatus;
-use codex_app_server_protocol::CancelLoginChatGptResponse;
-use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::CollaborationModeListParams;
-use codex_app_server_protocol::CollaborationModeListResponse;
-use codex_app_server_protocol::CommandExecParams;
-use codex_app_server_protocol::ConversationGitInfo;
-use codex_app_server_protocol::ConversationSummary;
-use codex_app_server_protocol::DynamicToolSpec as ApiDynamicToolSpec;
-use codex_app_server_protocol::ExecOneOffCommandResponse;
-use codex_app_server_protocol::FeedbackUploadParams;
-use codex_app_server_protocol::FeedbackUploadResponse;
-use codex_app_server_protocol::ForkConversationParams;
-use codex_app_server_protocol::ForkConversationResponse;
-use codex_app_server_protocol::FuzzyFileSearchParams;
-use codex_app_server_protocol::FuzzyFileSearchResponse;
-use codex_app_server_protocol::GetAccountParams;
-use codex_app_server_protocol::GetAccountRateLimitsResponse;
-use codex_app_server_protocol::GetAccountResponse;
-use codex_app_server_protocol::GetAuthStatusParams;
-use codex_app_server_protocol::GetAuthStatusResponse;
-use codex_app_server_protocol::GetConversationSummaryParams;
-use codex_app_server_protocol::GetConversationSummaryResponse;
-use codex_app_server_protocol::GetUserAgentResponse;
-use codex_app_server_protocol::GetUserSavedConfigResponse;
-use codex_app_server_protocol::GitDiffToRemoteResponse;
-use codex_app_server_protocol::GitInfo as ApiGitInfo;
-use codex_app_server_protocol::InputItem as WireInputItem;
-use codex_app_server_protocol::InterruptConversationParams;
-use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::ListConversationsParams;
-use codex_app_server_protocol::ListConversationsResponse;
-use codex_app_server_protocol::ListMcpServerStatusParams;
-use codex_app_server_protocol::ListMcpServerStatusResponse;
-use codex_app_server_protocol::LoginAccountParams;
-use codex_app_server_protocol::LoginAccountResponse;
-use codex_app_server_protocol::LoginApiKeyParams;
-use codex_app_server_protocol::LoginApiKeyResponse;
-use codex_app_server_protocol::LoginChatGptCompleteNotification;
-use codex_app_server_protocol::LoginChatGptResponse;
-use codex_app_server_protocol::LogoutAccountResponse;
-use codex_app_server_protocol::LogoutChatGptResponse;
-use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
-use codex_app_server_protocol::McpServerOauthLoginParams;
-use codex_app_server_protocol::McpServerOauthLoginResponse;
-use codex_app_server_protocol::McpServerRefreshResponse;
-use codex_app_server_protocol::McpServerStatus;
-use codex_app_server_protocol::ModelListParams;
-use codex_app_server_protocol::ModelListResponse;
-use codex_app_server_protocol::NewConversationParams;
-use codex_app_server_protocol::NewConversationResponse;
-use codex_app_server_protocol::RemoveConversationListenerParams;
-use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ResumeConversationParams;
-use codex_app_server_protocol::ResumeConversationResponse;
-use codex_app_server_protocol::ReviewDelivery as ApiReviewDelivery;
-use codex_app_server_protocol::ReviewStartParams;
-use codex_app_server_protocol::ReviewStartResponse;
-use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
-use codex_app_server_protocol::SandboxMode;
-use codex_app_server_protocol::SendUserMessageParams;
-use codex_app_server_protocol::SendUserMessageResponse;
-use codex_app_server_protocol::SendUserTurnParams;
-use codex_app_server_protocol::SendUserTurnResponse;
-use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::SessionConfiguredNotification;
-use codex_app_server_protocol::SetDefaultModelParams;
-use codex_app_server_protocol::SetDefaultModelResponse;
-use codex_app_server_protocol::SkillsConfigWriteParams;
-use codex_app_server_protocol::SkillsConfigWriteResponse;
-use codex_app_server_protocol::SkillsListParams;
-use codex_app_server_protocol::SkillsListResponse;
-use codex_app_server_protocol::Thread;
-use codex_app_server_protocol::ThreadArchiveParams;
-use codex_app_server_protocol::ThreadArchiveResponse;
-use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
-use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
-use codex_app_server_protocol::ThreadForkParams;
-use codex_app_server_protocol::ThreadForkResponse;
-use codex_app_server_protocol::ThreadItem;
-use codex_app_server_protocol::ThreadListParams;
-use codex_app_server_protocol::ThreadListResponse;
-use codex_app_server_protocol::ThreadLoadedListParams;
-use codex_app_server_protocol::ThreadLoadedListResponse;
-use codex_app_server_protocol::ThreadReadParams;
-use codex_app_server_protocol::ThreadReadResponse;
-use codex_app_server_protocol::ThreadResumeParams;
-use codex_app_server_protocol::ThreadResumeResponse;
-use codex_app_server_protocol::ThreadRollbackParams;
-use codex_app_server_protocol::ThreadSetNameParams;
-use codex_app_server_protocol::ThreadSetNameResponse;
-use codex_app_server_protocol::ThreadSortKey;
-use codex_app_server_protocol::ThreadSourceKind;
-use codex_app_server_protocol::ThreadStartParams;
-use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::ThreadStartedNotification;
-use codex_app_server_protocol::ThreadUnarchiveParams;
-use codex_app_server_protocol::ThreadUnarchiveResponse;
-use codex_app_server_protocol::Turn;
-use codex_app_server_protocol::TurnError;
-use codex_app_server_protocol::TurnInterruptParams;
-use codex_app_server_protocol::TurnStartParams;
-use codex_app_server_protocol::TurnStartResponse;
-use codex_app_server_protocol::TurnStartedNotification;
-use codex_app_server_protocol::TurnStatus;
-use codex_app_server_protocol::UserInfoResponse;
-use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_app_server_protocol::UserSavedConfig;
-use codex_app_server_protocol::build_turns_from_event_msgs;
-use codex_backend_client::Client as BackendClient;
-use codex_chatgpt::connectors;
-use codex_feedback::CodexFeedback;
-use codex_llm::CatalogRefreshStrategy;
-use codex_llm::RuntimeEndpoint;
-use codex_login::ServerOptions as LoginServerOptions;
-use codex_login::ShutdownHandle;
-use codex_login::run_login_server;
-use codex_protocol::ThreadId;
-use codex_protocol::config_types::ForcedLoginMethod;
-use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
-use codex_protocol::items::TurnItem;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::protocol::AgentStatus;
-use codex_protocol::protocol::GitInfo as CoreGitInfo;
-use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
-use codex_protocol::protocol::McpServerRefreshConfig;
-use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SessionMetaLine;
-use codex_protocol::protocol::USER_MESSAGE_BEGIN;
-use codex_protocol::user_input::UserInput as CoreInputItem;
-use codex_rmcp_client::perform_oauth_login_return_url;
-use codex_utils_json_to_toml::json_to_toml;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -379,7 +379,7 @@ impl CodexMessageProcessor {
     }
 
     async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
-        codex_agent::config::ConfigBuilder::default()
+        adam_agent::config::ConfigBuilder::default()
             .cli_overrides(self.cli_overrides.clone())
             .cloud_requirements(self.cloud_requirements.clone())
             .build()
@@ -510,7 +510,7 @@ impl CodexMessageProcessor {
             ApiReviewTarget::Custom { instructions } => CoreReviewTarget::Custom { instructions },
         };
 
-        let hint = codex_agent::review_prompts::user_facing_hint(&core_target);
+        let hint = adam_agent::review_prompts::user_facing_hint(&core_target);
         let review_request = ReviewRequest {
             target: core_target,
             user_facing_hint: Some(hint.clone()),
@@ -828,7 +828,7 @@ impl CodexMessageProcessor {
     async fn login_api_key_v2(&mut self, request_id: RequestId, params: LoginApiKeyParams) {
         match self.login_api_key_common(&params).await {
             Ok(()) => {
-                let response = codex_app_server_protocol::LoginAccountResponse::ApiKey {};
+                let response = adam_app_server_protocol::LoginAccountResponse::ApiKey {};
                 self.outgoing.send_response(request_id, response).await;
 
                 let payload_login_completed = AccountLoginCompletedNotification {
@@ -1057,7 +1057,7 @@ impl CodexMessageProcessor {
                         }
                     });
 
-                    let response = codex_app_server_protocol::LoginAccountResponse::Chatgpt {
+                    let response = adam_app_server_protocol::LoginAccountResponse::Chatgpt {
                         login_id: login_id.to_string(),
                         auth_url,
                     };
@@ -1702,7 +1702,7 @@ impl CodexMessageProcessor {
         let sandbox_cwd = self.config.cwd.clone();
 
         tokio::spawn(async move {
-            match codex_agent::exec::process_exec_tool_call(
+            match adam_agent::exec::process_exec_tool_call(
                 exec_params,
                 &effective_policy,
                 sandbox_cwd.as_path(),
@@ -1995,7 +1995,7 @@ impl CodexMessageProcessor {
         model: Option<String>,
         model_provider: Option<String>,
         cwd: Option<String>,
-        approval_policy: Option<codex_app_server_protocol::AskForApproval>,
+        approval_policy: Option<adam_app_server_protocol::AskForApproval>,
         sandbox: Option<SandboxMode>,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
@@ -2005,8 +2005,7 @@ impl CodexMessageProcessor {
             model,
             model_provider,
             cwd: cwd.map(PathBuf::from),
-            approval_policy: approval_policy
-                .map(codex_app_server_protocol::AskForApproval::to_core),
+            approval_policy: approval_policy.map(adam_app_server_protocol::AskForApproval::to_core),
             sandbox_mode: sandbox.map(SandboxMode::to_core),
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             base_instructions,
@@ -2071,7 +2070,7 @@ impl CodexMessageProcessor {
 
     async fn thread_set_name(&self, request_id: RequestId, params: ThreadSetNameParams) {
         let ThreadSetNameParams { thread_id, name } = params;
-        let Some(name) = codex_agent::util::normalize_thread_name(&name) else {
+        let Some(name) = adam_agent::util::normalize_thread_name(&name) else {
             self.send_invalid_request_error(
                 request_id,
                 "thread name must not be empty".to_string(),
@@ -2147,7 +2146,7 @@ impl CodexMessageProcessor {
         let archived_folder = self
             .config
             .adam_home
-            .join(codex_agent::ARCHIVED_SESSIONS_SUBDIR);
+            .join(adam_agent::ARCHIVED_SESSIONS_SUBDIR);
 
         let result: Result<Thread, JSONRPCErrorError> = async {
             let canonical_archived_dir = tokio::fs::canonicalize(&archived_folder).await.map_err(
@@ -2205,7 +2204,7 @@ impl CodexMessageProcessor {
                 });
             };
 
-            let sessions_folder = self.config.adam_home.join(codex_agent::SESSIONS_SUBDIR);
+            let sessions_folder = self.config.adam_home.join(adam_agent::SESSIONS_SUBDIR);
             let dest_dir = sessions_folder.join(year).join(month).join(day);
             let restored_path = dest_dir.join(&file_name);
             tokio::fs::create_dir_all(&dest_dir)
@@ -3032,7 +3031,7 @@ impl CodexMessageProcessor {
                 }
             }
             GetConversationSummaryParams::ThreadId { conversation_id } => {
-                match codex_agent::find_thread_path_by_id_str(
+                match adam_agent::find_thread_path_by_id_str(
                     &self.config.adam_home,
                     &conversation_id.to_string(),
                 )
@@ -4056,7 +4055,7 @@ impl CodexMessageProcessor {
         rollout_path: &Path,
     ) -> Result<(), JSONRPCErrorError> {
         // Verify rollout_path is under sessions dir.
-        let rollout_folder = self.config.adam_home.join(codex_agent::SESSIONS_SUBDIR);
+        let rollout_folder = self.config.adam_home.join(adam_agent::SESSIONS_SUBDIR);
 
         let canonical_sessions_dir = match tokio::fs::canonicalize(&rollout_folder).await {
             Ok(path) => path,
@@ -4154,7 +4153,7 @@ impl CodexMessageProcessor {
             let archive_folder = self
                 .config
                 .adam_home
-                .join(codex_agent::ARCHIVED_SESSIONS_SUBDIR);
+                .join(adam_agent::ARCHIVED_SESSIONS_SUBDIR);
             tokio::fs::create_dir_all(&archive_folder).await?;
             let archived_path = archive_folder.join(&file_name);
             tokio::fs::rename(&canonical_rollout_path, &archived_path).await?;
@@ -4375,7 +4374,7 @@ impl CodexMessageProcessor {
             let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
             let errors = errors_to_info(&outcome.errors);
             let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
-            data.push(codex_app_server_protocol::SkillsListEntry {
+            data.push(adam_app_server_protocol::SkillsListEntry {
                 cwd,
                 skills,
                 errors,
@@ -5092,19 +5091,19 @@ impl CodexMessageProcessor {
 }
 
 fn skills_to_info(
-    skills: &[codex_agent::skills::SkillMetadata],
+    skills: &[adam_agent::skills::SkillMetadata],
     disabled_paths: &std::collections::HashSet<PathBuf>,
-) -> Vec<codex_app_server_protocol::SkillMetadata> {
+) -> Vec<adam_app_server_protocol::SkillMetadata> {
     skills
         .iter()
         .map(|skill| {
             let enabled = !disabled_paths.contains(&skill.path);
-            codex_app_server_protocol::SkillMetadata {
+            adam_app_server_protocol::SkillMetadata {
                 name: skill.name.clone(),
                 description: skill.description.clone(),
                 short_description: skill.short_description.clone(),
                 interface: skill.interface.clone().map(|interface| {
-                    codex_app_server_protocol::SkillInterface {
+                    adam_app_server_protocol::SkillInterface {
                         display_name: interface.display_name,
                         short_description: interface.short_description,
                         icon_small: interface.icon_small,
@@ -5114,11 +5113,11 @@ fn skills_to_info(
                     }
                 }),
                 dependencies: skill.dependencies.clone().map(|dependencies| {
-                    codex_app_server_protocol::SkillDependencies {
+                    adam_app_server_protocol::SkillDependencies {
                         tools: dependencies
                             .tools
                             .into_iter()
-                            .map(|tool| codex_app_server_protocol::SkillToolDependency {
+                            .map(|tool| adam_app_server_protocol::SkillToolDependency {
                                 r#type: tool.r#type,
                                 value: tool.value,
                                 description: tool.description,
@@ -5138,11 +5137,11 @@ fn skills_to_info(
 }
 
 fn errors_to_info(
-    errors: &[codex_agent::skills::SkillError],
-) -> Vec<codex_app_server_protocol::SkillErrorInfo> {
+    errors: &[adam_agent::skills::SkillError],
+) -> Vec<adam_app_server_protocol::SkillErrorInfo> {
     errors
         .iter()
-        .map(|err| codex_app_server_protocol::SkillErrorInfo {
+        .map(|err| adam_app_server_protocol::SkillErrorInfo {
             path: err.path.clone(),
             message: err.message.clone(),
         })
@@ -5175,7 +5174,7 @@ fn validate_dynamic_tools(
             return Err(format!("duplicate dynamic tool name: {name}"));
         }
 
-        if let Err(err) = codex_agent::parse_tool_input_schema(&tool.input_schema) {
+        if let Err(err) = adam_agent::parse_tool_input_schema(&tool.input_schema) {
             return Err(format!(
                 "dynamic tool input schema is not supported for {name}: {err}"
             ));
@@ -5211,7 +5210,7 @@ async fn derive_config_from_params(
         )
         .collect::<Vec<_>>();
 
-    codex_agent::config::ConfigBuilder::default()
+    adam_agent::config::ConfigBuilder::default()
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .cloud_requirements(cloud_requirements.clone())
@@ -5237,7 +5236,7 @@ async fn derive_config_for_cwd(
         )
         .collect::<Vec<_>>();
 
-    codex_agent::config::ConfigBuilder::default()
+    adam_agent::config::ConfigBuilder::default()
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .fallback_cwd(cwd)
@@ -5317,7 +5316,7 @@ pub(crate) async fn read_summary_from_rollout(
 
 pub(crate) async fn read_event_msgs_from_rollout(
     path: &Path,
-) -> std::io::Result<Vec<codex_protocol::protocol::EventMsg>> {
+) -> std::io::Result<Vec<adam_protocol::protocol::EventMsg>> {
     let items = match RolloutRecorder::get_rollout_history(path).await? {
         InitialHistory::New => Vec::new(),
         InitialHistory::Forked(items) => items,
@@ -5345,7 +5344,7 @@ fn extract_conversation_summary(
     let preview = head
         .iter()
         .filter_map(|value| serde_json::from_value::<TranscriptItem>(value.clone()).ok())
-        .find_map(|item| match codex_agent::parse_turn_item(&item) {
+        .find_map(|item| match adam_agent::parse_turn_item(&item) {
             Some(TurnItem::UserMessage(user)) => Some(user.message()),
             _ => None,
         })?;
@@ -5469,8 +5468,8 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adam_protocol::protocol::SessionSource;
     use anyhow::Result;
-    use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::TempDir;
@@ -5510,7 +5509,7 @@ mod tests {
                 "cwd": "/",
                 "originator": "codex",
                 "cli_version": "0.0.0",
-                "rollout_schema_version": codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+                "rollout_schema_version": adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
                 "model_provider": "test-provider"
             }),
             json!({
@@ -5563,9 +5562,9 @@ mod tests {
 
     #[tokio::test]
     async fn read_summary_from_rollout_returns_empty_preview_when_no_user_message() -> Result<()> {
-        use codex_protocol::protocol::RolloutItem;
-        use codex_protocol::protocol::RolloutLine;
-        use codex_protocol::protocol::SessionMetaLine;
+        use adam_protocol::protocol::RolloutItem;
+        use adam_protocol::protocol::RolloutLine;
+        use adam_protocol::protocol::SessionMetaLine;
         use std::fs;
         use std::fs::FileTimes;
 

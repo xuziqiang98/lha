@@ -3,8 +3,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use crate::util::resolve_path;
-use codex_app_server_protocol::GitSha;
-use codex_protocol::protocol::GitInfo;
+use adam_app_server_protocol::GitSha;
+use adam_protocol::protocol::GitInfo;
 use futures::future::join_all;
 use serde::Deserialize;
 use serde::Serialize;

@@ -5,12 +5,12 @@ use std::fs;
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_agent::protocol::AskForApproval;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::SandboxPolicy;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::user_input::UserInput;
+use adam_agent::protocol::AskForApproval;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::SandboxPolicy;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;

@@ -8,13 +8,13 @@
 //! We expect to tighten this so that Enterprise ChatGPT customers must successfully fetch these
 //! requirements before Codex will run.
 
+use adam_agent::AuthManager;
+use adam_agent::auth::CodexAuth;
+use adam_agent::config_loader::CloudRequirementsLoader;
+use adam_agent::config_loader::ConfigRequirementsToml;
+use adam_backend_client::Client as BackendClient;
+use adam_protocol::account::PlanType;
 use async_trait::async_trait;
-use codex_agent::AuthManager;
-use codex_agent::auth::CodexAuth;
-use codex_agent::config_loader::CloudRequirementsLoader;
-use codex_agent::config_loader::ConfigRequirementsToml;
-use codex_backend_client::Client as BackendClient;
-use codex_protocol::account::PlanType;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -90,7 +90,7 @@ impl CloudRequirementsService {
 
     async fn fetch_with_timeout(&self) -> Option<ConfigRequirementsToml> {
         let _timer =
-            codex_otel::start_global_timer("codex.cloud_requirements.fetch.duration_ms", &[]);
+            adam_otel::start_global_timer("codex.cloud_requirements.fetch.duration_ms", &[]);
         let started_at = Instant::now();
         let result = timeout(self.timeout, self.fetch())
             .await
@@ -173,10 +173,10 @@ fn parse_cloud_requirements(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adam_agent::auth::AuthCredentialsStoreMode;
+    use adam_protocol::protocol::AskForApproval;
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use codex_agent::auth::AuthCredentialsStoreMode;
-    use codex_protocol::protocol::AskForApproval;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::future::pending;

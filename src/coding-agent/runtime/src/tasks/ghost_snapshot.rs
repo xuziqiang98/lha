@@ -4,16 +4,16 @@ use crate::protocol::WarningEvent;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
+use adam_git::CreateGhostCommitOptions;
+use adam_git::GhostSnapshotReport;
+use adam_git::GitToolingError;
+use adam_git::create_ghost_commit_with_report;
+use adam_protocol::protocol::GhostSnapshotRecord;
+use adam_protocol::protocol::GhostSnapshotStatus;
+use adam_protocol::user_input::UserInput;
+use adam_utils_readiness::Readiness;
+use adam_utils_readiness::Token;
 use async_trait::async_trait;
-use codex_git::CreateGhostCommitOptions;
-use codex_git::GhostSnapshotReport;
-use codex_git::GitToolingError;
-use codex_git::create_ghost_commit_with_report;
-use codex_protocol::protocol::GhostSnapshotRecord;
-use codex_protocol::protocol::GhostSnapshotStatus;
-use codex_protocol::user_input::UserInput;
-use codex_utils_readiness::Readiness;
-use codex_utils_readiness::Token;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -255,7 +255,7 @@ fn format_bytes(bytes: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_git::LargeUntrackedDir;
+    use adam_git::LargeUntrackedDir;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 

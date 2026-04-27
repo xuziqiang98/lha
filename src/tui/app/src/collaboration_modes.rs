@@ -1,6 +1,6 @@
-use codex_agent::ThreadManager;
-use codex_protocol::config_types::CollaborationModeMask;
-use codex_protocol::config_types::ModeKind;
+use adam_agent::ThreadManager;
+use adam_protocol::config_types::CollaborationModeMask;
+use adam_protocol::config_types::ModeKind;
 
 fn is_tui_mode(kind: ModeKind) -> bool {
     matches!(kind, ModeKind::Plan | ModeKind::Code)

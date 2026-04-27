@@ -1,26 +1,26 @@
 use super::card::new_status_output;
 use super::rate_limit_snapshot_display;
 use crate::history_cell::HistoryCell;
+use adam_agent::AuthManager;
+use adam_agent::auth::AuthDotJson;
+use adam_agent::auth::save_auth;
+use adam_agent::config::Config;
+use adam_agent::config::ConfigBuilder;
+use adam_agent::models_manager::manager::ModelsManager;
+use adam_agent::protocol::CreditsSnapshot;
+use adam_agent::protocol::RateLimitSnapshot;
+use adam_agent::protocol::RateLimitWindow;
+use adam_agent::protocol::SandboxPolicy;
+use adam_agent::protocol::TokenUsage;
+use adam_agent::protocol::TokenUsageInfo;
+use adam_app_server_protocol::AuthMode;
+use adam_protocol::ThreadId;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::openai_models::ReasoningEffort;
 use base64::Engine;
 use chrono::Duration as ChronoDuration;
 use chrono::TimeZone;
 use chrono::Utc;
-use codex_agent::AuthManager;
-use codex_agent::auth::AuthDotJson;
-use codex_agent::auth::save_auth;
-use codex_agent::config::Config;
-use codex_agent::config::ConfigBuilder;
-use codex_agent::models_manager::manager::ModelsManager;
-use codex_agent::protocol::CreditsSnapshot;
-use codex_agent::protocol::RateLimitSnapshot;
-use codex_agent::protocol::RateLimitWindow;
-use codex_agent::protocol::SandboxPolicy;
-use codex_agent::protocol::TokenUsage;
-use codex_agent::protocol::TokenUsageInfo;
-use codex_app_server_protocol::AuthMode;
-use codex_protocol::ThreadId;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::openai_models::ReasoningEffort;
 use insta::assert_snapshot;
 use ratatui::prelude::*;
 use serde_json::json;
@@ -120,12 +120,11 @@ fn sanitize_rendered_lines(lines: Vec<String>) -> Vec<String> {
     lines
         .into_iter()
         .map(|mut line| {
-            if let (Some(version_pos), Some(pipe_idx)) = (line.find("Codey (v"), line.rfind('│'))
-            {
+            if let (Some(version_pos), Some(pipe_idx)) = (line.find("Adam (v"), line.rfind('│')) {
                 let prefix = &line[..version_pos];
                 let suffix = &line[pipe_idx..];
                 let content_width = pipe_idx.saturating_sub(version_pos);
-                let replacement = "Codey (v0.0.0)";
+                let replacement = "Adam (v0.0.0)";
                 let mut rebuilt = prefix.to_string();
                 rebuilt.push_str(replacement);
                 if content_width > replacement.len() {

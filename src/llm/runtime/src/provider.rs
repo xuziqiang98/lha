@@ -1,9 +1,9 @@
 use crate::Error;
 use crate::Result;
-use codex_api::Provider as ApiProvider;
-use codex_api::WireApi as ApiWireApi;
-use codex_api::is_azure_responses_wire_base_url;
-use codex_api::provider::RetryConfig as ApiRetryConfig;
+use adam_api::Provider as ApiProvider;
+use adam_api::WireApi as ApiWireApi;
+use adam_api::is_azure_responses_wire_base_url;
+use adam_api::provider::RetryConfig as ApiRetryConfig;
 use http::HeaderMap;
 use http::header::HeaderName;
 use http::header::HeaderValue;

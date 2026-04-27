@@ -1,0 +1,16 @@
+---
+source: src/harness/tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Select Model and Effort
+  Access legacy models by running adam -m <model_name> or in your config.toml
+
+  1. gpt-5.3-codex          Official model from OpenAI provider.
+  2. gpt-5.4                Official model from OpenAI provider.
+  3. gpt-5.2-codex          Official model from OpenAI provider.
+  4. gpt-5.1-codex-max      Official model from OpenAI provider.
+  5. gpt-5.2                Official model from OpenAI provider.
+  6. gpt-5.1-codex-mini     Official model from OpenAI provider.
+› 7. gpt-5-codex (current)  Official model from OpenAI provider.
+
+  Press enter to select reasoning effort, or esc to dismiss.

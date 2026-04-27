@@ -1,0 +1,8 @@
+---
+source: src/tui/app/src/chatwidget/tests.rs
+expression: combined
+---
+↳ Interacted with background terminal · cargo test -p adam-coding-agent
+  └ (waited)
+
+• Streaming response.

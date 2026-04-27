@@ -1,13 +1,13 @@
 use crate::model::ThreadMetadata;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::models::is_local_image_close_tag_text;
-use codex_protocol::models::is_local_image_open_tag_text;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SessionMetaLine;
-use codex_protocol::protocol::TurnContextItem;
-use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+use adam_protocol::models::ContentItem;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::models::is_local_image_close_tag_text;
+use adam_protocol::models::is_local_image_open_tag_text;
+use adam_protocol::protocol::EventMsg;
+use adam_protocol::protocol::RolloutItem;
+use adam_protocol::protocol::SessionMetaLine;
+use adam_protocol::protocol::TurnContextItem;
+use adam_protocol::protocol::USER_MESSAGE_BEGIN;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -127,12 +127,12 @@ pub(crate) fn enum_to_string<T: Serialize>(value: &T) -> String {
 mod tests {
     use super::extract_user_message_text;
     use crate::model::ThreadMetadata;
+    use adam_protocol::ThreadId;
+    use adam_protocol::models::ContentItem;
+    use adam_protocol::models::TranscriptItem;
+    use adam_protocol::protocol::USER_MESSAGE_BEGIN;
     use chrono::DateTime;
     use chrono::Utc;
-    use codex_protocol::ThreadId;
-    use codex_protocol::models::ContentItem;
-    use codex_protocol::models::TranscriptItem;
-    use codex_protocol::protocol::USER_MESSAGE_BEGIN;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use uuid::Uuid;

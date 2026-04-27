@@ -1,7 +1,7 @@
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::Op;
+use adam_protocol::user_input::UserInput;
 use anyhow::Result;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::Op;
-use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;

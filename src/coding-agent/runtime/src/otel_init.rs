@@ -3,11 +3,11 @@ use crate::config::types::OtelExporterKind as Kind;
 use crate::config::types::OtelHttpProtocol as Protocol;
 use crate::default_client::originator;
 use crate::features::Feature;
-use codex_otel::config::OtelExporter;
-use codex_otel::config::OtelHttpProtocol;
-use codex_otel::config::OtelSettings;
-use codex_otel::config::OtelTlsConfig as OtelTlsSettings;
-use codex_otel::otel_provider::OtelProvider;
+use adam_otel::config::OtelExporter;
+use adam_otel::config::OtelHttpProtocol;
+use adam_otel::config::OtelSettings;
+use adam_otel::config::OtelTlsConfig as OtelTlsSettings;
+use adam_otel::otel_provider::OtelProvider;
 use std::error::Error;
 
 /// Build an OpenTelemetry provider from the app Config.
@@ -93,7 +93,7 @@ pub fn build_provider(
 }
 
 /// Filter predicate for exporting only Codex-owned events via OTEL.
-/// Keeps events that originated from codex_otel module
+/// Keeps events that originated from adam_otel module
 pub fn codex_export_filter(meta: &tracing::Metadata<'_>) -> bool {
-    meta.target().starts_with("codex_otel")
+    meta.target().starts_with("adam_otel")
 }

@@ -20,9 +20,9 @@ use std::sync::Mutex;
 use tracing::warn;
 
 use crate::token_data::TokenData;
-use codex_app_server_protocol::AuthMode;
-use codex_keyring_store::DefaultKeyringStore;
-use codex_keyring_store::KeyringStore;
+use adam_app_server_protocol::AuthMode;
+use adam_keyring_store::DefaultKeyringStore;
+use adam_keyring_store::KeyringStore;
 use once_cell::sync::Lazy;
 
 /// Determine where Codex should store CLI auth credentials.
@@ -341,7 +341,7 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    use codex_keyring_store::tests::MockKeyringStore;
+    use adam_keyring_store::tests::MockKeyringStore;
     use keyring::Error as KeyringError;
 
     #[tokio::test]

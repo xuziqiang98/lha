@@ -1,6 +1,6 @@
 use crate::bottom_pane::ApprovalRequest;
 use crate::render::renderable::Renderable;
-use codex_protocol::request_user_input::RequestUserInputEvent;
+use adam_protocol::request_user_input::RequestUserInputEvent;
 use crossterm::event::KeyEvent;
 
 use super::CancellationEvent;

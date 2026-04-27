@@ -2,10 +2,10 @@
 //! and suffix on UTF-8 boundaries, and helpers for line/token‑based truncation
 //! used across the core crate.
 
-use codex_llm::ToolResultContentItem;
-use codex_protocol::openai_models::TruncationMode;
-use codex_protocol::openai_models::TruncationPolicyConfig;
-use codex_protocol::protocol::TruncationPolicy as ProtocolTruncationPolicy;
+use adam_llm::ToolResultContentItem;
+use adam_protocol::openai_models::TruncationMode;
+use adam_protocol::openai_models::TruncationPolicyConfig;
+use adam_protocol::protocol::TruncationPolicy as ProtocolTruncationPolicy;
 
 const APPROX_BYTES_PER_TOKEN: usize = 4;
 
@@ -314,7 +314,7 @@ mod tests {
     use super::truncate_function_output_items_with_policy;
     use super::truncate_text;
     use super::truncate_with_token_budget;
-    use codex_llm::ToolResultContentItem;
+    use adam_llm::ToolResultContentItem;
     use pretty_assertions::assert_eq;
 
     #[test]

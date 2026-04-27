@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 
+pub use adam_app_server_protocol::AppInfo;
+use adam_protocol::protocol::SandboxPolicy;
 use async_channel::unbounded;
-pub use codex_app_server_protocol::AppInfo;
-use codex_protocol::protocol::SandboxPolicy;
 use tokio_util::sync::CancellationToken;
 
 use crate::AuthManager;

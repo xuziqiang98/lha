@@ -14,19 +14,19 @@ use crate::path_utils;
 use crate::path_utils::SymlinkWritePaths;
 use crate::path_utils::resolve_symlink_write_paths;
 use crate::path_utils::write_atomically;
-use codex_app_server_protocol::Config as ApiConfig;
-use codex_app_server_protocol::ConfigBatchWriteParams;
-use codex_app_server_protocol::ConfigLayerMetadata;
-use codex_app_server_protocol::ConfigLayerSource;
-use codex_app_server_protocol::ConfigReadParams;
-use codex_app_server_protocol::ConfigReadResponse;
-use codex_app_server_protocol::ConfigValueWriteParams;
-use codex_app_server_protocol::ConfigWriteErrorCode;
-use codex_app_server_protocol::ConfigWriteResponse;
-use codex_app_server_protocol::MergeStrategy;
-use codex_app_server_protocol::OverriddenMetadata;
-use codex_app_server_protocol::WriteStatus;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use adam_app_server_protocol::Config as ApiConfig;
+use adam_app_server_protocol::ConfigBatchWriteParams;
+use adam_app_server_protocol::ConfigLayerMetadata;
+use adam_app_server_protocol::ConfigLayerSource;
+use adam_app_server_protocol::ConfigReadParams;
+use adam_app_server_protocol::ConfigReadResponse;
+use adam_app_server_protocol::ConfigValueWriteParams;
+use adam_app_server_protocol::ConfigWriteErrorCode;
+use adam_app_server_protocol::ConfigWriteResponse;
+use adam_app_server_protocol::MergeStrategy;
+use adam_app_server_protocol::OverriddenMetadata;
+use adam_app_server_protocol::WriteStatus;
+use adam_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 use std::borrow::Cow;
 use std::path::Path;
@@ -227,7 +227,7 @@ impl ConfigService {
 
     pub async fn load_user_saved_config(
         &self,
-    ) -> Result<codex_app_server_protocol::UserSavedConfig, ConfigServiceError> {
+    ) -> Result<adam_app_server_protocol::UserSavedConfig, ConfigServiceError> {
         let layers = self
             .load_thread_agnostic_config()
             .await
@@ -699,9 +699,9 @@ fn find_effective_layer(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adam_app_server_protocol::AskForApproval;
+    use adam_utils_absolute_path::AbsolutePathBuf;
     use anyhow::Result;
-    use codex_app_server_protocol::AskForApproval;
-    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 

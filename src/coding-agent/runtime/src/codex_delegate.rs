@@ -2,21 +2,21 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
+use adam_async_utils::OrCancelExt;
+use adam_protocol::protocol::ApplyPatchApprovalRequestEvent;
+use adam_protocol::protocol::Event;
+use adam_protocol::protocol::EventMsg;
+use adam_protocol::protocol::ExecApprovalRequestEvent;
+use adam_protocol::protocol::Op;
+use adam_protocol::protocol::RequestUserInputEvent;
+use adam_protocol::protocol::SessionSource;
+use adam_protocol::protocol::SubAgentSource;
+use adam_protocol::protocol::Submission;
+use adam_protocol::request_user_input::RequestUserInputArgs;
+use adam_protocol::request_user_input::RequestUserInputResponse;
+use adam_protocol::user_input::UserInput;
 use async_channel::Receiver;
 use async_channel::Sender;
-use codex_async_utils::OrCancelExt;
-use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ExecApprovalRequestEvent;
-use codex_protocol::protocol::Op;
-use codex_protocol::protocol::RequestUserInputEvent;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
-use codex_protocol::protocol::Submission;
-use codex_protocol::request_user_input::RequestUserInputArgs;
-use codex_protocol::request_user_input::RequestUserInputResponse;
-use codex_protocol::user_input::UserInput;
 use std::time::Duration;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -30,7 +30,7 @@ use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::CodexErr;
 use crate::models_manager::manager::ModelsManager;
-use codex_protocol::protocol::InitialHistory;
+use adam_protocol::protocol::InitialHistory;
 
 /// Start an interactive sub-Codex thread and return IO channels.
 ///
@@ -415,17 +415,17 @@ async fn await_approval_with_cancel<F>(
     parent_session: &Session,
     sub_id: &str,
     cancel_token: &CancellationToken,
-) -> codex_protocol::protocol::ReviewDecision
+) -> adam_protocol::protocol::ReviewDecision
 where
-    F: core::future::Future<Output = codex_protocol::protocol::ReviewDecision>,
+    F: core::future::Future<Output = adam_protocol::protocol::ReviewDecision>,
 {
     tokio::select! {
         biased;
         _ = cancel_token.cancelled() => {
             parent_session
-                .notify_approval(sub_id, codex_protocol::protocol::ReviewDecision::Abort)
+                .notify_approval(sub_id, adam_protocol::protocol::ReviewDecision::Abort)
                 .await;
-            codex_protocol::protocol::ReviewDecision::Abort
+            adam_protocol::protocol::ReviewDecision::Abort
         }
         decision = fut => {
             decision
@@ -436,13 +436,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adam_llm::ToolCallPayload;
+    use adam_protocol::models::TranscriptItem;
+    use adam_protocol::protocol::AgentStatus;
+    use adam_protocol::protocol::RawTranscriptItemEvent;
+    use adam_protocol::protocol::TurnAbortReason;
+    use adam_protocol::protocol::TurnAbortedEvent;
     use async_channel::bounded;
-    use codex_llm::ToolCallPayload;
-    use codex_protocol::models::TranscriptItem;
-    use codex_protocol::protocol::AgentStatus;
-    use codex_protocol::protocol::RawTranscriptItemEvent;
-    use codex_protocol::protocol::TurnAbortReason;
-    use codex_protocol::protocol::TurnAbortedEvent;
     use pretty_assertions::assert_eq;
     use tokio::sync::watch;
 

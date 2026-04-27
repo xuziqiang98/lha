@@ -4,12 +4,12 @@
 From the repository root:
 
 ```
-cargo build -p codex-cli --bin codey --release
+cargo build -p adam-cli --bin adam --release
 
-export PATH="<codey binary path>:$PATH" >> ~/.bashrc
+export PATH="<adam binary path>:$PATH" >> ~/.bashrc
 ```
 
-The resulting binary is written to `target/release/codey`.
+The resulting binary is written to `target/release/adam`.
 
 ## Structure
 

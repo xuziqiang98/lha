@@ -43,12 +43,12 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tracing::warn;
 
-use codex_keyring_store::DefaultKeyringStore;
-use codex_keyring_store::KeyringStore;
+use adam_keyring_store::DefaultKeyringStore;
+use adam_keyring_store::KeyringStore;
 use rmcp::transport::auth::AuthorizationManager;
 use tokio::sync::Mutex;
 
-use codex_utils_home_dir::find_adam_home;
+use adam_utils_home_dir::find_adam_home;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const REFRESH_SKEW_MILLIS: u64 = 30_000;
@@ -612,7 +612,7 @@ mod tests {
     use std::sync::PoisonError;
     use tempfile::tempdir;
 
-    use codex_keyring_store::tests::MockKeyringStore;
+    use adam_keyring_store::tests::MockKeyringStore;
 
     struct TempCodexHome {
         _guard: MutexGuard<'static, ()>,

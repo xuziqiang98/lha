@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use codex_app_server_protocol::FuzzyFileSearchResult;
-use codex_file_search as file_search;
+use adam_app_server_protocol::FuzzyFileSearchResult;
+use adam_file_search as file_search;
 use tracing::warn;
 
 const MATCH_LIMIT: usize = 50;

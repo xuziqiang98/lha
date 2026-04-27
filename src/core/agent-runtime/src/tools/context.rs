@@ -1,7 +1,7 @@
-use codex_llm::ToolCallPayload as LlmToolCallPayload;
-use codex_llm::ToolResultContentItem;
-use codex_llm::ToolResultItem;
-use codex_llm_types::ToolResultPayload;
+use adam_llm::ToolCallPayload as LlmToolCallPayload;
+use adam_llm::ToolResultContentItem;
+use adam_llm::ToolResultItem;
+use adam_llm_types::ToolResultPayload;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolInvocation {

@@ -10,10 +10,10 @@ use crate::export_server_notification_schemas;
 use crate::export_server_param_schemas;
 use crate::export_server_response_schemas;
 use crate::export_server_responses;
+use adam_protocol::protocol::EventMsg;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-use codex_protocol::protocol::EventMsg;
 use schemars::JsonSchema;
 use schemars::schema_for;
 use serde::Serialize;
@@ -170,7 +170,7 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
 
     let bundle = build_schema_bundle(schemas)?;
     write_pretty_json(
-        out_dir.join("codex_app_server_protocol.schemas.json"),
+        out_dir.join("adam_app_server_protocol.schemas.json"),
         &bundle,
     )?;
 

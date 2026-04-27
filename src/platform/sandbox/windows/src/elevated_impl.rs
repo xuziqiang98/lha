@@ -110,17 +110,17 @@ mod windows_impl {
         }
     }
 
-    /// Locates `codex-command-runner.exe` next to the current binary.
+    /// Locates `adam-command-runner.exe` next to the current binary.
     fn find_runner_exe() -> PathBuf {
         if let Ok(exe) = std::env::current_exe() {
             if let Some(dir) = exe.parent() {
-                let candidate = dir.join("codex-command-runner.exe");
+                let candidate = dir.join("adam-command-runner.exe");
                 if candidate.exists() {
                     return candidate;
                 }
             }
         }
-        PathBuf::from("codex-command-runner.exe")
+        PathBuf::from("adam-command-runner.exe")
     }
 
     /// Generates a unique named-pipe path used to communicate with the runner process.
@@ -192,7 +192,7 @@ mod windows_impl {
     struct RunnerPayload {
         policy_json_or_preset: String,
         sandbox_policy_cwd: PathBuf,
-        // Writable log dir for sandbox user (.codey in sandbox profile).
+        // Writable log dir for sandbox user (.adam in sandbox profile).
         adam_home: PathBuf,
         // Real user's ADAM_HOME for shared data (caps, config).
         real_adam_home: PathBuf,
@@ -282,7 +282,7 @@ mod windows_impl {
         let runner_cmdline = runner_exe
             .to_str()
             .map(|s| s.to_string())
-            .unwrap_or_else(|| "codex-command-runner.exe".to_string());
+            .unwrap_or_else(|| "adam-command-runner.exe".to_string());
         // Write request to a file under the sandbox base dir for the runner to read.
         // TODO(iceweasel) - use a different mechanism for invoking the runner.
         let base_tmp = sandbox_base.join("requests");
@@ -494,9 +494,9 @@ pub use windows_impl::run_windows_sandbox_capture;
 
 #[cfg(not(target_os = "windows"))]
 mod stub {
+    use adam_protocol::protocol::SandboxPolicy;
     use anyhow::bail;
     use anyhow::Result;
-    use codex_protocol::protocol::SandboxPolicy;
     use std::collections::HashMap;
     use std::path::Path;
 

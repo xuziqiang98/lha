@@ -4,7 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::RwLock;
 
-use codex_utils_absolute_path::AbsolutePathBuf;
+use adam_utils_absolute_path::AbsolutePathBuf;
 use toml::Value as TomlValue;
 use tracing::warn;
 

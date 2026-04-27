@@ -3,13 +3,13 @@ use crate::protocol::v2::Turn;
 use crate::protocol::v2::TurnError;
 use crate::protocol::v2::TurnStatus;
 use crate::protocol::v2::UserInput;
-use codex_protocol::protocol::AgentReasoningEvent;
-use codex_protocol::protocol::AgentReasoningRawContentEvent;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ItemCompletedEvent;
-use codex_protocol::protocol::ThreadRolledBackEvent;
-use codex_protocol::protocol::TurnAbortedEvent;
-use codex_protocol::protocol::UserMessageEvent;
+use adam_protocol::protocol::AgentReasoningEvent;
+use adam_protocol::protocol::AgentReasoningRawContentEvent;
+use adam_protocol::protocol::EventMsg;
+use adam_protocol::protocol::ItemCompletedEvent;
+use adam_protocol::protocol::ThreadRolledBackEvent;
+use adam_protocol::protocol::TurnAbortedEvent;
+use adam_protocol::protocol::UserMessageEvent;
 
 /// Convert persisted [`EventMsg`] entries into a sequence of [`Turn`] values.
 ///
@@ -128,7 +128,7 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_item_completed(&mut self, payload: &ItemCompletedEvent) {
-        if let codex_protocol::items::TurnItem::Plan(plan) = &payload.item {
+        if let adam_protocol::items::TurnItem::Plan(plan) = &payload.item {
             if plan.text.is_empty() {
                 return;
             }
@@ -253,13 +253,13 @@ impl From<PendingTurn> for Turn {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::protocol::AgentMessageEvent;
-    use codex_protocol::protocol::AgentReasoningEvent;
-    use codex_protocol::protocol::AgentReasoningRawContentEvent;
-    use codex_protocol::protocol::ThreadRolledBackEvent;
-    use codex_protocol::protocol::TurnAbortReason;
-    use codex_protocol::protocol::TurnAbortedEvent;
-    use codex_protocol::protocol::UserMessageEvent;
+    use adam_protocol::protocol::AgentMessageEvent;
+    use adam_protocol::protocol::AgentReasoningEvent;
+    use adam_protocol::protocol::AgentReasoningRawContentEvent;
+    use adam_protocol::protocol::ThreadRolledBackEvent;
+    use adam_protocol::protocol::TurnAbortReason;
+    use adam_protocol::protocol::TurnAbortedEvent;
+    use adam_protocol::protocol::UserMessageEvent;
     use pretty_assertions::assert_eq;
 
     #[test]

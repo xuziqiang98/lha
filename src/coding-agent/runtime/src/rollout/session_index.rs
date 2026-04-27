@@ -5,7 +5,7 @@ use std::io::SeekFrom;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_protocol::ThreadId;
+use adam_protocol::ThreadId;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use codex_utils_cargo_bin::find_resource;
+use adam_utils_cargo_bin::find_resource;
 use walkdir::WalkDir;
 
 #[test]
@@ -9,13 +9,13 @@ fn agent_production_code_uses_llm_sdk_entrypoints() {
         .expect("agent source directory should be available for architecture checks");
     let forbidden_patterns = [
         "crate::model_provider_info",
-        "codex_llm::ConversationDialect",
-        "codex_llm::StreamingPreference",
-        "codex_llm::provider::",
-        "codex_llm::client::",
-        "codex_llm::compatibility::",
-        "codex_llm::prompt::",
-        "codex_llm::transport::",
+        "adam_llm::ConversationDialect",
+        "adam_llm::StreamingPreference",
+        "adam_llm::provider::",
+        "adam_llm::client::",
+        "adam_llm::compatibility::",
+        "adam_llm::prompt::",
+        "adam_llm::transport::",
         "try_switch_fallback_transport",
         "RuntimeCapabilities::from_endpoint_and_model",
         "is_azure_responses_endpoint",
@@ -25,7 +25,7 @@ fn agent_production_code_uses_llm_sdk_entrypoints() {
         "with_chat_completions_api",
         "with_responses_api",
         "with_messages_api",
-        "codex_llm::create_tools_json_for_",
+        "adam_llm::create_tools_json_for_",
     ];
 
     let offenders = WalkDir::new(&agent_src)
@@ -38,7 +38,7 @@ fn agent_production_code_uses_llm_sdk_entrypoints() {
 
     assert!(
         offenders.is_empty(),
-        "agent code should depend on codex_llm semantic APIs only:\n{}",
+        "agent code should depend on adam_llm semantic APIs only:\n{}",
         offenders.join("\n")
     );
 }

@@ -34,14 +34,14 @@ use windows_sys::Win32::Security::LookupAccountNameW;
 use windows_sys::Win32::Security::LookupAccountSidW;
 use windows_sys::Win32::Security::SID_NAME_USE;
 
-use codex_windows_sandbox::dpapi_protect;
-use codex_windows_sandbox::sandbox_dir;
-use codex_windows_sandbox::sandbox_secrets_dir;
-use codex_windows_sandbox::string_from_sid_bytes;
-use codex_windows_sandbox::to_wide;
-use codex_windows_sandbox::SetupErrorCode;
-use codex_windows_sandbox::SetupFailure;
-use codex_windows_sandbox::SETUP_VERSION;
+use adam_windows_sandbox::dpapi_protect;
+use adam_windows_sandbox::sandbox_dir;
+use adam_windows_sandbox::sandbox_secrets_dir;
+use adam_windows_sandbox::string_from_sid_bytes;
+use adam_windows_sandbox::to_wide;
+use adam_windows_sandbox::SetupErrorCode;
+use adam_windows_sandbox::SetupFailure;
+use adam_windows_sandbox::SETUP_VERSION;
 
 pub const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
 const SANDBOX_USERS_GROUP_COMMENT: &str = "Codex sandbox internal group (managed)";

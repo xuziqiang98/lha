@@ -7,15 +7,15 @@ use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::SessionSource;
+use adam_protocol::ThreadId;
+use adam_protocol::protocol::SessionSource;
 
-use codex_agent::AuthManager;
-use codex_agent::ThreadManager;
-use codex_agent::config::Config;
-use codex_agent::default_client::USER_AGENT_SUFFIX;
-use codex_agent::default_client::get_codex_user_agent;
-use codex_agent::protocol::Submission;
+use adam_agent::AuthManager;
+use adam_agent::ThreadManager;
+use adam_agent::config::Config;
+use adam_agent::default_client::USER_AGENT_SUFFIX;
+use adam_agent::default_client::get_codex_user_agent;
+use adam_agent::protocol::Submission;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
 use mcp_types::ClientRequest as McpClientRequest;
@@ -222,7 +222,7 @@ impl MessageProcessor {
             instructions: None,
             protocol_version: params.protocol_version.clone(),
             server_info: mcp_types::Implementation {
-                name: "codex-mcp-server".to_string(),
+                name: "adam-mcp-server".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 title: Some("Codex".to_string()),
                 user_agent: Some(get_codex_user_agent()),
@@ -585,7 +585,7 @@ impl MessageProcessor {
         let err = codex_arc
             .submit_with_id(Submission {
                 id: request_id_string,
-                op: codex_agent::protocol::Op::Interrupt,
+                op: adam_agent::protocol::Op::Interrupt,
             })
             .await;
         if let Err(e) = err {

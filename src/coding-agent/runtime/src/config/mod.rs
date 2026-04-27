@@ -40,24 +40,24 @@ use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
-use codex_app_server_protocol::Tools;
-use codex_app_server_protocol::UserSavedConfig;
-use codex_llm::RuntimeEndpoint;
-use codex_llm::built_in_runtime_endpoints;
-use codex_protocol::config_types::AltScreenMode;
-use codex_protocol::config_types::ForcedLoginMethod;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::SandboxMode;
-use codex_protocol::config_types::TrustLevel;
-use codex_protocol::config_types::Verbosity;
-use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_rmcp_client::OAuthCredentialsStoreMode;
-use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_absolute_path::AbsolutePathBufGuard;
+use adam_app_server_protocol::Tools;
+use adam_app_server_protocol::UserSavedConfig;
+use adam_llm::RuntimeEndpoint;
+use adam_llm::built_in_runtime_endpoints;
+use adam_protocol::config_types::AltScreenMode;
+use adam_protocol::config_types::ForcedLoginMethod;
+use adam_protocol::config_types::ModeKind;
+use adam_protocol::config_types::Personality;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::config_types::SandboxMode;
+use adam_protocol::config_types::TrustLevel;
+use adam_protocol::config_types::Verbosity;
+use adam_protocol::config_types::WebSearchMode;
+use adam_protocol::config_types::WindowsSandboxLevel;
+use adam_protocol::openai_models::ReasoningEffort;
+use adam_rmcp_client::OAuthCredentialsStoreMode;
+use adam_utils_absolute_path::AbsolutePathBuf;
+use adam_utils_absolute_path::AbsolutePathBufGuard;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -92,7 +92,7 @@ pub use constraint::ConstraintResult;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
 
-pub use codex_git::GhostSnapshotConfig;
+pub use adam_git::GhostSnapshotConfig;
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -427,12 +427,12 @@ pub struct Config {
     /// output will be hyperlinked using the specified URI scheme.
     pub file_opener: UriBasedFileOpener,
 
-    /// Path to the `codex-linux-sandbox` executable. This must be set if
+    /// Path to the `adam-linux-sandbox` executable. This must be set if
     /// [`crate::exec::SandboxType::LinuxSeccomp`] is used. Note that this
     /// cannot be set in the config file: it must be set in code via
     /// [`ConfigOverrides`].
     ///
-    /// When this program is invoked, arg0 will be set to `codex-linux-sandbox`.
+    /// When this program is invoked, arg0 will be set to `adam-linux-sandbox`.
     pub codex_linux_sandbox_exe: Option<PathBuf>,
 
     /// Value to use for `reasoning.effort` when making a request using the
@@ -1373,7 +1373,7 @@ impl ConfigToml {
         if cfg!(target_os = "windows")
             && matches!(resolved_sandbox_mode, SandboxMode::WorkspaceWrite)
             // If the experimental Windows sandbox is enabled, do not force a downgrade.
-            && windows_sandbox_level == codex_protocol::config_types::WindowsSandboxLevel::Disabled
+            && windows_sandbox_level == adam_protocol::config_types::WindowsSandboxLevel::Disabled
         {
             sandbox_policy = SandboxPolicy::new_read_only_policy();
             forced_auto_mode_downgraded_on_windows = true;
@@ -2119,7 +2119,7 @@ fn toml_uses_deprecated_instructions_file(value: &TomlValue) -> bool {
 /// - If `ADAM_HOME` is not set, this function does not verify that the
 ///   directory exists.
 pub fn find_adam_home() -> std::io::Result<PathBuf> {
-    codex_utils_home_dir::find_adam_home()
+    adam_utils_home_dir::find_adam_home()
 }
 
 /// Returns the path to the folder where Codex logs are stored. Does not verify

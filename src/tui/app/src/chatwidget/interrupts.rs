@@ -1,14 +1,14 @@
 use std::collections::VecDeque;
 
-use codex_agent::protocol::ApplyPatchApprovalRequestEvent;
-use codex_agent::protocol::ExecApprovalRequestEvent;
-use codex_agent::protocol::ExecCommandBeginEvent;
-use codex_agent::protocol::ExecCommandEndEvent;
-use codex_agent::protocol::McpToolCallBeginEvent;
-use codex_agent::protocol::McpToolCallEndEvent;
-use codex_agent::protocol::PatchApplyEndEvent;
-use codex_protocol::approvals::ElicitationRequestEvent;
-use codex_protocol::request_user_input::RequestUserInputEvent;
+use adam_agent::protocol::ApplyPatchApprovalRequestEvent;
+use adam_agent::protocol::ExecApprovalRequestEvent;
+use adam_agent::protocol::ExecCommandBeginEvent;
+use adam_agent::protocol::ExecCommandEndEvent;
+use adam_agent::protocol::McpToolCallBeginEvent;
+use adam_agent::protocol::McpToolCallEndEvent;
+use adam_agent::protocol::PatchApplyEndEvent;
+use adam_protocol::approvals::ElicitationRequestEvent;
+use adam_protocol::request_user_input::RequestUserInputEvent;
 
 use super::ChatWidget;
 

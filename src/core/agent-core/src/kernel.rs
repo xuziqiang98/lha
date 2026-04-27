@@ -1,10 +1,10 @@
+use adam_async_utils::CancelErr;
+use adam_async_utils::OrCancelExt;
+use adam_llm::ItemHandle;
+use adam_llm::ToolResultItem;
+use adam_llm::TurnEvent;
+use adam_llm::TurnEventStream;
 use async_trait::async_trait;
-use codex_async_utils::CancelErr;
-use codex_async_utils::OrCancelExt;
-use codex_llm::ItemHandle;
-use codex_llm::ToolResultItem;
-use codex_llm::TurnEvent;
-use codex_llm::TurnEventStream;
 use futures::StreamExt;
 use futures::future::BoxFuture;
 use futures::stream::FuturesOrdered;
@@ -77,7 +77,7 @@ pub trait TurnEventProcessor: Send {
 
     fn cancelled_error(&self) -> Self::Error;
 
-    fn llm_error(&self, err: codex_llm::Error) -> Self::Error;
+    fn llm_error(&self, err: adam_llm::Error) -> Self::Error;
 
     fn stream_closed_error(&self) -> Self::Error;
 }
@@ -135,14 +135,14 @@ impl AgentKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_llm::SemanticOutputItem;
-    use codex_llm::ToolCallPayload;
-    use codex_llm::ToolCallRequest;
-    use codex_llm::ToolResultItem;
-    use codex_llm::ToolResultPayload;
-    use codex_llm::TranscriptItem;
-    use codex_llm_types::ContentItem;
-    use codex_llm_types::TokenUsage;
+    use adam_llm::SemanticOutputItem;
+    use adam_llm::ToolCallPayload;
+    use adam_llm::ToolCallRequest;
+    use adam_llm::ToolResultItem;
+    use adam_llm::ToolResultPayload;
+    use adam_llm::TranscriptItem;
+    use adam_llm_types::ContentItem;
+    use adam_llm_types::TokenUsage;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc;
 
@@ -234,7 +234,7 @@ mod tests {
             TestError::Cancelled
         }
 
-        fn llm_error(&self, err: codex_llm::Error) -> Self::Error {
+        fn llm_error(&self, err: adam_llm::Error) -> Self::Error {
             TestError::Llm(err.to_string())
         }
 

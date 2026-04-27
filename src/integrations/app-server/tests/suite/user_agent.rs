@@ -1,10 +1,10 @@
+use adam_app_server_protocol::GetUserAgentResponse;
+use adam_app_server_protocol::JSONRPCResponse;
+use adam_app_server_protocol::RequestId;
 use anyhow::Result;
 use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
-use codex_app_server_protocol::GetUserAgentResponse;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -30,7 +30,7 @@ async fn get_user_agent_returns_current_codex_user_agent() -> Result<()> {
     let os_type = os_info.os_type();
     let os_version = os_info.version();
     let architecture = os_info.architecture().unwrap_or("unknown");
-    let terminal_ua = codex_agent::terminal::user_agent();
+    let terminal_ua = adam_agent::terminal::user_agent();
     let user_agent = format!(
         "{originator}/{} ({os_type} {os_version}; {architecture}) {terminal_ua} ({DEFAULT_CLIENT_NAME}; 0.1.0)",
         env!("CARGO_PKG_VERSION")

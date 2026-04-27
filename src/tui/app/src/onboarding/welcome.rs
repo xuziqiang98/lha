@@ -68,7 +68,7 @@ impl WidgetRef for &WelcomeWidget {
         lines.push(Line::from(vec![
             "  ".into(),
             "Welcome to ".into(),
-            "Codey".bold(),
+            "Adam".bold(),
             ", a lightweight command-line coding agent".into(),
         ]));
 
@@ -105,7 +105,7 @@ mod tests {
     }
 
     #[test]
-    fn welcome_renders_codey_ascii_on_first_draw() {
+    fn welcome_renders_adam_ascii_on_first_draw() {
         let widget = WelcomeWidget::new(false, FrameRequester::test_dummy(), true);
         let area = Rect::new(0, 0, ASCII_ART_WIDTH, ASCII_ART_HEIGHT + 2);
         let mut buf = Buffer::empty(area);
@@ -119,7 +119,7 @@ mod tests {
     }
 
     #[test]
-    fn welcome_skips_codey_ascii_below_height_breakpoint() {
+    fn welcome_skips_adam_ascii_below_height_breakpoint() {
         let widget = WelcomeWidget::new(false, FrameRequester::test_dummy(), true);
         let area = Rect::new(0, 0, ASCII_ART_WIDTH, ASCII_ART_HEIGHT + 1);
         let mut buf = Buffer::empty(area);

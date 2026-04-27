@@ -1,4 +1,4 @@
-use codex_agent::config::Config;
+use adam_agent::config::Config;
 use serde::Deserialize;
 
 use crate::chatgpt_client::chatgpt_get_request;

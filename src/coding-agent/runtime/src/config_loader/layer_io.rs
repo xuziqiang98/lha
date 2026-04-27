@@ -3,7 +3,7 @@ use super::diagnostics::config_error_from_toml;
 use super::diagnostics::io_error_from_config_error;
 #[cfg(target_os = "macos")]
 use super::macos::load_managed_admin_config_layer;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use adam_utils_absolute_path::AbsolutePathBuf;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;

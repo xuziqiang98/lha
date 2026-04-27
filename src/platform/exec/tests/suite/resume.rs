@@ -1,10 +1,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+use adam_protocol::ThreadId;
+use adam_protocol::protocol::SessionMeta;
+use adam_protocol::protocol::SessionMetaLine;
+use adam_protocol::protocol::SessionSource;
+use adam_utils_cargo_bin::find_resource;
 use anyhow::Context;
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::SessionMeta;
-use codex_protocol::protocol::SessionMetaLine;
-use codex_protocol::protocol::SessionSource;
-use codex_utils_cargo_bin::find_resource;
 use core_test_support::test_codex_exec::test_codex_exec;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -138,7 +138,7 @@ fn write_fake_rollout(
         cwd: cwd.to_path_buf(),
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
-        rollout_schema_version: codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+        rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
         source: SessionSource::Cli,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
@@ -186,7 +186,7 @@ fn exec_fixture() -> anyhow::Result<std::path::PathBuf> {
 }
 
 fn exec_repo_root() -> anyhow::Result<std::path::PathBuf> {
-    Ok(codex_utils_cargo_bin::repo_root()?)
+    Ok(adam_utils_cargo_bin::repo_root()?)
 }
 
 #[test]

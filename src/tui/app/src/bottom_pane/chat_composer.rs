@@ -135,12 +135,12 @@ use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
-use codex_common::fuzzy_match::fuzzy_match;
-use codex_protocol::custom_prompts::CustomPrompt;
-use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
-use codex_protocol::models::local_image_label_text;
-use codex_protocol::user_input::ByteRange;
-use codex_protocol::user_input::TextElement;
+use adam_common::fuzzy_match::fuzzy_match;
+use adam_protocol::custom_prompts::CustomPrompt;
+use adam_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
+use adam_protocol::models::local_image_label_text;
+use adam_protocol::user_input::ByteRange;
+use adam_protocol::user_input::TextElement;
 
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
@@ -152,10 +152,10 @@ use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
 use crate::ui_consts::LIVE_PREFIX_COLS;
-use codex_agent::skills::model::SkillMetadata;
-use codex_chatgpt::connectors;
-use codex_chatgpt::connectors::AppInfo;
-use codex_file_search::FileMatch;
+use adam_agent::skills::model::SkillMetadata;
+use adam_chatgpt::connectors;
+use adam_chatgpt::connectors::AppInfo;
+use adam_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -2722,7 +2722,7 @@ impl ChatComposer {
                 }
                 let display_name = connectors::connector_display_label(connector);
                 let description = Some(Self::connector_brief_description(connector));
-                let slug = codex_agent::connectors::connector_mention_slug(connector);
+                let slug = adam_agent::connectors::connector_mention_slug(connector);
                 let search_terms = vec![display_name.clone(), connector.id.clone(), slug.clone()];
                 let connector_id = connector.id.as_str();
                 mentions.push(MentionItem {
@@ -3318,7 +3318,7 @@ mod tests {
             composer.set_footer_info(
                 "gpt-5.4".to_string(),
                 Some("high".to_string()),
-                "~/Workspace/codey".to_string(),
+                "~/Workspace/adam".to_string(),
             );
         }
 

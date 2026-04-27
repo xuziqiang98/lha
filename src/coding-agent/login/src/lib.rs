@@ -11,15 +11,15 @@ pub use server::ServerOptions;
 pub use server::ShutdownHandle;
 pub use server::run_login_server;
 
-// Re-export commonly used auth types and helpers from codex-coding-agent for compatibility.
-pub use codex_agent::AuthManager;
-pub use codex_agent::CodexAuth;
-pub use codex_agent::auth::AuthDotJson;
-pub use codex_agent::auth::CLIENT_ID;
-pub use codex_agent::auth::CODEX_API_KEY_ENV_VAR;
-pub use codex_agent::auth::OPENAI_API_KEY_ENV_VAR;
-pub use codex_agent::auth::login_with_api_key;
-pub use codex_agent::auth::logout;
-pub use codex_agent::auth::save_auth;
-pub use codex_agent::token_data::TokenData;
-pub use codex_app_server_protocol::AuthMode;
+// Re-export commonly used auth types and helpers from adam-coding-agent for compatibility.
+pub use adam_agent::AuthManager;
+pub use adam_agent::CodexAuth;
+pub use adam_agent::auth::AuthDotJson;
+pub use adam_agent::auth::CLIENT_ID;
+pub use adam_agent::auth::CODEX_API_KEY_ENV_VAR;
+pub use adam_agent::auth::OPENAI_API_KEY_ENV_VAR;
+pub use adam_agent::auth::login_with_api_key;
+pub use adam_agent::auth::logout;
+pub use adam_agent::auth::save_auth;
+pub use adam_agent::token_data::TokenData;
+pub use adam_app_server_protocol::AuthMode;

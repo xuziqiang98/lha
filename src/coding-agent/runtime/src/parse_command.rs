@@ -2,7 +2,7 @@ use crate::bash::extract_bash_command;
 use crate::bash::try_parse_shell;
 use crate::bash::try_parse_word_only_commands_sequence;
 use crate::powershell::extract_powershell_command;
-use codex_protocol::parse_command::ParsedCommand;
+use adam_protocol::parse_command::ParsedCommand;
 use shlex::split as shlex_split;
 use shlex::try_join as shlex_try_join;
 use std::path::PathBuf;
@@ -671,12 +671,12 @@ mod tests {
     #[test]
     fn supports_single_string_script_with_cd_and_pipe() {
         let inner =
-            r#"cd /Users/pakrym/code/codex && rg -n "codex_api" src/resources -S | head -n 50"#;
+            r#"cd /Users/pakrym/code/codex && rg -n "adam_api" src/resources -S | head -n 50"#;
         assert_parsed(
             &vec_str(&["bash", "-lc", inner]),
             vec![ParsedCommand::Search {
-                cmd: "rg -n codex_api src/resources -S".to_string(),
-                query: Some("codex_api".to_string()),
+                cmd: "rg -n adam_api src/resources -S".to_string(),
+                query: Some("adam_api".to_string()),
                 path: Some("resources".to_string()),
             }],
         );

@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_protocol::ThreadId;
+use adam_protocol::ThreadId;
 use tracing::debug;
 use tracing::error;
 
@@ -10,7 +10,7 @@ use crate::parse_command::shlex_join;
 /// Emit structured feedback metadata as key/value pairs.
 ///
 /// This logs a tracing event with `target: "feedback_tags"`. If
-/// `codex_feedback::CodexFeedback::metadata_layer()` is installed, these fields are captured and
+/// `adam_feedback::CodexFeedback::metadata_layer()` is installed, these fields are captured and
 /// later attached as tags when feedback is uploaded.
 ///
 /// Values are wrapped with [`tracing::field::DebugValue`], so the expression only needs to
@@ -19,8 +19,8 @@ use crate::parse_command::shlex_join;
 /// Example:
 ///
 /// ```rust
-/// codex_agent::feedback_tags!(model = "gpt-5", cached = true);
-/// codex_agent::feedback_tags!(provider = provider_id, request_id = request_id);
+/// adam_agent::feedback_tags!(model = "gpt-5", cached = true);
+/// adam_agent::feedback_tags!(provider = provider_id, request_id = request_id);
 /// ```
 #[macro_export]
 macro_rules! feedback_tags {
@@ -82,9 +82,9 @@ pub fn resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>) ->
         let needs_double_dash = target.starts_with('-');
         let escaped = shlex_join(&[target]);
         if needs_double_dash {
-            format!("codey resume -- {escaped}")
+            format!("adam resume -- {escaped}")
         } else {
-            format!("codey resume {escaped}")
+            format!("adam resume {escaped}")
         }
     })
 }
@@ -138,7 +138,7 @@ mod tests {
     fn resume_command_prefers_name_over_id() {
         let thread_id = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
         let command = resume_command(Some("my-thread"), Some(thread_id));
-        assert_eq!(command, Some("codey resume my-thread".to_string()));
+        assert_eq!(command, Some("adam resume my-thread".to_string()));
     }
 
     #[test]
@@ -147,7 +147,7 @@ mod tests {
         let command = resume_command(None, Some(thread_id));
         assert_eq!(
             command,
-            Some("codey resume 123e4567-e89b-12d3-a456-426614174000".to_string())
+            Some("adam resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
     }
 
@@ -162,13 +162,13 @@ mod tests {
         let command = resume_command(Some("-starts-with-dash"), None);
         assert_eq!(
             command,
-            Some("codey resume -- -starts-with-dash".to_string())
+            Some("adam resume -- -starts-with-dash".to_string())
         );
 
         let command = resume_command(Some("two words"), None);
-        assert_eq!(command, Some("codey resume 'two words'".to_string()));
+        assert_eq!(command, Some("adam resume 'two words'".to_string()));
 
         let command = resume_command(Some("quote'case"), None);
-        assert_eq!(command, Some("codey resume \"quote'case\"".to_string()));
+        assert_eq!(command, Some("adam resume \"quote'case\"".to_string()));
     }
 }

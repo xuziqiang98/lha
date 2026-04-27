@@ -1,19 +1,19 @@
-//! Entry-point for the `codex-exec` binary.
+//! Entry-point for the `adam-exec` binary.
 //!
-//! When this CLI is invoked normally, it parses the standard `codex-exec` CLI
+//! When this CLI is invoked normally, it parses the standard `adam-exec` CLI
 //! options and launches the non-interactive Codex agent. However, if it is
-//! invoked with arg0 as `codex-linux-sandbox`, we instead treat the invocation
-//! as a request to run the logic for the standalone `codex-linux-sandbox`
+//! invoked with arg0 as `adam-linux-sandbox`, we instead treat the invocation
+//! as a request to run the logic for the standalone `adam-linux-sandbox`
 //! executable (i.e., parse any -s args and then run a *sandboxed* command under
 //! Landlock + seccomp.
 //!
 //! This allows us to ship a completely separate set of functionality as part
-//! of the `codex-exec` binary.
+//! of the `adam-exec` binary.
+use adam_arg0::arg0_dispatch_or_else;
+use adam_common::CliConfigOverrides;
+use adam_exec::Cli;
+use adam_exec::run_main;
 use clap::Parser;
-use codex_arg0::arg0_dispatch_or_else;
-use codex_common::CliConfigOverrides;
-use codex_exec::Cli;
-use codex_exec::run_main;
 
 #[derive(Parser, Debug)]
 struct TopCli {
@@ -48,7 +48,7 @@ mod tests {
     fn top_cli_parses_resume_prompt_after_config_flag() {
         const PROMPT: &str = "echo resume-with-global-flags-after-subcommand";
         let cli = TopCli::parse_from([
-            "codex-exec",
+            "adam-exec",
             "resume",
             "--last",
             "--json",
@@ -61,7 +61,7 @@ mod tests {
             PROMPT,
         ]);
 
-        let Some(codex_exec::Command::Resume(args)) = cli.inner.command else {
+        let Some(adam_exec::Command::Resume(args)) = cli.inner.command else {
             panic!("expected resume command");
         };
         let effective_prompt = args.prompt.clone().or_else(|| {

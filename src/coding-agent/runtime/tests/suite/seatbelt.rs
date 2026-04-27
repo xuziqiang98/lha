@@ -7,10 +7,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_agent::protocol::SandboxPolicy;
-use codex_agent::seatbelt::spawn_command_under_seatbelt;
-use codex_agent::spawn::CODEX_SANDBOX_ENV_VAR;
-use codex_agent::spawn::StdioPolicy;
+use adam_agent::protocol::SandboxPolicy;
+use adam_agent::seatbelt::spawn_command_under_seatbelt;
+use adam_agent::spawn::CODEX_SANDBOX_ENV_VAR;
+use adam_agent::spawn::StdioPolicy;
 use tempfile::TempDir;
 
 struct TestScenario {

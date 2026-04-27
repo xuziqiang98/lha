@@ -22,14 +22,14 @@ use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::spec::ApplyPatchToolArgs;
 use crate::tools::spec::JsonSchema;
+use adam_apply_patch::ApplyPatchAction;
+use adam_apply_patch::ApplyPatchFileChange;
+use adam_llm::FreeformToolDescriptor;
+use adam_llm::FreeformToolDescriptorFormat;
+use adam_llm::FunctionToolDescriptor;
+use adam_llm::ToolDescriptor;
+use adam_utils_absolute_path::AbsolutePathBuf;
 use async_trait::async_trait;
-use codex_apply_patch::ApplyPatchAction;
-use codex_apply_patch::ApplyPatchFileChange;
-use codex_llm::FreeformToolDescriptor;
-use codex_llm::FreeformToolDescriptorFormat;
-use codex_llm::FunctionToolDescriptor;
-use codex_llm::ToolDescriptor;
-use codex_utils_absolute_path::AbsolutePathBuf;
 
 pub struct ApplyPatchHandler;
 
@@ -103,8 +103,8 @@ impl ToolHandler for ApplyPatchHandler {
         // Avoid building temporary ExecParams/command vectors; derive directly from inputs.
         let cwd = turn.cwd.clone();
         let command = vec!["apply_patch".to_string(), patch_input.clone()];
-        match codex_apply_patch::maybe_parse_apply_patch_verified(&command, &cwd) {
-            codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+        match adam_apply_patch::maybe_parse_apply_patch_verified(&command, &cwd) {
+            adam_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
                 match apply_patch::apply_patch(turn.as_ref(), changes).await {
                     InternalApplyPatchInvocation::Output(item) => {
                         let content = item?;
@@ -162,18 +162,18 @@ impl ToolHandler for ApplyPatchHandler {
                     }
                 }
             }
-            codex_apply_patch::MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
+            adam_apply_patch::MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
                 Err(FunctionCallError::RespondToModel(format!(
                     "apply_patch verification failed: {parse_error}"
                 )))
             }
-            codex_apply_patch::MaybeApplyPatchVerified::ShellParseError(error) => {
+            adam_apply_patch::MaybeApplyPatchVerified::ShellParseError(error) => {
                 tracing::trace!("Failed to parse apply_patch input, {error:?}");
                 Err(FunctionCallError::RespondToModel(
                     "apply_patch handler received invalid patch input".to_string(),
                 ))
             }
-            codex_apply_patch::MaybeApplyPatchVerified::NotApplyPatch => {
+            adam_apply_patch::MaybeApplyPatchVerified::NotApplyPatch => {
                 Err(FunctionCallError::RespondToModel(
                     "apply_patch handler received non-apply_patch input".to_string(),
                 ))
@@ -193,8 +193,8 @@ pub(crate) async fn intercept_apply_patch(
     call_id: &str,
     tool_name: &str,
 ) -> Result<Option<ToolOutput>, FunctionCallError> {
-    match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd) {
-        codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+    match adam_apply_patch::maybe_parse_apply_patch_verified(command, cwd) {
+        adam_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
             session
                 .record_model_warning(
                     format!("apply_patch was requested via {tool_name}. Use the apply_patch tool instead of exec_command."),
@@ -249,16 +249,16 @@ pub(crate) async fn intercept_apply_patch(
                 }
             }
         }
-        codex_apply_patch::MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
+        adam_apply_patch::MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
             Err(FunctionCallError::RespondToModel(format!(
                 "apply_patch verification failed: {parse_error}"
             )))
         }
-        codex_apply_patch::MaybeApplyPatchVerified::ShellParseError(error) => {
+        adam_apply_patch::MaybeApplyPatchVerified::ShellParseError(error) => {
             tracing::trace!("Failed to parse apply_patch input, {error:?}");
             Ok(None)
         }
-        codex_apply_patch::MaybeApplyPatchVerified::NotApplyPatch => Ok(None),
+        adam_apply_patch::MaybeApplyPatchVerified::NotApplyPatch => Ok(None),
     }
 }
 
@@ -369,7 +369,7 @@ It is important to remember:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_apply_patch::MaybeApplyPatchVerified;
+    use adam_apply_patch::MaybeApplyPatchVerified;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
@@ -388,7 +388,7 @@ mod tests {
 +new content
 *** End Patch"#;
         let argv = vec!["apply_patch".to_string(), patch.to_string()];
-        let action = match codex_apply_patch::maybe_parse_apply_patch_verified(&argv, cwd) {
+        let action = match adam_apply_patch::maybe_parse_apply_patch_verified(&argv, cwd) {
             MaybeApplyPatchVerified::Body(action) => action,
             other => panic!("expected patch body, got: {other:?}"),
         };

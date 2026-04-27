@@ -1,6 +1,6 @@
+use adam_common::CliConfigOverrides;
 use clap::Args;
 use clap::Parser;
-use codex_common::CliConfigOverrides;
 
 #[derive(Parser, Debug, Default)]
 #[command(version)]

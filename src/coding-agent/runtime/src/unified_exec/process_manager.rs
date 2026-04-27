@@ -462,7 +462,7 @@ impl UnifiedExecProcessManager {
             .ok_or(UnifiedExecError::MissingCommandLine)?;
 
         let spawn_result = if tty {
-            codex_utils_pty::pty::spawn_process(
+            adam_utils_pty::pty::spawn_process(
                 program,
                 args,
                 env.cwd.as_path(),
@@ -471,7 +471,7 @@ impl UnifiedExecProcessManager {
             )
             .await
         } else {
-            codex_utils_pty::pipe::spawn_process_no_stdin(
+            adam_utils_pty::pipe::spawn_process_no_stdin(
                 program,
                 args,
                 env.cwd.as_path(),

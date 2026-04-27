@@ -1,3 +1,28 @@
+use adam_agent::protocol::AskForApproval;
+use adam_agent::protocol::SandboxPolicy;
+use adam_agent::protocol_config_types::ReasoningSummary;
+use adam_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use adam_app_server_protocol::AddConversationListenerParams;
+use adam_app_server_protocol::AddConversationSubscriptionResponse;
+use adam_app_server_protocol::ExecCommandApprovalParams;
+use adam_app_server_protocol::InputItem;
+use adam_app_server_protocol::JSONRPCNotification;
+use adam_app_server_protocol::JSONRPCResponse;
+use adam_app_server_protocol::NewConversationParams;
+use adam_app_server_protocol::NewConversationResponse;
+use adam_app_server_protocol::RemoveConversationListenerParams;
+use adam_app_server_protocol::RemoveConversationSubscriptionResponse;
+use adam_app_server_protocol::RequestId;
+use adam_app_server_protocol::SendUserMessageParams;
+use adam_app_server_protocol::SendUserMessageResponse;
+use adam_app_server_protocol::SendUserTurnParams;
+use adam_app_server_protocol::SendUserTurnResponse;
+use adam_app_server_protocol::ServerRequest;
+use adam_protocol::config_types::SandboxMode;
+use adam_protocol::openai_models::ReasoningEffort;
+use adam_protocol::parse_command::ParsedCommand;
+use adam_protocol::protocol::Event;
+use adam_protocol::protocol::EventMsg;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
@@ -5,31 +30,6 @@ use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell;
 use app_test_support::to_response;
-use codex_agent::protocol::AskForApproval;
-use codex_agent::protocol::SandboxPolicy;
-use codex_agent::protocol_config_types::ReasoningSummary;
-use codex_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use codex_app_server_protocol::AddConversationListenerParams;
-use codex_app_server_protocol::AddConversationSubscriptionResponse;
-use codex_app_server_protocol::ExecCommandApprovalParams;
-use codex_app_server_protocol::InputItem;
-use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::NewConversationParams;
-use codex_app_server_protocol::NewConversationResponse;
-use codex_app_server_protocol::RemoveConversationListenerParams;
-use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::SendUserMessageParams;
-use codex_app_server_protocol::SendUserMessageResponse;
-use codex_app_server_protocol::SendUserTurnParams;
-use codex_app_server_protocol::SendUserTurnResponse;
-use codex_app_server_protocol::ServerRequest;
-use codex_protocol::config_types::SandboxMode;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
 use pretty_assertions::assert_eq;
 use std::env;
 use std::path::Path;
@@ -116,7 +116,7 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
     let send_user_id = mcp
         .send_send_user_message_request(SendUserMessageParams {
             conversation_id,
-            items: vec![codex_app_server_protocol::InputItem::Text {
+            items: vec![adam_app_server_protocol::InputItem::Text {
                 text: "text".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -269,7 +269,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     let send_user_id = mcp
         .send_send_user_message_request(SendUserMessageParams {
             conversation_id,
-            items: vec![codex_app_server_protocol::InputItem::Text {
+            items: vec![adam_app_server_protocol::InputItem::Text {
                 text: "run python".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -310,7 +310,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     // Approve so the first turn can complete
     mcp.send_response(
         request_id,
-        serde_json::json!({ "decision": codex_agent::protocol::ReviewDecision::Approved }),
+        serde_json::json!({ "decision": adam_agent::protocol::ReviewDecision::Approved }),
     )
     .await?;
 
@@ -325,7 +325,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     let send_turn_id = mcp
         .send_send_user_turn_request(SendUserTurnParams {
             conversation_id,
-            items: vec![codex_app_server_protocol::InputItem::Text {
+            items: vec![adam_app_server_protocol::InputItem::Text {
                 text: "run python again".to_string(),
                 text_elements: Vec::new(),
             }],

@@ -1,15 +1,15 @@
 [package]
-name = "codex-linux-sandbox"
+name = "adam-linux-sandbox"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "codex-linux-sandbox"
+name = "adam-linux-sandbox"
 path = "src/main.rs"
 
 [lib]
-name = "codex_linux_sandbox"
+name = "adam_linux_sandbox"
 path = "src/lib.rs"
 
 [lints]
@@ -17,8 +17,8 @@ workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 clap = { workspace = true, features = ["derive"] }
-codex-agent = { workspace = true }
-codex-utils-absolute-path = { workspace = true }
+adam-agent = { workspace = true }
+adam-utils-absolute-path = { workspace = true }
 landlock = { workspace = true }
 libc = { workspace = true }
 seccompiler = { workspace = true }

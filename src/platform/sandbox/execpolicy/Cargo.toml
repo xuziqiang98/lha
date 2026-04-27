@@ -1,16 +1,16 @@
 [package]
-name = "codex-execpolicy"
+name = "adam-execpolicy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Codex exec policy: prefix-based Starlark rules for command decisions."
 
 [lib]
-name = "codex_execpolicy"
+name = "adam_execpolicy"
 path = "src/lib.rs"
 
 [[bin]]
-name = "codex-execpolicy"
+name = "adam-execpolicy"
 path = "src/main.rs"
 
 [lints]

@@ -1,16 +1,16 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use adam_agent::config::types::McpServerConfig;
+use adam_agent::config::types::McpServerTransportConfig;
+use adam_agent::protocol::AskForApproval;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::SandboxPolicy;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::user_input::UserInput;
 use anyhow::Context;
 use anyhow::Result;
-use codex_agent::config::types::McpServerConfig;
-use codex_agent::config::types::McpServerTransportConfig;
-use codex_agent::protocol::AskForApproval;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::SandboxPolicy;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -417,8 +417,8 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
         let mut servers = config.mcp_servers.get().clone();
         servers.insert(
             server_name.to_string(),
-            codex_agent::config::types::McpServerConfig {
-                transport: codex_agent::config::types::McpServerTransportConfig::Stdio {
+            adam_agent::config::types::McpServerConfig {
+                transport: adam_agent::config::types::McpServerTransportConfig::Stdio {
                     command: rmcp_test_server_bin,
                     args: Vec::new(),
                     env: None,
@@ -774,8 +774,8 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
         let mut servers = config.mcp_servers.get().clone();
         servers.insert(
             server_name.to_string(),
-            codex_agent::config::types::McpServerConfig {
-                transport: codex_agent::config::types::McpServerTransportConfig::Stdio {
+            adam_agent::config::types::McpServerConfig {
+                transport: adam_agent::config::types::McpServerTransportConfig::Stdio {
                     command: rmcp_test_server_bin,
                     args: Vec::new(),
                     env: None,

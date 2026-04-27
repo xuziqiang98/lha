@@ -1,9 +1,9 @@
 use crate::config::model_ref::ModelRef;
 use crate::path_utils::write_atomically;
-use codex_llm::RuntimeEndpoint;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::Verbosity;
-use codex_protocol::openai_models::ReasoningEffort;
+use adam_llm::RuntimeEndpoint;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::config_types::Verbosity;
+use adam_protocol::openai_models::ReasoningEffort;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;

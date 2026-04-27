@@ -6,15 +6,15 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
-pub use codex_llm_types::ModelInfoUpgrade;
-pub use codex_llm_types::ModelInstructionsVariables;
-pub use codex_llm_types::ModelMessages;
-pub use codex_llm_types::ModelVisibility;
-pub use codex_llm_types::ReasoningEffort;
-pub use codex_llm_types::ReasoningEffortPreset;
-pub use codex_llm_types::TruncationMode;
-pub use codex_llm_types::TruncationPolicyConfig;
-pub use codex_llm_types::reasoning_effort_mapping_from_presets;
+pub use adam_llm_types::ModelInfoUpgrade;
+pub use adam_llm_types::ModelInstructionsVariables;
+pub use adam_llm_types::ModelMessages;
+pub use adam_llm_types::ModelVisibility;
+pub use adam_llm_types::ReasoningEffort;
+pub use adam_llm_types::ReasoningEffortPreset;
+pub use adam_llm_types::TruncationMode;
+pub use adam_llm_types::TruncationPolicyConfig;
+pub use adam_llm_types::reasoning_effort_mapping_from_presets;
 
 #[derive(
     Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema, strum_macros::Display,
@@ -54,7 +54,7 @@ pub struct ModelInfo {
     pub model_messages: Option<ModelMessages>,
     pub supports_reasoning_summaries: bool,
     pub support_verbosity: bool,
-    pub default_verbosity: Option<codex_llm_types::Verbosity>,
+    pub default_verbosity: Option<adam_llm_types::Verbosity>,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub truncation_policy: TruncationPolicyConfig,
     pub supports_parallel_tool_calls: bool,
@@ -86,14 +86,14 @@ impl ModelInfo {
 
     pub fn get_model_instructions(
         &self,
-        personality: Option<codex_llm_types::Personality>,
+        personality: Option<adam_llm_types::Personality>,
     ) -> String {
         self.semantic_model_info()
             .get_model_instructions(personality)
     }
 
-    pub fn semantic_model_info(&self) -> codex_llm_types::ModelInfo {
-        codex_llm_types::ModelInfo {
+    pub fn semantic_model_info(&self) -> adam_llm_types::ModelInfo {
+        adam_llm_types::ModelInfo {
             slug: self.slug.clone(),
             display_name: self.display_name.clone(),
             description: self.description.clone(),
@@ -117,8 +117,8 @@ impl ModelInfo {
     }
 }
 
-impl From<codex_llm_types::ModelInfo> for ModelInfo {
-    fn from(value: codex_llm_types::ModelInfo) -> Self {
+impl From<adam_llm_types::ModelInfo> for ModelInfo {
+    fn from(value: adam_llm_types::ModelInfo) -> Self {
         Self {
             slug: value.slug,
             display_name: value.display_name,
@@ -146,7 +146,7 @@ impl From<codex_llm_types::ModelInfo> for ModelInfo {
     }
 }
 
-impl From<ModelInfo> for codex_llm_types::ModelInfo {
+impl From<ModelInfo> for adam_llm_types::ModelInfo {
     fn from(value: ModelInfo) -> Self {
         value.semantic_model_info()
     }
@@ -337,7 +337,7 @@ mod tests {
         }));
 
         let instructions =
-            model.get_model_instructions(Some(codex_llm_types::Personality::Friendly));
+            model.get_model_instructions(Some(adam_llm_types::Personality::Friendly));
         assert_eq!(instructions, "hello friendly");
     }
 
@@ -360,7 +360,7 @@ mod tests {
         }));
 
         let instructions =
-            model.get_model_instructions(Some(codex_llm_types::Personality::Friendly));
+            model.get_model_instructions(Some(adam_llm_types::Personality::Friendly));
         assert_eq!(instructions, "base");
     }
 
@@ -368,11 +368,11 @@ mod tests {
     fn exposes_personality_messages() {
         let variables = personality_variables();
         assert_eq!(
-            variables.get_personality_message(Some(codex_llm_types::Personality::Friendly)),
+            variables.get_personality_message(Some(adam_llm_types::Personality::Friendly)),
             Some("friendly".to_string()),
         );
         assert_eq!(
-            variables.get_personality_message(Some(codex_llm_types::Personality::Pragmatic)),
+            variables.get_personality_message(Some(adam_llm_types::Personality::Pragmatic)),
             Some("pragmatic".to_string()),
         );
         assert_eq!(

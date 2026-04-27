@@ -2,12 +2,12 @@ use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_agent::CODEX_APPLY_PATCH_ARG1;
+use adam_agent::CODEX_APPLY_PATCH_ARG1;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 use tempfile::TempDir;
 
-const LINUX_SANDBOX_ARG0: &str = "codex-linux-sandbox";
+const LINUX_SANDBOX_ARG0: &str = "adam-linux-sandbox";
 const APPLY_PATCH_ARG0: &str = "apply_patch";
 const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
 
@@ -22,9 +22,9 @@ pub fn arg0_dispatch() -> Option<TempDir> {
 
     if exe_name == LINUX_SANDBOX_ARG0 {
         // Safety: [`run_main`] never returns.
-        codex_linux_sandbox::run_main();
+        adam_linux_sandbox::run_main();
     } else if exe_name == APPLY_PATCH_ARG0 || exe_name == MISSPELLED_APPLY_PATCH_ARG0 {
-        codex_apply_patch::main();
+        adam_apply_patch::main();
     }
 
     let argv1 = args.next().unwrap_or_default();
@@ -34,7 +34,7 @@ pub fn arg0_dispatch() -> Option<TempDir> {
             Some(patch_arg) => {
                 let mut stdout = std::io::stdout();
                 let mut stderr = std::io::stderr();
-                match codex_apply_patch::apply_patch(&patch_arg, &mut stdout, &mut stderr) {
+                match adam_apply_patch::apply_patch(&patch_arg, &mut stdout, &mut stderr) {
                     Ok(()) => 0,
                     Err(_) => 1,
                 }
@@ -69,8 +69,8 @@ pub fn arg0_dispatch() -> Option<TempDir> {
 /// Linux (but not Windows).
 ///
 /// When the current executable is invoked through the hard-link or alias named
-/// `codex-linux-sandbox` we *directly* execute
-/// [`codex_linux_sandbox::run_main`] (which never returns). Otherwise we:
+/// `adam-linux-sandbox` we *directly* execute
+/// [`adam_linux_sandbox::run_main`] (which never returns). Otherwise we:
 ///
 /// 1.  Load `.env` values from `~/.adam/.env` before creating any threads.
 /// 2.  Construct a Tokio multi-thread runtime.
@@ -79,7 +79,7 @@ pub fn arg0_dispatch() -> Option<TempDir> {
 /// 4.  Execute the provided async `main_fn` inside that runtime, forwarding any
 ///     error. Note that `main_fn` receives `codex_linux_sandbox_exe:
 ///     Option<PathBuf>`, as an argument, which is generally needed as part of
-///     constructing [`codex_agent::config::Config`].
+///     constructing [`adam_agent::config::Config`].
 ///
 /// This function should be used to wrap any `main()` function in binary crates
 /// in this workspace that depends on these helper CLIs.
@@ -114,7 +114,7 @@ const ILLEGAL_ENV_VAR_PREFIX: &str = "CODEX_";
 /// Security: Do not allow `.env` files to create or modify any variables
 /// with names starting with `CODEX_`.
 fn load_dotenv() {
-    if let Ok(adam_home) = codex_agent::config::find_adam_home()
+    if let Ok(adam_home) = adam_agent::config::find_adam_home()
         && let Ok(iter) = dotenvy::from_path_iter(adam_home.join(".env"))
     {
         set_filtered(iter);
@@ -150,7 +150,7 @@ where
 /// IMPORTANT: This function modifies the PATH environment variable, so it MUST
 /// be called before multiple threads are spawned.
 pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
-    let adam_home = codex_agent::config::find_adam_home()?;
+    let adam_home = adam_agent::config::find_adam_home()?;
     #[cfg(not(debug_assertions))]
     {
         // Guard against placing helpers in system temp directories outside debug builds.
@@ -178,7 +178,7 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
     }
 
     let temp_dir = tempfile::Builder::new()
-        .prefix("codex-arg0")
+        .prefix("adam-arg0")
         .tempdir_in(&temp_root)?;
     let path = temp_dir.path();
 

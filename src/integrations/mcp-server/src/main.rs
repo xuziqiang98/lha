@@ -1,6 +1,6 @@
-use codex_arg0::arg0_dispatch_or_else;
-use codex_common::CliConfigOverrides;
-use codex_mcp_server::run_main;
+use adam_arg0::arg0_dispatch_or_else;
+use adam_common::CliConfigOverrides;
+use adam_mcp_server::run_main;
 
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {

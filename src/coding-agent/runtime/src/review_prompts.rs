@@ -1,6 +1,6 @@
-use codex_git::merge_base_with_head;
-use codex_protocol::protocol::ReviewRequest;
-use codex_protocol::protocol::ReviewTarget;
+use adam_git::merge_base_with_head;
+use adam_protocol::protocol::ReviewRequest;
+use adam_protocol::protocol::ReviewTarget;
 use std::path::Path;
 
 #[derive(Clone, Debug, PartialEq)]

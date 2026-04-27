@@ -26,12 +26,12 @@ use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
+use adam_agent::features::Features;
+use adam_agent::skills::model::SkillMetadata;
+use adam_file_search::FileMatch;
+use adam_protocol::request_user_input::RequestUserInputEvent;
+use adam_protocol::user_input::TextElement;
 use bottom_pane_view::BottomPaneView;
-use codex_agent::features::Features;
-use codex_agent::skills::model::SkillMetadata;
-use codex_file_search::FileMatch;
-use codex_protocol::request_user_input::RequestUserInputEvent;
-use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
@@ -109,10 +109,10 @@ pub(crate) enum CancellationEvent {
     NotHandled,
 }
 
+use adam_protocol::custom_prompts::CustomPrompt;
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::ChatComposerConfig;
 pub(crate) use chat_composer::InputResult;
-use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::status_indicator_widget::StatusIndicatorWidget;
@@ -890,8 +890,8 @@ impl Renderable for BottomPane {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use codex_agent::protocol::Op;
-    use codex_protocol::protocol::SkillScope;
+    use adam_agent::protocol::Op;
+    use adam_protocol::protocol::SkillScope;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use ratatui::buffer::Buffer;

@@ -29,11 +29,11 @@ use crate::bottom_pane::selection_popup_common::GenericDisplayRow;
 use crate::bottom_pane::selection_popup_common::measure_rows_height;
 use crate::render::renderable::Renderable;
 
-use codex_agent::protocol::Op;
-use codex_protocol::request_user_input::RequestUserInputAnswer;
-use codex_protocol::request_user_input::RequestUserInputEvent;
-use codex_protocol::request_user_input::RequestUserInputResponse;
-use codex_protocol::user_input::TextElement;
+use adam_agent::protocol::Op;
+use adam_protocol::request_user_input::RequestUserInputAnswer;
+use adam_protocol::request_user_input::RequestUserInputEvent;
+use adam_protocol::request_user_input::RequestUserInputResponse;
+use adam_protocol::user_input::TextElement;
 use unicode_width::UnicodeWidthStr;
 
 const NOTES_PLACEHOLDER: &str = "Add notes";
@@ -178,7 +178,7 @@ impl RequestUserInputOverlay {
 
     fn current_question(
         &self,
-    ) -> Option<&codex_protocol::request_user_input::RequestUserInputQuestion> {
+    ) -> Option<&adam_protocol::request_user_input::RequestUserInputQuestion> {
         self.request.questions.get(self.current_index())
     }
 
@@ -565,7 +565,7 @@ impl RequestUserInputOverlay {
     }
 
     fn options_len_for_question(
-        question: &codex_protocol::request_user_input::RequestUserInputQuestion,
+        question: &adam_protocol::request_user_input::RequestUserInputQuestion,
     ) -> usize {
         let options_len = question
             .options
@@ -580,7 +580,7 @@ impl RequestUserInputOverlay {
     }
 
     fn other_option_enabled_for_question(
-        question: &codex_protocol::request_user_input::RequestUserInputQuestion,
+        question: &adam_protocol::request_user_input::RequestUserInputQuestion,
     ) -> bool {
         question.is_other
             && question
@@ -590,7 +590,7 @@ impl RequestUserInputOverlay {
     }
 
     fn option_label_for_index(
-        question: &codex_protocol::request_user_input::RequestUserInputQuestion,
+        question: &adam_protocol::request_user_input::RequestUserInputQuestion,
         idx: usize,
     ) -> Option<String> {
         let options = question.options.as_ref()?;
@@ -1229,8 +1229,8 @@ mod tests {
     use crate::app_event::AppEvent;
     use crate::bottom_pane::selection_popup_common::menu_surface_inset;
     use crate::render::renderable::Renderable;
-    use codex_protocol::request_user_input::RequestUserInputQuestion;
-    use codex_protocol::request_user_input::RequestUserInputQuestionOption;
+    use adam_protocol::request_user_input::RequestUserInputQuestion;
+    use adam_protocol::request_user_input::RequestUserInputQuestionOption;
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;

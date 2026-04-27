@@ -1,23 +1,23 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use codex_agent::AuthManager;
-use codex_agent::CodexAuth;
-use codex_agent::NewThread;
-use codex_agent::ThreadManager;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::InitialHistory;
-use codex_agent::protocol::ResumedHistory;
-use codex_agent::protocol::RolloutItem;
-use codex_agent::protocol::TurnContextItem;
-use codex_agent::protocol::WarningEvent;
-use codex_protocol::ThreadId;
+use adam_agent::AuthManager;
+use adam_agent::CodexAuth;
+use adam_agent::NewThread;
+use adam_agent::ThreadManager;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::InitialHistory;
+use adam_agent::protocol::ResumedHistory;
+use adam_agent::protocol::RolloutItem;
+use adam_agent::protocol::TurnContextItem;
+use adam_agent::protocol::WarningEvent;
+use adam_protocol::ThreadId;
 use core::time::Duration;
 use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
 
 fn resume_history(
-    config: &codex_agent::config::Config,
+    config: &adam_agent::config::Config,
     previous_model: &str,
     rollout_path: &std::path::Path,
 ) -> InitialHistory {

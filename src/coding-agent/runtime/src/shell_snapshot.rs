@@ -10,12 +10,12 @@ use crate::rollout::list::find_thread_path_by_id_str;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::shell::get_shell;
+use adam_otel::OtelManager;
+use adam_protocol::ThreadId;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
-use codex_otel::OtelManager;
-use codex_protocol::ThreadId;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
 use tokio::process::Child;
@@ -26,7 +26,7 @@ use tracing::Instrument;
 use tracing::info_span;
 
 #[cfg(unix)]
-use codex_utils_pty::process_group::kill_child_process_group;
+use adam_utils_pty::process_group::kill_child_process_group;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShellSnapshot {
@@ -197,7 +197,7 @@ async fn run_script_with_timeout(
     #[cfg(unix)]
     unsafe {
         handler.pre_exec(|| {
-            codex_utils_pty::process_group::detach_from_tty()?;
+            adam_utils_pty::process_group::detach_from_tty()?;
             Ok(())
         });
     }
@@ -645,7 +645,7 @@ mod tests {
             .env("BASH_ENV", "/dev/null")
             .env("VALID_NAME", "ok")
             .env("PWD", "/tmp/stale")
-            .env("NEXTEST_BIN_EXE_codex-write-config-schema", "/path/to/bin")
+            .env("NEXTEST_BIN_EXE_adam-write-config-schema", "/path/to/bin")
             .env("BAD-NAME", "broken")
             .output()?;
 
@@ -654,7 +654,7 @@ mod tests {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("VALID_NAME"));
         assert!(!stdout.contains("PWD=/tmp/stale"));
-        assert!(!stdout.contains("NEXTEST_BIN_EXE_codex-write-config-schema"));
+        assert!(!stdout.contains("NEXTEST_BIN_EXE_adam-write-config-schema"));
         assert!(!stdout.contains("BAD-NAME"));
 
         Ok(())

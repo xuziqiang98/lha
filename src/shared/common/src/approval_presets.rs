@@ -1,5 +1,5 @@
-use codex_agent::protocol::AskForApproval;
-use codex_agent::protocol::SandboxPolicy;
+use adam_agent::protocol::AskForApproval;
+use adam_agent::protocol::SandboxPolicy;
 
 /// A simple preset pairing an approval policy with a sandbox policy.
 #[derive(Debug, Clone)]

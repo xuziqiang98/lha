@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use codex_agent::error::CodexErr;
-use codex_agent::error::Result;
-use codex_agent::error::SandboxErr;
-use codex_agent::protocol::SandboxPolicy;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use adam_agent::error::CodexErr;
+use adam_agent::error::Result;
+use adam_agent::error::SandboxErr;
+use adam_agent::protocol::SandboxPolicy;
+use adam_utils_absolute_path::AbsolutePathBuf;
 
 use landlock::ABI;
 use landlock::Access;

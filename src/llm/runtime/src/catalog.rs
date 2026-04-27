@@ -1,10 +1,10 @@
 use crate::Result;
 use crate::auth::AuthContext;
 use crate::auth::auth_provider_from_context;
-use codex_api::ModelsClient;
-use codex_api::ReqwestTransport;
-use codex_client::HttpTransport;
-use codex_llm_types::ModelInfo;
+use adam_api::ModelsClient;
+use adam_api::ReqwestTransport;
+use adam_client::HttpTransport;
+use adam_llm_types::ModelInfo;
 use http::HeaderMap;
 use reqwest::Client;
 use std::time::Duration;
@@ -43,7 +43,7 @@ pub async fn fetch_remote_models(
 
 async fn fetch_remote_models_with_transport<T, A>(
     transport: T,
-    provider: codex_api::Provider,
+    provider: adam_api::Provider,
     auth: A,
     client_version: &str,
     extra_headers: HeaderMap,
@@ -51,7 +51,7 @@ async fn fetch_remote_models_with_transport<T, A>(
 ) -> Result<(Vec<ModelInfo>, Option<String>)>
 where
     T: HttpTransport,
-    A: codex_api::AuthProvider,
+    A: adam_api::AuthProvider,
 {
     let client = ModelsClient::new(transport, provider, auth);
     timeout(

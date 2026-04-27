@@ -1,10 +1,10 @@
 use crate::error::ApiError;
-use codex_llm_types::RateLimitSnapshot;
-use codex_llm_types::ReasoningEffort as ReasoningEffortConfig;
-use codex_llm_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_llm_types::TokenUsage;
-use codex_llm_types::TranscriptItem;
-use codex_llm_types::Verbosity as VerbosityConfig;
+use adam_llm_types::RateLimitSnapshot;
+use adam_llm_types::ReasoningEffort as ReasoningEffortConfig;
+use adam_llm_types::ReasoningSummary as ReasoningSummaryConfig;
+use adam_llm_types::TokenUsage;
+use adam_llm_types::TranscriptItem;
+use adam_llm_types::Verbosity as VerbosityConfig;
 use futures::Stream;
 use serde::Serialize;
 use serde_json::Value;

@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 
 use crate::Result;
 
-pub use codex_api::common::ResponseEvent;
+pub use adam_api::common::ResponseEvent;
 
 #[derive(Default, Debug, Clone)]
 pub struct Prompt {

@@ -1,14 +1,14 @@
+use adam_agent::protocol::AskForApproval;
+use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::Op;
+use adam_agent::protocol::RolloutItem;
+use adam_agent::protocol::RolloutLine;
+use adam_agent::protocol::SandboxPolicy;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::models::ContentItem;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::user_input::UserInput;
 use anyhow::Context;
-use codex_agent::protocol::AskForApproval;
-use codex_agent::protocol::EventMsg;
-use codex_agent::protocol::Op;
-use codex_agent::protocol::RolloutItem;
-use codex_agent::protocol::RolloutLine;
-use codex_agent::protocol::SandboxPolicy;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -148,11 +148,11 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
         role: "user".to_string(),
         content: vec![
             ContentItem::InputText {
-                text: codex_protocol::models::local_image_open_tag_text(1),
+                text: adam_protocol::models::local_image_open_tag_text(1),
             },
             ContentItem::InputImage { image_url },
             ContentItem::InputText {
-                text: codex_protocol::models::image_close_tag_text(),
+                text: adam_protocol::models::image_close_tag_text(),
             },
             ContentItem::InputText {
                 text: "pasted image".to_string(),
@@ -229,11 +229,11 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
         role: "user".to_string(),
         content: vec![
             ContentItem::InputText {
-                text: codex_protocol::models::image_open_tag_text(),
+                text: adam_protocol::models::image_open_tag_text(),
             },
             ContentItem::InputImage { image_url },
             ContentItem::InputText {
-                text: codex_protocol::models::image_close_tag_text(),
+                text: adam_protocol::models::image_close_tag_text(),
             },
             ContentItem::InputText {
                 text: "dropped image".to_string(),

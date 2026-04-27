@@ -14,9 +14,9 @@ use crate::protocol::CompactedItem;
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use crate::protocol::TurnStartedEvent;
-use codex_llm::TurnRequest;
-use codex_protocol::items::ContextCompactionItem;
-use codex_protocol::items::TurnItem;
+use adam_llm::TurnRequest;
+use adam_protocol::items::ContextCompactionItem;
+use adam_protocol::items::TurnItem;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,

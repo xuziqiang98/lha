@@ -2,44 +2,44 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::protocol::common::AuthMode;
-use codex_protocol::account::PlanType;
-use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::CollaborationModeMask;
-use codex_protocol::config_types::ForcedLoginMethod;
-use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
-use codex_protocol::config_types::Verbosity;
-use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
-use codex_protocol::items::TurnItem as CoreTurnItem;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
-use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
-use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
-use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
-use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
-use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
-use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
-use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
-use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
-use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
-use codex_protocol::protocol::SessionSource as CoreSessionSource;
-use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
-use codex_protocol::protocol::SkillErrorInfo as CoreSkillErrorInfo;
-use codex_protocol::protocol::SkillInterface as CoreSkillInterface;
-use codex_protocol::protocol::SkillMetadata as CoreSkillMetadata;
-use codex_protocol::protocol::SkillScope as CoreSkillScope;
-use codex_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
-use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
-use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
-use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
-use codex_protocol::user_input::ByteRange as CoreByteRange;
-use codex_protocol::user_input::TextElement as CoreTextElement;
-use codex_protocol::user_input::UserInput as CoreUserInput;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use adam_protocol::account::PlanType;
+use adam_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
+use adam_protocol::config_types::CollaborationMode;
+use adam_protocol::config_types::CollaborationModeMask;
+use adam_protocol::config_types::ForcedLoginMethod;
+use adam_protocol::config_types::Personality;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::config_types::SandboxMode as CoreSandboxMode;
+use adam_protocol::config_types::Verbosity;
+use adam_protocol::config_types::WebSearchMode;
+use adam_protocol::items::AgentMessageContent as CoreAgentMessageContent;
+use adam_protocol::items::TurnItem as CoreTurnItem;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::openai_models::ReasoningEffort;
+use adam_protocol::parse_command::ParsedCommand as CoreParsedCommand;
+use adam_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
+use adam_protocol::plan_tool::StepStatus as CorePlanStepStatus;
+use adam_protocol::protocol::AgentStatus as CoreAgentStatus;
+use adam_protocol::protocol::AskForApproval as CoreAskForApproval;
+use adam_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
+use adam_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
+use adam_protocol::protocol::NetworkAccess as CoreNetworkAccess;
+use adam_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
+use adam_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
+use adam_protocol::protocol::SessionSource as CoreSessionSource;
+use adam_protocol::protocol::SkillDependencies as CoreSkillDependencies;
+use adam_protocol::protocol::SkillErrorInfo as CoreSkillErrorInfo;
+use adam_protocol::protocol::SkillInterface as CoreSkillInterface;
+use adam_protocol::protocol::SkillMetadata as CoreSkillMetadata;
+use adam_protocol::protocol::SkillScope as CoreSkillScope;
+use adam_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
+use adam_protocol::protocol::SubAgentSource as CoreSubAgentSource;
+use adam_protocol::protocol::TokenUsage as CoreTokenUsage;
+use adam_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
+use adam_protocol::user_input::ByteRange as CoreByteRange;
+use adam_protocol::user_input::TextElement as CoreTextElement;
+use adam_protocol::user_input::UserInput as CoreUserInput;
+use adam_utils_absolute_path::AbsolutePathBuf;
 use mcp_types::ContentBlock as McpContentBlock;
 use mcp_types::Resource as McpResource;
 use mcp_types::ResourceTemplate as McpResourceTemplate;
@@ -219,13 +219,13 @@ impl From<CoreSandboxMode> for SandboxMode {
 }
 
 v2_enum_from_core!(
-    pub enum ReviewDelivery from codex_protocol::protocol::ReviewDelivery {
+    pub enum ReviewDelivery from adam_protocol::protocol::ReviewDelivery {
         Inline, Detached
     }
 );
 
 v2_enum_from_core!(
-    pub enum McpAuthStatus from codex_protocol::protocol::McpAuthStatus {
+    pub enum McpAuthStatus from adam_protocol::protocol::McpAuthStatus {
         Unsupported,
         NotLoggedIn,
         BearerToken,
@@ -616,14 +616,14 @@ pub enum SandboxPolicy {
 }
 
 impl SandboxPolicy {
-    pub fn to_core(&self) -> codex_protocol::protocol::SandboxPolicy {
+    pub fn to_core(&self) -> adam_protocol::protocol::SandboxPolicy {
         match self {
             SandboxPolicy::DangerFullAccess => {
-                codex_protocol::protocol::SandboxPolicy::DangerFullAccess
+                adam_protocol::protocol::SandboxPolicy::DangerFullAccess
             }
-            SandboxPolicy::ReadOnly => codex_protocol::protocol::SandboxPolicy::ReadOnly,
+            SandboxPolicy::ReadOnly => adam_protocol::protocol::SandboxPolicy::ReadOnly,
             SandboxPolicy::ExternalSandbox { network_access } => {
-                codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
+                adam_protocol::protocol::SandboxPolicy::ExternalSandbox {
                     network_access: match network_access {
                         NetworkAccess::Restricted => CoreNetworkAccess::Restricted,
                         NetworkAccess::Enabled => CoreNetworkAccess::Enabled,
@@ -635,7 +635,7 @@ impl SandboxPolicy {
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
-            } => codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
+            } => adam_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: writable_roots.clone(),
                 network_access: *network_access,
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
@@ -645,14 +645,14 @@ impl SandboxPolicy {
     }
 }
 
-impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
-    fn from(value: codex_protocol::protocol::SandboxPolicy) -> Self {
+impl From<adam_protocol::protocol::SandboxPolicy> for SandboxPolicy {
+    fn from(value: adam_protocol::protocol::SandboxPolicy) -> Self {
         match value {
-            codex_protocol::protocol::SandboxPolicy::DangerFullAccess => {
+            adam_protocol::protocol::SandboxPolicy::DangerFullAccess => {
                 SandboxPolicy::DangerFullAccess
             }
-            codex_protocol::protocol::SandboxPolicy::ReadOnly => SandboxPolicy::ReadOnly,
-            codex_protocol::protocol::SandboxPolicy::ExternalSandbox { network_access } => {
+            adam_protocol::protocol::SandboxPolicy::ReadOnly => SandboxPolicy::ReadOnly,
+            adam_protocol::protocol::SandboxPolicy::ExternalSandbox { network_access } => {
                 SandboxPolicy::ExternalSandbox {
                     network_access: match network_access {
                         CoreNetworkAccess::Restricted => NetworkAccess::Restricted,
@@ -660,7 +660,7 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
                     },
                 }
             }
-            codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
+            adam_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 network_access,
                 exclude_tmpdir_env_var,
@@ -2172,19 +2172,19 @@ pub enum WebSearchAction {
     Other,
 }
 
-impl From<codex_protocol::models::WebSearchAction> for WebSearchAction {
-    fn from(value: codex_protocol::models::WebSearchAction) -> Self {
+impl From<adam_protocol::models::WebSearchAction> for WebSearchAction {
+    fn from(value: adam_protocol::models::WebSearchAction) -> Self {
         match value {
-            codex_protocol::models::WebSearchAction::Search { query, queries } => {
+            adam_protocol::models::WebSearchAction::Search { query, queries } => {
                 WebSearchAction::Search { query, queries }
             }
-            codex_protocol::models::WebSearchAction::OpenPage { url } => {
+            adam_protocol::models::WebSearchAction::OpenPage { url } => {
                 WebSearchAction::OpenPage { url }
             }
-            codex_protocol::models::WebSearchAction::FindInPage { url, pattern } => {
+            adam_protocol::models::WebSearchAction::FindInPage { url, pattern } => {
                 WebSearchAction::FindInPage { url, pattern }
             }
-            codex_protocol::models::WebSearchAction::Other => WebSearchAction::Other,
+            adam_protocol::models::WebSearchAction::Other => WebSearchAction::Other,
         }
     }
 }
@@ -2872,15 +2872,15 @@ pub struct ConfigWarningNotification {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::items::AgentMessageContent;
-    use codex_protocol::items::AgentMessageItem;
-    use codex_protocol::items::ReasoningItem;
-    use codex_protocol::items::TurnItem;
-    use codex_protocol::items::UserMessageItem;
-    use codex_protocol::items::WebSearchItem;
-    use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
-    use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
-    use codex_protocol::user_input::UserInput as CoreUserInput;
+    use adam_protocol::items::AgentMessageContent;
+    use adam_protocol::items::AgentMessageItem;
+    use adam_protocol::items::ReasoningItem;
+    use adam_protocol::items::TurnItem;
+    use adam_protocol::items::UserMessageItem;
+    use adam_protocol::items::WebSearchItem;
+    use adam_protocol::models::WebSearchAction as CoreWebSearchAction;
+    use adam_protocol::protocol::NetworkAccess as CoreNetworkAccess;
+    use adam_protocol::user_input::UserInput as CoreUserInput;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
@@ -2894,7 +2894,7 @@ mod tests {
         let core_policy = v2_policy.to_core();
         assert_eq!(
             core_policy,
-            codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
+            adam_protocol::protocol::SandboxPolicy::ExternalSandbox {
                 network_access: CoreNetworkAccess::Enabled,
             }
         );

@@ -1,3 +1,16 @@
+use adam_agent::ARCHIVED_SESSIONS_SUBDIR;
+use adam_app_server_protocol::GitInfo as ApiGitInfo;
+use adam_app_server_protocol::JSONRPCError;
+use adam_app_server_protocol::JSONRPCResponse;
+use adam_app_server_protocol::RequestId;
+use adam_app_server_protocol::SessionSource;
+use adam_app_server_protocol::ThreadListResponse;
+use adam_app_server_protocol::ThreadSortKey;
+use adam_app_server_protocol::ThreadSourceKind;
+use adam_protocol::ThreadId;
+use adam_protocol::protocol::GitInfo as CoreGitInfo;
+use adam_protocol::protocol::SessionSource as CoreSessionSource;
+use adam_protocol::protocol::SubAgentSource;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
@@ -8,19 +21,6 @@ use app_test_support::rollout_path;
 use app_test_support::to_response;
 use chrono::DateTime;
 use chrono::Utc;
-use codex_agent::ARCHIVED_SESSIONS_SUBDIR;
-use codex_app_server_protocol::GitInfo as ApiGitInfo;
-use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::SessionSource;
-use codex_app_server_protocol::ThreadListResponse;
-use codex_app_server_protocol::ThreadSortKey;
-use codex_app_server_protocol::ThreadSourceKind;
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::GitInfo as CoreGitInfo;
-use codex_protocol::protocol::SessionSource as CoreSessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
 use std::cmp::Reverse;
 use std::fs;
@@ -61,7 +61,7 @@ async fn list_threads_with_sort(
     archived: Option<bool>,
 ) -> Result<ThreadListResponse> {
     let request_id = mcp
-        .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+        .send_thread_list_request(adam_app_server_protocol::ThreadListParams {
             cursor,
             limit,
             sort_key,
@@ -172,7 +172,7 @@ async fn thread_list_skips_unsupported_rollouts() -> Result<()> {
         "2025-01-01T12:00:00Z",
         "valid",
         Some("mock_provider"),
-        Some(codex_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3),
+        Some(adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3),
     )?;
     create_fake_rollout_with_schema_version(
         adam_home.path(),
@@ -1191,7 +1191,7 @@ async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
     let mut mcp = init_mcp(adam_home.path()).await?;
 
     let request_id = mcp
-        .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+        .send_thread_list_request(adam_app_server_protocol::ThreadListParams {
             cursor: Some("not-a-cursor".to_string()),
             limit: Some(2),
             sort_key: None,

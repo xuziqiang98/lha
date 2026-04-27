@@ -2,24 +2,24 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use adam_api::AuthProvider;
+use adam_api::ChatClient;
+use adam_api::MessagesClient;
+use adam_api::Provider;
+use adam_api::ResponsesClient;
+use adam_api::ResponsesOptions;
+use adam_api::WireApi;
+use adam_api::requests::responses::Compression;
+use adam_client::HttpTransport;
+use adam_client::Request;
+use adam_client::Response;
+use adam_client::StreamResponse;
+use adam_client::TransportError;
+use adam_llm_types::ContentItem;
+use adam_llm_types::TranscriptItem;
 use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
-use codex_api::AuthProvider;
-use codex_api::ChatClient;
-use codex_api::MessagesClient;
-use codex_api::Provider;
-use codex_api::ResponsesClient;
-use codex_api::ResponsesOptions;
-use codex_api::WireApi;
-use codex_api::requests::responses::Compression;
-use codex_client::HttpTransport;
-use codex_client::Request;
-use codex_client::Response;
-use codex_client::StreamResponse;
-use codex_client::TransportError;
-use codex_llm_types::ContentItem;
-use codex_llm_types::TranscriptItem;
 use http::HeaderMap;
 use http::StatusCode;
 use pretty_assertions::assert_eq;
@@ -127,7 +127,7 @@ fn provider(name: &str, wire: WireApi) -> Provider {
         query_params: None,
         wire,
         headers: HeaderMap::new(),
-        retry: codex_api::provider::RetryConfig {
+        retry: adam_api::provider::RetryConfig {
             max_attempts: 1,
             base_delay: Duration::from_millis(1),
             retry_429: false,
@@ -264,7 +264,7 @@ async fn messages_client_uses_messages_path_for_messages_wire() -> Result<()> {
 
     let body = serde_json::json!({ "echo": true });
     let _stream = client
-        .stream_request(codex_api::MessagesRequest {
+        .stream_request(adam_api::MessagesRequest {
             body,
             headers: HeaderMap::new(),
         })
@@ -284,7 +284,7 @@ async fn messages_wire_uses_x_api_key_auth() -> Result<()> {
 
     let body = serde_json::json!({ "model": "claude-test" });
     let _stream = client
-        .stream_request(codex_api::MessagesRequest {
+        .stream_request(adam_api::MessagesRequest {
             body,
             headers: HeaderMap::new(),
         })
@@ -348,7 +348,7 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
 
     let client = ResponsesClient::new(transport.clone(), provider, NoAuth);
 
-    let prompt = codex_api::Prompt {
+    let prompt = adam_api::Prompt {
         instructions: "Say hi".to_string(),
         input: vec![TranscriptItem::Message {
             id: None,

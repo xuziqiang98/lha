@@ -9,17 +9,17 @@ use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::is_dangerous_command::command_might_be_dangerous;
 use crate::is_safe_command::is_known_safe_command;
-use codex_execpolicy::AmendError;
-use codex_execpolicy::Decision;
-use codex_execpolicy::Error as ExecPolicyRuleError;
-use codex_execpolicy::Evaluation;
-use codex_execpolicy::Policy;
-use codex_execpolicy::PolicyParser;
-use codex_execpolicy::RuleMatch;
-use codex_execpolicy::blocking_append_allow_prefix_rule;
-use codex_protocol::approvals::ExecPolicyAmendment;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
+use adam_execpolicy::AmendError;
+use adam_execpolicy::Decision;
+use adam_execpolicy::Error as ExecPolicyRuleError;
+use adam_execpolicy::Evaluation;
+use adam_execpolicy::Policy;
+use adam_execpolicy::PolicyParser;
+use adam_execpolicy::RuleMatch;
+use adam_execpolicy::blocking_append_allow_prefix_rule;
+use adam_protocol::approvals::ExecPolicyAmendment;
+use adam_protocol::protocol::AskForApproval;
+use adam_protocol::protocol::SandboxPolicy;
 use thiserror::Error;
 use tokio::fs;
 use tokio::task::spawn_blocking;
@@ -61,7 +61,7 @@ pub enum ExecPolicyError {
     #[error("failed to parse rules file {path}: {source}")]
     ParsePolicy {
         path: String,
-        source: codex_execpolicy::Error,
+        source: adam_execpolicy::Error,
     },
 }
 
@@ -564,10 +564,10 @@ mod tests {
     use crate::config_loader::ConfigRequirementsToml;
     use crate::features::Feature;
     use crate::features::Features;
-    use codex_app_server_protocol::ConfigLayerSource;
-    use codex_protocol::protocol::AskForApproval;
-    use codex_protocol::protocol::SandboxPolicy;
-    use codex_utils_absolute_path::AbsolutePathBuf;
+    use adam_app_server_protocol::ConfigLayerSource;
+    use adam_protocol::protocol::AskForApproval;
+    use adam_protocol::protocol::SandboxPolicy;
+    use adam_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;

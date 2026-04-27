@@ -11,12 +11,12 @@ use crate::snapshot::ActiveTurnSnapshot;
 use crate::snapshot::SessionSnapshot;
 use crate::status::SessionStatus;
 use crate::tools::ToolExecutor;
+use adam_agent_core::kernel::AgentKernel;
+use adam_llm::SemanticRuntimeSession;
+use adam_llm::TranscriptItem;
+use adam_llm::TurnRequest;
 use async_channel::Receiver;
 use async_channel::Sender;
-use codex_agent_core::kernel::AgentKernel;
-use codex_llm::SemanticRuntimeSession;
-use codex_llm::TranscriptItem;
-use codex_llm::TurnRequest;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -462,21 +462,21 @@ mod tests {
     use crate::tools::ToolHandler;
     use crate::tools::ToolInvocation;
     use crate::tools::ToolOutput;
+    use adam_llm::FunctionToolDescriptor;
+    use adam_llm::RuntimeMetadata;
+    use adam_llm::SemanticConversationCompactor;
+    use adam_llm::SemanticRuntime;
+    use adam_llm::SemanticRuntimeSession;
+    use adam_llm::ToolCallPayload;
+    use adam_llm::ToolCallRequest;
+    use adam_llm::ToolDescriptor;
+    use adam_llm::ToolInputSchema;
+    use adam_llm::TranscriptItem;
+    use adam_llm::TurnEvent;
+    use adam_llm::TurnEventStream;
+    use adam_llm_types::ContentItem;
+    use adam_llm_types::TokenUsage;
     use async_trait::async_trait;
-    use codex_llm::FunctionToolDescriptor;
-    use codex_llm::RuntimeMetadata;
-    use codex_llm::SemanticConversationCompactor;
-    use codex_llm::SemanticRuntime;
-    use codex_llm::SemanticRuntimeSession;
-    use codex_llm::ToolCallPayload;
-    use codex_llm::ToolCallRequest;
-    use codex_llm::ToolDescriptor;
-    use codex_llm::ToolInputSchema;
-    use codex_llm::TranscriptItem;
-    use codex_llm::TurnEvent;
-    use codex_llm::TurnEventStream;
-    use codex_llm_types::ContentItem;
-    use codex_llm_types::TokenUsage;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeMap;
     use std::collections::VecDeque;
@@ -493,7 +493,7 @@ mod tests {
     }
 
     struct FakeTurnScript {
-        events: Vec<codex_llm::Result<TurnEvent>>,
+        events: Vec<adam_llm::Result<TurnEvent>>,
         gate: Option<Arc<Notify>>,
         hold_open: Option<Arc<Notify>>,
     }
@@ -507,7 +507,7 @@ mod tests {
         async fn compact_conversation_history(
             &self,
             input: &TurnRequest,
-        ) -> codex_llm::Result<Vec<TranscriptItem>> {
+        ) -> adam_llm::Result<Vec<TranscriptItem>> {
             Ok(input.conversation.clone())
         }
     }
@@ -520,8 +520,8 @@ mod tests {
             })
         }
 
-        fn capabilities(&self) -> codex_llm::RuntimeCapabilities {
-            codex_llm::RuntimeCapabilities {
+        fn capabilities(&self) -> adam_llm::RuntimeCapabilities {
+            adam_llm::RuntimeCapabilities {
                 supports_parallel_tool_calls: true,
                 enforce_declared_tool_names: false,
                 supports_dynamic_context_window_probe: false,
@@ -545,7 +545,7 @@ mod tests {
 
     #[async_trait]
     impl SemanticRuntimeSession for FakeRuntimeSession {
-        async fn run_turn(&mut self, _input: &TurnRequest) -> codex_llm::Result<TurnEventStream> {
+        async fn run_turn(&mut self, _input: &TurnRequest) -> adam_llm::Result<TurnEventStream> {
             let script = self
                 .scripts
                 .lock()
@@ -606,8 +606,8 @@ mod tests {
         })
     }
 
-    fn assistant_item(text: &str) -> codex_llm::SemanticOutputItem {
-        codex_llm::SemanticOutputItem::AssistantMessage {
+    fn assistant_item(text: &str) -> adam_llm::SemanticOutputItem {
+        adam_llm::SemanticOutputItem::AssistantMessage {
             item: TranscriptItem::Message {
                 id: Some("msg-1".to_string()),
                 role: "assistant".to_string(),

@@ -2,10 +2,10 @@ use crate::Error;
 use crate::tools::ToolInvocation;
 use crate::tools::ToolPayload;
 use crate::tools::ToolRegistry;
-use codex_agent_core::kernel::ToolFuture;
-use codex_llm::ToolCallRequest;
-use codex_llm::ToolResultItem;
-use codex_llm::ToolResultPayload;
+use adam_agent_core::kernel::ToolFuture;
+use adam_llm::ToolCallRequest;
+use adam_llm::ToolResultItem;
+use adam_llm::ToolResultPayload;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -56,14 +56,14 @@ impl ToolExecutor {
 
     fn aborted_response(call: &ToolCallRequest) -> ToolResultItem {
         match call.payload {
-            codex_llm::ToolCallPayload::TextInput { .. } => ToolResultItem {
+            adam_llm::ToolCallPayload::TextInput { .. } => ToolResultItem {
                 call_id: call.call_id.clone(),
                 tool_name: call.tool_name.clone(),
                 payload: ToolResultPayload::Text {
                     output: "aborted by user".to_string(),
                 },
             },
-            codex_llm::ToolCallPayload::JsonArguments { .. } => ToolResultItem {
+            adam_llm::ToolCallPayload::JsonArguments { .. } => ToolResultItem {
                 call_id: call.call_id.clone(),
                 tool_name: call.tool_name.clone(),
                 payload: ToolResultPayload::Structured {

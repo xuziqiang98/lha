@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::protocol::SandboxPolicy;
-use codex_protocol::config_types::WindowsSandboxLevel;
+use adam_protocol::config_types::WindowsSandboxLevel;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -44,7 +44,7 @@ pub fn windows_sandbox_level_from_features(features: &Features) -> WindowsSandbo
 
 #[cfg(target_os = "windows")]
 pub fn sandbox_setup_is_complete(adam_home: &Path) -> bool {
-    codex_windows_sandbox::sandbox_setup_is_complete(adam_home)
+    adam_windows_sandbox::sandbox_setup_is_complete(adam_home)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -54,9 +54,9 @@ pub fn sandbox_setup_is_complete(_adam_home: &Path) -> bool {
 
 #[cfg(target_os = "windows")]
 pub fn elevated_setup_failure_details(err: &anyhow::Error) -> Option<(String, String)> {
-    let failure = codex_windows_sandbox::extract_setup_failure(err)?;
+    let failure = adam_windows_sandbox::extract_setup_failure(err)?;
     let code = failure.code.as_str().to_string();
-    let message = codex_windows_sandbox::sanitize_setup_metric_tag_value(&failure.message);
+    let message = adam_windows_sandbox::sanitize_setup_metric_tag_value(&failure.message);
     Some((code, message))
 }
 
@@ -73,7 +73,7 @@ pub fn run_elevated_setup(
     env_map: &HashMap<String, String>,
     adam_home: &Path,
 ) -> anyhow::Result<()> {
-    codex_windows_sandbox::run_elevated_setup(
+    adam_windows_sandbox::run_elevated_setup(
         policy,
         policy_cwd,
         command_cwd,

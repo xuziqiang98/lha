@@ -1,24 +1,24 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use codex_protocol::ThreadId;
-use codex_protocol::config_types::ForcedLoginMethod;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::SandboxMode;
-use codex_protocol::config_types::Verbosity;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::TurnAbortReason;
-use codex_protocol::user_input::ByteRange as CoreByteRange;
-use codex_protocol::user_input::TextElement as CoreTextElement;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use adam_protocol::ThreadId;
+use adam_protocol::config_types::ForcedLoginMethod;
+use adam_protocol::config_types::ReasoningSummary;
+use adam_protocol::config_types::SandboxMode;
+use adam_protocol::config_types::Verbosity;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::openai_models::ReasoningEffort;
+use adam_protocol::parse_command::ParsedCommand;
+use adam_protocol::protocol::AskForApproval;
+use adam_protocol::protocol::EventMsg;
+use adam_protocol::protocol::FileChange;
+use adam_protocol::protocol::ReviewDecision;
+use adam_protocol::protocol::SandboxPolicy;
+use adam_protocol::protocol::SessionSource;
+use adam_protocol::protocol::TurnAbortReason;
+use adam_protocol::user_input::ByteRange as CoreByteRange;
+use adam_protocol::user_input::TextElement as CoreTextElement;
+use adam_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -219,8 +219,8 @@ pub struct GitDiffToRemoteResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ApplyPatchApprovalParams {
     pub conversation_id: ThreadId,
-    /// Use to correlate this with [codex_agent::protocol::PatchApplyBeginEvent]
-    /// and [codex_agent::protocol::PatchApplyEndEvent].
+    /// Use to correlate this with [adam_agent::protocol::PatchApplyBeginEvent]
+    /// and [adam_agent::protocol::PatchApplyEndEvent].
     pub call_id: String,
     pub file_changes: HashMap<PathBuf, FileChange>,
     /// Optional explanatory reason (e.g. request for extra write access).
@@ -240,8 +240,8 @@ pub struct ApplyPatchApprovalResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ExecCommandApprovalParams {
     pub conversation_id: ThreadId,
-    /// Use to correlate this with [codex_agent::protocol::ExecCommandBeginEvent]
-    /// and [codex_agent::protocol::ExecCommandEndEvent].
+    /// Use to correlate this with [adam_agent::protocol::ExecCommandBeginEvent]
+    /// and [adam_agent::protocol::ExecCommandEndEvent].
     pub call_id: String,
     pub command: Vec<String>,
     pub cwd: PathBuf,

@@ -1,10 +1,10 @@
-# codex-otel
+# adam-otel
 
-`codex-otel` is the OpenTelemetry integration crate for Codex. It provides:
+`adam-otel` is the OpenTelemetry integration crate for Codex. It provides:
 
-- Trace/log/metrics exporters and tracing subscriber layers (`codex_otel::otel_provider`).
-- A structured event helper (`codex_otel::OtelManager`).
-- OpenTelemetry metrics support via OTLP exporters (`codex_otel::metrics`).
+- Trace/log/metrics exporters and tracing subscriber layers (`adam_otel::otel_provider`).
+- A structured event helper (`adam_otel::OtelManager`).
+- OpenTelemetry metrics support via OTLP exporters (`adam_otel::metrics`).
 - A metrics facade on `OtelManager` so tracing + metrics share metadata.
 
 ## Tracing and logs
@@ -14,15 +14,15 @@ metrics (when enabled), then attach its layers to your `tracing_subscriber`
 registry:
 
 ```rust
-use codex_otel::config::OtelExporter;
-use codex_otel::config::OtelHttpProtocol;
-use codex_otel::config::OtelSettings;
-use codex_otel::otel_provider::OtelProvider;
+use adam_otel::config::OtelExporter;
+use adam_otel::config::OtelHttpProtocol;
+use adam_otel::config::OtelSettings;
+use adam_otel::otel_provider::OtelProvider;
 use tracing_subscriber::prelude::*;
 
 let settings = OtelSettings {
     environment: "dev".to_string(),
-    service_name: "codex-cli".to_string(),
+    service_name: "adam-cli".to_string(),
     service_version: env!("CARGO_PKG_VERSION").to_string(),
     adam_home: std::path::PathBuf::from("/tmp"),
     exporter: OtelExporter::OtlpHttp {
@@ -54,7 +54,7 @@ if let Some(provider) = OtelProvider::from(&settings)? {
 Codex-specific events.
 
 ```rust
-use codex_otel::OtelManager;
+use adam_otel::OtelManager;
 
 let manager = OtelManager::new(
     conversation_id,
@@ -78,17 +78,17 @@ Modes:
 - OTLP: exports metrics via the OpenTelemetry OTLP exporter (HTTP or gRPC).
 - In-memory: records via `opentelemetry_sdk::metrics::InMemoryMetricExporter` for tests/assertions; call `shutdown()` to flush.
 
-`codex-otel` also provides `OtelExporter::Statsig`, a shorthand for exporting OTLP/HTTP JSON metrics
+`adam-otel` also provides `OtelExporter::Statsig`, a shorthand for exporting OTLP/HTTP JSON metrics
 to Statsig using Codex-internal defaults.
 
 Statsig ingestion (OTLP/HTTP JSON) example:
 
 ```rust
-use codex_otel::config::{OtelExporter, OtelHttpProtocol};
+use adam_otel::config::{OtelExporter, OtelHttpProtocol};
 
 let metrics = MetricsClient::new(MetricsConfig::otlp(
     "dev",
-    "codex-cli",
+    "adam-cli",
     env!("CARGO_PKG_VERSION"),
     OtelExporter::OtlpHttp {
         endpoint: "https://api.statsig.com/otlp".to_string(),
@@ -111,7 +111,7 @@ In-memory (tests):
 let exporter = InMemoryMetricExporter::default();
 let metrics = MetricsClient::new(MetricsConfig::in_memory(
     "test",
-    "codex-cli",
+    "adam-cli",
     env!("CARGO_PKG_VERSION"),
     exporter.clone(),
 ))?;

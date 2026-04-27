@@ -1,15 +1,15 @@
 [package]
-name = "codex-stdio-to-uds"
+name = "adam-stdio-to-uds"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "codex-stdio-to-uds"
+name = "adam-stdio-to-uds"
 path = "src/main.rs"
 
 [lib]
-name = "codex_stdio_to_uds"
+name = "adam_stdio_to_uds"
 path = "src/lib.rs"
 
 [lints]
@@ -23,6 +23,6 @@ uds_windows = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
-codex-utils-cargo-bin = { workspace = true }
+adam-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

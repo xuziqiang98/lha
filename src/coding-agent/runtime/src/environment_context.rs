@@ -1,9 +1,9 @@
 use crate::codex::TurnContext;
 use crate::shell::Shell;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::TranscriptItem;
-use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
-use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
+use adam_protocol::models::ContentItem;
+use adam_protocol::models::TranscriptItem;
+use adam_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
+use adam_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;

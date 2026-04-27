@@ -3,8 +3,8 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use codex_llm::TranscriptItem;
-use codex_protocol::protocol::GhostSnapshotRecord;
+use adam_llm::TranscriptItem;
+use adam_protocol::protocol::GhostSnapshotRecord;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
