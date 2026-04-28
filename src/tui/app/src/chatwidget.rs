@@ -27,13 +27,13 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 use std::time::Instant;
 
 use crate::version::CODEX_CLI_VERSION;
 use adam_agent::config::Config;
 use adam_agent::config::ConstraintResult;
 use adam_agent::config::types::Notifications;
+use adam_agent::connectors;
 use adam_agent::features::FEATURES;
 use adam_agent::features::Feature;
 use adam_agent::git_info::current_branch_name;
@@ -49,7 +49,6 @@ use adam_agent::protocol::ApplyPatchApprovalRequestEvent;
 use adam_agent::protocol::BackgroundEventEvent;
 use adam_agent::protocol::CodexErrorInfo;
 use adam_agent::protocol::CollabAgentSpawnBeginEvent;
-use adam_agent::protocol::CreditsSnapshot;
 use adam_agent::protocol::DeprecationNoticeEvent;
 use adam_agent::protocol::ErrorEvent;
 use adam_agent::protocol::Event;
@@ -70,7 +69,6 @@ use adam_agent::protocol::McpToolCallBeginEvent;
 use adam_agent::protocol::McpToolCallEndEvent;
 use adam_agent::protocol::Op;
 use adam_agent::protocol::PatchApplyBeginEvent;
-use adam_agent::protocol::RateLimitSnapshot;
 use adam_agent::protocol::ReviewRequest;
 use adam_agent::protocol::ReviewTarget;
 use adam_agent::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -91,11 +89,8 @@ use adam_agent::protocol::WebSearchEndEvent;
 use adam_agent::skills::model::SkillMetadata;
 #[cfg(target_os = "windows")]
 use adam_agent::windows_sandbox::WindowsSandboxLevelExt;
-use adam_backend_client::Client as BackendClient;
-use adam_chatgpt::connectors;
 use adam_otel::OtelManager;
 use adam_protocol::ThreadId;
-use adam_protocol::account::PlanType;
 use adam_protocol::approvals::ElicitationRequestEvent;
 use adam_protocol::config_types::CollaborationMode;
 use adam_protocol::config_types::CollaborationModeMask;
@@ -127,7 +122,6 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::task::JoinHandle;
 use tracing::debug;
 
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
@@ -185,7 +179,6 @@ use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
-use crate::status::RateLimitSnapshotDisplay;
 use crate::status::format_directory_display;
 use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
@@ -210,10 +203,7 @@ use crate::streaming::controller::PlanStreamController;
 use crate::streaming::controller::StreamController;
 
 use adam_agent::AuthManager;
-use adam_agent::CodexAuth;
 use adam_agent::ThreadManager;
-use adam_agent::auth::AuthMode;
-use adam_agent::models_manager::manager::RefreshStrategy;
 use adam_agent::protocol::AskForApproval;
 use adam_agent::protocol::SandboxPolicy;
 use adam_common::approval_presets::ApprovalPreset;
@@ -222,7 +212,6 @@ use adam_file_search::FileMatch;
 use adam_protocol::openai_models::ModelPreset;
 use adam_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use adam_protocol::plan_tool::UpdatePlanArgs;
-use chrono::Local;
 use strum::IntoEnumIterator;
 
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
@@ -292,94 +281,35 @@ fn is_standard_tool_call(parsed_cmd: &[ParsedCommand]) -> bool {
             .all(|parsed| !matches!(parsed, ParsedCommand::Unknown { .. }))
 }
 
-const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
-const NUDGE_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
-const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
-
-#[derive(Default)]
-struct RateLimitWarningState {
-    secondary_index: usize,
-    primary_index: usize,
+#[derive(Debug)]
+enum RateLimitErrorKind {
+    ModelCap {
+        model: String,
+        reset_after_seconds: Option<u64>,
+    },
 }
 
-impl RateLimitWarningState {
-    fn take_warnings(
-        &mut self,
-        secondary_used_percent: Option<f64>,
-        secondary_window_minutes: Option<i64>,
-        primary_used_percent: Option<f64>,
-        primary_window_minutes: Option<i64>,
-    ) -> Vec<String> {
-        let reached_secondary_cap =
-            matches!(secondary_used_percent, Some(percent) if percent == 100.0);
-        let reached_primary_cap = matches!(primary_used_percent, Some(percent) if percent == 100.0);
-        if reached_secondary_cap || reached_primary_cap {
-            return Vec::new();
-        }
-
-        let mut warnings = Vec::new();
-
-        if let Some(secondary_used_percent) = secondary_used_percent {
-            let mut highest_secondary: Option<f64> = None;
-            while self.secondary_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
-                && secondary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index]
-            {
-                highest_secondary = Some(RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index]);
-                self.secondary_index += 1;
-            }
-            if let Some(threshold) = highest_secondary {
-                let limit_label = secondary_window_minutes
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| "weekly".to_string());
-                let remaining_percent = 100.0 - threshold;
-                warnings.push(format!(
-                    "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left. Run /status for a breakdown."
-                ));
-            }
-        }
-
-        if let Some(primary_used_percent) = primary_used_percent {
-            let mut highest_primary: Option<f64> = None;
-            while self.primary_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
-                && primary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index]
-            {
-                highest_primary = Some(RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index]);
-                self.primary_index += 1;
-            }
-            if let Some(threshold) = highest_primary {
-                let limit_label = primary_window_minutes
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| "5h".to_string());
-                let remaining_percent = 100.0 - threshold;
-                warnings.push(format!(
-                    "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left. Run /status for a breakdown."
-                ));
-            }
-        }
-
-        warnings
-    }
-}
-
-pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
-    const MINUTES_PER_HOUR: i64 = 60;
-    const MINUTES_PER_DAY: i64 = 24 * MINUTES_PER_HOUR;
-    const MINUTES_PER_WEEK: i64 = 7 * MINUTES_PER_DAY;
-    const MINUTES_PER_MONTH: i64 = 30 * MINUTES_PER_DAY;
-    const ROUNDING_BIAS_MINUTES: i64 = 3;
-
-    let windows_minutes = windows_minutes.max(0);
-
-    if windows_minutes <= MINUTES_PER_DAY.saturating_add(ROUNDING_BIAS_MINUTES) {
-        let adjusted = windows_minutes.saturating_add(ROUNDING_BIAS_MINUTES);
-        let hours = std::cmp::max(1, adjusted / MINUTES_PER_HOUR);
-        format!("{hours}h")
-    } else if windows_minutes <= MINUTES_PER_WEEK.saturating_add(ROUNDING_BIAS_MINUTES) {
-        "weekly".to_string()
-    } else if windows_minutes <= MINUTES_PER_MONTH.saturating_add(ROUNDING_BIAS_MINUTES) {
-        "monthly".to_string()
-    } else {
-        "annual".to_string()
+fn rate_limit_error_kind(info: &CodexErrorInfo) -> Option<RateLimitErrorKind> {
+    match info {
+        CodexErrorInfo::ModelCap {
+            model,
+            reset_after_seconds,
+        } => Some(RateLimitErrorKind::ModelCap {
+            model: model.clone(),
+            reset_after_seconds: *reset_after_seconds,
+        }),
+        CodexErrorInfo::UsageLimitExceeded
+        | CodexErrorInfo::ResponseTooManyFailedAttempts { .. }
+        | CodexErrorInfo::ContextWindowExceeded
+        | CodexErrorInfo::HttpConnectionFailed { .. }
+        | CodexErrorInfo::ResponseStreamConnectionFailed { .. }
+        | CodexErrorInfo::InternalServerError
+        | CodexErrorInfo::Unauthorized
+        | CodexErrorInfo::BadRequest
+        | CodexErrorInfo::SandboxError
+        | CodexErrorInfo::ResponseStreamDisconnected { .. }
+        | CodexErrorInfo::ThreadRollbackFailed
+        | CodexErrorInfo::Other => None,
     }
 }
 
@@ -398,14 +328,6 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) otel_manager: OtelManager,
 }
 
-#[derive(Default)]
-enum RateLimitSwitchPromptState {
-    #[default]
-    Idle,
-    Pending,
-    Shown,
-}
-
 #[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 enum ConnectorsCacheState {
@@ -414,33 +336,6 @@ enum ConnectorsCacheState {
     Loading,
     Ready(ConnectorsSnapshot),
     Failed(String),
-}
-
-#[derive(Debug)]
-enum RateLimitErrorKind {
-    ModelCap {
-        model: String,
-        reset_after_seconds: Option<u64>,
-    },
-    UsageLimit,
-    Generic,
-}
-
-fn rate_limit_error_kind(info: &CodexErrorInfo) -> Option<RateLimitErrorKind> {
-    match info {
-        CodexErrorInfo::ModelCap {
-            model,
-            reset_after_seconds,
-        } => Some(RateLimitErrorKind::ModelCap {
-            model: model.clone(),
-            reset_after_seconds: *reset_after_seconds,
-        }),
-        CodexErrorInfo::UsageLimitExceeded => Some(RateLimitErrorKind::UsageLimit),
-        CodexErrorInfo::ResponseTooManyFailedAttempts {
-            http_status_code: Some(429),
-        } => Some(RateLimitErrorKind::Generic),
-        _ => None,
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -520,11 +415,6 @@ pub(crate) struct ChatWidget {
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
-    rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
-    plan_type: Option<PlanType>,
-    rate_limit_warnings: RateLimitWarningState,
-    rate_limit_switch_prompt: RateLimitSwitchPromptState,
-    rate_limit_poller: Option<JoinHandle<()>>,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     // Stream lifecycle controller for proposed plan output.
@@ -1186,8 +1076,6 @@ impl ChatWidget {
         self.notify(Notification::AgentTurnComplete {
             response: last_agent_message.unwrap_or_default(),
         });
-
-        self.maybe_show_pending_rate_limit_prompt();
     }
 
     fn maybe_prompt_plan_implementation(&mut self) {
@@ -1204,13 +1092,6 @@ impl ChatWidget {
             return;
         }
         if !self.bottom_pane.no_modal_or_popup_active() {
-            return;
-        }
-
-        if matches!(
-            self.rate_limit_switch_prompt,
-            RateLimitSwitchPromptState::Pending
-        ) {
             return;
         }
 
@@ -1308,85 +1189,6 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
-        if let Some(mut snapshot) = snapshot {
-            if snapshot.credits.is_none() {
-                snapshot.credits = self
-                    .rate_limit_snapshot
-                    .as_ref()
-                    .and_then(|display| display.credits.as_ref())
-                    .map(|credits| CreditsSnapshot {
-                        has_credits: credits.has_credits,
-                        unlimited: credits.unlimited,
-                        balance: credits.balance.clone(),
-                    });
-            }
-
-            self.plan_type = snapshot.plan_type.or(self.plan_type);
-
-            let should_show_rate_limit_nudges = self.should_show_rate_limit_usage_nudges();
-            let warnings = if should_show_rate_limit_nudges {
-                self.rate_limit_warnings.take_warnings(
-                    snapshot
-                        .secondary
-                        .as_ref()
-                        .map(|window| window.used_percent),
-                    snapshot
-                        .secondary
-                        .as_ref()
-                        .and_then(|window| window.window_minutes),
-                    snapshot.primary.as_ref().map(|window| window.used_percent),
-                    snapshot
-                        .primary
-                        .as_ref()
-                        .and_then(|window| window.window_minutes),
-                )
-            } else {
-                Vec::new()
-            };
-
-            let high_usage = snapshot
-                .secondary
-                .as_ref()
-                .map(|w| w.used_percent >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
-                .unwrap_or(false)
-                || snapshot
-                    .primary
-                    .as_ref()
-                    .map(|w| w.used_percent >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
-                    .unwrap_or(false);
-
-            if should_show_rate_limit_nudges {
-                if high_usage
-                    && !self.rate_limit_switch_prompt_hidden()
-                    && self.current_model() != NUDGE_MODEL_SLUG
-                    && !matches!(
-                        self.rate_limit_switch_prompt,
-                        RateLimitSwitchPromptState::Shown
-                    )
-                {
-                    self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Pending;
-                }
-            } else if matches!(
-                self.rate_limit_switch_prompt,
-                RateLimitSwitchPromptState::Pending
-            ) {
-                self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
-            }
-
-            let display = crate::status::rate_limit_snapshot_display(&snapshot, Local::now());
-            self.rate_limit_snapshot = Some(display);
-
-            if !warnings.is_empty() {
-                for warning in warnings {
-                    self.add_to_history(history_cell::new_warning_event(warning));
-                }
-                self.request_redraw();
-            }
-        } else {
-            self.rate_limit_snapshot = None;
-        }
-    }
     /// Finalize any active exec as failed and stop/clear agent-turn UI state.
     ///
     /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
@@ -1404,7 +1206,6 @@ impl ChatWidget {
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
         self.stream_controller = None;
-        self.maybe_show_pending_rate_limit_prompt();
     }
 
     fn on_model_cap_error(&mut self, model: String, reset_after_seconds: Option<u64>) {
@@ -2387,11 +2188,6 @@ impl ChatWidget {
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
-            rate_limit_snapshot: None,
-            plan_type: None,
-            rate_limit_warnings: RateLimitWarningState::default(),
-            rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
-            rate_limit_poller: None,
             stream_controller: None,
             plan_stream_controller: None,
             running_commands: HashMap::new(),
@@ -2438,7 +2234,6 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
         };
 
-        widget.prefetch_rate_limits();
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
@@ -2535,11 +2330,6 @@ impl ChatWidget {
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
-            rate_limit_snapshot: None,
-            plan_type: None,
-            rate_limit_warnings: RateLimitWarningState::default(),
-            rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
-            rate_limit_poller: None,
             stream_controller: None,
             plan_stream_controller: None,
             running_commands: HashMap::new(),
@@ -2586,7 +2376,6 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
         };
 
-        widget.prefetch_rate_limits();
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
@@ -2674,11 +2463,6 @@ impl ChatWidget {
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
-            rate_limit_snapshot: None,
-            plan_type: None,
-            rate_limit_warnings: RateLimitWarningState::default(),
-            rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
-            rate_limit_poller: None,
             stream_controller: None,
             plan_stream_controller: None,
             running_commands: HashMap::new(),
@@ -2725,7 +2509,6 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
         };
 
-        widget.prefetch_rate_limits();
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
@@ -3077,12 +2860,6 @@ impl ChatWidget {
                 self.request_quit_without_confirmation();
             }
             SlashCommand::Logout => {
-                if let Err(e) = adam_agent::auth::logout(
-                    &self.config.adam_home,
-                    self.config.cli_auth_credentials_store_mode,
-                ) {
-                    tracing::error!("failed to logout: {e}");
-                }
                 self.request_quit_without_confirmation();
             }
             // SlashCommand::Undo => {
@@ -3527,7 +3304,6 @@ impl ChatWidget {
             }
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
-                self.on_rate_limit_snapshot(ev.rate_limits);
             }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::Error(ErrorEvent {
@@ -3535,17 +3311,12 @@ impl ChatWidget {
                 codex_error_info,
             }) => {
                 if let Some(info) = codex_error_info
-                    && let Some(kind) = rate_limit_error_kind(&info)
+                    && let Some(RateLimitErrorKind::ModelCap {
+                        model,
+                        reset_after_seconds,
+                    }) = rate_limit_error_kind(&info)
                 {
-                    match kind {
-                        RateLimitErrorKind::ModelCap {
-                            model,
-                            reset_after_seconds,
-                        } => self.on_model_cap_error(model, reset_after_seconds),
-                        RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                            self.on_error(message)
-                        }
-                    }
+                    self.on_model_cap_error(model, reset_after_seconds);
                 } else {
                     self.on_error(message);
                 }
@@ -3888,9 +3659,6 @@ impl ChatWidget {
             &self.thread_id,
             self.thread_name.clone(),
             self.forked_from,
-            self.rate_limit_snapshot.as_ref(),
-            self.plan_type,
-            Local::now(),
             self.model_display_name(),
             collaboration_mode,
             reasoning_effort_override,
@@ -3915,12 +3683,6 @@ impl ChatWidget {
         self.add_info_message("Stopping all background terminals.".to_string(), None);
     }
 
-    fn stop_rate_limit_poller(&mut self) {
-        if let Some(handle) = self.rate_limit_poller.take() {
-            handle.abort();
-        }
-    }
-
     fn prefetch_connectors(&mut self) {
         if !self.connectors_enabled() {
             return;
@@ -3934,179 +3696,13 @@ impl ChatWidget {
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
             let result: Result<ConnectorsSnapshot, anyhow::Error> = async {
-                let connectors = connectors::list_connectors(&config).await?;
+                let connectors =
+                    connectors::list_accessible_connectors_from_mcp_tools(&config).await?;
                 Ok(ConnectorsSnapshot { connectors })
             }
             .await;
             let result = result.map_err(|err| format!("Failed to load apps: {err}"));
             app_event_tx.send(AppEvent::ConnectorsLoaded(result));
-        });
-    }
-
-    fn prefetch_rate_limits(&mut self) {
-        self.stop_rate_limit_poller();
-
-        if !self
-            .auth_manager
-            .auth_cached()
-            .as_ref()
-            .is_some_and(CodexAuth::is_chatgpt_auth)
-        {
-            return;
-        }
-
-        let base_url = self.config.chatgpt_base_url.clone();
-        let app_event_tx = self.app_event_tx.clone();
-        let auth_manager = Arc::clone(&self.auth_manager);
-
-        let handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(60));
-
-            loop {
-                if let Some(auth) = auth_manager.auth().await
-                    && auth.is_chatgpt_auth()
-                    && let Some(snapshot) = fetch_rate_limits(base_url.clone(), auth).await
-                {
-                    app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));
-                }
-                interval.tick().await;
-            }
-        });
-
-        self.rate_limit_poller = Some(handle);
-    }
-
-    fn lower_cost_preset(&self) -> Option<ModelPreset> {
-        let models = self
-            .thread_manager
-            .try_list_picker_models(&self.config)
-            .ok()?;
-        models
-            .iter()
-            .find(|preset| preset.model == NUDGE_MODEL_SLUG)
-            .cloned()
-    }
-
-    fn should_show_rate_limit_usage_nudges(&self) -> bool {
-        self.auth_manager
-            .auth_cached()
-            .as_ref()
-            .is_some_and(CodexAuth::is_chatgpt_auth)
-            && self
-                .thread_manager
-                .try_is_official_openai_model(
-                    &self.config,
-                    self.current_model(),
-                    self.config.model_provider_id.as_str(),
-                )
-                .unwrap_or(false)
-    }
-
-    fn rate_limit_switch_prompt_hidden(&self) -> bool {
-        self.config
-            .notices
-            .hide_rate_limit_model_nudge
-            .unwrap_or(false)
-    }
-
-    fn maybe_show_pending_rate_limit_prompt(&mut self) {
-        if self.rate_limit_switch_prompt_hidden() {
-            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
-            return;
-        }
-        if !self.should_show_rate_limit_usage_nudges() {
-            if matches!(
-                self.rate_limit_switch_prompt,
-                RateLimitSwitchPromptState::Pending
-            ) {
-                self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
-            }
-            return;
-        }
-        if !matches!(
-            self.rate_limit_switch_prompt,
-            RateLimitSwitchPromptState::Pending
-        ) {
-            return;
-        }
-        if let Some(preset) = self.lower_cost_preset() {
-            self.open_rate_limit_switch_prompt(preset);
-            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Shown;
-        } else {
-            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
-        }
-    }
-
-    fn open_rate_limit_switch_prompt(&mut self, preset: ModelPreset) {
-        let switch_model = preset.model.to_string();
-        let display_name = preset.display_name.to_string();
-        let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
-
-        let switch_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-            tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                cwd: None,
-                approval_policy: None,
-                sandbox_policy: None,
-                windows_sandbox_level: None,
-                model: Some(switch_model.clone()),
-                effort: Some(Some(default_effort)),
-                summary: None,
-                collaboration_mode: None,
-                personality: None,
-            }));
-            tx.send(AppEvent::UpdateModel(switch_model.clone()));
-            tx.send(AppEvent::UpdateReasoningEffort(Some(default_effort)));
-        })];
-
-        let keep_actions: Vec<SelectionAction> = Vec::new();
-        let never_actions: Vec<SelectionAction> = vec![Box::new(|tx| {
-            tx.send(AppEvent::UpdateRateLimitSwitchPromptHidden(true));
-            tx.send(AppEvent::PersistRateLimitSwitchPromptHidden);
-        })];
-        let description = if preset.description.is_empty() {
-            Some("Uses fewer credits for upcoming turns.".to_string())
-        } else {
-            Some(preset.description)
-        };
-
-        let items = vec![
-            SelectionItem {
-                name: format!("Switch to {display_name}"),
-                description,
-                selected_description: None,
-                is_current: false,
-                actions: switch_actions,
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: "Keep current model".to_string(),
-                description: None,
-                selected_description: None,
-                is_current: false,
-                actions: keep_actions,
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: "Keep current model (never show again)".to_string(),
-                description: Some(
-                    "Hide future rate limit reminders about switching models.".to_string(),
-                ),
-                selected_description: None,
-                is_current: false,
-                actions: never_actions,
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-        ];
-
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Approaching rate limits".to_string()),
-            subtitle: Some(format!("Switch to {display_name} for lower credit usage?")),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            ..Default::default()
         });
     }
 
@@ -4118,36 +3714,6 @@ impl ChatWidget {
                 "Model selection is disabled until startup completes.".to_string(),
                 None,
             );
-            return;
-        }
-
-        let previous_auth_mode = self.auth_manager.get_internal_auth_mode();
-        // Refresh auth from disk so `/model` picks up a ChatGPT login that was
-        // established after this session started, without clobbering an
-        // already-active in-memory ChatGPT auth state.
-        if previous_auth_mode != Some(AuthMode::Chatgpt) {
-            self.auth_manager.reload();
-        }
-        let current_auth_mode = self.auth_manager.get_internal_auth_mode();
-
-        if Self::should_refresh_models_after_auth_reload(
-            previous_auth_mode,
-            current_auth_mode,
-            self.config.model_provider.is_openai(),
-        ) {
-            self.add_info_message(
-                "Refreshing models; opening picker when ready.".to_string(),
-                None,
-            );
-            let thread_manager = self.thread_manager.clone();
-            let config = self.config.clone();
-            let app_event_tx = self.app_event_tx.clone();
-            tokio::spawn(async move {
-                let models = thread_manager
-                    .list_model_switcher_models(&config, RefreshStrategy::OnlineIfUncached)
-                    .await;
-                app_event_tx.send(AppEvent::OpenModelPopupWithPresets { models });
-            });
             return;
         }
 
@@ -4165,14 +3731,6 @@ impl ChatWidget {
             }
         };
         self.open_model_popup_with_presets(presets);
-    }
-
-    fn should_refresh_models_after_auth_reload(
-        before: Option<AuthMode>,
-        after: Option<AuthMode>,
-        provider_is_openai: bool,
-    ) -> bool {
-        provider_is_openai && before != Some(AuthMode::Chatgpt) && after == Some(AuthMode::Chatgpt)
     }
 
     pub(crate) fn open_provider_popup(&mut self) {
@@ -5522,13 +5080,6 @@ impl ChatWidget {
         self.config.notices.hide_world_writable_warning = Some(acknowledged);
     }
 
-    pub(crate) fn set_rate_limit_switch_prompt_hidden(&mut self, hidden: bool) {
-        self.config.notices.hide_rate_limit_model_nudge = Some(hidden);
-        if hidden {
-            self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
-        }
-    }
-
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn world_writable_warning_hidden(&self) -> bool {
         self.config
@@ -6594,12 +6145,6 @@ impl ChatWidget {
     }
 }
 
-impl Drop for ChatWidget {
-    fn drop(&mut self) {
-        self.stop_rate_limit_poller();
-    }
-}
-
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         if self.transcript_host_mode == TranscriptHostMode::TerminalScrollback {
@@ -6774,22 +6319,6 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
-}
-
-async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimitSnapshot> {
-    match BackendClient::from_auth(base_url, &auth) {
-        Ok(client) => match client.get_rate_limits().await {
-            Ok(snapshot) => Some(snapshot),
-            Err(err) => {
-                debug!(error = ?err, "failed to fetch rate limits from /usage");
-                None
-            }
-        },
-        Err(err) => {
-            debug!(error = ?err, "failed to construct backend client for rate limits");
-            None
-        }
-    }
 }
 
 #[cfg(test)]

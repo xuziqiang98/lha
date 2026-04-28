@@ -75,7 +75,7 @@ fn manager_snapshot_metrics_collects_without_shutdown() -> Result<()> {
         "gpt-5.1",
         Some("account-id".to_string()),
         None,
-        Some(AuthMode::ApiKey),
+        Some(AuthMode::ApiKey.to_string()),
         true,
         "tty".to_string(),
         SessionSource::Cli,

@@ -30,9 +30,6 @@ adam-ansi-escape = { workspace = true }
 adam-api = { workspace = true }
 adam-app-server-protocol = { workspace = true }
 adam-arg0 = { workspace = true }
-adam-backend-client = { workspace = true }
-adam-chatgpt = { workspace = true }
-adam-cloud-requirements = { workspace = true }
 adam-common = { workspace = true, features = [
     "cli",
     "elapsed",
@@ -42,7 +39,6 @@ adam-agent = { workspace = true }
 adam-llm = { workspace = true }
 adam-feedback = { workspace = true }
 adam-file-search = { workspace = true }
-adam-login = { workspace = true }
 adam-otel = { workspace = true }
 adam-protocol = { workspace = true }
 adam-state = { workspace = true }

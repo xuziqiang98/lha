@@ -1,12 +1,10 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
-use adam_agent::AuthManager;
 use adam_agent::config::Config;
 use adam_agent::config::ConfigBuilder;
 use adam_agent::config_loader::CloudRequirementsLoader;
 use adam_agent::config_loader::ConfigLayerStackOrdering;
 use adam_agent::config_loader::LoaderOverrides;
-use adam_cloud_requirements::cloud_requirements_loader;
 use adam_common::CliConfigOverrides;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
@@ -208,43 +206,30 @@ pub async fn run_main(
             format!("error parsing -c overrides: {e}"),
         )
     })?;
-    let cloud_requirements = match ConfigBuilder::default()
+    let cloud_requirements = CloudRequirementsLoader::default();
+    if let Ok(config) = ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides.clone())
         .loader_overrides(loader_overrides.clone())
         .build()
         .await
     {
-        Ok(config) => {
-            let effective_toml = config.config_layer_stack.effective_config();
-            match effective_toml.try_into() {
-                Ok(config_toml) => {
-                    if let Err(err) = adam_agent::personality_migration::maybe_migrate_personality(
-                        &config.adam_home,
-                        &config_toml,
-                    )
-                    .await
-                    {
-                        warn!(error = %err, "Failed to run personality migration");
-                    }
-                }
-                Err(err) => {
-                    warn!(error = %err, "Failed to deserialize config for personality migration");
+        let effective_toml = config.config_layer_stack.effective_config();
+        match effective_toml.try_into() {
+            Ok(config_toml) => {
+                if let Err(err) = adam_agent::personality_migration::maybe_migrate_personality(
+                    &config.adam_home,
+                    &config_toml,
+                )
+                .await
+                {
+                    warn!(error = %err, "Failed to run personality migration");
                 }
             }
-
-            let auth_manager = AuthManager::shared(
-                config.adam_home.clone(),
-                false,
-                config.cli_auth_credentials_store_mode,
-            );
-            cloud_requirements_loader(auth_manager, config.chatgpt_base_url)
+            Err(err) => {
+                warn!(error = %err, "Failed to deserialize config for personality migration");
+            }
         }
-        Err(err) => {
-            warn!(error = %err, "Failed to preload config for cloud requirements");
-            // TODO(gt): Make cloud requirements preload failures blocking once we can fail-closed.
-            CloudRequirementsLoader::default()
-        }
-    };
+    }
     let loader_overrides_for_config_api = loader_overrides.clone();
     let mut config_warnings = Vec::new();
     let config = match ConfigBuilder::default()

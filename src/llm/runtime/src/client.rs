@@ -54,10 +54,7 @@ use crate::Result;
 use crate::TokenUsage;
 use crate::TranscriptItem;
 use crate::WebSearchMode;
-use crate::auth::AuthContext;
-use crate::auth::AuthSource;
-use crate::auth::UnauthorizedRecovery;
-use crate::auth::auth_provider_from_context;
+use crate::auth::auth_provider_from_endpoint;
 use crate::compatibility::ChatRoleCompatibility;
 use crate::compatibility::ChatRoleCompatibilityHandle;
 use crate::config::LlmRuntimeConfig;
@@ -77,7 +74,6 @@ const ANTHROPIC_MESSAGES_MAX_TOKENS: u32 = 8_192;
 
 struct LlmClientState {
     runtime_config: Arc<LlmRuntimeConfig>,
-    auth_source: Arc<dyn AuthSource>,
     http_client: HttpClient,
     model_info: ModelInfo,
     chat_role_compatibility: Option<ChatRoleCompatibilityHandle>,
@@ -107,7 +103,6 @@ pub struct LlmClientSession {
 impl LlmClient {
     pub fn new(
         runtime_config: Arc<LlmRuntimeConfig>,
-        auth_source: Arc<dyn AuthSource>,
         http_client: HttpClient,
         model_info: ModelInfo,
         chat_role_compatibility: Option<ChatRoleCompatibilityHandle>,
@@ -122,7 +117,6 @@ impl LlmClient {
         Self {
             state: Arc::new(LlmClientState {
                 runtime_config,
-                auth_source,
                 http_client,
                 model_info,
                 chat_role_compatibility,
@@ -155,7 +149,7 @@ impl LlmClient {
         let instructions = prompt.base_instructions.text.clone();
         let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools).ok()?;
         let api_prompt = build_api_prompt(prompt, instructions, tools_json);
-        let api_provider = self.state.endpoint.to_api_provider(false).ok()?;
+        let api_provider = self.state.endpoint.to_api_provider().ok()?;
         let handling = self.developer_role_handling();
         let request = ApiChatRequestBuilder::new(
             &self.state.model_info.slug,
@@ -179,12 +173,8 @@ impl LlmClient {
         if prompt.input.is_empty() {
             return Ok(Vec::new());
         }
-        let auth = self.state.auth_source.current_auth().await?;
-        let api_provider = self
-            .state
-            .endpoint
-            .to_api_provider(auth.as_ref().is_some_and(|auth| auth.use_chatgpt_base_url))?;
-        let api_auth = auth_provider_from_context(auth);
+        let api_provider = self.state.endpoint.to_api_provider()?;
+        let api_auth = auth_provider_from_endpoint(&self.state.endpoint)?;
         let transport = ReqwestTransport::new(self.state.http_client.clone());
         let request_telemetry = self.build_request_telemetry();
         let client = ApiCompactClient::new(transport, api_provider, api_auth)
@@ -494,12 +484,8 @@ impl LlmClientSession {
         ))
     }
 
-    fn responses_request_compression(&self, auth: Option<&AuthContext>) -> Compression {
-        if auth.is_some_and(|auth| auth.use_chatgpt_base_url) && self.state.endpoint.is_openai() {
-            Compression::Zstd
-        } else {
-            Compression::None
-        }
+    fn responses_request_compression(&self) -> Compression {
+        Compression::None
     }
 
     async fn stream_chat_completions(&self, prompt: &Prompt) -> Result<(ApiResponseStream, i64)> {
@@ -516,14 +502,9 @@ impl LlmClientSession {
         let session_id = self.state.session_id.clone();
         let origin_tag = self.state.origin_tag.clone();
 
-        let mut auth_recovery = self.state.auth_source.unauthorized_recovery();
-        loop {
-            let auth = self.state.auth_source.current_auth().await?;
-            let api_provider = self
-                .state
-                .endpoint
-                .to_api_provider(auth.as_ref().is_some_and(|auth| auth.use_chatgpt_base_url))?;
-            let api_auth = auth_provider_from_context(auth.clone());
+        let api_provider = self.state.endpoint.to_api_provider()?;
+        let api_auth = auth_provider_from_endpoint(&self.state.endpoint)?;
+        {
             let request_provider = api_provider.clone();
             let transport = ReqwestTransport::new(self.state.http_client.clone());
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
@@ -552,8 +533,7 @@ impl LlmClientSession {
                 Err(ApiError::Transport(TransportError::Http { status, .. }))
                     if status == StatusCode::UNAUTHORIZED =>
                 {
-                    handle_unauthorized(status, &mut auth_recovery).await?;
-                    continue;
+                    return Err(unauthorized_error(status));
                 }
                 Err(err)
                     if handling == DeveloperRoleHandling::Preserve
@@ -580,8 +560,7 @@ impl LlmClientSession {
                         Err(ApiError::Transport(TransportError::Http { status, .. }))
                             if status == StatusCode::UNAUTHORIZED =>
                         {
-                            handle_unauthorized(status, &mut auth_recovery).await?;
-                            continue;
+                            return Err(unauthorized_error(status));
                         }
                         Err(err) => return Err(err.into()),
                     }
@@ -599,14 +578,9 @@ impl LlmClientSession {
         }
 
         let api_prompt = self.build_messages_request(prompt)?;
-        let mut auth_recovery = self.state.auth_source.unauthorized_recovery();
-        loop {
-            let auth = self.state.auth_source.current_auth().await?;
-            let api_provider = self
-                .state
-                .endpoint
-                .to_api_provider(auth.as_ref().is_some_and(|auth| auth.use_chatgpt_base_url))?;
-            let api_auth = auth_provider_from_context(auth);
+        let api_provider = self.state.endpoint.to_api_provider()?;
+        let api_auth = auth_provider_from_endpoint(&self.state.endpoint)?;
+        {
             let transport = ReqwestTransport::new(self.state.http_client.clone());
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
             let request = ApiMessagesRequestBuilder::new(
@@ -628,8 +602,7 @@ impl LlmClientSession {
                 Err(ApiError::Transport(TransportError::Http { status, .. }))
                     if status == StatusCode::UNAUTHORIZED =>
                 {
-                    handle_unauthorized(status, &mut auth_recovery).await?;
-                    continue;
+                    return Err(unauthorized_error(status));
                 }
                 Err(err) => return Err(err.into()),
             }
@@ -645,17 +618,12 @@ impl LlmClientSession {
         }
 
         let api_prompt = self.build_responses_request(prompt)?;
-        let mut auth_recovery = self.state.auth_source.unauthorized_recovery();
-        loop {
-            let auth = self.state.auth_source.current_auth().await?;
-            let api_provider = self
-                .state
-                .endpoint
-                .to_api_provider(auth.as_ref().is_some_and(|auth| auth.use_chatgpt_base_url))?;
-            let api_auth = auth_provider_from_context(auth.clone());
+        let api_provider = self.state.endpoint.to_api_provider()?;
+        let api_auth = auth_provider_from_endpoint(&self.state.endpoint)?;
+        {
             let transport = ReqwestTransport::new(self.state.http_client.clone());
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
-            let compression = self.responses_request_compression(auth.as_ref());
+            let compression = self.responses_request_compression();
 
             let client = ApiResponsesClient::new(transport, api_provider, api_auth)
                 .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
@@ -672,8 +640,7 @@ impl LlmClientSession {
                 Err(ApiError::Transport(TransportError::Http { status, .. }))
                     if status == StatusCode::UNAUTHORIZED =>
                 {
-                    handle_unauthorized(status, &mut auth_recovery).await?;
-                    continue;
+                    return Err(unauthorized_error(status));
                 }
                 Err(err) => return Err(err.into()),
             }
@@ -682,15 +649,10 @@ impl LlmClientSession {
 
     async fn stream_responses_websocket(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
         let api_prompt = self.build_responses_request(prompt)?;
-        let mut auth_recovery = self.state.auth_source.unauthorized_recovery();
-        loop {
-            let auth = self.state.auth_source.current_auth().await?;
-            let api_provider = self
-                .state
-                .endpoint
-                .to_api_provider(auth.as_ref().is_some_and(|auth| auth.use_chatgpt_base_url))?;
-            let api_auth = auth_provider_from_context(auth.clone());
-            let compression = self.responses_request_compression(auth.as_ref());
+        let api_provider = self.state.endpoint.to_api_provider()?;
+        let api_auth = auth_provider_from_endpoint(&self.state.endpoint)?;
+        {
+            let compression = self.responses_request_compression();
 
             let options = self.build_responses_options(prompt, compression);
             let request = self.prepare_websocket_request(&prompt.input, &api_prompt, &options);
@@ -703,8 +665,7 @@ impl LlmClientSession {
                 Err(ApiError::Transport(TransportError::Http { status, .. }))
                     if status == StatusCode::UNAUTHORIZED =>
                 {
-                    handle_unauthorized(status, &mut auth_recovery).await?;
-                    continue;
+                    return Err(unauthorized_error(status));
                 }
                 Err(err) => return Err(err.into()),
             };
@@ -1152,23 +1113,14 @@ fn count_chars(text: &str) -> usize {
     text.chars().count()
 }
 
-async fn handle_unauthorized(
-    status: StatusCode,
-    auth_recovery: &mut Option<Box<dyn UnauthorizedRecovery>>,
-) -> Result<()> {
-    if let Some(recovery) = auth_recovery
-        && recovery.has_next()
-    {
-        return recovery.recover().await;
-    }
-
-    Err(ApiError::Transport(TransportError::Http {
+fn unauthorized_error(status: StatusCode) -> Error {
+    ApiError::Transport(TransportError::Http {
         status,
         url: None,
         headers: None,
         body: None,
     })
-    .into())
+    .into()
 }
 
 struct ApiTelemetry {

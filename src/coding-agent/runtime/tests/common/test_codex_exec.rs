@@ -1,5 +1,4 @@
 #![allow(clippy::expect_used)]
-use adam_agent::auth::CODEX_API_KEY_ENV_VAR;
 use std::path::Path;
 use tempfile::TempDir;
 use wiremock::MockServer;
@@ -16,7 +15,7 @@ impl TestCodexExecBuilder {
         );
         cmd.current_dir(self.cwd.path())
             .env("ADAM_HOME", self.home.path())
-            .env(CODEX_API_KEY_ENV_VAR, "dummy");
+            .env("OPENAI_API_KEY", "dummy");
         cmd
     }
     pub fn cmd_with_server(&self, server: &MockServer) -> assert_cmd::Command {

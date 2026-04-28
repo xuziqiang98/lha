@@ -9,9 +9,6 @@ use crate::provider::WireApi;
 /// reach this interface.
 pub trait AuthProvider: Send + Sync {
     fn bearer_token(&self) -> Option<String>;
-    fn account_id(&self) -> Option<String> {
-        None
-    }
 }
 
 pub(crate) fn add_auth_headers<A: AuthProvider>(
@@ -32,12 +29,6 @@ pub(crate) fn add_auth_headers<A: AuthProvider>(
                 }
             }
         }
-    }
-    if wire_api != WireApi::Messages
-        && let Some(account_id) = auth.account_id()
-        && let Ok(header) = account_id.parse()
-    {
-        let _ = req.headers.insert("ChatGPT-Account-ID", header);
     }
     req
 }

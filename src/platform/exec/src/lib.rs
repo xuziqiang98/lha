@@ -13,12 +13,12 @@ pub mod exec_events;
 use adam_agent::AuthManager;
 use adam_agent::NewThread;
 use adam_agent::ThreadManager;
-use adam_agent::auth::enforce_login_restrictions;
 use adam_agent::config::Config;
 use adam_agent::config::ConfigBuilder;
 use adam_agent::config::ConfigOverrides;
 use adam_agent::config::find_adam_home;
 use adam_agent::config::load_config_as_toml_with_cli_overrides;
+use adam_agent::config_loader::CloudRequirementsLoader;
 use adam_agent::config_loader::ConfigLoadError;
 use adam_agent::config_loader::format_config_error_with_source;
 use adam_agent::git_info::get_git_repo_root;
@@ -29,7 +29,6 @@ use adam_agent::protocol::Op;
 use adam_agent::protocol::ReviewRequest;
 use adam_agent::protocol::ReviewTarget;
 use adam_agent::protocol::SessionSource;
-use adam_cloud_requirements::cloud_requirements_loader;
 use adam_llm::CatalogRefreshStrategy;
 use adam_protocol::approvals::ElicitationAction;
 use adam_protocol::config_types::SandboxMode;
@@ -162,7 +161,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     #[allow(clippy::print_stderr)]
-    let config_toml = match load_config_as_toml_with_cli_overrides(
+    let _config_toml = match load_config_as_toml_with_cli_overrides(
         &adam_home,
         &config_cwd,
         cli_kv_overrides.clone(),
@@ -187,17 +186,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     };
 
-    let cloud_auth_manager = AuthManager::shared(
-        adam_home.clone(),
-        false,
-        config_toml.cli_auth_credentials_store.unwrap_or_default(),
-    );
-    let chatgpt_base_url = config_toml
-        .chatgpt_base_url
-        .clone()
-        .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    // TODO(gt): Make cloud requirements failures blocking once we can fail-closed.
-    let cloud_requirements = cloud_requirements_loader(cloud_auth_manager, chatgpt_base_url);
+    let cloud_requirements = CloudRequirementsLoader::default();
 
     let model = model_cli_arg;
 
@@ -230,11 +219,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         .build()
         .await?;
     set_default_client_residency_requirement(config.enforce_residency.value());
-
-    if let Err(err) = enforce_login_restrictions(&config) {
-        eprintln!("{err}");
-        std::process::exit(1);
-    }
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         adam_agent::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, false)
@@ -284,11 +268,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         std::process::exit(1);
     }
 
-    let auth_manager = AuthManager::shared(
-        config.adam_home.clone(),
-        true,
-        config.cli_auth_credentials_store_mode,
-    );
+    let auth_manager = AuthManager::shared(config.adam_home.clone(), true);
     let thread_manager = Arc::new(ThreadManager::new(
         config.adam_home.clone(),
         auth_manager.clone(),

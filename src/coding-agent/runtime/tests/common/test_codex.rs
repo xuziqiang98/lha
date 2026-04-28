@@ -204,6 +204,9 @@ impl TestCodexBuilder {
     ) -> anyhow::Result<(Config, Arc<TempDir>)> {
         let mut model_provider = built_in_runtime_endpoints()["openai"].clone();
         model_provider.base_url = Some(base_url);
+        model_provider.env_key = None;
+        model_provider.env_key_instructions = None;
+        model_provider.experimental_bearer_token = Some("sk-test".to_string());
         let cwd = Arc::new(TempDir::new()?);
         let mut config = load_default_config_for_test(home).await;
         config.cwd = cwd.path().to_path_buf();

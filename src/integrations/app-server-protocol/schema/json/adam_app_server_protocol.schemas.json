@@ -295,50 +295,6 @@
       ],
       "type": "object"
     },
-    "AuthMode": {
-      "description": "Authentication mode for OpenAI-backed providers.",
-      "oneOf": [
-        {
-          "description": "OpenAI API key provided by the caller and stored by Codex.",
-          "enum": [
-            "apikey"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "ChatGPT OAuth managed by Codex (tokens persisted and refreshed by Codex).",
-          "enum": [
-            "chatgpt"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.\n\nChatGPT auth tokens are supplied by an external host app and are only stored in memory. Token refresh must be handled by the external host app.",
-          "enum": [
-            "chatgptAuthTokens"
-          ],
-          "type": "string"
-        }
-      ]
-    },
-    "AuthStatusChangeNotification": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "Deprecated notification. Use AccountUpdatedNotification instead.",
-      "properties": {
-        "authMethod": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AuthMode"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "title": "AuthStatusChangeNotification",
-      "type": "object"
-    },
     "BlobResourceContents": {
       "properties": {
         "blob": {
@@ -401,72 +357,6 @@
       "required": [
         "content"
       ],
-      "type": "object"
-    },
-    "CancelLoginChatGptParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "loginId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "loginId"
-      ],
-      "title": "CancelLoginChatGptParams",
-      "type": "object"
-    },
-    "CancelLoginChatGptResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "CancelLoginChatGptResponse",
-      "type": "object"
-    },
-    "ChatgptAuthTokensRefreshParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "previousAccountId": {
-          "description": "Workspace/account identifier that Codex was previously using.\n\nClients that manage multiple accounts/workspaces can use this as a hint to refresh the token for the correct workspace.\n\nThis may be `null` when the prior ID token did not include a workspace identifier (`chatgpt_account_id`) or when the token could not be parsed.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "reason": {
-          "$ref": "#/definitions/ChatgptAuthTokensRefreshReason"
-        }
-      },
-      "required": [
-        "reason"
-      ],
-      "title": "ChatgptAuthTokensRefreshParams",
-      "type": "object"
-    },
-    "ChatgptAuthTokensRefreshReason": {
-      "oneOf": [
-        {
-          "description": "Codex attempted a backend request and received `401 Unauthorized`.",
-          "enum": [
-            "unauthorized"
-          ],
-          "type": "string"
-        }
-      ]
-    },
-    "ChatgptAuthTokensRefreshResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "accessToken": {
-          "type": "string"
-        },
-        "idToken": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "accessToken",
-        "idToken"
-      ],
-      "title": "ChatgptAuthTokensRefreshResponse",
       "type": "object"
     },
     "ClientInfo": {
@@ -1077,100 +967,6 @@
             },
             "method": {
               "enum": [
-                "account/login/start"
-              ],
-              "title": "Account/login/startRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/LoginAccountParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Account/login/startRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "account/login/cancel"
-              ],
-              "title": "Account/login/cancelRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/CancelLoginAccountParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Account/login/cancelRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "account/logout"
-              ],
-              "title": "Account/logoutRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "type": "null"
-            }
-          },
-          "required": [
-            "id",
-            "method"
-          ],
-          "title": "Account/logoutRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "account/rateLimits/read"
-              ],
-              "title": "Account/rateLimits/readRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "type": "null"
-            }
-          },
-          "required": [
-            "id",
-            "method"
-          ],
-          "title": "Account/rateLimits/readRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
                 "feedback/upload"
               ],
               "title": "Feedback/uploadRequestMethod",
@@ -1306,30 +1102,6 @@
             "method"
           ],
           "title": "ConfigRequirements/readRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "account/read"
-              ],
-              "title": "Account/readRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/GetAccountParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Account/readRequest",
           "type": "object"
         },
         {
@@ -1622,125 +1394,6 @@
             "params"
           ],
           "title": "GitDiffToRemoteRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "loginApiKey"
-              ],
-              "title": "LoginApiKeyRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/LoginApiKeyParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "LoginApiKeyRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "loginChatGpt"
-              ],
-              "title": "LoginChatGptRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "type": "null"
-            }
-          },
-          "required": [
-            "id",
-            "method"
-          ],
-          "title": "LoginChatGptRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "cancelLoginChatGpt"
-              ],
-              "title": "CancelLoginChatGptRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/CancelLoginChatGptParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "CancelLoginChatGptRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "logoutChatGpt"
-              ],
-              "title": "LogoutChatGptRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "type": "null"
-            }
-          },
-          "required": [
-            "id",
-            "method"
-          ],
-          "title": "LogoutChatGptRequest",
-          "type": "object"
-        },
-        {
-          "description": "DEPRECATED in favor of GetAccount",
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "getAuthStatus"
-              ],
-              "title": "GetAuthStatusRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/GetAuthStatusParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "GetAuthStatusRequest",
           "type": "object"
         },
         {
@@ -2365,27 +2018,6 @@
       ],
       "type": "object"
     },
-    "CreditsSnapshot": {
-      "properties": {
-        "balance": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "has_credits": {
-          "type": "boolean"
-        },
-        "unlimited": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "has_credits",
-        "unlimited"
-      ],
-      "type": "object"
-    },
     "CustomPrompt": {
       "properties": {
         "argument_hint": {
@@ -2676,16 +2308,6 @@
               "anyOf": [
                 {
                   "$ref": "#/definitions/TokenUsageInfo"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "rate_limits": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/v2/RateLimitSnapshot"
                 },
                 {
                   "type": "null"
@@ -5284,13 +4906,6 @@
       "title": "FileChangeRequestApprovalResponse",
       "type": "object"
     },
-    "ForcedLoginMethod": {
-      "enum": [
-        "chatgpt",
-        "api"
-      ],
-      "type": "string"
-    },
     "ForkConversationParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -5431,54 +5046,6 @@
         "root",
         "score"
       ],
-      "type": "object"
-    },
-    "GetAuthStatusParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "includeToken": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "refreshToken": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "title": "GetAuthStatusParams",
-      "type": "object"
-    },
-    "GetAuthStatusResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "authMethod": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AuthMode"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "authToken": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "requiresOpenaiAuth": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "title": "GetAuthStatusResponse",
       "type": "object"
     },
     "GetConversationSummaryParams": {
@@ -5940,70 +5507,6 @@
       "title": "ListConversationsResponse",
       "type": "object"
     },
-    "LoginApiKeyParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "apiKey": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "apiKey"
-      ],
-      "title": "LoginApiKeyParams",
-      "type": "object"
-    },
-    "LoginApiKeyResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "LoginApiKeyResponse",
-      "type": "object"
-    },
-    "LoginChatGptCompleteNotification": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "Deprecated in favor of AccountLoginCompletedNotification.",
-      "properties": {
-        "error": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "loginId": {
-          "type": "string"
-        },
-        "success": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "loginId",
-        "success"
-      ],
-      "title": "LoginChatGptCompleteNotification",
-      "type": "object"
-    },
-    "LoginChatGptResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "authUrl": {
-          "type": "string"
-        },
-        "loginId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "authUrl",
-        "loginId"
-      ],
-      "title": "LoginChatGptResponse",
-      "type": "object"
-    },
-    "LogoutChatGptResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "LogoutChatGptResponse",
-      "type": "object"
-    },
     "McpAuthStatus": {
       "enum": [
         "unsupported",
@@ -6372,20 +5875,6 @@
       ],
       "type": "object"
     },
-    "PlanType": {
-      "enum": [
-        "free",
-        "go",
-        "plus",
-        "pro",
-        "team",
-        "business",
-        "enterprise",
-        "edu",
-        "unknown"
-      ],
-      "type": "string"
-    },
     "Profile": {
       "properties": {
         "approvalPolicy": {
@@ -6396,12 +5885,6 @@
             {
               "type": "null"
             }
-          ]
-        },
-        "chatgptBaseUrl": {
-          "type": [
-            "string",
-            "null"
           ]
         },
         "model": {
@@ -6447,77 +5930,6 @@
           ]
         }
       },
-      "type": "object"
-    },
-    "RateLimitSnapshot": {
-      "properties": {
-        "credits": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/CreditsSnapshot"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "plan_type": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PlanType"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "primary": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/RateLimitWindow"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "secondary": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/RateLimitWindow"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "RateLimitWindow": {
-      "properties": {
-        "resets_at": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "used_percent": {
-          "format": "double",
-          "type": "number"
-        },
-        "window_minutes": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "used_percent"
-      ],
       "type": "object"
     },
     "ReasoningEffort": {
@@ -7785,46 +7197,6 @@
           "properties": {
             "method": {
               "enum": [
-                "account/updated"
-              ],
-              "title": "Account/updatedNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/AccountUpdatedNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Account/updatedNotification",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "enum": [
-                "account/rateLimits/updated"
-              ],
-              "title": "Account/rateLimits/updatedNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/AccountRateLimitsUpdatedNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Account/rateLimits/updatedNotification",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "enum": [
                 "item/reasoning/summaryTextDelta"
               ],
               "title": "Item/reasoning/summaryTextDeltaNotificationMethod",
@@ -7964,68 +7336,7 @@
           "type": "object"
         },
         {
-          "properties": {
-            "method": {
-              "enum": [
-                "account/login/completed"
-              ],
-              "title": "Account/login/completedNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/AccountLoginCompletedNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Account/login/completedNotification",
-          "type": "object"
-        },
-        {
           "description": "DEPRECATED NOTIFICATIONS below",
-          "properties": {
-            "method": {
-              "enum": [
-                "authStatusChange"
-              ],
-              "title": "AuthStatusChangeNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/AuthStatusChangeNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "AuthStatusChangeNotification",
-          "type": "object"
-        },
-        {
-          "description": "Deprecated: use `account/login/completed` instead.",
-          "properties": {
-            "method": {
-              "enum": [
-                "loginChatGptComplete"
-              ],
-              "title": "LoginChatGptCompleteNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/LoginChatGptCompleteNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "LoginChatGptCompleteNotification",
-          "type": "object"
-        },
-        {
           "properties": {
             "method": {
               "enum": [
@@ -8150,30 +7461,6 @@
             "params"
           ],
           "title": "Item/tool/callRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "account/chatgptAuthTokens/refresh"
-              ],
-              "title": "Account/chatgptAuthTokens/refreshRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/ChatgptAuthTokensRefreshParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Account/chatgptAuthTokens/refreshRequest",
           "type": "object"
         },
         {
@@ -9662,22 +8949,6 @@
             }
           ]
         },
-        "forcedChatgptWorkspaceId": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "forcedLoginMethod": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ForcedLoginMethod"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "model": {
           "type": [
             "string",
@@ -9920,105 +9191,6 @@
         "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
         "type": "string"
       },
-      "Account": {
-        "oneOf": [
-          {
-            "properties": {
-              "type": {
-                "enum": [
-                  "apiKey"
-                ],
-                "title": "ApiKeyAccountType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "title": "ApiKeyAccount",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "email": {
-                "type": "string"
-              },
-              "planType": {
-                "$ref": "#/definitions/v2/PlanType"
-              },
-              "type": {
-                "enum": [
-                  "chatgpt"
-                ],
-                "title": "ChatgptAccountType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "email",
-              "planType",
-              "type"
-            ],
-            "title": "ChatgptAccount",
-            "type": "object"
-          }
-        ]
-      },
-      "AccountLoginCompletedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "error": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "loginId": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "success": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "success"
-        ],
-        "title": "AccountLoginCompletedNotification",
-        "type": "object"
-      },
-      "AccountRateLimitsUpdatedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "rateLimits": {
-            "$ref": "#/definitions/v2/RateLimitSnapshot"
-          }
-        },
-        "required": [
-          "rateLimits"
-        ],
-        "title": "AccountRateLimitsUpdatedNotification",
-        "type": "object"
-      },
-      "AccountUpdatedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "authMode": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/AuthMode"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "title": "AccountUpdatedNotification",
-        "type": "object"
-      },
       "AgentMessageDeltaNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -10218,32 +9390,6 @@
         ],
         "type": "object"
       },
-      "AuthMode": {
-        "description": "Authentication mode for OpenAI-backed providers.",
-        "oneOf": [
-          {
-            "description": "OpenAI API key provided by the caller and stored by Codex.",
-            "enum": [
-              "apikey"
-            ],
-            "type": "string"
-          },
-          {
-            "description": "ChatGPT OAuth managed by Codex (tokens persisted and refreshed by Codex).",
-            "enum": [
-              "chatgpt"
-            ],
-            "type": "string"
-          },
-          {
-            "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.\n\nChatGPT auth tokens are supplied by an external host app and are only stored in memory. Token refresh must be handled by the external host app.",
-            "enum": [
-              "chatgptAuthTokens"
-            ],
-            "type": "string"
-          }
-        ]
-      },
       "BlobResourceContents": {
         "properties": {
           "blob": {
@@ -10283,39 +9429,6 @@
           "start"
         ],
         "type": "object"
-      },
-      "CancelLoginAccountParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "loginId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "loginId"
-        ],
-        "title": "CancelLoginAccountParams",
-        "type": "object"
-      },
-      "CancelLoginAccountResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "status": {
-            "$ref": "#/definitions/v2/CancelLoginAccountStatus"
-          }
-        },
-        "required": [
-          "status"
-        ],
-        "title": "CancelLoginAccountResponse",
-        "type": "object"
-      },
-      "CancelLoginAccountStatus": {
-        "enum": [
-          "canceled",
-          "notFound"
-        ],
-        "type": "string"
       },
       "CodexErrorInfo": {
         "description": "This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.",
@@ -10834,22 +9947,6 @@
             "type": [
               "string",
               "null"
-            ]
-          },
-          "forced_chatgpt_workspace_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "forced_login_method": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ForcedLoginMethod"
-              },
-              {
-                "type": "null"
-              }
             ]
           },
           "instructions": {
@@ -11522,27 +10619,6 @@
         "title": "ContextCompactedNotification",
         "type": "object"
       },
-      "CreditsSnapshot": {
-        "properties": {
-          "balance": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "hasCredits": {
-            "type": "boolean"
-          },
-          "unlimited": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "hasCredits",
-          "unlimited"
-        ],
-        "type": "object"
-      },
       "DeprecationNoticeNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -11732,61 +10808,6 @@
         ],
         "type": "object"
       },
-      "ForcedLoginMethod": {
-        "enum": [
-          "chatgpt",
-          "api"
-        ],
-        "type": "string"
-      },
-      "GetAccountParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "refreshToken": {
-            "default": false,
-            "description": "When `true`, requests a proactive token refresh before returning.\n\nIn managed auth mode this triggers the normal refresh-token flow. In external auth mode this flag is ignored. Clients should refresh tokens themselves and call `account/login/start` with `chatgptAuthTokens`.",
-            "type": "boolean"
-          }
-        },
-        "title": "GetAccountParams",
-        "type": "object"
-      },
-      "GetAccountRateLimitsResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "rateLimits": {
-            "$ref": "#/definitions/v2/RateLimitSnapshot"
-          }
-        },
-        "required": [
-          "rateLimits"
-        ],
-        "title": "GetAccountRateLimitsResponse",
-        "type": "object"
-      },
-      "GetAccountResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "account": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Account"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "requiresOpenaiAuth": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "requiresOpenaiAuth"
-        ],
-        "title": "GetAccountResponse",
-        "type": "object"
-      },
       "GitInfo": {
         "properties": {
           "branch": {
@@ -11926,143 +10947,6 @@
           "data"
         ],
         "title": "ListMcpServerStatusResponse",
-        "type": "object"
-      },
-      "LoginAccountParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "oneOf": [
-          {
-            "properties": {
-              "apiKey": {
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "apiKey"
-                ],
-                "title": "ApiKeyv2::LoginAccountParamsType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "apiKey",
-              "type"
-            ],
-            "title": "ApiKeyv2::LoginAccountParams",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "type": {
-                "enum": [
-                  "chatgpt"
-                ],
-                "title": "Chatgptv2::LoginAccountParamsType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "title": "Chatgptv2::LoginAccountParams",
-            "type": "object"
-          },
-          {
-            "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE. The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.",
-            "properties": {
-              "accessToken": {
-                "description": "Access token (JWT) supplied by the client. This token is used for backend API requests.",
-                "type": "string"
-              },
-              "idToken": {
-                "description": "ID token (JWT) supplied by the client.\n\nThis token is used for identity and account metadata (email, plan type, workspace id).",
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "chatgptAuthTokens"
-                ],
-                "title": "ChatgptAuthTokensv2::LoginAccountParamsType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "accessToken",
-              "idToken",
-              "type"
-            ],
-            "title": "ChatgptAuthTokensv2::LoginAccountParams",
-            "type": "object"
-          }
-        ],
-        "title": "LoginAccountParams"
-      },
-      "LoginAccountResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "oneOf": [
-          {
-            "properties": {
-              "type": {
-                "enum": [
-                  "apiKey"
-                ],
-                "title": "ApiKeyv2::LoginAccountResponseType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "title": "ApiKeyv2::LoginAccountResponse",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "authUrl": {
-                "description": "URL the client should open in a browser to initiate the OAuth flow.",
-                "type": "string"
-              },
-              "loginId": {
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "chatgpt"
-                ],
-                "title": "Chatgptv2::LoginAccountResponseType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "authUrl",
-              "loginId",
-              "type"
-            ],
-            "title": "Chatgptv2::LoginAccountResponse",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "type": {
-                "enum": [
-                  "chatgptAuthTokens"
-                ],
-                "title": "ChatgptAuthTokensv2::LoginAccountResponseType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "title": "ChatgptAuthTokensv2::LoginAccountResponse",
-            "type": "object"
-          }
-        ],
-        "title": "LoginAccountResponse"
-      },
-      "LogoutAccountResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "LogoutAccountResponse",
         "type": "object"
       },
       "McpAuthStatus": {
@@ -12469,20 +11353,6 @@
         "title": "PlanDeltaNotification",
         "type": "object"
       },
-      "PlanType": {
-        "enum": [
-          "free",
-          "go",
-          "plus",
-          "pro",
-          "team",
-          "business",
-          "enterprise",
-          "edu",
-          "unknown"
-        ],
-        "type": "string"
-      },
       "ProfileV2": {
         "additionalProperties": true,
         "properties": {
@@ -12494,12 +11364,6 @@
               {
                 "type": "null"
               }
-            ]
-          },
-          "chatgpt_base_url": {
-            "type": [
-              "string",
-              "null"
             ]
           },
           "model": {
@@ -12555,77 +11419,6 @@
             ]
           }
         },
-        "type": "object"
-      },
-      "RateLimitSnapshot": {
-        "properties": {
-          "credits": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/CreditsSnapshot"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "planType": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/PlanType"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "primary": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/RateLimitWindow"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "secondary": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/RateLimitWindow"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "type": "object"
-      },
-      "RateLimitWindow": {
-        "properties": {
-          "resetsAt": {
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "usedPercent": {
-            "format": "int32",
-            "type": "integer"
-          },
-          "windowDurationMins": {
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "usedPercent"
-        ],
         "type": "object"
       },
       "RawTranscriptItemCompletedNotification": {

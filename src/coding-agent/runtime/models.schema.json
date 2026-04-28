@@ -104,10 +104,6 @@
           "minimum": 0.0,
           "type": "integer"
         },
-        "requires_openai_auth": {
-          "default": false,
-          "type": "boolean"
-        },
         "stream_idle_timeout_ms": {
           "format": "uint64",
           "minimum": 0.0,

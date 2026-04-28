@@ -4,11 +4,9 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 #![deny(clippy::disallowed_methods)]
 use adam_agent::AuthManager;
-use adam_agent::CodexAuth;
 use adam_agent::INTERACTIVE_SESSION_SOURCES;
 use adam_agent::RolloutRecorder;
 use adam_agent::ThreadSortKey;
-use adam_agent::auth::enforce_login_restrictions;
 use adam_agent::config::Config;
 use adam_agent::config::ConfigBuilder;
 use adam_agent::config::ConfigOverrides;
@@ -25,8 +23,6 @@ use adam_agent::protocol::AskForApproval;
 use adam_agent::read_effective_thread_cwd;
 use adam_agent::terminal::Multiplexer;
 use adam_agent::windows_sandbox::WindowsSandboxLevelExt;
-use adam_app_server_protocol::AuthMode;
-use adam_cloud_requirements::cloud_requirements_loader;
 use adam_protocol::config_types::AltScreenMode;
 use adam_protocol::config_types::SandboxMode;
 use adam_protocol::config_types::WindowsSandboxLevel;
@@ -208,16 +204,7 @@ pub async fn run_main(
         tracing::warn!(error = %err, "failed to run personality migration");
     }
 
-    let cloud_auth_manager = AuthManager::shared(
-        adam_home.to_path_buf(),
-        false,
-        config_toml.cli_auth_credentials_store.unwrap_or_default(),
-    );
-    let chatgpt_base_url = config_toml
-        .chatgpt_base_url
-        .clone()
-        .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    let cloud_requirements = cloud_requirements_loader(cloud_auth_manager, chatgpt_base_url);
+    let cloud_requirements = CloudRequirementsLoader::default();
 
     let model = cli.model.clone();
 
@@ -250,12 +237,6 @@ pub async fn run_main(
             eprintln!("Error adding directories: {warning}");
             std::process::exit(1);
         }
-    }
-
-    #[allow(clippy::print_stderr)]
-    if let Err(err) = enforce_login_restrictions(&config) {
-        eprintln!("{err}");
-        std::process::exit(1);
     }
 
     let log_dir = adam_agent::config::log_dir(&config)?;
@@ -402,23 +383,13 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
 
-    let auth_manager = AuthManager::shared(
-        initial_config.adam_home.clone(),
-        false,
-        initial_config.cli_auth_credentials_store_mode,
-    );
-    let login_status = get_login_status(&initial_config);
-    let should_show_trust_screen_flag = should_show_trust_screen(&initial_config);
-    let should_show_onboarding =
-        should_show_onboarding(login_status, &initial_config, should_show_trust_screen_flag);
+    let auth_manager = AuthManager::shared(initial_config.adam_home.clone(), false);
+    let should_show_onboarding = should_show_trust_screen(&initial_config);
 
     let config = if should_show_onboarding {
         let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
-                show_login_screen: should_show_login_screen(login_status, &initial_config),
-                show_trust_screen: should_show_trust_screen_flag,
-                login_status,
-                auth_manager: auth_manager.clone(),
+                show_trust_screen: should_show_onboarding,
                 config: initial_config.clone(),
             },
             &mut tui,
@@ -776,30 +747,6 @@ fn determine_alt_screen_mode(no_alt_screen: bool, tui_alternate_screen: AltScree
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LoginStatus {
-    AuthMode(AuthMode),
-    NotAuthenticated,
-}
-
-fn get_login_status(config: &Config) -> LoginStatus {
-    if config.model_provider.requires_openai_auth {
-        // Reading the OpenAI API key is an async operation because it may need
-        // to refresh the token. Block on it.
-        let adam_home = config.adam_home.clone();
-        match CodexAuth::from_auth_storage(&adam_home, config.cli_auth_credentials_store_mode) {
-            Ok(Some(auth)) => LoginStatus::AuthMode(auth.api_auth_mode()),
-            Ok(None) => LoginStatus::NotAuthenticated,
-            Err(err) => {
-                error!("Failed to read auth.json: {err}");
-                LoginStatus::NotAuthenticated
-            }
-        }
-    } else {
-        LoginStatus::NotAuthenticated
-    }
-}
-
 async fn load_config_or_exit(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
@@ -848,28 +795,6 @@ fn should_show_trust_screen(config: &Config) -> bool {
     }
     // otherwise, show only if no trust decision has been made
     config.active_project.trust_level.is_none()
-}
-
-fn should_show_onboarding(
-    login_status: LoginStatus,
-    config: &Config,
-    show_trust_screen: bool,
-) -> bool {
-    if show_trust_screen {
-        return true;
-    }
-
-    should_show_login_screen(login_status, config)
-}
-
-fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool {
-    // Only show the login screen for providers that actually require OpenAI auth
-    // (OpenAI or equivalents). For OSS/other providers, skip login entirely.
-    if !config.model_provider.requires_openai_auth {
-        return false;
-    }
-
-    login_status == LoginStatus::NotAuthenticated
 }
 
 #[cfg(test)]

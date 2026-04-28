@@ -61,7 +61,7 @@ async fn bundled_model_info_takes_precedence_over_builtin_fallback() {
     config.features.enable(Feature::RemoteModels);
 
     let auth_manager = adam_agent::auth::AuthManager::from_auth_for_testing(
-        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        CodexAuth::from_api_key("Test API Key"),
     );
     let models_manager = ModelsManager::with_provider(
         adam_home.path().to_path_buf(),

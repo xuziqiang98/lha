@@ -26,7 +26,6 @@ use adam_agent::protocol::TokenCountEvent;
 use adam_agent::protocol::TurnDiffEvent;
 use adam_agent::review_format::format_review_findings_block;
 use adam_agent::review_prompts;
-use adam_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use adam_app_server_protocol::AgentMessageDeltaNotification;
 use adam_app_server_protocol::ApplyPatchApprovalParams;
 use adam_app_server_protocol::ApplyPatchApprovalResponse;
@@ -1422,7 +1421,7 @@ async fn handle_token_count_event(
     token_count_event: TokenCountEvent,
     outgoing: &OutgoingMessageSender,
 ) {
-    let TokenCountEvent { info, rate_limits } = token_count_event;
+    let TokenCountEvent { info } = token_count_event;
     if let Some(token_usage) = info.map(ThreadTokenUsage::from) {
         let notification = ThreadTokenUsageUpdatedNotification {
             thread_id: conversation_id.to_string(),
@@ -1431,15 +1430,6 @@ async fn handle_token_count_event(
         };
         outgoing
             .send_server_notification(ServerNotification::ThreadTokenUsageUpdated(notification))
-            .await;
-    }
-    if let Some(rate_limits) = rate_limits {
-        outgoing
-            .send_server_notification(ServerNotification::AccountRateLimitsUpdated(
-                AccountRateLimitsUpdatedNotification {
-                    rate_limits: rate_limits.into(),
-                },
-            ))
             .await;
     }
 }
@@ -1881,10 +1871,7 @@ mod tests {
     use crate::CHANNEL_CAPACITY;
     use crate::outgoing_message::OutgoingMessage;
     use crate::outgoing_message::OutgoingMessageSender;
-    use adam_agent::protocol::CreditsSnapshot;
     use adam_agent::protocol::McpInvocation;
-    use adam_agent::protocol::RateLimitSnapshot;
-    use adam_agent::protocol::RateLimitWindow;
     use adam_agent::protocol::TokenUsage;
     use adam_agent::protocol::TokenUsageInfo;
     use adam_app_server_protocol::TurnPlanStepStatus;
@@ -2117,7 +2104,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_token_count_event_emits_usage_and_rate_limits() -> Result<()> {
+    async fn test_handle_token_count_event_emits_usage() -> Result<()> {
         let conversation_id = ThreadId::new();
         let turn_id = "turn-123".to_string();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
@@ -2140,28 +2127,11 @@ mod tests {
             },
             model_context_window: Some(4096),
         };
-        let rate_limits = RateLimitSnapshot {
-            primary: Some(RateLimitWindow {
-                used_percent: 42.5,
-                window_minutes: Some(15),
-                resets_at: Some(1700000000),
-            }),
-            secondary: None,
-            credits: Some(CreditsSnapshot {
-                has_credits: true,
-                unlimited: false,
-                balance: Some("5".to_string()),
-            }),
-            plan_type: None,
-        };
 
         handle_token_count_event(
             conversation_id,
             turn_id.clone(),
-            TokenCountEvent {
-                info: Some(info),
-                rate_limits: Some(rate_limits),
-            },
+            TokenCountEvent { info: Some(info) },
             &outgoing,
         )
         .await;
@@ -2185,19 +2155,6 @@ mod tests {
             other => bail!("unexpected notification: {other:?}"),
         }
 
-        let second = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("expected rate limit notification"))?;
-        match second {
-            OutgoingMessage::AppServerNotification(
-                ServerNotification::AccountRateLimitsUpdated(payload),
-            ) => {
-                assert!(payload.rate_limits.primary.is_some());
-                assert!(payload.rate_limits.credits.is_some());
-            }
-            other => bail!("unexpected notification: {other:?}"),
-        }
         Ok(())
     }
 
@@ -2211,10 +2168,7 @@ mod tests {
         handle_token_count_event(
             conversation_id,
             turn_id.clone(),
-            TokenCountEvent {
-                info: None,
-                rate_limits: None,
-            },
+            TokenCountEvent { info: None },
             &outgoing,
         )
         .await;

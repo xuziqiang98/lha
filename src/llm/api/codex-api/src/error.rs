@@ -1,4 +1,3 @@
-use crate::rate_limits::RateLimitError;
 use adam_client::TransportError;
 use http::StatusCode;
 use std::time::Duration;
@@ -27,10 +26,4 @@ pub enum ApiError {
     RateLimit(String),
     #[error("invalid request: {message}")]
     InvalidRequest { message: String },
-}
-
-impl From<RateLimitError> for ApiError {
-    fn from(err: RateLimitError) -> Self {
-        Self::RateLimit(err.to_string())
-    }
 }

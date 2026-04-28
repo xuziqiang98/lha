@@ -1,7 +1,6 @@
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::error::ApiError;
-use crate::rate_limits::parse_rate_limit;
 use crate::telemetry::SseTelemetry;
 use adam_client::ByteStream;
 use adam_client::StreamResponse;
@@ -62,7 +61,6 @@ pub fn spawn_response_stream(
     telemetry: Option<Arc<dyn SseTelemetry>>,
     turn_state: Option<Arc<OnceLock<String>>>,
 ) -> ResponseStream {
-    let rate_limits = parse_rate_limit(&stream_response.headers);
     let models_etag = stream_response
         .headers
         .get("X-Models-Etag")
@@ -82,9 +80,6 @@ pub fn spawn_response_stream(
     }
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
     tokio::spawn(async move {
-        if let Some(snapshot) = rate_limits {
-            let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
-        }
         if let Some(etag) = models_etag {
             let _ = tx_event.send(Ok(ResponseEvent::ModelsEtag(etag))).await;
         }
@@ -105,7 +100,6 @@ struct Error {
     r#type: Option<String>,
     code: Option<String>,
     message: Option<String>,
-    plan_type: Option<String>,
     resets_at: Option<i64>,
 }
 
@@ -1025,7 +1019,6 @@ mod tests {
             r#type: None,
             message: Some("Rate limit reached for gpt-5.1 in organization org- on tokens per min (TPM): Limit 1, Used 1, Requested 19304. Please try again in 28ms. Visit https://platform.openai.com/account/rate-limits to learn more.".to_string()),
             code: Some("rate_limit_exceeded".to_string()),
-            plan_type: None,
             resets_at: None,
         };
 
@@ -1039,7 +1032,6 @@ mod tests {
             r#type: None,
             message: Some("Rate limit reached for gpt-5.1 in organization <ORG> on tokens per min (TPM): Limit 30000, Used 6899, Requested 24050. Please try again in 1.898s. Visit https://platform.openai.com/account/rate-limits to learn more.".to_string()),
             code: Some("rate_limit_exceeded".to_string()),
-            plan_type: None,
             resets_at: None,
         };
         let delay = try_parse_retry_after(&err);
@@ -1052,7 +1044,6 @@ mod tests {
             r#type: None,
             message: Some("Rate limit exceeded. Try again in 35 seconds.".to_string()),
             code: Some("rate_limit_exceeded".to_string()),
-            plan_type: None,
             resets_at: None,
         };
         let delay = try_parse_retry_after(&err);

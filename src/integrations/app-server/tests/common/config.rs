@@ -103,7 +103,7 @@ pub fn write_mock_responses_models_json(
     adam_home: &Path,
     server_uri: &str,
     provider_id: &str,
-    requires_openai_auth: bool,
+    _requires_openai_auth: bool,
     auto_compact_limit: Option<i64>,
     model: &str,
 ) -> std::io::Result<()> {
@@ -125,7 +125,6 @@ pub fn write_mock_responses_models_json(
           "experimental_bearer_token": "sk-test",
           "request_max_retries": 0,
           "stream_max_retries": 0,
-          "requires_openai_auth": {requires_openai_auth},
           "models": {{
             "{model}": {{
               "context_window": 100000{auto_compact}

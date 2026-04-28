@@ -1,4 +1,3 @@
-use crate::auth::AuthCredentialsStoreMode;
 use crate::config::model_ref::ModelRef;
 use crate::config::models_json::ModelsJson;
 use crate::config::models_json::provider_ref as models_provider_ref;
@@ -45,7 +44,6 @@ use adam_app_server_protocol::UserSavedConfig;
 use adam_llm::RuntimeEndpoint;
 use adam_llm::built_in_runtime_endpoints;
 use adam_protocol::config_types::AltScreenMode;
-use adam_protocol::config_types::ForcedLoginMethod;
 use adam_protocol::config_types::ModeKind;
 use adam_protocol::config_types::Personality;
 use adam_protocol::config_types::ReasoningSummary;
@@ -364,12 +362,6 @@ pub struct Config {
     /// resolved against this path.
     pub cwd: PathBuf,
 
-    /// Preferred store for CLI auth credentials.
-    /// file (default): Use a file in the Adam home directory.
-    /// keyring: Use an OS-specific keyring service.
-    /// auto: Use the OS-specific keyring service if available, otherwise use a file.
-    pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
-
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     pub mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
 
@@ -448,15 +440,6 @@ pub struct Config {
 
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
-
-    /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
-    pub chatgpt_base_url: String,
-
-    /// When set, restricts ChatGPT login to a specific workspace identifier.
-    pub forced_chatgpt_workspace_id: Option<String>,
-
-    /// When set, restricts the login mechanism users may use.
-    pub forced_login_method: Option<ForcedLoginMethod>,
 
     /// Include the `apply_patch` tool for models that benefit from invoking
     /// file edits as a structured tool call. When unset, this falls back to the
@@ -1012,21 +995,6 @@ pub struct ConfigToml {
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
 
-    /// When set, restricts ChatGPT login to a specific workspace identifier.
-    #[serde(default)]
-    pub forced_chatgpt_workspace_id: Option<String>,
-
-    /// When set, restricts the login mechanism users may use.
-    #[serde(default)]
-    pub forced_login_method: Option<ForcedLoginMethod>,
-
-    /// Preferred backend for storing CLI auth credentials.
-    /// file (default): Use a file in the Adam home directory.
-    /// keyring: Use an OS-specific keyring service.
-    /// auto: Use the keyring if available, otherwise use a file.
-    #[serde(default)]
-    pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
-
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     #[serde(default)]
     // Uses the raw MCP input shape (custom deserialization) rather than `McpServerConfig`.
@@ -1090,9 +1058,6 @@ pub struct ConfigToml {
 
     /// Optionally specify a personality for the model
     pub personality: Option<Personality>,
-
-    /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
-    pub chatgpt_base_url: Option<String>,
 
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
@@ -1179,8 +1144,6 @@ impl From<ConfigToml> for UserSavedConfig {
             approval_policy: config_toml.approval_policy,
             sandbox_mode: config_toml.sandbox_mode,
             sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
-            forced_chatgpt_workspace_id: config_toml.forced_chatgpt_workspace_id,
-            forced_login_method: config_toml.forced_login_method,
             model: None,
             model_reasoning_effort: config_toml.model_reasoning_effort,
             model_reasoning_summary: config_toml.model_reasoning_summary,
@@ -1810,18 +1773,6 @@ impl Config {
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
 
-        let forced_chatgpt_workspace_id =
-            cfg.forced_chatgpt_workspace_id.as_ref().and_then(|value| {
-                let trimmed = value.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_string())
-                }
-            });
-
-        let forced_login_method = cfg.forced_login_method;
-
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
             let trimmed = value.trim();
             if trimmed.is_empty() {
@@ -1907,7 +1858,6 @@ impl Config {
             compact_prompt,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
-            cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
             mcp_servers,
             config_profiles: cfg.profiles.clone(),
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
@@ -1955,12 +1905,6 @@ impl Config {
                 .unwrap_or_default(),
             model_supports_reasoning_summaries: cfg.model_supports_reasoning_summaries,
             model_verbosity: config_profile.model_verbosity.or(cfg.model_verbosity),
-            chatgpt_base_url: config_profile
-                .chatgpt_base_url
-                .or(cfg.chatgpt_base_url)
-                .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
-            forced_chatgpt_workspace_id,
-            forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             web_search_mode,
             use_experimental_unified_exec_tool,
@@ -2645,47 +2589,6 @@ trust_level = "trusted"
                 other => panic!("expected workspace-write policy, got {other:?}"),
             }
         }
-
-        Ok(())
-    }
-
-    #[test]
-    fn config_defaults_to_file_cli_auth_store_mode() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
-        let cfg = ConfigToml::default();
-
-        let config = Config::load_from_base_config_with_overrides(
-            cfg,
-            ConfigOverrides::default(),
-            adam_home.path().to_path_buf(),
-        )?;
-
-        assert_eq!(
-            config.cli_auth_credentials_store_mode,
-            AuthCredentialsStoreMode::File,
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn config_honors_explicit_keyring_auth_store_mode() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
-        let cfg = ConfigToml {
-            cli_auth_credentials_store: Some(AuthCredentialsStoreMode::Keyring),
-            ..Default::default()
-        };
-
-        let config = Config::load_from_base_config_with_overrides(
-            cfg,
-            ConfigOverrides::default(),
-            adam_home.path().to_path_buf(),
-        )?;
-
-        assert_eq!(
-            config.cli_auth_credentials_store_mode,
-            AuthCredentialsStoreMode::Keyring,
-        );
 
         Ok(())
     }
@@ -4296,7 +4199,6 @@ model_verbosity = "high"
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
-                cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: Constrained::allow_any(HashMap::new()),
                 config_profiles: fixture.cfg.profiles.clone(),
                 mcp_oauth_credentials_store_mode: Default::default(),
@@ -4322,12 +4224,9 @@ model_verbosity = "high"
                 model_supports_reasoning_summaries: None,
                 model_verbosity: None,
                 personality: Some(Personality::Friendly),
-                chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
                 developer_instructions: None,
                 compact_prompt: None,
-                forced_chatgpt_workspace_id: None,
-                forced_login_method: None,
                 include_apply_patch_tool: false,
                 web_search_mode: None,
                 use_experimental_unified_exec_tool: !cfg!(windows),
@@ -4385,7 +4284,6 @@ model_verbosity = "high"
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
-            cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
             config_profiles: fixture.cfg.profiles.clone(),
             mcp_oauth_credentials_store_mode: Default::default(),
@@ -4411,12 +4309,9 @@ model_verbosity = "high"
             model_supports_reasoning_summaries: None,
             model_verbosity: None,
             personality: Some(Personality::Friendly),
-            chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
-            forced_chatgpt_workspace_id: None,
-            forced_login_method: None,
             include_apply_patch_tool: false,
             web_search_mode: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
@@ -4489,7 +4384,6 @@ model_verbosity = "high"
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
-            cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
             config_profiles: fixture.cfg.profiles.clone(),
             mcp_oauth_credentials_store_mode: Default::default(),
@@ -4515,12 +4409,9 @@ model_verbosity = "high"
             model_supports_reasoning_summaries: None,
             model_verbosity: None,
             personality: Some(Personality::Friendly),
-            chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
-            forced_chatgpt_workspace_id: None,
-            forced_login_method: None,
             include_apply_patch_tool: false,
             web_search_mode: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
@@ -4579,7 +4470,6 @@ model_verbosity = "high"
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
-            cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
             config_profiles: fixture.cfg.profiles.clone(),
             mcp_oauth_credentials_store_mode: Default::default(),
@@ -4605,12 +4495,9 @@ model_verbosity = "high"
             model_supports_reasoning_summaries: None,
             model_verbosity: Some(Verbosity::High),
             personality: Some(Personality::Friendly),
-            chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
-            forced_chatgpt_workspace_id: None,
-            forced_login_method: None,
             include_apply_patch_tool: false,
             web_search_mode: None,
             use_experimental_unified_exec_tool: !cfg!(windows),

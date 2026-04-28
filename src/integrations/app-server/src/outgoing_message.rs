@@ -16,9 +16,6 @@ use tracing::warn;
 
 use crate::error_code::INTERNAL_ERROR_CODE;
 
-#[cfg(test)]
-use adam_protocol::account::PlanType;
-
 /// Sends messages to the client and manages request callbacks.
 pub(crate) struct OutgoingMessageSender {
     next_request_id: AtomicI64,
@@ -97,14 +94,6 @@ impl OutgoingMessageSender {
                 warn!("could not find callback for {id:?}");
             }
         }
-    }
-
-    pub(crate) async fn cancel_request(&self, id: &RequestId) -> bool {
-        let entry = {
-            let mut request_id_to_callback = self.request_id_to_callback.lock().await;
-            request_id_to_callback.remove_entry(id)
-        };
-        entry.is_some()
     }
 
     pub(crate) async fn send_response<T: Serialize>(&self, id: RequestId, response: T) {
@@ -190,128 +179,11 @@ pub(crate) struct OutgoingError {
 
 #[cfg(test)]
 mod tests {
-    use adam_app_server_protocol::AccountLoginCompletedNotification;
-    use adam_app_server_protocol::AccountRateLimitsUpdatedNotification;
-    use adam_app_server_protocol::AccountUpdatedNotification;
-    use adam_app_server_protocol::AuthMode;
     use adam_app_server_protocol::ConfigWarningNotification;
-    use adam_app_server_protocol::LoginChatGptCompleteNotification;
-    use adam_app_server_protocol::RateLimitSnapshot;
-    use adam_app_server_protocol::RateLimitWindow;
     use pretty_assertions::assert_eq;
     use serde_json::json;
-    use uuid::Uuid;
 
     use super::*;
-
-    #[test]
-    fn verify_server_notification_serialization() {
-        let notification =
-            ServerNotification::LoginChatGptComplete(LoginChatGptCompleteNotification {
-                login_id: Uuid::nil(),
-                success: true,
-                error: None,
-            });
-
-        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
-        assert_eq!(
-            json!({
-                "method": "loginChatGptComplete",
-                "params": {
-                    "loginId": Uuid::nil(),
-                    "success": true,
-                    "error": null,
-                },
-            }),
-            serde_json::to_value(jsonrpc_notification)
-                .expect("ensure the strum macros serialize the method field correctly"),
-            "ensure the strum macros serialize the method field correctly"
-        );
-    }
-
-    #[test]
-    fn verify_account_login_completed_notification_serialization() {
-        let notification =
-            ServerNotification::AccountLoginCompleted(AccountLoginCompletedNotification {
-                login_id: Some(Uuid::nil().to_string()),
-                success: true,
-                error: None,
-            });
-
-        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
-        assert_eq!(
-            json!({
-                "method": "account/login/completed",
-                "params": {
-                    "loginId": Uuid::nil().to_string(),
-                    "success": true,
-                    "error": null,
-                },
-            }),
-            serde_json::to_value(jsonrpc_notification)
-                .expect("ensure the notification serializes correctly"),
-            "ensure the notification serializes correctly"
-        );
-    }
-
-    #[test]
-    fn verify_account_rate_limits_notification_serialization() {
-        let notification =
-            ServerNotification::AccountRateLimitsUpdated(AccountRateLimitsUpdatedNotification {
-                rate_limits: RateLimitSnapshot {
-                    primary: Some(RateLimitWindow {
-                        used_percent: 25,
-                        window_duration_mins: Some(15),
-                        resets_at: Some(123),
-                    }),
-                    secondary: None,
-                    credits: None,
-                    plan_type: Some(PlanType::Plus),
-                },
-            });
-
-        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
-        assert_eq!(
-            json!({
-                "method": "account/rateLimits/updated",
-                "params": {
-                    "rateLimits": {
-                        "primary": {
-                            "usedPercent": 25,
-                            "windowDurationMins": 15,
-                            "resetsAt": 123
-                        },
-                        "secondary": null,
-                        "credits": null,
-                        "planType": "plus"
-                    }
-                },
-            }),
-            serde_json::to_value(jsonrpc_notification)
-                .expect("ensure the notification serializes correctly"),
-            "ensure the notification serializes correctly"
-        );
-    }
-
-    #[test]
-    fn verify_account_updated_notification_serialization() {
-        let notification = ServerNotification::AccountUpdated(AccountUpdatedNotification {
-            auth_mode: Some(AuthMode::ApiKey),
-        });
-
-        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
-        assert_eq!(
-            json!({
-                "method": "account/updated",
-                "params": {
-                    "authMode": "apikey"
-                },
-            }),
-            serde_json::to_value(jsonrpc_notification)
-                .expect("ensure the notification serializes correctly"),
-            "ensure the notification serializes correctly"
-        );
-    }
 
     #[test]
     fn verify_config_warning_notification_serialization() {

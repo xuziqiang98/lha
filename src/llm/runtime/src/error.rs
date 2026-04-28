@@ -1,9 +1,5 @@
 use adam_api::TransportError;
 use adam_api::error::ApiError;
-use adam_api::rate_limits::parse_promo_message;
-use adam_api::rate_limits::parse_rate_limit;
-use adam_llm_types::PlanType;
-use adam_llm_types::RateLimitSnapshot;
 use chrono::DateTime;
 use chrono::Utc;
 use http::HeaderMap;
@@ -56,18 +52,8 @@ pub enum Error {
     UnsupportedOperation(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error("{message}")]
-    UnauthorizedRecoveryFailed {
-        reason: UnauthorizedRecoveryFailedReason,
-        message: String,
-    },
     #[error("usage limit reached")]
-    UsageLimitReached {
-        plan_type: Option<PlanType>,
-        resets_at: Option<DateTime<Utc>>,
-        rate_limits: Option<RateLimitSnapshot>,
-        promo_message: Option<String>,
-    },
+    UsageLimitReached { resets_at: Option<DateTime<Utc>> },
     #[error("model capacity reached for {model}")]
     ModelCap {
         model: String,
@@ -78,14 +64,6 @@ pub enum Error {
         var: String,
         instructions: Option<String>,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UnauthorizedRecoveryFailedReason {
-    Expired,
-    Exhausted,
-    Revoked,
-    Other,
 }
 
 impl From<ApiError> for Error {
@@ -175,18 +153,11 @@ fn map_too_many_requests(
 
     if let Ok(err) = serde_json::from_str::<UsageErrorResponse>(&body_text) {
         if err.error.error_type.as_deref() == Some("usage_limit_reached") {
-            let rate_limits = headers.and_then(parse_rate_limit);
-            let promo_message = headers.and_then(parse_promo_message);
             let resets_at = err
                 .error
                 .resets_at
                 .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0));
-            return Error::UsageLimitReached {
-                plan_type: err.error.plan_type,
-                resets_at,
-                rate_limits,
-                promo_message,
-            };
+            return Error::UsageLimitReached { resets_at };
         }
         if err.error.error_type.as_deref() == Some("usage_not_included") {
             return Error::UsageNotIncluded;
@@ -226,6 +197,5 @@ struct UsageErrorResponse {
 struct UsageErrorBody {
     #[serde(rename = "type")]
     error_type: Option<String>,
-    plan_type: Option<PlanType>,
     resets_at: Option<i64>,
 }

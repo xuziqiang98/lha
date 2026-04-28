@@ -61,22 +61,6 @@
             "null"
           ]
         },
-        "forced_chatgpt_workspace_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "forced_login_method": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ForcedLoginMethod"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "instructions": {
           "type": [
             "string",
@@ -395,13 +379,6 @@
         }
       ]
     },
-    "ForcedLoginMethod": {
-      "enum": [
-        "chatgpt",
-        "api"
-      ],
-      "type": "string"
-    },
     "ProfileV2": {
       "additionalProperties": true,
       "properties": {
@@ -413,12 +390,6 @@
             {
               "type": "null"
             }
-          ]
-        },
-        "chatgpt_base_url": {
-          "type": [
-            "string",
-            "null"
           ]
         },
         "model": {

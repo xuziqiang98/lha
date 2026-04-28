@@ -520,27 +520,6 @@
         }
       ]
     },
-    "CreditsSnapshot": {
-      "properties": {
-        "balance": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "has_credits": {
-          "type": "boolean"
-        },
-        "unlimited": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "has_credits",
-        "unlimited"
-      ],
-      "type": "object"
-    },
     "CustomPrompt": {
       "properties": {
         "argument_hint": {
@@ -786,16 +765,6 @@
               "anyOf": [
                 {
                   "$ref": "#/definitions/TokenUsageInfo"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "rate_limits": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/RateLimitSnapshot"
                 },
                 {
                   "type": "null"
@@ -3504,91 +3473,6 @@
       ],
       "type": "object"
     },
-    "PlanType": {
-      "enum": [
-        "free",
-        "go",
-        "plus",
-        "pro",
-        "team",
-        "business",
-        "enterprise",
-        "edu",
-        "unknown"
-      ],
-      "type": "string"
-    },
-    "RateLimitSnapshot": {
-      "properties": {
-        "credits": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/CreditsSnapshot"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "plan_type": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PlanType"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "primary": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/RateLimitWindow"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "secondary": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/RateLimitWindow"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "RateLimitWindow": {
-      "properties": {
-        "resets_at": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "used_percent": {
-          "format": "double",
-          "type": "number"
-        },
-        "window_minutes": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "used_percent"
-      ],
-      "type": "object"
-    },
     "ReasoningEffort": {
       "enum": [
         "none",
@@ -5565,16 +5449,6 @@
           "anyOf": [
             {
               "$ref": "#/definitions/TokenUsageInfo"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "rate_limits": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/RateLimitSnapshot"
             },
             {
               "type": "null"

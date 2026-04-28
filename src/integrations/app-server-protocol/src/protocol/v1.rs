@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use adam_protocol::ThreadId;
-use adam_protocol::config_types::ForcedLoginMethod;
 use adam_protocol::config_types::ReasoningSummary;
 use adam_protocol::config_types::SandboxMode;
 use adam_protocol::config_types::Verbosity;
@@ -25,8 +24,6 @@ use serde::Serialize;
 use ts_rs::TS;
 use uuid::Uuid;
 
-// Reuse shared types defined in `common.rs`.
-use crate::protocol::common::AuthMode;
 use crate::protocol::common::GitSha;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
@@ -192,24 +189,6 @@ pub struct RemoveConversationSubscriptionResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct LoginApiKeyParams {
-    pub api_key: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct LoginApiKeyResponse {}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct LoginChatGptResponse {
-    #[schemars(with = "String")]
-    pub login_id: Uuid,
-    pub auth_url: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
 pub struct GitDiffToRemoteResponse {
     pub sha: GitSha,
     pub diff: String,
@@ -256,34 +235,8 @@ pub struct ExecCommandApprovalResponse {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct CancelLoginChatGptParams {
-    #[schemars(with = "String")]
-    pub login_id: Uuid,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
 pub struct GitDiffToRemoteParams {
     pub cwd: PathBuf,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct CancelLoginChatGptResponse {}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct LogoutChatGptParams {}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct LogoutChatGptResponse {}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct GetAuthStatusParams {
-    pub include_token: Option<bool>,
-    pub refresh_token: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -301,14 +254,6 @@ pub struct ExecOneOffCommandResponse {
     pub exit_code: i32,
     pub stdout: String,
     pub stderr: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct GetAuthStatusResponse {
-    pub auth_method: Option<AuthMode>,
-    pub auth_token: Option<String>,
-    pub requires_openai_auth: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -347,8 +292,6 @@ pub struct UserSavedConfig {
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,
     pub sandbox_settings: Option<SandboxSettings>,
-    pub forced_chatgpt_workspace_id: Option<String>,
-    pub forced_login_method: Option<ForcedLoginMethod>,
     pub model: Option<String>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
@@ -367,7 +310,6 @@ pub struct Profile {
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
-    pub chatgpt_base_url: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
@@ -515,16 +457,6 @@ impl From<V1TextElement> for CoreTextElement {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-/// Deprecated in favor of AccountLoginCompletedNotification.
-pub struct LoginChatGptCompleteNotification {
-    #[schemars(with = "String")]
-    pub login_id: Uuid,
-    pub success: bool,
-    pub error: Option<String>,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionConfiguredNotification {
@@ -536,11 +468,4 @@ pub struct SessionConfiguredNotification {
     pub history_entry_count: usize,
     pub initial_messages: Option<Vec<EventMsg>>,
     pub rollout_path: PathBuf,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-/// Deprecated notification. Use AccountUpdatedNotification instead.
-pub struct AuthStatusChangeNotification {
-    pub auth_method: Option<AuthMode>,
 }

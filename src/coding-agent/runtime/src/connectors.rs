@@ -7,13 +7,10 @@ use adam_protocol::protocol::SandboxPolicy;
 use async_channel::unbounded;
 use tokio_util::sync::CancellationToken;
 
-use crate::AuthManager;
 use crate::SandboxState;
 use crate::config::Config;
 use crate::features::Feature;
-use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
-use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
 use crate::mcp_connection_manager::McpConnectionManager;
 
@@ -24,9 +21,7 @@ pub async fn list_accessible_connectors_from_mcp_tools(
         return Ok(Vec::new());
     }
 
-    let auth_manager = auth_manager_from_config(config);
-    let auth = auth_manager.auth().await;
-    let mcp_servers = with_codex_apps_mcp(HashMap::new(), true, auth.as_ref(), config);
+    let mcp_servers = config.mcp_servers.get().clone();
     if mcp_servers.is_empty() {
         return Ok(Vec::new());
     }
@@ -56,10 +51,10 @@ pub async fn list_accessible_connectors_from_mcp_tools(
         )
         .await;
 
-    if let Some(cfg) = mcp_servers.get(CODEX_APPS_MCP_SERVER_NAME) {
+    for (server_name, cfg) in &mcp_servers {
         let timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
         mcp_connection_manager
-            .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, timeout)
+            .wait_for_server_ready(server_name, timeout)
             .await;
     }
 
@@ -67,14 +62,6 @@ pub async fn list_accessible_connectors_from_mcp_tools(
     cancel_token.cancel();
 
     Ok(accessible_connectors_from_mcp_tools(&tools))
-}
-
-fn auth_manager_from_config(config: &Config) -> std::sync::Arc<AuthManager> {
-    AuthManager::shared(
-        config.adam_home.clone(),
-        false,
-        config.cli_auth_credentials_store_mode,
-    )
 }
 
 pub fn connector_display_label(connector: &AppInfo) -> String {
@@ -89,9 +76,6 @@ pub(crate) fn accessible_connectors_from_mcp_tools(
     mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
 ) -> Vec<AppInfo> {
     let tools = mcp_tools.values().filter_map(|tool| {
-        if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
-            return None;
-        }
         let connector_id = tool.connector_id.as_deref()?;
         let connector_name = normalize_connector_value(tool.connector_name.as_deref());
         Some((connector_id.to_string(), connector_name))

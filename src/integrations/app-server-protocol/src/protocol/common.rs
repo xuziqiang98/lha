@@ -23,22 +23,11 @@ impl GitSha {
     }
 }
 
-/// Authentication mode for OpenAI-backed providers.
+/// Authentication mode for OpenAI-compatible providers.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthMode {
-    /// OpenAI API key provided by the caller and stored by Codex.
     ApiKey,
-    /// ChatGPT OAuth managed by Codex (tokens persisted and refreshed by Codex).
-    Chatgpt,
-    /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
-    ///
-    /// ChatGPT auth tokens are supplied by an external host app and are only
-    /// stored in memory. Token refresh must be handled by the external host app.
-    #[serde(rename = "chatgptAuthTokens")]
-    #[ts(rename = "chatgptAuthTokens")]
-    #[strum(serialize = "chatgptAuthTokens")]
-    ChatgptAuthTokens,
 }
 
 /// Generates an `enum ClientRequest` where each variant is a request that the
@@ -207,26 +196,6 @@ client_request_definitions! {
         response: v2::ListMcpServerStatusResponse,
     },
 
-    LoginAccount => "account/login/start" {
-        params: v2::LoginAccountParams,
-        response: v2::LoginAccountResponse,
-    },
-
-    CancelLoginAccount => "account/login/cancel" {
-        params: v2::CancelLoginAccountParams,
-        response: v2::CancelLoginAccountResponse,
-    },
-
-    LogoutAccount => "account/logout" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v2::LogoutAccountResponse,
-    },
-
-    GetAccountRateLimits => "account/rateLimits/read" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v2::GetAccountRateLimitsResponse,
-    },
-
     FeedbackUpload => "feedback/upload" {
         params: v2::FeedbackUploadParams,
         response: v2::FeedbackUploadResponse,
@@ -254,11 +223,6 @@ client_request_definitions! {
     ConfigRequirementsRead => "configRequirements/read" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v2::ConfigRequirementsReadResponse,
-    },
-
-    GetAccount => "account/read" {
-        params: v2::GetAccountParams,
-        response: v2::GetAccountResponse,
     },
 
     /// DEPRECATED APIs below
@@ -312,28 +276,6 @@ client_request_definitions! {
     GitDiffToRemote {
         params: v1::GitDiffToRemoteParams,
         response: v1::GitDiffToRemoteResponse,
-    },
-    LoginApiKey {
-        params: v1::LoginApiKeyParams,
-        response: v1::LoginApiKeyResponse,
-    },
-    LoginChatGpt {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v1::LoginChatGptResponse,
-    },
-    // DEPRECATED in favor of CancelLoginAccount
-    CancelLoginChatGpt {
-        params: v1::CancelLoginChatGptParams,
-        response: v1::CancelLoginChatGptResponse,
-    },
-    LogoutChatGpt {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v1::LogoutChatGptResponse,
-    },
-    /// DEPRECATED in favor of GetAccount
-    GetAuthStatus {
-        params: v1::GetAuthStatusParams,
-        response: v1::GetAuthStatusResponse,
     },
     GetUserSavedConfig {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
@@ -554,11 +496,6 @@ server_request_definitions! {
         response: v2::DynamicToolCallResponse,
     },
 
-    ChatgptAuthTokensRefresh => "account/chatgptAuthTokens/refresh" {
-        params: v2::ChatgptAuthTokensRefreshParams,
-        response: v2::ChatgptAuthTokensRefreshResponse,
-    },
-
     /// DEPRECATED APIs below
     /// Request to approve a patch.
     /// This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).
@@ -621,8 +558,6 @@ server_notification_definitions! {
     FileChangeOutputDelta => "item/fileChange/outputDelta" (v2::FileChangeOutputDeltaNotification),
     McpToolCallProgress => "item/mcpToolCall/progress" (v2::McpToolCallProgressNotification),
     McpServerOauthLoginCompleted => "mcpServer/oauthLogin/completed" (v2::McpServerOauthLoginCompletedNotification),
-    AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
-    AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
     ReasoningSummaryTextDelta => "item/reasoning/summaryTextDelta" (v2::ReasoningSummaryTextDeltaNotification),
     ReasoningSummaryPartAdded => "item/reasoning/summaryPartAdded" (v2::ReasoningSummaryPartAddedNotification),
     ReasoningTextDelta => "item/reasoning/textDelta" (v2::ReasoningTextDeltaNotification),
@@ -634,16 +569,7 @@ server_notification_definitions! {
     /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
 
-    #[serde(rename = "account/login/completed")]
-    #[ts(rename = "account/login/completed")]
-    #[strum(serialize = "account/login/completed")]
-    AccountLoginCompleted(v2::AccountLoginCompletedNotification),
-
     /// DEPRECATED NOTIFICATIONS below
-    AuthStatusChange(v1::AuthStatusChangeNotification),
-
-    /// Deprecated: use `account/login/completed` instead.
-    LoginChatGptComplete(v1::LoginChatGptCompleteNotification),
     SessionConfigured(v1::SessionConfiguredNotification),
 }
 
@@ -655,7 +581,6 @@ client_notification_definitions! {
 mod tests {
     use super::*;
     use adam_protocol::ThreadId;
-    use adam_protocol::account::PlanType;
     use adam_protocol::parse_command::ParsedCommand;
     use adam_protocol::protocol::AskForApproval;
     use anyhow::Result;
@@ -782,45 +707,6 @@ mod tests {
     }
 
     #[test]
-    fn serialize_chatgpt_auth_tokens_refresh_request() -> Result<()> {
-        let request = ServerRequest::ChatgptAuthTokensRefresh {
-            request_id: RequestId::Integer(8),
-            params: v2::ChatgptAuthTokensRefreshParams {
-                reason: v2::ChatgptAuthTokensRefreshReason::Unauthorized,
-                previous_account_id: Some("org-123".to_string()),
-            },
-        };
-        assert_eq!(
-            json!({
-                "method": "account/chatgptAuthTokens/refresh",
-                "id": 8,
-                "params": {
-                    "reason": "unauthorized",
-                    "previousAccountId": "org-123"
-                }
-            }),
-            serde_json::to_value(&request)?,
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn serialize_get_account_rate_limits() -> Result<()> {
-        let request = ClientRequest::GetAccountRateLimits {
-            request_id: RequestId::Integer(1),
-            params: None,
-        };
-        assert_eq!(
-            json!({
-                "method": "account/rateLimits/read",
-                "id": 1,
-            }),
-            serde_json::to_value(&request)?,
-        );
-        Ok(())
-    }
-
-    #[test]
     fn serialize_config_requirements_read() -> Result<()> {
         let request = ClientRequest::ConfigRequirementsRead {
             request_id: RequestId::Integer(1),
@@ -833,134 +719,6 @@ mod tests {
             }),
             serde_json::to_value(&request)?,
         );
-        Ok(())
-    }
-
-    #[test]
-    fn serialize_account_login_api_key() -> Result<()> {
-        let request = ClientRequest::LoginAccount {
-            request_id: RequestId::Integer(2),
-            params: v2::LoginAccountParams::ApiKey {
-                api_key: "secret".to_string(),
-            },
-        };
-        assert_eq!(
-            json!({
-                "method": "account/login/start",
-                "id": 2,
-                "params": {
-                    "type": "apiKey",
-                    "apiKey": "secret"
-                }
-            }),
-            serde_json::to_value(&request)?,
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn serialize_account_login_chatgpt() -> Result<()> {
-        let request = ClientRequest::LoginAccount {
-            request_id: RequestId::Integer(3),
-            params: v2::LoginAccountParams::Chatgpt,
-        };
-        assert_eq!(
-            json!({
-                "method": "account/login/start",
-                "id": 3,
-                "params": {
-                    "type": "chatgpt"
-                }
-            }),
-            serde_json::to_value(&request)?,
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn serialize_account_logout() -> Result<()> {
-        let request = ClientRequest::LogoutAccount {
-            request_id: RequestId::Integer(4),
-            params: None,
-        };
-        assert_eq!(
-            json!({
-                "method": "account/logout",
-                "id": 4,
-            }),
-            serde_json::to_value(&request)?,
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn serialize_account_login_chatgpt_auth_tokens() -> Result<()> {
-        let request = ClientRequest::LoginAccount {
-            request_id: RequestId::Integer(5),
-            params: v2::LoginAccountParams::ChatgptAuthTokens {
-                access_token: "access-token".to_string(),
-                id_token: "id-token".to_string(),
-            },
-        };
-        assert_eq!(
-            json!({
-                "method": "account/login/start",
-                "id": 5,
-                "params": {
-                    "type": "chatgptAuthTokens",
-                    "accessToken": "access-token",
-                    "idToken": "id-token"
-                }
-            }),
-            serde_json::to_value(&request)?,
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn serialize_get_account() -> Result<()> {
-        let request = ClientRequest::GetAccount {
-            request_id: RequestId::Integer(6),
-            params: v2::GetAccountParams {
-                refresh_token: false,
-            },
-        };
-        assert_eq!(
-            json!({
-                "method": "account/read",
-                "id": 6,
-                "params": {
-                    "refreshToken": false
-                }
-            }),
-            serde_json::to_value(&request)?,
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn account_serializes_fields_in_camel_case() -> Result<()> {
-        let api_key = v2::Account::ApiKey {};
-        assert_eq!(
-            json!({
-                "type": "apiKey",
-            }),
-            serde_json::to_value(&api_key)?,
-        );
-
-        let chatgpt = v2::Account::Chatgpt {
-            email: "user@example.com".to_string(),
-            plan_type: PlanType::Plus,
-        };
-        assert_eq!(
-            json!({
-                "type": "chatgpt",
-                "email": "user@example.com",
-                "planType": "plus",
-            }),
-            serde_json::to_value(&chatgpt)?,
-        );
-
         Ok(())
     }
 

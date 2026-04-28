@@ -3465,7 +3465,6 @@ async fn preflight_auto_compact_with_messages_uses_local_compaction() {
     let mut model_provider = RuntimeEndpoint::openai();
     model_provider.base_url = Some(format!("{}/v1", server.uri()));
     model_provider.env_key = Some("PATH".into());
-    model_provider.requires_openai_auth = false;
     model_provider.set_realtime_turn_streaming_enabled(false);
     model_provider.set_message_turns();
 
@@ -3633,7 +3632,7 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
         mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;
 
     let codex = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
         .with_config(|config| {
             set_test_compact_prompt(config);
             config.model_auto_compact_token_limit = Some(300);
@@ -3756,7 +3755,7 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
         mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;
 
     let codex = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
         .with_config(|config| {
             set_test_compact_prompt(config);
             config.model_auto_compact_token_limit = Some(300);

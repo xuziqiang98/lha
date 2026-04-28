@@ -74,13 +74,6 @@ pub struct RuntimeEndpoint {
     /// Idle timeout (in milliseconds) to wait for activity on a streaming
     /// response before treating the connection as lost.
     pub stream_idle_timeout_ms: Option<u64>,
-    /// Does this provider require an OpenAI API Key or ChatGPT login token? If
-    /// true, user is presented with login screen on first run, and login
-    /// preference and token/key are stored in auth.json. If false (which is
-    /// the default), login screen is skipped, and API key (if needed) comes
-    /// from the "env_key" environment variable.
-    #[serde(default)]
-    pub requires_openai_auth: bool,
     /// Whether this endpoint supports realtime streaming.
     #[serde(default)]
     supports_realtime_streaming: bool,
@@ -247,11 +240,6 @@ impl RuntimeEndpoint {
         self
     }
 
-    pub fn with_openai_auth_requirement(mut self, requires_openai_auth: bool) -> Self {
-        self.requires_openai_auth = requires_openai_auth;
-        self
-    }
-
     pub fn supports_live_web_search(&self) -> bool {
         !self.is_azure_responses_endpoint()
     }
@@ -281,12 +269,8 @@ impl RuntimeEndpoint {
         headers
     }
 
-    pub(crate) fn to_api_provider(&self, use_chatgpt_base_url: bool) -> Result<ApiProvider> {
-        let default_base_url = if use_chatgpt_base_url {
-            "https://chatgpt.com/backend-api/codex"
-        } else {
-            "https://api.openai.com/v1"
-        };
+    pub(crate) fn to_api_provider(&self) -> Result<ApiProvider> {
+        let default_base_url = "https://api.openai.com/v1";
         let base_url = self
             .base_url
             .clone()
@@ -371,7 +355,7 @@ impl RuntimeEndpoint {
             base_url: std::env::var("OPENAI_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
-            env_key: None,
+            env_key: Some("OPENAI_API_KEY".to_string()),
             env_key_instructions: None,
             experimental_bearer_token: None,
             dialect: ConversationDialect::Responses,
@@ -395,7 +379,6 @@ impl RuntimeEndpoint {
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
-            requires_openai_auth: true,
             supports_realtime_streaming: true,
         }
     }
@@ -430,7 +413,6 @@ impl RuntimeEndpoint {
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
-            requires_openai_auth: false,
             supports_realtime_streaming: false,
         }
     }

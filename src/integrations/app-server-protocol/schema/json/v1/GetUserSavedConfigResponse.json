@@ -38,13 +38,6 @@
         }
       ]
     },
-    "ForcedLoginMethod": {
-      "enum": [
-        "chatgpt",
-        "api"
-      ],
-      "type": "string"
-    },
     "Profile": {
       "properties": {
         "approvalPolicy": {
@@ -55,12 +48,6 @@
             {
               "type": "null"
             }
-          ]
-        },
-        "chatgptBaseUrl": {
-          "type": [
-            "string",
-            "null"
           ]
         },
         "model": {
@@ -189,22 +176,6 @@
           "anyOf": [
             {
               "$ref": "#/definitions/AskForApproval"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "forcedChatgptWorkspaceId": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "forcedLoginMethod": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ForcedLoginMethod"
             },
             {
               "type": "null"

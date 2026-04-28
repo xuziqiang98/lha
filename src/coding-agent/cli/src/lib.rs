@@ -1,6 +1,5 @@
 pub mod debug_sandbox;
 mod exit_status;
-pub mod login;
 
 use adam_common::CliConfigOverrides;
 use clap::Parser;

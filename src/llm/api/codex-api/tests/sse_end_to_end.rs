@@ -138,10 +138,7 @@ async fn responses_stream_parses_items_and_completed_end_to_end() -> Result<()> 
         events.push(ev?);
     }
 
-    let events: Vec<ResponseEvent> = events
-        .into_iter()
-        .filter(|ev| !matches!(ev, ResponseEvent::RateLimits(_)))
-        .collect();
+    let events: Vec<ResponseEvent> = events.into_iter().collect();
 
     assert_eq!(events.len(), 3);
 
@@ -209,10 +206,7 @@ async fn responses_stream_aggregates_output_text_deltas() -> Result<()> {
         events.push(ev?);
     }
 
-    let events: Vec<ResponseEvent> = events
-        .into_iter()
-        .filter(|ev| !matches!(ev, ResponseEvent::RateLimits(_)))
-        .collect();
+    let events: Vec<ResponseEvent> = events.into_iter().collect();
 
     assert_eq!(events.len(), 2);
 

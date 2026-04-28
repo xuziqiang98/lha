@@ -525,7 +525,7 @@ async fn ignores_remote_personality_if_remote_models_disabled() -> anyhow::Resul
     let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
 
     let mut builder = test_codex()
-        .with_auth(adam_agent::CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_auth(adam_agent::CodexAuth::from_api_key("Test API Key"))
         .with_config(|config| {
             config.features.disable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
@@ -640,7 +640,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
     let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
 
     let mut builder = test_codex()
-        .with_auth(adam_agent::CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_auth(adam_agent::CodexAuth::from_api_key("Test API Key"))
         .with_config(|config| {
             config.features.enable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
@@ -754,7 +754,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
     .await;
 
     let mut builder = test_codex()
-        .with_auth(adam_agent::CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_auth(adam_agent::CodexAuth::from_api_key("Test API Key"))
         .with_config(|config| {
             config.features.enable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);

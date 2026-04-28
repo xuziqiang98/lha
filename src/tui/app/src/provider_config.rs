@@ -356,7 +356,6 @@ pub(crate) fn persist_custom_provider_files(
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
-            requires_openai_auth: false,
             supports_realtime_streaming: false,
             models: Default::default(),
         });
@@ -369,7 +368,6 @@ pub(crate) fn persist_custom_provider_files(
     endpoint.query_params = None;
     endpoint.http_headers = None;
     endpoint.env_http_headers = None;
-    endpoint.requires_openai_auth = false;
     let model_metadata = endpoint.models.entry(config.model.clone()).or_default();
     model_metadata.context_window = config.model_context_window;
 

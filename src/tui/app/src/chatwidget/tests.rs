@@ -32,7 +32,6 @@ use adam_agent::protocol::AgentReasoningDeltaEvent;
 use adam_agent::protocol::AgentReasoningEvent;
 use adam_agent::protocol::ApplyPatchApprovalRequestEvent;
 use adam_agent::protocol::BackgroundEventEvent;
-use adam_agent::protocol::CreditsSnapshot;
 use adam_agent::protocol::Event;
 use adam_agent::protocol::EventMsg;
 use adam_agent::protocol::ExecApprovalRequestEvent;
@@ -49,7 +48,6 @@ use adam_agent::protocol::McpStartupUpdateEvent;
 use adam_agent::protocol::Op;
 use adam_agent::protocol::PatchApplyBeginEvent;
 use adam_agent::protocol::PatchApplyEndEvent;
-use adam_agent::protocol::RateLimitWindow;
 use adam_agent::protocol::ReviewRequest;
 use adam_agent::protocol::ReviewTarget;
 use adam_agent::protocol::SessionSource;
@@ -67,7 +65,6 @@ use adam_agent::protocol::WarningEvent;
 use adam_common::approval_presets::builtin_approval_presets;
 use adam_otel::OtelManager;
 use adam_protocol::ThreadId;
-use adam_protocol::account::PlanType;
 use adam_protocol::config_types::CollaborationMode;
 use adam_protocol::config_types::ModeKind;
 use adam_protocol::config_types::Personality;
@@ -106,9 +103,6 @@ use toml::Value as TomlValue;
 use crate::provider_config::CustomProviderConfig;
 use crate::provider_config::custom_provider_ref;
 use crate::provider_config::persist_custom_provider_files;
-use base64::Engine;
-use chrono::Utc;
-use serde_json::json;
 
 async fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
@@ -139,19 +133,6 @@ fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> Co
         candidate: candidate.into(),
         allowed: allowed.into(),
         requirement_source: RequirementSource::Unknown,
-    }
-}
-
-fn snapshot(percent: f64) -> RateLimitSnapshot {
-    RateLimitSnapshot {
-        primary: Some(RateLimitWindow {
-            used_percent: percent,
-            window_minutes: Some(60),
-            resets_at: None,
-        }),
-        secondary: None,
-        credits: None,
-        plan_type: None,
     }
 }
 
@@ -1475,7 +1456,6 @@ async fn review_restores_context_window_indicator() {
         id: "token-before".into(),
         msg: EventMsg::TokenCount(TokenCountEvent {
             info: Some(make_token_info(pre_review_tokens, context_window)),
-            rate_limits: None,
         }),
     });
     assert_eq!(chat.bottom_pane.context_window_percent(), Some(2));
@@ -1494,7 +1474,6 @@ async fn review_restores_context_window_indicator() {
         id: "token-review".into(),
         msg: EventMsg::TokenCount(TokenCountEvent {
             info: Some(make_token_info(review_tokens, context_window)),
-            rate_limits: None,
         }),
     });
     assert_eq!(chat.bottom_pane.context_window_percent(), Some(7));
@@ -1523,17 +1502,13 @@ async fn token_count_none_resets_context_indicator() {
         id: "token-before".into(),
         msg: EventMsg::TokenCount(TokenCountEvent {
             info: Some(make_token_info(pre_compact_tokens, context_window)),
-            rate_limits: None,
         }),
     });
     assert_eq!(chat.bottom_pane.context_window_percent(), Some(2));
 
     chat.handle_codex_event(Event {
         id: "token-cleared".into(),
-        msg: EventMsg::TokenCount(TokenCountEvent {
-            info: None,
-            rate_limits: None,
-        }),
+        msg: EventMsg::TokenCount(TokenCountEvent { info: None }),
     });
     assert_eq!(chat.bottom_pane.context_window_percent(), None);
 }
@@ -1562,7 +1537,6 @@ async fn context_indicator_shows_used_tokens_when_window_unknown() {
         id: "token-usage".into(),
         msg: EventMsg::TokenCount(TokenCountEvent {
             info: Some(token_info),
-            rate_limits: None,
         }),
     });
 
@@ -1581,7 +1555,6 @@ async fn context_indicator_uses_real_remaining_percentage() {
         id: "token-usage".into(),
         msg: EventMsg::TokenCount(TokenCountEvent {
             info: Some(make_token_info(10_600, 30_400)),
-            rate_limits: None,
         }),
     });
 
@@ -1726,11 +1699,6 @@ async fn make_chatwidget_manual_with_scrollback_mode(
         session_header: SessionHeader::new(resolved_model.clone()),
         initial_user_message: None,
         token_info: None,
-        rate_limit_snapshot: None,
-        plan_type: None,
-        rate_limit_warnings: RateLimitWarningState::default(),
-        rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
-        rate_limit_poller: None,
         stream_controller: None,
         plan_stream_controller: None,
         running_commands: HashMap::new(),
@@ -1851,11 +1819,6 @@ async fn make_chatwidget_manual_with_frame_requester(
         session_header: SessionHeader::new(resolved_model.clone()),
         initial_user_message: None,
         token_info: None,
-        rate_limit_snapshot: None,
-        plan_type: None,
-        rate_limit_warnings: RateLimitWarningState::default(),
-        rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
-        rate_limit_poller: None,
         stream_controller: None,
         plan_stream_controller: None,
         running_commands: HashMap::new(),
@@ -1928,66 +1891,6 @@ fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
     }
 }
 
-fn set_chatgpt_auth(chat: &mut ChatWidget) {
-    chat.auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    chat.thread_manager = Arc::new(ThreadManager::new(
-        chat.config.adam_home.clone(),
-        chat.auth_manager.clone(),
-        chat.config.model_provider_id.as_str(),
-        chat.config.model_provider.clone(),
-        SessionSource::Cli,
-    ));
-}
-
-fn set_openai_provider(chat: &mut ChatWidget) {
-    chat.config.model_provider_id = "openai".to_string();
-    chat.config.model_provider = adam_llm::RuntimeEndpoint::openai();
-    chat.thread_manager = Arc::new(ThreadManager::new(
-        chat.config.adam_home.clone(),
-        chat.auth_manager.clone(),
-        chat.config.model_provider_id.as_str(),
-        chat.config.model_provider.clone(),
-        SessionSource::Cli,
-    ));
-}
-
-fn write_chatgpt_auth(config: &Config) {
-    let header = json!({
-        "alg": "none",
-        "typ": "JWT",
-    });
-    let payload = json!({
-        "email": "user@example.com",
-        "email_verified": true,
-        "https://api.openai.com/auth": {
-            "chatgpt_plan_type": "pro",
-            "chatgpt_user_id": "user-12345",
-            "user_id": "user-12345",
-        },
-    });
-    let b64 = |value: &serde_json::Value| {
-        base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(serde_json::to_vec(value).expect("serialize jwt segment"))
-    };
-    let raw_jwt = format!("{}.{}.{}", b64(&header), b64(&payload), b64(&json!("sig")));
-    let auth_json = json!({
-        "OPENAI_API_KEY": null,
-        "tokens": {
-            "id_token": raw_jwt,
-            "access_token": "test-access-token",
-            "refresh_token": "test-refresh-token"
-        },
-        "last_refresh": Utc::now(),
-    });
-    let auth_file = config.adam_home.join("auth.json");
-    std::fs::write(
-        auth_file,
-        serde_json::to_string_pretty(&auth_json).expect("serialize auth json"),
-    )
-    .expect("write chatgpt auth");
-}
-
 async fn reload_chat_config_with_saved_providers(
     chat: &mut ChatWidget,
     configs: Vec<CustomProviderConfig>,
@@ -2017,16 +1920,6 @@ async fn reload_chat_config_with_saved_providers(
         chat.config.model_provider.clone(),
         SessionSource::Cli,
     ));
-}
-
-#[tokio::test]
-async fn worked_elapsed_from_resets_when_timer_restarts() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    assert_eq!(chat.worked_elapsed_from(5), 5);
-    assert_eq!(chat.worked_elapsed_from(9), 4);
-    // Simulate status timer resetting (e.g., status indicator recreated for a new task).
-    assert_eq!(chat.worked_elapsed_from(3), 3);
-    assert_eq!(chat.worked_elapsed_from(7), 4);
 }
 
 pub(crate) async fn make_chatwidget_manual_with_sender() -> (
@@ -2099,297 +1992,6 @@ fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {
         last_token_usage: usage(total_tokens),
         model_context_window: Some(context_window),
     }
-}
-
-#[tokio::test]
-async fn rate_limit_warnings_emit_thresholds() {
-    let mut state = RateLimitWarningState::default();
-    let mut warnings: Vec<String> = Vec::new();
-
-    warnings.extend(state.take_warnings(Some(10.0), Some(10079), Some(55.0), Some(299)));
-    warnings.extend(state.take_warnings(Some(55.0), Some(10081), Some(10.0), Some(299)));
-    warnings.extend(state.take_warnings(Some(10.0), Some(10081), Some(80.0), Some(299)));
-    warnings.extend(state.take_warnings(Some(80.0), Some(10081), Some(10.0), Some(299)));
-    warnings.extend(state.take_warnings(Some(10.0), Some(10081), Some(95.0), Some(299)));
-    warnings.extend(state.take_warnings(Some(95.0), Some(10079), Some(10.0), Some(299)));
-
-    assert_eq!(
-        warnings,
-        vec![
-            String::from(
-                "Heads up, you have less than 25% of your 5h limit left. Run /status for a breakdown."
-            ),
-            String::from(
-                "Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown.",
-            ),
-            String::from(
-                "Heads up, you have less than 5% of your 5h limit left. Run /status for a breakdown."
-            ),
-            String::from(
-                "Heads up, you have less than 5% of your weekly limit left. Run /status for a breakdown.",
-            ),
-        ],
-        "expected one warning per limit for the highest crossed threshold"
-    );
-}
-
-#[tokio::test]
-async fn test_rate_limit_warnings_monthly() {
-    let mut state = RateLimitWarningState::default();
-    let mut warnings: Vec<String> = Vec::new();
-
-    warnings.extend(state.take_warnings(Some(75.0), Some(43199), None, None));
-    assert_eq!(
-        warnings,
-        vec![String::from(
-            "Heads up, you have less than 25% of your monthly limit left. Run /status for a breakdown.",
-        ),],
-        "expected one warning per limit for the highest crossed threshold"
-    );
-}
-
-#[tokio::test]
-async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
-        primary: None,
-        secondary: None,
-        credits: Some(CreditsSnapshot {
-            has_credits: true,
-            unlimited: false,
-            balance: Some("17.5".to_string()),
-        }),
-        plan_type: None,
-    }));
-    let initial_balance = chat
-        .rate_limit_snapshot
-        .as_ref()
-        .and_then(|snapshot| snapshot.credits.as_ref())
-        .and_then(|credits| credits.balance.as_deref());
-    assert_eq!(initial_balance, Some("17.5"));
-
-    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
-        primary: Some(RateLimitWindow {
-            used_percent: 80.0,
-            window_minutes: Some(60),
-            resets_at: Some(123),
-        }),
-        secondary: None,
-        credits: None,
-        plan_type: None,
-    }));
-
-    let display = chat
-        .rate_limit_snapshot
-        .as_ref()
-        .expect("rate limits should be cached");
-    let credits = display
-        .credits
-        .as_ref()
-        .expect("credits should persist when headers omit them");
-
-    assert_eq!(credits.balance.as_deref(), Some("17.5"));
-    assert!(!credits.unlimited);
-    assert_eq!(
-        display.primary.as_ref().map(|window| window.used_percent),
-        Some(80.0)
-    );
-}
-
-#[tokio::test]
-async fn rate_limit_snapshot_updates_and_retains_plan_type() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
-        primary: Some(RateLimitWindow {
-            used_percent: 10.0,
-            window_minutes: Some(60),
-            resets_at: None,
-        }),
-        secondary: Some(RateLimitWindow {
-            used_percent: 5.0,
-            window_minutes: Some(300),
-            resets_at: None,
-        }),
-        credits: None,
-        plan_type: Some(PlanType::Plus),
-    }));
-    assert_eq!(chat.plan_type, Some(PlanType::Plus));
-
-    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
-        primary: Some(RateLimitWindow {
-            used_percent: 25.0,
-            window_minutes: Some(30),
-            resets_at: Some(123),
-        }),
-        secondary: Some(RateLimitWindow {
-            used_percent: 15.0,
-            window_minutes: Some(300),
-            resets_at: Some(234),
-        }),
-        credits: None,
-        plan_type: Some(PlanType::Pro),
-    }));
-    assert_eq!(chat.plan_type, Some(PlanType::Pro));
-
-    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
-        primary: Some(RateLimitWindow {
-            used_percent: 30.0,
-            window_minutes: Some(60),
-            resets_at: Some(456),
-        }),
-        secondary: Some(RateLimitWindow {
-            used_percent: 18.0,
-            window_minutes: Some(300),
-            resets_at: Some(567),
-        }),
-        credits: None,
-        plan_type: None,
-    }));
-    assert_eq!(chat.plan_type, Some(PlanType::Pro));
-}
-
-#[tokio::test]
-async fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
-    let (mut chat, _, _) = make_chatwidget_manual(Some(NUDGE_MODEL_SLUG)).await;
-    set_chatgpt_auth(&mut chat);
-    set_openai_provider(&mut chat);
-
-    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
-
-    assert!(matches!(
-        chat.rate_limit_switch_prompt,
-        RateLimitSwitchPromptState::Idle
-    ));
-}
-
-#[tokio::test]
-async fn rate_limit_switch_prompt_shows_once_per_session() {
-    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
-    set_chatgpt_auth(&mut chat);
-    set_openai_provider(&mut chat);
-
-    chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
-    assert!(
-        chat.rate_limit_warnings.primary_index >= 1,
-        "warnings not emitted"
-    );
-    chat.maybe_show_pending_rate_limit_prompt();
-    assert!(matches!(
-        chat.rate_limit_switch_prompt,
-        RateLimitSwitchPromptState::Shown
-    ));
-
-    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
-    assert!(matches!(
-        chat.rate_limit_switch_prompt,
-        RateLimitSwitchPromptState::Shown
-    ));
-}
-
-#[tokio::test]
-async fn rate_limit_switch_prompt_respects_hidden_notice() {
-    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
-    set_chatgpt_auth(&mut chat);
-    set_openai_provider(&mut chat);
-    chat.config.notices.hide_rate_limit_model_nudge = Some(true);
-
-    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
-
-    assert!(matches!(
-        chat.rate_limit_switch_prompt,
-        RateLimitSwitchPromptState::Idle
-    ));
-}
-
-#[tokio::test]
-async fn rate_limit_switch_prompt_defers_until_task_complete() {
-    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
-    set_chatgpt_auth(&mut chat);
-    set_openai_provider(&mut chat);
-
-    chat.bottom_pane.set_task_running(true);
-    chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
-    assert!(matches!(
-        chat.rate_limit_switch_prompt,
-        RateLimitSwitchPromptState::Pending
-    ));
-
-    chat.bottom_pane.set_task_running(false);
-    chat.maybe_show_pending_rate_limit_prompt();
-    assert!(matches!(
-        chat.rate_limit_switch_prompt,
-        RateLimitSwitchPromptState::Shown
-    ));
-}
-
-#[tokio::test]
-async fn rate_limit_nudges_are_hidden_for_custom_provider_models() {
-    let (mut chat, mut rx, _) = make_chatwidget_manual(Some("gpt-5.2")).await;
-    set_chatgpt_auth(&mut chat);
-    chat.config.model_provider_id = "provider_a".to_string();
-
-    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
-
-    assert_eq!(chat.rate_limit_warnings.primary_index, 0);
-    assert!(drain_insert_history(&mut rx).is_empty());
-    assert!(matches!(
-        chat.rate_limit_switch_prompt,
-        RateLimitSwitchPromptState::Idle
-    ));
-}
-
-#[tokio::test]
-async fn rate_limit_nudges_are_hidden_for_unknown_openai_models() {
-    let (mut chat, mut rx, _) = make_chatwidget_manual(Some("custom-openai-model")).await;
-    set_chatgpt_auth(&mut chat);
-    set_openai_provider(&mut chat);
-
-    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
-
-    assert_eq!(chat.rate_limit_warnings.primary_index, 0);
-    assert!(drain_insert_history(&mut rx).is_empty());
-    assert!(matches!(
-        chat.rate_limit_switch_prompt,
-        RateLimitSwitchPromptState::Idle
-    ));
-}
-
-#[tokio::test]
-async fn rate_limit_switch_prompt_pending_clears_after_switching_to_custom_provider() {
-    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5.2")).await;
-    set_chatgpt_auth(&mut chat);
-    set_openai_provider(&mut chat);
-
-    chat.bottom_pane.set_task_running(true);
-    chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
-    assert!(matches!(
-        chat.rate_limit_switch_prompt,
-        RateLimitSwitchPromptState::Pending
-    ));
-
-    chat.config.model_provider_id = "provider_a".to_string();
-    chat.bottom_pane.set_task_running(false);
-    chat.maybe_show_pending_rate_limit_prompt();
-
-    assert!(matches!(
-        chat.rate_limit_switch_prompt,
-        RateLimitSwitchPromptState::Idle
-    ));
-}
-
-#[tokio::test]
-async fn rate_limit_switch_prompt_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    set_chatgpt_auth(&mut chat);
-    set_openai_provider(&mut chat);
-
-    chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
-    chat.maybe_show_pending_rate_limit_prompt();
-
-    let popup = render_bottom_popup(&chat, 80);
-    assert_snapshot!("rate_limit_switch_prompt_popup", popup);
 }
 
 #[tokio::test]
@@ -2541,40 +2143,6 @@ async fn plan_implementation_popup_shows_after_proposed_plan_output() {
         "expected plan popup after proposed plan output, got {popup:?}"
     );
 }
-
-#[tokio::test]
-async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
-    let plan_mask =
-        collaboration_modes::mask_for_kind(chat.thread_manager.as_ref(), ModeKind::Plan)
-            .expect("expected plan collaboration mask");
-    chat.set_collaboration_mask(plan_mask);
-
-    chat.on_task_started();
-    chat.on_plan_update(UpdatePlanArgs {
-        explanation: None,
-        plan: vec![PlanItemArg {
-            step: "First".to_string(),
-            status: StepStatus::Pending,
-        }],
-    });
-    chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
-    chat.on_task_complete(None, false);
-
-    let popup = render_bottom_popup(&chat, 80);
-    assert!(
-        popup.contains("Approaching rate limits"),
-        "expected rate limit popup, got {popup:?}"
-    );
-    assert!(
-        !popup.contains(PLAN_IMPLEMENTATION_TITLE),
-        "expected plan popup to be skipped, got {popup:?}"
-    );
-}
-
 #[tokio::test]
 async fn prevent_idle_sleep_syncs_with_turn_lifecycle() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -4637,7 +4205,6 @@ async fn experimental_features_toggle_saves_on_exit() {
 async fn model_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
     chat.thread_id = Some(ThreadId::new());
-    set_chatgpt_auth(&mut chat);
     chat.open_model_popup();
 
     let popup = render_bottom_popup(&chat, 80);
@@ -4869,275 +4436,6 @@ async fn model_picker_without_auth_shows_same_model_for_different_custom_provide
         "expected current entry to match active provider:\n{popup}"
     );
 }
-
-#[tokio::test]
-async fn model_picker_with_chatgpt_auth_shows_full_list_and_config_models() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("mock-model")).await;
-    chat.thread_id = Some(ThreadId::new());
-    set_chatgpt_auth(&mut chat);
-    reload_chat_config_with_saved_providers(
-        &mut chat,
-        vec![
-            CustomProviderConfig {
-                provider_id: "mock_provider".to_string(),
-                dialect: crate::provider_config::ApiProviderDialect::Responses,
-                base_url: "https://example.test/v1".to_string(),
-                api_key: "sk-test".to_string(),
-                model: "mock-model".to_string(),
-                model_context_window: None,
-            },
-            CustomProviderConfig {
-                provider_id: "mock_provider".to_string(),
-                dialect: crate::provider_config::ApiProviderDialect::Responses,
-                base_url: "https://example.test/v1".to_string(),
-                api_key: "sk-test".to_string(),
-                model: "deepseek-r1".to_string(),
-                model_context_window: None,
-            },
-        ],
-    )
-    .await;
-    chat.set_model("mock-model");
-
-    chat.open_model_popup();
-
-    let popup = render_bottom_popup(&chat, 80);
-    assert!(
-        popup.contains("gpt-5.2-codex"),
-        "expected the full built-in model list with ChatGPT auth:\n{popup}"
-    );
-    assert!(
-        popup.contains("deepseek-r1"),
-        "expected configured models to remain visible with ChatGPT auth:\n{popup}"
-    );
-}
-
-#[tokio::test]
-async fn model_picker_reloads_chatgpt_auth_for_custom_provider_sessions() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("glm-5")).await;
-    chat.thread_id = Some(ThreadId::new());
-    chat.auth_manager = Arc::new(AuthManager::new(
-        chat.config.adam_home.clone(),
-        false,
-        AuthCredentialsStoreMode::File,
-    ));
-    chat.thread_manager = Arc::new(ThreadManager::new(
-        chat.config.adam_home.clone(),
-        chat.auth_manager.clone(),
-        chat.config.model_provider_id.as_str(),
-        chat.config.model_provider.clone(),
-        SessionSource::Cli,
-    ));
-    reload_chat_config_with_saved_providers(
-        &mut chat,
-        vec![CustomProviderConfig {
-            provider_id: "glm_provider".to_string(),
-            dialect: crate::provider_config::ApiProviderDialect::Responses,
-            base_url: "https://example.test/v1".to_string(),
-            api_key: "sk-test".to_string(),
-            model: "glm-5".to_string(),
-            model_context_window: None,
-        }],
-    )
-    .await;
-    write_chatgpt_auth(&chat.config);
-
-    chat.open_model_popup();
-
-    let popup = render_bottom_popup(&chat, 80);
-    assert!(
-        popup.contains("gpt-5.2-codex"),
-        "expected official OpenAI models after reloading ChatGPT auth:\n{popup}"
-    );
-    assert!(
-        popup.contains("glm-5"),
-        "expected configured custom model to remain visible after auth reload:\n{popup}"
-    );
-}
-
-#[tokio::test]
-async fn model_picker_reloads_chatgpt_auth_for_custom_messages_provider_sessions() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("glm-5.1")).await;
-    chat.thread_id = Some(ThreadId::new());
-    chat.auth_manager = Arc::new(AuthManager::new(
-        chat.config.adam_home.clone(),
-        false,
-        AuthCredentialsStoreMode::File,
-    ));
-    chat.thread_manager = Arc::new(ThreadManager::new(
-        chat.config.adam_home.clone(),
-        chat.auth_manager.clone(),
-        chat.config.model_provider_id.as_str(),
-        chat.config.model_provider.clone(),
-        SessionSource::Cli,
-    ));
-    reload_chat_config_with_saved_providers(
-        &mut chat,
-        vec![CustomProviderConfig {
-            provider_id: "glm_provider".to_string(),
-            dialect: crate::provider_config::ApiProviderDialect::Messages,
-            base_url: "https://example.test/v1".to_string(),
-            api_key: "sk-test".to_string(),
-            model: "glm-5.1".to_string(),
-            model_context_window: None,
-        }],
-    )
-    .await;
-    write_chatgpt_auth(&chat.config);
-
-    chat.open_model_popup();
-
-    let popup = render_bottom_popup(&chat, 120);
-    assert!(
-        popup.contains("gpt-5.2-codex"),
-        "expected official OpenAI models after reloading ChatGPT auth for messages provider:\n{popup}"
-    );
-    assert!(
-        popup.contains("glm-5.1"),
-        "expected configured messages-provider model to remain visible after auth reload:\n{popup}"
-    );
-}
-
-#[tokio::test]
-async fn model_picker_with_chatgpt_auth_keeps_builtin_and_custom_same_slug_visible() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    chat.thread_id = Some(ThreadId::new());
-    set_chatgpt_auth(&mut chat);
-    reload_chat_config_with_saved_providers(
-        &mut chat,
-        vec![CustomProviderConfig {
-            provider_id: "provider_a".to_string(),
-            dialect: crate::provider_config::ApiProviderDialect::Responses,
-            base_url: "https://example.test/a".to_string(),
-            api_key: "sk-test-a".to_string(),
-            model: "gpt-5.4".to_string(),
-            model_context_window: None,
-        }],
-    )
-    .await;
-    AdamStateStore::new(&chat.config.adam_home)
-        .set_last_selected_model(
-            &ModelRef::parse("provider_a.responses:gpt-5.4").expect("model ref"),
-            None,
-            None,
-        )
-        .expect("persist active model selection");
-    chat.config = ConfigBuilder::default()
-        .adam_home(chat.config.adam_home.clone())
-        .build()
-        .await
-        .expect("reload config");
-    chat.thread_manager = Arc::new(ThreadManager::new(
-        chat.config.adam_home.clone(),
-        chat.auth_manager.clone(),
-        chat.config.model_provider_id.as_str(),
-        chat.config.model_provider.clone(),
-        SessionSource::Cli,
-    ));
-    chat.set_model("gpt-5.4");
-
-    chat.open_model_popup();
-
-    let popup = render_bottom_popup(&chat, 140);
-    let matching_lines = popup
-        .lines()
-        .filter(|line| {
-            line.contains("gpt-5.4")
-                && (line.contains("Official model from OpenAI provider.")
-                    || line.contains("User-defined model from provider_a (responses) provider."))
-        })
-        .count();
-
-    assert_eq!(matching_lines, 2, "expected two gpt-5.4 entries:\n{popup}");
-    assert!(
-        popup.lines().any(|line| {
-            line.contains("gpt-5.4") && line.contains("Official model from OpenAI provider.")
-        }),
-        "expected official openai description in picker:\n{popup}"
-    );
-    assert!(
-        popup.contains("User-defined model from provider_a (responses) provider."),
-        "expected custom provider description in picker:\n{popup}"
-    );
-    assert_eq!(
-        popup.matches("(current)").count(),
-        1,
-        "expected only one current entry:\n{popup}"
-    );
-    assert!(
-        popup.lines().any(|line| {
-            line.contains("gpt-5.4 (current)")
-                && line.contains("User-defined model from provider_a (responses) provider.")
-        }),
-        "expected current entry to match active custom provider:\n{popup}"
-    );
-}
-
-#[tokio::test]
-async fn model_switcher_with_chatgpt_auth_keeps_builtin_and_custom_same_slug_visible() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
-    chat.thread_id = Some(ThreadId::new());
-    set_chatgpt_auth(&mut chat);
-    reload_chat_config_with_saved_providers(
-        &mut chat,
-        vec![CustomProviderConfig {
-            provider_id: "provider_a".to_string(),
-            dialect: crate::provider_config::ApiProviderDialect::Responses,
-            base_url: "https://example.test/a".to_string(),
-            api_key: "sk-test-a".to_string(),
-            model: "gpt-5.2".to_string(),
-            model_context_window: None,
-        }],
-    )
-    .await;
-    chat.set_model("gpt-5.2");
-
-    let presets = chat
-        .thread_manager
-        .try_list_model_switcher_models(&chat.config)
-        .expect("model switcher presets");
-    chat.open_all_models_popup(presets);
-
-    let popup = render_bottom_popup(&chat, 140);
-    let matching_lines = popup
-        .lines()
-        .filter(|line| {
-            line.contains("gpt-5.2")
-                && !line.contains("gpt-5.2-codex")
-                && (line.contains("Official model from OpenAI provider.")
-                    || line.contains("User-defined model from provider_a (responses) provider."))
-        })
-        .count();
-
-    assert_eq!(matching_lines, 2, "expected two gpt-5.2 entries:\n{popup}");
-    assert!(
-        popup.contains("Official model from OpenAI provider."),
-        "expected official openai entry in picker:\n{popup}"
-    );
-    assert!(
-        popup.contains("User-defined model from provider_a (responses) provider."),
-        "expected custom provider description in picker:\n{popup}"
-    );
-    assert!(
-        popup.lines().any(|line| {
-            line.contains("gpt-5.2") && line.contains("Official model from OpenAI provider.")
-        }),
-        "expected official openai description on built-in entry:\n{popup}"
-    );
-    assert_eq!(
-        popup.matches("(current)").count(),
-        1,
-        "expected only one current entry:\n{popup}"
-    );
-    assert!(
-        popup.lines().any(|line| {
-            line.contains("gpt-5.2 (current)")
-                && line.contains("User-defined model from provider_a (responses) provider.")
-        }),
-        "expected current entry to match active custom provider:\n{popup}"
-    );
-}
-
 #[tokio::test]
 async fn model_switcher_prefers_exact_provider_for_current_marker() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
@@ -5216,14 +4514,7 @@ async fn model_cap_error_does_not_switch_models() {
         }),
     });
 
-    while let Ok(event) = rx.try_recv() {
-        if let AppEvent::UpdateModel(model) = event {
-            assert_eq!(
-                model, "boomslang",
-                "did not expect model switch on model-cap error"
-            );
-        }
-    }
+    while rx.try_recv().is_ok() {}
 
     while let Ok(event) = op_rx.try_recv() {
         if let Op::OverrideTurnContext { model, .. } = event {
@@ -5354,7 +4645,6 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
 async fn model_reasoning_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
 
-    set_chatgpt_auth(&mut chat);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
@@ -5368,7 +4658,6 @@ async fn model_reasoning_selection_popup_snapshot() {
 async fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
 
-    set_chatgpt_auth(&mut chat);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
@@ -5381,8 +4670,6 @@ async fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
 #[tokio::test]
 async fn reasoning_popup_shows_extra_high_with_space() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
-
-    set_chatgpt_auth(&mut chat);
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
     chat.open_reasoning_popup(preset);
@@ -5603,7 +4890,6 @@ async fn feedback_upload_consent_popup_snapshot() {
 async fn reasoning_popup_escape_returns_to_model_popup() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
     chat.thread_id = Some(ThreadId::new());
-    set_chatgpt_auth(&mut chat);
     chat.open_model_popup();
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
@@ -7339,36 +6625,4 @@ async fn review_queues_user_messages_snapshot() {
     })
     .unwrap();
     assert_snapshot!(term.backend().vt100().screen().contents());
-}
-
-#[test]
-fn model_popup_refreshes_after_chatgpt_auth_reload_only() {
-    assert!(ChatWidget::should_refresh_models_after_auth_reload(
-        None,
-        Some(AuthMode::Chatgpt),
-        true,
-    ));
-    assert!(ChatWidget::should_refresh_models_after_auth_reload(
-        Some(AuthMode::ApiKey),
-        Some(AuthMode::Chatgpt),
-        true,
-    ));
-    assert!(!ChatWidget::should_refresh_models_after_auth_reload(
-        Some(AuthMode::Chatgpt),
-        Some(AuthMode::Chatgpt),
-        true,
-    ));
-    assert!(!ChatWidget::should_refresh_models_after_auth_reload(
-        Some(AuthMode::ApiKey),
-        Some(AuthMode::ApiKey),
-        true,
-    ));
-    assert!(!ChatWidget::should_refresh_models_after_auth_reload(
-        Some(AuthMode::ApiKey),
-        Some(AuthMode::Chatgpt),
-        false,
-    ));
-    assert!(!ChatWidget::should_refresh_models_after_auth_reload(
-        None, None, true
-    ));
 }

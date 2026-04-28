@@ -1,5 +1,4 @@
 use crate::error::ApiError;
-use adam_llm_types::RateLimitSnapshot;
 use adam_llm_types::ReasoningEffort as ReasoningEffortConfig;
 use adam_llm_types::ReasoningSummary as ReasoningSummaryConfig;
 use adam_llm_types::TokenUsage;
@@ -64,7 +63,6 @@ pub enum ResponseEvent {
     ReasoningSummaryPartAdded {
         summary_index: i64,
     },
-    RateLimits(RateLimitSnapshot),
     ModelsEtag(String),
 }
 

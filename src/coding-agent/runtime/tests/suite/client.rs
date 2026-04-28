@@ -1,9 +1,6 @@
 use adam_agent::AuthManager;
 use adam_agent::CodexAuth;
 use adam_agent::ContentItem;
-use adam_agent::NewThread;
-use adam_agent::ThreadManager;
-use adam_agent::auth::AuthCredentialsStoreMode;
 use adam_agent::default_client::originator;
 use adam_agent::error::CodexErr;
 use adam_agent::models_manager::manager::ModelsManager;
@@ -16,7 +13,6 @@ use adam_llm::RuntimeEndpoint;
 use adam_llm::ToolCallPayload;
 use adam_llm::TurnEvent;
 use adam_llm::TurnRequest;
-use adam_llm::built_in_runtime_endpoints;
 use adam_otel::OtelManager;
 use adam_protocol::ThreadId;
 use adam_protocol::config_types::CollaborationMode;
@@ -34,11 +30,9 @@ use adam_protocol::openai_models::ReasoningEffort;
 use adam_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
-use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
-use core_test_support::responses::sse;
 use core_test_support::responses::sse_failed;
 use core_test_support::runtime_client::TestRuntimeClient;
 use core_test_support::skip_if_no_network;
@@ -179,58 +173,6 @@ fn assert_message_ends_with(request_body: &serde_json::Value, text: &str) {
         content.ends_with(text),
         "expected message content '{content}' to end with '{text}'"
     );
-}
-
-/// Writes an `auth.json` into the provided `adam_home` with the specified parameters.
-/// Returns the fake JWT string written to `tokens.id_token`.
-#[expect(clippy::unwrap_used)]
-fn write_auth_json(
-    adam_home: &TempDir,
-    openai_api_key: Option<&str>,
-    chatgpt_plan_type: &str,
-    access_token: &str,
-    account_id: Option<&str>,
-) -> String {
-    use base64::Engine as _;
-
-    let header = json!({ "alg": "none", "typ": "JWT" });
-    let payload = json!({
-        "email": "user@example.com",
-        "https://api.openai.com/auth": {
-            "chatgpt_plan_type": chatgpt_plan_type,
-            "chatgpt_account_id": account_id.unwrap_or("acc-123")
-        }
-    });
-
-    let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
-    let header_b64 = b64(&serde_json::to_vec(&header).unwrap());
-    let payload_b64 = b64(&serde_json::to_vec(&payload).unwrap());
-    let signature_b64 = b64(b"sig");
-    let fake_jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
-
-    let mut tokens = json!({
-        "id_token": fake_jwt,
-        "access_token": access_token,
-        "refresh_token": "refresh-test",
-    });
-    if let Some(acc) = account_id {
-        tokens["account_id"] = json!(acc);
-    }
-
-    let auth_json = json!({
-        "OPENAI_API_KEY": openai_api_key,
-        "tokens": tokens,
-        // RFC3339 datetime; value doesn't matter for these tests
-        "last_refresh": chrono::Utc::now(),
-    });
-
-    std::fs::write(
-        adam_home.path().join("auth.json"),
-        serde_json::to_string_pretty(&auth_json).unwrap(),
-    )
-    .unwrap();
-
-    fake_jwt
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -502,136 +444,6 @@ async fn includes_base_instructions_override_in_request() {
             .unwrap()
             .contains("test instructions")
     );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn chatgpt_auth_sends_correct_request() {
-    skip_if_no_network!();
-
-    // Mock server
-    let server = MockServer::start().await;
-
-    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
-
-    let mut model_provider = built_in_runtime_endpoints()["openai"].clone();
-    model_provider.base_url = Some(format!("{}/api/codex", server.uri()));
-    let mut builder = test_codex()
-        .with_auth(create_dummy_codex_auth())
-        .with_config(move |config| {
-            config.model_provider = model_provider;
-        });
-    let test = builder
-        .build(&server)
-        .await
-        .expect("create new conversation");
-    let codex = test.codex.clone();
-    let thread_id = test.session_configured.session_id;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-        })
-        .await
-        .unwrap();
-
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    let request = resp_mock.single_request();
-    assert_eq!(request.path(), "/api/codex/responses");
-    let request_authorization = request
-        .header("authorization")
-        .expect("authorization header");
-    let request_originator = request.header("originator").expect("originator header");
-    let request_chatgpt_account_id = request
-        .header("chatgpt-account-id")
-        .expect("chatgpt-account-id header");
-    let request_body = request.body_json();
-
-    let session_id = request.header("session_id").expect("session_id header");
-    assert_eq!(session_id, thread_id.to_string());
-
-    assert_eq!(request_originator, originator().value);
-    assert_eq!(request_authorization, "Bearer Access Token");
-    assert_eq!(request_chatgpt_account_id, "account_id");
-    assert!(request_body["stream"].as_bool().unwrap());
-    assert_eq!(
-        request_body["include"][0].as_str().unwrap(),
-        "reasoning.encrypted_content"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
-    skip_if_no_network!();
-
-    // Mock server
-    let server = MockServer::start().await;
-
-    let first = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse_completed("resp1"), "text/event-stream");
-
-    // Expect API key header, no ChatGPT account header required.
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(header_regex("Authorization", r"Bearer sk-test-key"))
-        .respond_with(first)
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let mut model_provider = built_in_runtime_endpoints()["openai"].clone();
-    model_provider.base_url = Some(format!("{}/v1", server.uri()));
-
-    // Init session
-    let adam_home = TempDir::new().unwrap();
-    // Write auth.json that contains both API key and ChatGPT tokens for a plan that should prefer ChatGPT,
-    // but config will force API key preference.
-    let _jwt = write_auth_json(
-        &adam_home,
-        Some("sk-test-key"),
-        "pro",
-        "Access-123",
-        Some("acc-123"),
-    );
-
-    let mut config = load_default_config_for_test(&adam_home).await;
-    config.model_provider = model_provider;
-
-    let auth_manager =
-        match CodexAuth::from_auth_storage(adam_home.path(), AuthCredentialsStoreMode::File) {
-            Ok(Some(auth)) => adam_agent::AuthManager::from_auth_for_testing(auth),
-            Ok(None) => panic!("No CodexAuth found in adam_home"),
-            Err(e) => panic!("Failed to load CodexAuth: {e}"),
-        };
-    let thread_manager = ThreadManager::new(
-        adam_home.path().to_path_buf(),
-        auth_manager,
-        config.model_provider_id.as_str(),
-        config.model_provider.clone(),
-        SessionSource::Exec,
-    );
-    let NewThread { thread: codex, .. } = thread_manager
-        .start_thread(config)
-        .await
-        .expect("create new conversation");
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-        })
-        .await
-        .unwrap();
-
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1220,7 +1032,6 @@ async fn messages_api_folds_developer_messages_into_system() {
     let mut model_provider = RuntimeEndpoint::openai();
     model_provider.base_url = Some(format!("{}/v1", server.uri()));
     model_provider.env_key = Some("PATH".into());
-    model_provider.requires_openai_auth = false;
     model_provider.set_realtime_turn_streaming_enabled(false);
     model_provider.set_message_turns();
 
@@ -1328,7 +1139,6 @@ async fn messages_api_streamed_agent_message_reuses_item_id() {
     let mut model_provider = RuntimeEndpoint::openai();
     model_provider.base_url = Some(format!("{}/v1", server.uri()));
     model_provider.env_key = Some("PATH".into());
-    model_provider.requires_openai_auth = false;
     model_provider.set_realtime_turn_streaming_enabled(false);
     model_provider.set_message_turns();
 
@@ -1408,7 +1218,6 @@ async fn messages_api_filters_unsupported_freeform_tools() {
     let mut model_provider = RuntimeEndpoint::openai();
     model_provider.base_url = Some(format!("{}/v1", server.uri()));
     model_provider.env_key = Some("PATH".into());
-    model_provider.requires_openai_auth = false;
     model_provider.set_realtime_turn_streaming_enabled(false);
     model_provider.set_message_turns();
 
@@ -1638,175 +1447,17 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn token_count_includes_rate_limits_snapshot() {
-    skip_if_no_network!();
-    let server = MockServer::start().await;
-
-    let sse_body = sse(vec![ev_completed_with_tokens("resp_rate", 123)]);
-
-    let response = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .insert_header("x-codex-primary-used-percent", "12.5")
-        .insert_header("x-codex-secondary-used-percent", "40.0")
-        .insert_header("x-codex-primary-window-minutes", "10")
-        .insert_header("x-codex-secondary-window-minutes", "60")
-        .insert_header("x-codex-primary-reset-at", "1704069000")
-        .insert_header("x-codex-secondary-reset-at", "1704074400")
-        .set_body_raw(sse_body, "text/event-stream");
-
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(response)
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let mut provider = built_in_runtime_endpoints()["openai"].clone();
-    provider.base_url = Some(format!("{}/v1", server.uri()));
-
-    let mut builder = test_codex()
-        .with_auth(CodexAuth::from_api_key("test"))
-        .with_config(move |config| {
-            config.model_provider = provider;
-        });
-    let codex = builder
-        .build(&server)
-        .await
-        .expect("create conversation")
-        .codex;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-        })
-        .await
-        .unwrap();
-
-    let first_token_event =
-        wait_for_event(&codex, |msg| matches!(msg, EventMsg::TokenCount(_))).await;
-    let rate_limit_only = match first_token_event {
-        EventMsg::TokenCount(ev) => ev,
-        _ => unreachable!(),
-    };
-
-    let rate_limit_json = serde_json::to_value(&rate_limit_only).unwrap();
-    pretty_assertions::assert_eq!(
-        rate_limit_json,
-        json!({
-            "info": null,
-            "rate_limits": {
-                "primary": {
-                    "used_percent": 12.5,
-                    "window_minutes": 10,
-                    "resets_at": 1704069000
-                },
-                "secondary": {
-                    "used_percent": 40.0,
-                    "window_minutes": 60,
-                    "resets_at": 1704074400
-                },
-                "credits": null,
-                "plan_type": null
-            }
-        })
-    );
-
-    let token_event = wait_for_event(
-        &codex,
-        |msg| matches!(msg, EventMsg::TokenCount(ev) if ev.info.is_some()),
-    )
-    .await;
-    let final_payload = match token_event {
-        EventMsg::TokenCount(ev) => ev,
-        _ => unreachable!(),
-    };
-    // Assert full JSON for the final token count event (usage + rate limits)
-    let final_json = serde_json::to_value(&final_payload).unwrap();
-    pretty_assertions::assert_eq!(
-        final_json,
-        json!({
-            "info": {
-                "total_token_usage": {
-                    "input_tokens": 123,
-                    "cached_input_tokens": 0,
-                    "output_tokens": 0,
-                    "reasoning_output_tokens": 0,
-                    "total_tokens": 123
-                },
-                "last_token_usage": {
-                    "input_tokens": 123,
-                    "cached_input_tokens": 0,
-                    "output_tokens": 0,
-                    "reasoning_output_tokens": 0,
-                    "total_tokens": 123
-                },
-                // Default model is gpt-5.1-codex-max in tests → 95% usable context window
-                "model_context_window": 258400
-            },
-            "rate_limits": {
-                "primary": {
-                    "used_percent": 12.5,
-                    "window_minutes": 10,
-                    "resets_at": 1704069000
-                },
-                "secondary": {
-                    "used_percent": 40.0,
-                    "window_minutes": 60,
-                    "resets_at": 1704074400
-                },
-                "credits": null,
-                "plan_type": null
-            }
-        })
-    );
-    let usage = final_payload
-        .info
-        .expect("token usage info should be recorded after completion");
-    assert_eq!(usage.total_token_usage.total_tokens, 123);
-    let final_snapshot = final_payload
-        .rate_limits
-        .expect("latest rate limit snapshot should be retained");
-    assert_eq!(
-        final_snapshot
-            .primary
-            .as_ref()
-            .map(|window| window.used_percent),
-        Some(12.5)
-    );
-    assert_eq!(
-        final_snapshot
-            .primary
-            .as_ref()
-            .and_then(|window| window.resets_at),
-        Some(1704069000)
-    );
-
-    wait_for_event(&codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
+async fn usage_limit_error_emits_error_event() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let response = ResponseTemplate::new(429)
-        .insert_header("x-codex-primary-used-percent", "100.0")
-        .insert_header("x-codex-secondary-used-percent", "87.5")
-        .insert_header("x-codex-primary-over-secondary-limit-percent", "95.0")
-        .insert_header("x-codex-primary-window-minutes", "15")
-        .insert_header("x-codex-secondary-window-minutes", "60")
-        .set_body_json(json!({
+    let response = ResponseTemplate::new(429).set_body_json(json!({
             "error": {
                 "type": "usage_limit_reached",
                 "message": "limit reached",
-                "resets_at": 1704067242,
-                "plan_type": "pro"
+                "resets_at": 1704067242
             }
-        }));
+    }));
 
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
@@ -1819,21 +1470,6 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
     let codex_fixture = builder.build(&server).await?;
     let codex = codex_fixture.codex.clone();
 
-    let expected_limits = json!({
-        "primary": {
-            "used_percent": 100.0,
-            "window_minutes": 15,
-            "resets_at": null
-        },
-        "secondary": {
-            "used_percent": 87.5,
-            "window_minutes": 60,
-            "resets_at": null
-        },
-        "credits": null,
-        "plan_type": null
-    });
-
     let submission_id = codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -1844,20 +1480,6 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
         })
         .await
         .expect("submission should succeed while emitting usage limit error events");
-
-    let token_event = wait_for_event(&codex, |msg| matches!(msg, EventMsg::TokenCount(_))).await;
-    let EventMsg::TokenCount(event) = token_event else {
-        unreachable!();
-    };
-
-    let event_json = serde_json::to_value(&event).expect("serialize token count event");
-    pretty_assertions::assert_eq!(
-        event_json,
-        json!({
-            "info": null,
-            "rate_limits": expected_limits
-        })
-    );
 
     let error_event = wait_for_event(&codex, |msg| matches!(msg, EventMsg::Error(_))).await;
     let EventMsg::Error(error_event) = error_event else {
@@ -2107,7 +1729,7 @@ async fn env_var_overrides_loaded_auth() {
 }
 
 fn create_dummy_codex_auth() -> CodexAuth {
-    CodexAuth::create_dummy_chatgpt_auth_for_testing()
+    CodexAuth::from_api_key("Test API Key")
 }
 
 /// Scenario:

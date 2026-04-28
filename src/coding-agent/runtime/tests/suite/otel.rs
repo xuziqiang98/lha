@@ -628,7 +628,6 @@ async fn record_responses_sets_span_fields_for_response_events() {
 
     let expected = [
         ("created", None::<&str>, None::<&str>),
-        ("rate_limits", None, None),
         ("function_call", Some("output_item_added"), Some("fn")),
         ("message_from_assistant", Some("output_item_done"), None),
         ("reasoning", Some("output_item_done"), None),

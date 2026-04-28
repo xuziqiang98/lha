@@ -11,7 +11,6 @@ use crate::metrics::names::WEBSOCKET_REQUEST_DURATION_METRIC;
 use crate::otel_provider::traceparent_context_from_env;
 use adam_api::ApiError;
 use adam_api::ResponseEvent;
-use adam_app_server_protocol::AuthMode;
 use adam_llm_types::TranscriptItem;
 use adam_protocol::ThreadId;
 use adam_protocol::config_types::ReasoningSummary;
@@ -51,7 +50,7 @@ impl OtelManager {
         slug: &str,
         account_id: Option<String>,
         account_email: Option<String>,
-        auth_mode: Option<AuthMode>,
+        auth_mode: Option<String>,
         log_user_prompts: bool,
         terminal_type: String,
         session_source: SessionSource,
@@ -59,7 +58,7 @@ impl OtelManager {
         Self {
             metadata: OtelEventMetadata {
                 conversation_id,
-                auth_mode: auth_mode.map(|m| m.to_string()),
+                auth_mode,
                 account_id,
                 account_email,
                 session_source: session_source.to_string(),
@@ -657,7 +656,6 @@ impl OtelManager {
                 "reasoning_summary_part_added".into()
             }
             ResponseEvent::ServerReasoningIncluded(_) => "server_reasoning_included".into(),
-            ResponseEvent::RateLimits(_) => "rate_limits".into(),
             ResponseEvent::ModelsEtag(_) => "models_etag".into(),
         }
     }

@@ -2,9 +2,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use crate::analytics_client::AnalyticsEventsClient;
-use crate::analytics_client::SkillInvocation;
-use crate::analytics_client::TrackEventsContext;
 use crate::instructions::SkillInstructions;
 use crate::skills::SkillMetadata;
 use adam_otel::OtelManager;
@@ -21,8 +18,6 @@ pub(crate) struct SkillInjections {
 pub(crate) async fn build_skill_injections(
     mentioned_skills: &[SkillMetadata],
     otel: Option<&OtelManager>,
-    analytics_client: &AnalyticsEventsClient,
-    tracking: TrackEventsContext,
 ) -> SkillInjections {
     if mentioned_skills.is_empty() {
         return SkillInjections::default();
@@ -32,17 +27,10 @@ pub(crate) async fn build_skill_injections(
         items: Vec::with_capacity(mentioned_skills.len()),
         warnings: Vec::new(),
     };
-    let mut invocations = Vec::new();
-
     for skill in mentioned_skills {
         match fs::read_to_string(&skill.path).await {
             Ok(contents) => {
                 emit_skill_injected_metric(otel, skill, "ok");
-                invocations.push(SkillInvocation {
-                    skill_name: skill.name.clone(),
-                    skill_scope: skill.scope,
-                    skill_path: skill.path.clone(),
-                });
                 result.items.push(TranscriptItem::from(SkillInstructions {
                     name: skill.name.clone(),
                     path: skill.path.to_string_lossy().into_owned(),
@@ -60,8 +48,6 @@ pub(crate) async fn build_skill_injections(
             }
         }
     }
-
-    analytics_client.track_skill_invocations(tracking, invocations);
 
     result
 }

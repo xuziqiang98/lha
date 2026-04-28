@@ -19,7 +19,6 @@ workspace = true
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 adam-arg0 = { workspace = true }
-adam-cloud-requirements = { workspace = true }
 adam-common = { workspace = true, features = [
     "cli",
     "elapsed",

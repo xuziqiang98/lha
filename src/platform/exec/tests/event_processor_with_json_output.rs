@@ -1279,10 +1279,7 @@ fn task_complete_produces_turn_completed_with_usage() {
     };
     let token_count_event = event(
         "e1",
-        EventMsg::TokenCount(adam_agent::protocol::TokenCountEvent {
-            info: Some(info),
-            rate_limits: None,
-        }),
+        EventMsg::TokenCount(adam_agent::protocol::TokenCountEvent { info: Some(info) }),
     );
     assert!(ep.collect_thread_events(&token_count_event).is_empty());
 

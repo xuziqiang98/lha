@@ -14,8 +14,6 @@ use adam_agent::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use adam_app_server_protocol::AddConversationListenerParams;
 use adam_app_server_protocol::AppsListParams;
 use adam_app_server_protocol::ArchiveConversationParams;
-use adam_app_server_protocol::CancelLoginAccountParams;
-use adam_app_server_protocol::CancelLoginChatGptParams;
 use adam_app_server_protocol::ClientInfo;
 use adam_app_server_protocol::ClientNotification;
 use adam_app_server_protocol::CollaborationModeListParams;
@@ -24,8 +22,6 @@ use adam_app_server_protocol::ConfigReadParams;
 use adam_app_server_protocol::ConfigValueWriteParams;
 use adam_app_server_protocol::FeedbackUploadParams;
 use adam_app_server_protocol::ForkConversationParams;
-use adam_app_server_protocol::GetAccountParams;
-use adam_app_server_protocol::GetAuthStatusParams;
 use adam_app_server_protocol::InitializeParams;
 use adam_app_server_protocol::InterruptConversationParams;
 use adam_app_server_protocol::JSONRPCError;
@@ -35,8 +31,6 @@ use adam_app_server_protocol::JSONRPCNotification;
 use adam_app_server_protocol::JSONRPCRequest;
 use adam_app_server_protocol::JSONRPCResponse;
 use adam_app_server_protocol::ListConversationsParams;
-use adam_app_server_protocol::LoginAccountParams;
-use adam_app_server_protocol::LoginApiKeyParams;
 use adam_app_server_protocol::ModelListParams;
 use adam_app_server_protocol::NewConversationParams;
 use adam_app_server_protocol::RemoveConversationListenerParams;
@@ -268,15 +262,6 @@ impl McpProcess {
         self.send_request("interruptConversation", params).await
     }
 
-    /// Send a `getAuthStatus` JSON-RPC request.
-    pub async fn send_get_auth_status_request(
-        &mut self,
-        params: GetAuthStatusParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("getAuthStatus", params).await
-    }
-
     /// Send a `getUserSavedConfig` JSON-RPC request.
     pub async fn send_get_user_saved_config_request(&mut self) -> anyhow::Result<i64> {
         self.send_request("getUserSavedConfig", None).await
@@ -285,34 +270,6 @@ impl McpProcess {
     /// Send a `getUserAgent` JSON-RPC request.
     pub async fn send_get_user_agent_request(&mut self) -> anyhow::Result<i64> {
         self.send_request("getUserAgent", None).await
-    }
-
-    /// Send an `account/rateLimits/read` JSON-RPC request.
-    pub async fn send_get_account_rate_limits_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("account/rateLimits/read", None).await
-    }
-
-    /// Send an `account/read` JSON-RPC request.
-    pub async fn send_get_account_request(
-        &mut self,
-        params: GetAccountParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("account/read", params).await
-    }
-
-    /// Send an `account/login/start` JSON-RPC request with ChatGPT auth tokens.
-    pub async fn send_chatgpt_auth_tokens_login_request(
-        &mut self,
-        id_token: String,
-        access_token: String,
-    ) -> anyhow::Result<i64> {
-        let params = LoginAccountParams::ChatgptAuthTokens {
-            id_token,
-            access_token,
-        };
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("account/login/start", params).await
     }
 
     /// Send a `feedback/upload` JSON-RPC request.
@@ -480,20 +437,6 @@ impl McpProcess {
         self.send_request("forkConversation", params).await
     }
 
-    /// Send a `loginApiKey` JSON-RPC request.
-    pub async fn send_login_api_key_request(
-        &mut self,
-        params: LoginApiKeyParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("loginApiKey", params).await
-    }
-
-    /// Send a `loginChatGpt` JSON-RPC request.
-    pub async fn send_login_chat_gpt_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("loginChatGpt", None).await
-    }
-
     /// Send a `turn/start` JSON-RPC request (v2).
     pub async fn send_turn_start_request(
         &mut self,
@@ -521,20 +464,6 @@ impl McpProcess {
         self.send_request("review/start", params).await
     }
 
-    /// Send a `cancelLoginChatGpt` JSON-RPC request.
-    pub async fn send_cancel_login_chat_gpt_request(
-        &mut self,
-        params: CancelLoginChatGptParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("cancelLoginChatGpt", params).await
-    }
-
-    /// Send a `logoutChatGpt` JSON-RPC request.
-    pub async fn send_logout_chat_gpt_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("logoutChatGpt", None).await
-    }
-
     pub async fn send_config_read_request(
         &mut self,
         params: ConfigReadParams,
@@ -557,40 +486,6 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("config/batchWrite", params).await
-    }
-
-    /// Send an `account/logout` JSON-RPC request.
-    pub async fn send_logout_account_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("account/logout", None).await
-    }
-
-    /// Send an `account/login/start` JSON-RPC request for API key login.
-    pub async fn send_login_account_api_key_request(
-        &mut self,
-        api_key: &str,
-    ) -> anyhow::Result<i64> {
-        let params = serde_json::json!({
-            "type": "apiKey",
-            "apiKey": api_key,
-        });
-        self.send_request("account/login/start", Some(params)).await
-    }
-
-    /// Send an `account/login/start` JSON-RPC request for ChatGPT login.
-    pub async fn send_login_account_chatgpt_request(&mut self) -> anyhow::Result<i64> {
-        let params = serde_json::json!({
-            "type": "chatgpt"
-        });
-        self.send_request("account/login/start", Some(params)).await
-    }
-
-    /// Send an `account/login/cancel` JSON-RPC request.
-    pub async fn send_cancel_login_account_request(
-        &mut self,
-        params: CancelLoginAccountParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("account/login/cancel", params).await
     }
 
     /// Send a `fuzzyFileSearch` JSON-RPC request.

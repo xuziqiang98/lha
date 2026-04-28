@@ -2,7 +2,6 @@ use crate::input::InputQueue;
 use crate::session::SessionId;
 use crate::session::SubmissionId;
 use adam_llm::ItemHandle;
-use adam_llm::RateLimitSnapshot;
 use adam_llm::RuntimeNotice;
 use adam_llm::SemanticOutputItem;
 use adam_llm::ToolCallRequest;
@@ -75,10 +74,6 @@ pub enum AgentEvent {
         session_id: SessionId,
         submission_id: SubmissionId,
         response: ToolResultItem,
-    },
-    RateLimitsUpdated {
-        session_id: SessionId,
-        snapshot: RateLimitSnapshot,
     },
     ServerReasoningIncluded {
         session_id: SessionId,

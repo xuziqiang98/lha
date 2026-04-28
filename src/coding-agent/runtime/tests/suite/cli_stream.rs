@@ -1,5 +1,4 @@
 use adam_agent::RolloutRecorder;
-use adam_agent::auth::CODEX_API_KEY_ENV_VAR;
 use adam_agent::protocol::GitInfo;
 use adam_utils_cargo_bin::find_resource;
 use assert_cmd::Command as AssertCommand;
@@ -239,7 +238,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .arg(&repo_root)
         .arg(&prompt);
     cmd.env("ADAM_HOME", home.path())
-        .env(CODEX_API_KEY_ENV_VAR, "dummy")
+        .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
         // Required for CLI arg parsing even though fixture short-circuits network usage.
         .env("OPENAI_BASE_URL", "http://unused.local");

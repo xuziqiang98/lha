@@ -45,7 +45,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
 
     let harness = TestCodexHarness::with_builder(
         test_codex()
-            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_auth(CodexAuth::from_api_key("Test API Key"))
             .with_config(|config| {
                 config.features.enable(Feature::RemoteCompaction);
             }),
@@ -110,12 +110,8 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     let compact_request = compact_mock.single_request();
     assert_eq!(compact_request.path(), "/v1/responses/compact");
     assert_eq!(
-        compact_request.header("chatgpt-account-id").as_deref(),
-        Some("account_id")
-    );
-    assert_eq!(
         compact_request.header("authorization").as_deref(),
-        Some("Bearer Access Token")
+        Some("Bearer Test API Key")
     );
     let compact_body = compact_request.body_json();
     assert_eq!(
@@ -156,7 +152,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
 
     let harness = TestCodexHarness::with_builder(
         test_codex()
-            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_auth(CodexAuth::from_api_key("Test API Key"))
             .with_config(|config| {
                 config.features.enable(Feature::RemoteCompaction);
             }),
@@ -225,7 +221,7 @@ async fn remote_manual_compact_emits_context_compaction_items() -> Result<()> {
 
     let harness = TestCodexHarness::with_builder(
         test_codex()
-            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_auth(CodexAuth::from_api_key("Test API Key"))
             .with_config(|config| {
                 config.features.enable(Feature::RemoteCompaction);
             }),
@@ -315,7 +311,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
 
     let harness = TestCodexHarness::with_builder(
         test_codex()
-            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_auth(CodexAuth::from_api_key("Test API Key"))
             .with_config(|config| {
                 config.features.enable(Feature::RemoteCompaction);
             }),
@@ -415,7 +411,7 @@ async fn remote_compact_backfills_latest_plan_into_replacement_history() -> Resu
 
     let harness = TestCodexHarness::with_builder(
         test_codex()
-            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_auth(CodexAuth::from_api_key("Test API Key"))
             .with_config(|config| {
                 config.features.enable(Feature::RemoteCompaction);
                 config.features.enable(Feature::BackfillCompactPlanContext);
@@ -530,7 +526,7 @@ async fn remote_compact_backfills_recent_skills_into_replacement_history() -> Re
             .with_pre_build_hook(|home| {
                 write_skill(home, "demo", "demo skill", skill_body);
             })
-            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_auth(CodexAuth::from_api_key("Test API Key"))
             .with_config(|config| {
                 config.features.enable(Feature::RemoteCompaction);
                 config.features.enable(Feature::BackfillCompactPlanContext);
@@ -655,7 +651,7 @@ async fn remote_compact_backfills_latest_unfinished_update_plan() -> Result<()> 
 
     let harness = TestCodexHarness::with_builder(
         test_codex()
-            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_auth(CodexAuth::from_api_key("Test API Key"))
             .with_config(|config| {
                 config.features.enable(Feature::RemoteCompaction);
                 config.features.enable(Feature::BackfillCompactPlanContext);

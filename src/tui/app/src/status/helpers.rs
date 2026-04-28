@@ -1,16 +1,9 @@
 use crate::exec_command::relativize_to_home;
 use crate::text_formatting;
-use adam_agent::AuthManager;
-use adam_agent::CodexAuth;
 use adam_agent::config::Config;
 use adam_agent::project_doc::discover_project_doc_paths;
-use adam_protocol::account::PlanType;
-use chrono::DateTime;
-use chrono::Local;
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
-
-use super::account::StatusAccountDisplay;
 
 fn normalize_agents_display_path(path: &Path) -> String {
     dunce::simplified(path).display().to_string()
@@ -84,24 +77,6 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
     }
 }
 
-pub(crate) fn compose_account_display(
-    auth_manager: &AuthManager,
-    plan: Option<PlanType>,
-) -> Option<StatusAccountDisplay> {
-    let auth = auth_manager.auth_cached()?;
-
-    match auth {
-        CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
-            let email = auth.get_account_email();
-            let plan = plan
-                .map(|plan_type| title_case(format!("{plan_type:?}").as_str()))
-                .or_else(|| Some("Unknown".to_string()));
-            Some(StatusAccountDisplay::ChatGpt { email, plan })
-        }
-        CodexAuth::ApiKey(_) => Some(StatusAccountDisplay::ApiKey),
-    }
-}
-
 pub(crate) fn format_tokens_compact(value: i64) -> String {
     let value = value.max(0);
     if value == 0 {
@@ -164,26 +139,4 @@ pub(crate) fn format_directory_display(directory: &Path, max_width: Option<usize
     }
 
     formatted
-}
-
-pub(crate) fn format_reset_timestamp(dt: DateTime<Local>, captured_at: DateTime<Local>) -> String {
-    let time = dt.format("%H:%M").to_string();
-    if dt.date_naive() == captured_at.date_naive() {
-        time
-    } else {
-        format!("{time} on {}", dt.format("%-d %b"))
-    }
-}
-
-pub(crate) fn title_case(s: &str) -> String {
-    if s.is_empty() {
-        return String::new();
-    }
-    let mut chars = s.chars();
-    let first = match chars.next() {
-        Some(c) => c,
-        None => return String::new(),
-    };
-    let rest: String = chars.as_str().to_ascii_lowercase();
-    first.to_uppercase().collect::<String>() + &rest
 }

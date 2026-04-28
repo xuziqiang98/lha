@@ -85,16 +85,12 @@ version = "0.95.0-alpha.1"
 dependencies = [
  "adam-app-server-protocol",
  "adam-arg0",
- "adam-backend-client",
- "adam-chatgpt",
- "adam-cloud-requirements",
  "adam-coding-agent",
  "adam-common",
  "adam-execpolicy",
  "adam-feedback",
  "adam-file-search",
  "adam-llm",
- "adam-login",
  "adam-protocol",
  "adam-rmcp-client",
  "adam-utils-absolute-path",
@@ -186,20 +182,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "adam-backend-client"
-version = "0.95.0-alpha.1"
-dependencies = [
- "adam-backend-openapi-models",
- "adam-coding-agent",
- "adam-protocol",
- "anyhow",
- "pretty_assertions",
- "reqwest",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "adam-backend-openapi-models"
 version = "0.95.0-alpha.1"
 dependencies = [
@@ -209,37 +191,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "adam-chatgpt"
-version = "0.95.0-alpha.1"
-dependencies = [
- "adam-coding-agent",
- "adam-common",
- "adam-git",
- "adam-utils-cargo-bin",
- "anyhow",
- "clap",
- "pretty_assertions",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "urlencoding",
-]
-
-[[package]]
 name = "adam-cli"
 version = "0.95.0-alpha.1"
 dependencies = [
  "adam-app-server",
  "adam-app-server-protocol",
  "adam-arg0",
- "adam-chatgpt",
- "adam-cloud-tasks",
  "adam-coding-agent",
  "adam-common",
  "adam-exec",
  "adam-execpolicy",
- "adam-login",
  "adam-mcp-server",
  "adam-protocol",
  "adam-responses-api-proxy",
@@ -259,7 +220,7 @@ dependencies = [
  "pretty_assertions",
  "regex-lite",
  "serde_json",
- "supports-color 3.0.2",
+ "supports-color",
  "tempfile",
  "tokio",
  "toml 0.9.5",
@@ -288,68 +249,6 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "zstd",
-]
-
-[[package]]
-name = "adam-cloud-requirements"
-version = "0.95.0-alpha.1"
-dependencies = [
- "adam-backend-client",
- "adam-coding-agent",
- "adam-otel",
- "adam-protocol",
- "async-trait",
- "base64",
- "pretty_assertions",
- "serde_json",
- "tempfile",
- "tokio",
- "toml 0.9.5",
- "tracing",
-]
-
-[[package]]
-name = "adam-cloud-tasks"
-version = "0.95.0-alpha.1"
-dependencies = [
- "adam-cloud-tasks-client",
- "adam-coding-agent",
- "adam-common",
- "adam-login",
- "adam-tui",
- "anyhow",
- "async-trait",
- "base64",
- "chrono",
- "clap",
- "crossterm",
- "owo-colors",
- "pretty_assertions",
- "ratatui",
- "reqwest",
- "serde",
- "serde_json",
- "supports-color 3.0.2",
- "tokio",
- "tokio-stream",
- "tracing",
- "tracing-subscriber",
- "unicode-width 0.2.1",
-]
-
-[[package]]
-name = "adam-cloud-tasks-client"
-version = "0.95.0-alpha.1"
-dependencies = [
- "adam-backend-client",
- "adam-git",
- "anyhow",
- "async-trait",
- "chrono",
- "diffy",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -476,7 +375,6 @@ name = "adam-exec"
 version = "0.95.0-alpha.1"
 dependencies = [
  "adam-arg0",
- "adam-cloud-requirements",
  "adam-coding-agent",
  "adam-common",
  "adam-llm",
@@ -495,7 +393,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shlex",
- "supports-color 3.0.2",
+ "supports-color",
  "tempfile",
  "tokio",
  "tracing",
@@ -629,30 +527,6 @@ dependencies = [
  "strum_macros 0.27.2",
  "tracing",
  "ts-rs",
-]
-
-[[package]]
-name = "adam-login"
-version = "0.95.0-alpha.1"
-dependencies = [
- "adam-app-server-protocol",
- "adam-coding-agent",
- "anyhow",
- "base64",
- "chrono",
- "core_test_support",
- "rand 0.9.2",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "tiny_http",
- "tokio",
- "url",
- "urlencoding",
- "webbrowser",
- "wiremock",
 ]
 
 [[package]]
@@ -836,16 +710,12 @@ dependencies = [
  "adam-api",
  "adam-app-server-protocol",
  "adam-arg0",
- "adam-backend-client",
- "adam-chatgpt",
  "adam-cli",
- "adam-cloud-requirements",
  "adam-coding-agent",
  "adam-common",
  "adam-feedback",
  "adam-file-search",
  "adam-llm",
- "adam-login",
  "adam-otel",
  "adam-protocol",
  "adam-state",
@@ -887,7 +757,7 @@ dependencies = [
  "shlex",
  "strum 0.27.2",
  "strum_macros 0.27.2",
- "supports-color 3.0.2",
+ "supports-color",
  "tempfile",
  "textwrap 0.16.2",
  "thiserror 2.0.17",
@@ -4760,10 +4630,6 @@ name = "owo-colors"
 version = "4.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48dd4f4a2c8405440fd0462561f0e5806bd0f77e86f51c761481bdd4018b545e"
-dependencies = [
- "supports-color 2.1.0",
- "supports-color 3.0.2",
-]
 
 [[package]]
 name = "parking"
@@ -6705,16 +6571,6 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
-
-[[package]]
-name = "supports-color"
-version = "2.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6398cde53adc3c4557306a96ce67b302968513830a77a95b2b17305d9719a89"
-dependencies = [
- "is-terminal",
- "is_ci",
-]
 
 [[package]]
 name = "supports-color"

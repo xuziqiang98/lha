@@ -35,9 +35,6 @@ use crate::plan_tool::UpdatePlanArgs;
 use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
 use adam_git::GhostCommit;
-pub use adam_llm_types::CreditsSnapshot;
-pub use adam_llm_types::RateLimitSnapshot;
-pub use adam_llm_types::RateLimitWindow;
 pub use adam_llm_types::TokenUsage;
 use adam_utils_absolute_path::AbsolutePathBuf;
 use mcp_types::CallToolResult;
@@ -1219,7 +1216,6 @@ impl TokenUsageInfo {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TokenCountEvent {
     pub info: Option<TokenUsageInfo>,
-    pub rate_limits: Option<RateLimitSnapshot>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]

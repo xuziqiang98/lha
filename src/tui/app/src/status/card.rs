@@ -5,42 +5,27 @@ use crate::history_cell::with_border_with_inner_width;
 use crate::version::CODEX_CLI_VERSION;
 use adam_agent::config::Config;
 use adam_agent::config::display_model_provider_ref;
-use adam_agent::models_manager::manager::ModelsManager;
 use adam_agent::protocol::NetworkAccess;
 use adam_agent::protocol::SandboxPolicy;
 use adam_agent::protocol::TokenUsage;
 use adam_agent::protocol::TokenUsageInfo;
 use adam_common::summarize_sandbox_policy;
 use adam_protocol::ThreadId;
-use adam_protocol::account::PlanType;
 use adam_protocol::openai_models::ReasoningEffort;
-use chrono::DateTime;
-use chrono::Local;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use url::Url;
 
-use super::account::StatusAccountDisplay;
 use super::format::FieldFormatter;
 use super::format::line_display_width;
 use super::format::push_label;
 use super::format::truncate_line_to_width;
-use super::helpers::compose_account_display;
 use super::helpers::compose_agents_summary;
 use super::helpers::compose_model_display;
 use super::helpers::format_directory_display;
 use super::helpers::format_tokens_compact;
-use super::rate_limits::RateLimitSnapshotDisplay;
-use super::rate_limits::StatusRateLimitData;
-use super::rate_limits::StatusRateLimitRow;
-use super::rate_limits::StatusRateLimitValue;
-use super::rate_limits::compose_rate_limit_data;
-use super::rate_limits::format_status_limit_summary;
-use super::rate_limits::render_status_limit_progress_bar;
-use crate::wrapping::RtOptions;
-use crate::wrapping::word_wrap_lines;
 use adam_agent::AuthManager;
 
 #[derive(Debug, Clone)]
@@ -68,64 +53,22 @@ struct StatusHistoryCell {
     agents_summary: String,
     collaboration_mode: Option<String>,
     model_provider: Option<String>,
-    show_limits: bool,
-    show_usage_note: bool,
-    account: Option<StatusAccountDisplay>,
     thread_name: Option<String>,
     session_id: Option<String>,
     forked_from: Option<String>,
     context_compact_count: usize,
     token_usage: StatusTokenUsageData,
-    rate_limits: StatusRateLimitData,
-}
-
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn new_status_output(
-    config: &Config,
-    auth_manager: &AuthManager,
-    token_info: Option<&TokenUsageInfo>,
-    total_usage: &TokenUsage,
-    session_id: &Option<ThreadId>,
-    thread_name: Option<String>,
-    forked_from: Option<ThreadId>,
-    rate_limits: Option<&RateLimitSnapshotDisplay>,
-    plan_type: Option<PlanType>,
-    now: DateTime<Local>,
-    model_name: &str,
-    collaboration_mode: Option<&str>,
-    reasoning_effort_override: Option<Option<ReasoningEffort>>,
-) -> CompositeHistoryCell {
-    new_status_output_with_context_compact_count(
-        config,
-        auth_manager,
-        token_info,
-        total_usage,
-        session_id,
-        thread_name,
-        forked_from,
-        rate_limits,
-        plan_type,
-        now,
-        model_name,
-        collaboration_mode,
-        reasoning_effort_override,
-        0,
-    )
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn new_status_output_with_context_compact_count(
     config: &Config,
-    auth_manager: &AuthManager,
+    _auth_manager: &AuthManager,
     token_info: Option<&TokenUsageInfo>,
     total_usage: &TokenUsage,
     session_id: &Option<ThreadId>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
-    rate_limits: Option<&RateLimitSnapshotDisplay>,
-    plan_type: Option<PlanType>,
-    now: DateTime<Local>,
     model_name: &str,
     collaboration_mode: Option<&str>,
     reasoning_effort_override: Option<Option<ReasoningEffort>>,
@@ -134,15 +77,12 @@ pub(crate) fn new_status_output_with_context_compact_count(
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
     let card = StatusHistoryCell::new(
         config,
-        auth_manager,
+        _auth_manager,
         token_info,
         total_usage,
         session_id,
         thread_name,
         forked_from,
-        rate_limits,
-        plan_type,
-        now,
         model_name,
         collaboration_mode,
         reasoning_effort_override,
@@ -156,15 +96,12 @@ impl StatusHistoryCell {
     #[allow(clippy::too_many_arguments)]
     fn new(
         config: &Config,
-        auth_manager: &AuthManager,
+        _auth_manager: &AuthManager,
         token_info: Option<&TokenUsageInfo>,
         total_usage: &TokenUsage,
         session_id: &Option<ThreadId>,
         thread_name: Option<String>,
         forked_from: Option<ThreadId>,
-        rate_limits: Option<&RateLimitSnapshotDisplay>,
-        plan_type: Option<PlanType>,
-        now: DateTime<Local>,
         model_name: &str,
         collaboration_mode: Option<&str>,
         reasoning_effort_override: Option<Option<ReasoningEffort>>,
@@ -214,15 +151,6 @@ impl StatusHistoryCell {
         };
         let agents_summary = compose_agents_summary(config);
         let model_provider = format_model_provider(config);
-        let account = compose_account_display(auth_manager, plan_type);
-        let show_limits = matches!(account, Some(StatusAccountDisplay::ChatGpt { .. }))
-            && config.model_provider.is_openai()
-            && !ModelsManager::is_configured_custom_model(
-                &model_name,
-                config,
-                auth_manager.get_internal_auth_mode(),
-            );
-        let show_usage_note = show_limits;
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let forked_from = forked_from.map(|id| id.to_string());
         let default_usage = TokenUsage::default();
@@ -242,8 +170,6 @@ impl StatusHistoryCell {
             output: total_usage.output_tokens,
             context_window,
         };
-        let rate_limits = compose_rate_limit_data(rate_limits, now);
-
         Self {
             model_name,
             model_details,
@@ -253,15 +179,11 @@ impl StatusHistoryCell {
             agents_summary,
             collaboration_mode: collaboration_mode.map(ToString::to_string),
             model_provider,
-            show_limits,
-            show_usage_note,
-            account,
             thread_name,
             session_id,
             forked_from,
             context_compact_count,
             token_usage,
-            rate_limits,
         }
     }
 
@@ -298,110 +220,6 @@ impl StatusHistoryCell {
             Span::from(")").dim(),
         ])
     }
-
-    fn rate_limit_lines(
-        &self,
-        available_inner_width: usize,
-        formatter: &FieldFormatter,
-    ) -> Vec<Line<'static>> {
-        match &self.rate_limits {
-            StatusRateLimitData::Available(rows_data) => {
-                if rows_data.is_empty() {
-                    return vec![
-                        formatter.line("Limits", vec![Span::from("data not available yet").dim()]),
-                    ];
-                }
-
-                self.rate_limit_row_lines(rows_data, available_inner_width, formatter)
-            }
-            StatusRateLimitData::Stale(rows_data) => {
-                let mut lines =
-                    self.rate_limit_row_lines(rows_data, available_inner_width, formatter);
-                lines.push(formatter.line(
-                    "Warning",
-                    vec![Span::from("limits may be stale - start new turn to refresh.").dim()],
-                ));
-                lines
-            }
-            StatusRateLimitData::Missing => {
-                vec![formatter.line("Limits", vec![Span::from("data not available yet").dim()])]
-            }
-        }
-    }
-
-    fn rate_limit_row_lines(
-        &self,
-        rows: &[StatusRateLimitRow],
-        available_inner_width: usize,
-        formatter: &FieldFormatter,
-    ) -> Vec<Line<'static>> {
-        let mut lines = Vec::with_capacity(rows.len().saturating_mul(2));
-
-        for row in rows {
-            match &row.value {
-                StatusRateLimitValue::Window {
-                    percent_used,
-                    resets_at,
-                } => {
-                    let percent_remaining = (100.0 - percent_used).clamp(0.0, 100.0);
-                    let value_spans = vec![
-                        Span::from(render_status_limit_progress_bar(percent_remaining)),
-                        Span::from(" "),
-                        Span::from(format_status_limit_summary(percent_remaining)),
-                    ];
-                    let base_spans = formatter.full_spans(row.label.as_str(), value_spans);
-                    let base_line = Line::from(base_spans.clone());
-
-                    if let Some(resets_at) = resets_at.as_ref() {
-                        let resets_span = Span::from(format!("(resets {resets_at})")).dim();
-                        let mut inline_spans = base_spans.clone();
-                        inline_spans.push(Span::from(" ").dim());
-                        inline_spans.push(resets_span.clone());
-
-                        if line_display_width(&Line::from(inline_spans.clone()))
-                            <= available_inner_width
-                        {
-                            lines.push(Line::from(inline_spans));
-                        } else {
-                            lines.push(base_line);
-                            lines.push(formatter.continuation(vec![resets_span]));
-                        }
-                    } else {
-                        lines.push(base_line);
-                    }
-                }
-                StatusRateLimitValue::Text(text) => {
-                    let label = row.label.clone();
-                    let spans =
-                        formatter.full_spans(label.as_str(), vec![Span::from(text.clone())]);
-                    lines.push(Line::from(spans));
-                }
-            }
-        }
-
-        lines
-    }
-
-    fn collect_rate_limit_labels(&self, seen: &mut BTreeSet<String>, labels: &mut Vec<String>) {
-        match &self.rate_limits {
-            StatusRateLimitData::Available(rows) => {
-                if rows.is_empty() {
-                    push_label(labels, seen, "Limits");
-                } else {
-                    for row in rows {
-                        push_label(labels, seen, row.label.as_str());
-                    }
-                }
-            }
-            StatusRateLimitData::Stale(rows) => {
-                for row in rows {
-                    push_label(labels, seen, row.label.as_str());
-                }
-                push_label(labels, seen, "Warning");
-            }
-            StatusRateLimitData::Missing => push_label(labels, seen, "Limits"),
-        }
-    }
 }
 
 impl HistoryCell for StatusHistoryCell {
@@ -420,18 +238,6 @@ impl HistoryCell for StatusHistoryCell {
             return Vec::new();
         }
 
-        let account_value = self.account.as_ref().map(|account| match account {
-            StatusAccountDisplay::ChatGpt { email, plan } => match (email, plan) {
-                (Some(email), Some(plan)) => format!("{email} ({plan})"),
-                (Some(email), None) => email.clone(),
-                (None, Some(plan)) => plan.clone(),
-                (None, None) => "ChatGPT".to_string(),
-            },
-            StatusAccountDisplay::ApiKey => {
-                "API key configured (run codex login to use ChatGPT)".to_string()
-            }
-        });
-
         let mut labels: Vec<String> =
             vec!["Model", "Directory", "Approval", "Sandbox", "Agents.md"]
                 .into_iter()
@@ -442,9 +248,6 @@ impl HistoryCell for StatusHistoryCell {
 
         if self.model_provider.is_some() {
             push_label(&mut labels, &mut seen, "Model provider");
-        }
-        if account_value.is_some() {
-            push_label(&mut labels, &mut seen, "Account");
         }
         if thread_name.is_some() {
             push_label(&mut labels, &mut seen, "Thread name");
@@ -466,31 +269,8 @@ impl HistoryCell for StatusHistoryCell {
             push_label(&mut labels, &mut seen, "Context compact");
         }
 
-        if self.show_limits {
-            self.collect_rate_limit_labels(&mut seen, &mut labels);
-        }
-
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
         let value_width = formatter.value_width(available_inner_width);
-
-        if self.show_usage_note {
-            let note_first_line = Line::from(vec![
-                Span::from("Visit ").cyan(),
-                "https://chatgpt.com/codex/settings/usage"
-                    .cyan()
-                    .underlined(),
-                Span::from(" for up-to-date").cyan(),
-            ]);
-            let note_second_line = Line::from(vec![
-                Span::from("information on rate limits and credits").cyan(),
-            ]);
-            let note_lines = word_wrap_lines(
-                [note_first_line, note_second_line],
-                RtOptions::new(available_inner_width),
-            );
-            lines.extend(note_lines);
-            lines.push(Line::from(Vec::<Span<'static>>::new()));
-        }
 
         let mut model_spans = vec![Span::from(self.model_name.clone())];
         if !self.model_details.is_empty() {
@@ -510,10 +290,6 @@ impl HistoryCell for StatusHistoryCell {
         lines.push(formatter.line("Sandbox", vec![Span::from(self.sandbox.clone())]));
         lines.push(formatter.line("Agents.md", vec![Span::from(self.agents_summary.clone())]));
 
-        if let Some(account_value) = account_value {
-            lines.push(formatter.line("Account", vec![Span::from(account_value)]));
-        }
-
         if let Some(thread_name) = thread_name {
             lines.push(formatter.line("Thread name", vec![Span::from(thread_name.to_string())]));
         }
@@ -530,10 +306,7 @@ impl HistoryCell for StatusHistoryCell {
         }
 
         lines.push(Line::from(Vec::<Span<'static>>::new()));
-        // Hide token usage only for ChatGPT subscribers
-        if !matches!(self.account, Some(StatusAccountDisplay::ChatGpt { .. })) {
-            lines.push(formatter.line("Token usage", self.token_usage_spans()));
-        }
+        lines.push(formatter.line("Token usage", self.token_usage_spans()));
 
         if let Some(spans) = self.context_window_spans() {
             lines.push(formatter.line("Context window", spans));
@@ -543,10 +316,6 @@ impl HistoryCell for StatusHistoryCell {
                 "Context compact",
                 vec![Span::from(self.context_compact_count.to_string())],
             ));
-        }
-
-        if self.show_limits {
-            lines.extend(self.rate_limit_lines(available_inner_width, &formatter));
         }
 
         let content_width = lines.iter().map(line_display_width).max().unwrap_or(0);

@@ -42,7 +42,6 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use adam_agent::AuthManager;
-use adam_agent::CodexAuth;
 use adam_agent::ThreadManager;
 use adam_agent::config::Config;
 use adam_agent::config::ConfigBuilder;
@@ -1654,15 +1653,13 @@ impl App {
             model = updated_model;
         }
 
-        let auth = auth_manager.auth().await;
-        let auth_ref = auth.as_ref();
         let otel_manager = OtelManager::new(
             ThreadId::new(),
             model.as_str(),
             model.as_str(),
-            auth_ref.and_then(CodexAuth::get_account_id),
-            auth_ref.and_then(CodexAuth::get_account_email),
-            auth_ref.map(CodexAuth::api_auth_mode),
+            None,
+            None,
+            None,
             config.otel.log_user_prompt,
             adam_agent::terminal::user_agent(),
             SessionSource::Cli,
@@ -2285,17 +2282,8 @@ impl App {
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
-            AppEvent::RateLimitSnapshotFetched(snapshot) => {
-                self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
-            }
             AppEvent::ConnectorsLoaded(result) => {
                 self.chat_widget.on_connectors_loaded(result);
-            }
-            AppEvent::UpdateReasoningEffort(effort) => {
-                self.on_update_reasoning_effort(effort);
-            }
-            AppEvent::UpdateModel(model) => {
-                self.chat_widget.set_model(&model);
             }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
@@ -2311,9 +2299,6 @@ impl App {
             }
             AppEvent::OpenAllModelsPopup { models } => {
                 self.chat_widget.open_all_models_popup(models);
-            }
-            AppEvent::OpenModelPopupWithPresets { models } => {
-                self.chat_widget.open_model_popup_with_presets(models);
             }
             AppEvent::OpenFullAccessConfirmation {
                 preset,
@@ -2786,9 +2771,6 @@ impl App {
                 self.chat_widget
                     .set_world_writable_warning_acknowledged(ack);
             }
-            AppEvent::UpdateRateLimitSwitchPromptHidden(hidden) => {
-                self.chat_widget.set_rate_limit_switch_prompt_hidden(hidden);
-            }
             AppEvent::PersistFullAccessWarningAcknowledged => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.adam_home)
                     .set_hide_full_access_warning(true)
@@ -2816,21 +2798,6 @@ impl App {
                     );
                     self.chat_widget.add_error_message(format!(
                         "Failed to save Agent mode warning preference: {err}"
-                    ));
-                }
-            }
-            AppEvent::PersistRateLimitSwitchPromptHidden => {
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.adam_home)
-                    .set_hide_rate_limit_model_nudge(true)
-                    .apply()
-                    .await
-                {
-                    tracing::error!(
-                        error = %err,
-                        "failed to persist rate limit switch prompt preference"
-                    );
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to save rate limit reminder preference: {err}"
                     ));
                 }
             }
@@ -4128,7 +4095,6 @@ mod tests {
                 request_max_retries: None,
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
-                requires_openai_auth: false,
                 supports_realtime_streaming: false,
                 models: Default::default(),
             });

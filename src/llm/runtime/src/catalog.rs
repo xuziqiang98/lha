@@ -1,6 +1,5 @@
 use crate::Result;
-use crate::auth::AuthContext;
-use crate::auth::auth_provider_from_context;
+use crate::auth::auth_provider_from_endpoint;
 use adam_api::ModelsClient;
 use adam_api::ReqwestTransport;
 use adam_client::HttpTransport;
@@ -24,7 +23,6 @@ pub enum CatalogRefreshStrategy {
 pub async fn fetch_remote_models(
     http_client: Client,
     provider: &crate::provider::RuntimeEndpoint,
-    auth: Option<AuthContext>,
     client_version: &str,
     extra_headers: HeaderMap,
     request_timeout: Duration,
@@ -32,8 +30,8 @@ pub async fn fetch_remote_models(
     let transport = ReqwestTransport::new(http_client);
     fetch_remote_models_with_transport(
         transport,
-        provider.to_api_provider(auth.as_ref().is_some_and(|auth| auth.use_chatgpt_base_url))?,
-        auth_provider_from_context(auth),
+        provider.to_api_provider()?,
+        auth_provider_from_endpoint(provider)?,
         client_version,
         extra_headers,
         request_timeout,

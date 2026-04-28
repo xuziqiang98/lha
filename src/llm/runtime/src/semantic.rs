@@ -9,7 +9,6 @@ use tokio::sync::mpsc;
 
 use crate::BaseInstructions;
 use crate::Personality;
-use crate::RateLimitSnapshot;
 use crate::Result;
 use crate::TokenUsage;
 use crate::TranscriptItem;
@@ -435,7 +434,6 @@ pub enum TurnEvent {
         response_id: String,
         token_usage: Option<TokenUsage>,
     },
-    RateLimits(RateLimitSnapshot),
     ModelsEtag(String),
 }
 
@@ -496,7 +494,6 @@ impl TurnEvent {
                 response_id: response_id.clone(),
                 token_usage: token_usage.clone(),
             },
-            Self::RateLimits(snapshot) => ResponseEvent::RateLimits(snapshot.clone()),
             Self::ModelsEtag(etag) => ResponseEvent::ModelsEtag(etag.clone()),
         })
     }
@@ -646,7 +643,6 @@ fn adapt_response_event(
                 token_usage,
             }]
         }
-        ResponseEvent::RateLimits(snapshot) => vec![TurnEvent::RateLimits(snapshot)],
         ResponseEvent::ModelsEtag(etag) => vec![TurnEvent::ModelsEtag(etag)],
     };
 

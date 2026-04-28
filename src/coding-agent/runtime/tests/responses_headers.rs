@@ -5,7 +5,6 @@ use adam_agent::CodexAuth;
 use adam_agent::ContentItem;
 use adam_agent::WEB_SEARCH_ELIGIBLE_HEADER;
 use adam_agent::models_manager::manager::ModelsManager;
-use adam_app_server_protocol::AuthMode;
 use adam_llm::RuntimeEndpoint;
 use adam_llm::TurnEvent;
 use adam_llm::TurnRequest;
@@ -58,7 +57,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
     let config = Arc::new(config);
 
     let conversation_id = ThreadId::new();
-    let auth_mode = AuthMode::Chatgpt;
+    let auth_mode = "apikey".to_string();
     let session_source = SessionSource::SubAgent(SubAgentSource::Review);
     let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
     let otel_manager = OtelManager::new(
@@ -67,7 +66,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
-        Some(auth_mode),
+        Some(auth_mode.clone()),
         false,
         "test".to_string(),
         session_source.clone(),
@@ -146,7 +145,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
     let config = Arc::new(config);
 
     let conversation_id = ThreadId::new();
-    let auth_mode = AuthMode::Chatgpt;
+    let auth_mode = "apikey".to_string();
     let session_source = SessionSource::SubAgent(SubAgentSource::Other("my-task".to_string()));
     let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
 
@@ -156,7 +155,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
-        Some(auth_mode),
+        Some(auth_mode.clone()),
         false,
         "test".to_string(),
         session_source.clone(),

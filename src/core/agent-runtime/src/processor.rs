@@ -198,15 +198,6 @@ impl TurnEventProcessor for SessionTurnProcessor {
                     .await;
                 Ok(TurnEventUpdate::default())
             }
-            TurnEvent::RateLimits(snapshot) => {
-                self.session
-                    .emit_event(AgentEvent::RateLimitsUpdated {
-                        session_id: self.session.session_id,
-                        snapshot,
-                    })
-                    .await;
-                Ok(TurnEventUpdate::default())
-            }
             TurnEvent::ModelsEtag(etag) => {
                 self.session
                     .emit_event(AgentEvent::ModelsEtagUpdated {

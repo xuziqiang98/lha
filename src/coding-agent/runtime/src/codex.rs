@@ -7,10 +7,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use crate::AuthManager;
-use crate::CodexAuth;
 use crate::SandboxState;
-use crate::analytics_client::AnalyticsEventsClient;
-use crate::analytics_client::build_track_events_context;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
@@ -132,7 +129,6 @@ use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::effective_mcp_servers;
 use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
-use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
@@ -155,7 +151,6 @@ use crate::protocol::ExecApprovalRequestEvent;
 use crate::protocol::McpServerRefreshConfig;
 use crate::protocol::Op;
 use crate::protocol::PlanDeltaEvent;
-use crate::protocol::RateLimitSnapshot;
 use crate::protocol::ReasoningContentDeltaEvent;
 use crate::protocol::ReasoningRawContentDeltaEvent;
 use crate::protocol::RequestUserInputEvent;
@@ -902,24 +897,22 @@ impl Session {
         };
 
         let history_meta_fut = crate::message_history::history_metadata(&config);
-        let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
         let auth_and_mcp_fut = async move {
-            let auth = auth_manager_clone.auth().await;
-            let mcp_servers = effective_mcp_servers(&config_for_mcp, auth.as_ref());
+            let mcp_servers = effective_mcp_servers(&config_for_mcp);
             let auth_statuses = compute_auth_statuses(
                 mcp_servers.iter(),
                 config_for_mcp.mcp_oauth_credentials_store_mode,
             )
             .await;
-            (auth, mcp_servers, auth_statuses)
+            (mcp_servers, auth_statuses)
         };
 
         // Join all independent futures.
         let (
             rollout_recorder_and_state_db,
             (history_log_id, history_entry_count),
-            (auth, mcp_servers, auth_statuses),
+            (mcp_servers, auth_statuses),
         ) = tokio::join!(rollout_fut, history_meta_fut, auth_and_mcp_fut);
 
         let (rollout_recorder, state_db_ctx) = rollout_recorder_and_state_db.map_err(|e| {
@@ -956,14 +949,13 @@ impl Session {
         }
         maybe_push_unstable_features_warning(&config, &mut post_session_configured_events);
 
-        let auth = auth.as_ref();
         let otel_manager = OtelManager::new(
             conversation_id,
             session_configuration.collaboration_mode.model(),
             session_configuration.collaboration_mode.model(),
-            auth.and_then(CodexAuth::get_account_id),
-            auth.and_then(CodexAuth::get_account_email),
-            auth.map(CodexAuth::api_auth_mode),
+            None,
+            None,
+            None,
             config.otel.log_user_prompt,
             terminal::user_agent(),
             session_configuration.session_source.clone(),
@@ -1023,10 +1015,6 @@ impl Session {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
-            analytics_events_client: AnalyticsEventsClient::new(
-                Arc::clone(&config),
-                Arc::clone(&auth_manager),
-            ),
             notifier: UserNotifier::new(config.notify.clone()),
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
@@ -2189,18 +2177,6 @@ impl Session {
         self.send_token_count_event(turn_context).await;
     }
 
-    pub(crate) async fn update_rate_limits(
-        &self,
-        turn_context: &TurnContext,
-        new_rate_limits: RateLimitSnapshot,
-    ) {
-        {
-            let mut state = self.state.lock().await;
-            state.set_rate_limits(new_rate_limits);
-        }
-        self.send_token_count_event(turn_context).await;
-    }
-
     pub(crate) async fn mcp_dependency_prompted(&self) -> HashSet<String> {
         let state = self.state.lock().await;
         state.mcp_dependency_prompted()
@@ -2230,11 +2206,11 @@ impl Session {
     }
 
     async fn send_token_count_event(&self, turn_context: &TurnContext) {
-        let (info, rate_limits) = {
+        let info = {
             let state = self.state.lock().await;
-            state.token_info_and_rate_limits()
+            state.token_info()
         };
-        let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
+        let event = EventMsg::TokenCount(TokenCountEvent { info });
         self.send_event(turn_context, event).await;
     }
 
@@ -2473,14 +2449,7 @@ impl Session {
         mcp_servers: HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
     ) {
-        let auth = self.services.auth_manager.auth().await;
-        let config = self.get_config().await;
-        let mcp_servers = with_codex_apps_mcp(
-            mcp_servers,
-            self.features.enabled(Feature::Apps),
-            auth.as_ref(),
-            config.as_ref(),
-        );
+        let _config = self.get_config().await;
         let auth_statuses = compute_auth_statuses(mcp_servers.iter(), store_mode).await;
         let sandbox_state = SandboxState {
             sandbox_policy: turn_context.sandbox_policy.clone(),
@@ -3022,8 +2991,7 @@ mod handlers {
 
     pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
         let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
-        let auth = sess.services.auth_manager.auth().await;
-        let mcp_servers = effective_mcp_servers(config, auth.as_ref());
+        let mcp_servers = effective_mcp_servers(config);
         let snapshot = collect_mcp_snapshot_from_manager(
             &mcp_connection_manager,
             compute_auth_statuses(mcp_servers.iter(), config.mcp_oauth_credentials_store_mode)
@@ -3574,18 +3542,10 @@ pub(crate) async fn run_turn(
     .await;
 
     let otel_manager = turn_context.runtime.get_otel_manager();
-    let thread_id = sess.conversation_id.to_string();
-    let tracking = build_track_events_context(turn_context.runtime.get_model(), thread_id);
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
-    } = build_skill_injections(
-        &mentioned_skills,
-        Some(&otel_manager),
-        &sess.services.analytics_events_client,
-        tracking.clone(),
-    )
-    .await;
+    } = build_skill_injections(&mentioned_skills, Some(&otel_manager)).await;
 
     for message in skill_warnings {
         sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
@@ -4174,10 +4134,6 @@ async fn run_sampling_request(
             request_input_tokens,
         }),
         Err(CodexErr::UsageLimitReached(e)) => {
-            let rate_limits = e.rate_limits.clone();
-            if let Some(rate_limits) = rate_limits {
-                sess.update_rate_limits(&turn_context, rate_limits).await;
-            }
             Err(SamplingRequestError::Codex(CodexErr::UsageLimitReached(e)))
         }
         Err(err) => Err(SamplingRequestError::Codex(err)),
@@ -4742,12 +4698,6 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
                 self.sess.set_server_reasoning_included(included).await;
                 Ok(TurnEventUpdate::default())
             }
-            TurnEvent::RateLimits(snapshot) => {
-                self.sess
-                    .update_rate_limits(&self.turn_context, snapshot)
-                    .await;
-                Ok(TurnEventUpdate::default())
-            }
             TurnEvent::ModelsEtag(etag) => {
                 let config = self.sess.get_config().await;
                 self.sess
@@ -5075,10 +5025,7 @@ mod tests {
     use adam_protocol::ThreadId;
 
     use crate::protocol::CompactedItem;
-    use crate::protocol::CreditsSnapshot;
     use crate::protocol::InitialHistory;
-    use crate::protocol::RateLimitSnapshot;
-    use crate::protocol::RateLimitWindow;
     use crate::protocol::ResumedHistory;
     use crate::protocol::ThreadRolledBackEvent;
     use crate::protocol::TokenCountEvent;
@@ -5407,28 +5354,18 @@ mod tests {
         };
 
         rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
-            TokenCountEvent {
-                info: Some(info1),
-                rate_limits: None,
-            },
+            TokenCountEvent { info: Some(info1) },
         )));
         rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
-            TokenCountEvent {
-                info: None,
-                rate_limits: None,
-            },
+            TokenCountEvent { info: None },
         )));
         rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
             TokenCountEvent {
                 info: Some(info2.clone()),
-                rate_limits: None,
             },
         )));
         rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
-            TokenCountEvent {
-                info: None,
-                rate_limits: None,
-            },
+            TokenCountEvent { info: None },
         )));
 
         session
@@ -5971,172 +5908,6 @@ mod tests {
         assert_eq!(initial_context, history.raw_items());
     }
 
-    #[tokio::test]
-    async fn set_rate_limits_retains_previous_credits() {
-        let adam_home = tempfile::tempdir().expect("create temp dir");
-        let config = build_test_config(adam_home.path()).await;
-        let config = Arc::new(config);
-        let model = ModelsManager::get_model_offline(config.model.as_deref());
-        let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
-        let reasoning_effort = config.model_reasoning_effort;
-        let collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
-            settings: Settings {
-                model,
-                reasoning_effort,
-                developer_instructions: None,
-            },
-        };
-        let session_configuration = SessionConfiguration {
-            provider: config.model_provider.clone(),
-            collaboration_mode,
-            model_reasoning_summary: config.model_reasoning_summary,
-            developer_instructions: config.developer_instructions.clone(),
-            user_instructions: config.user_instructions.clone(),
-            personality: config.personality,
-            base_instructions: config
-                .base_instructions
-                .clone()
-                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
-            compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.approval_policy.clone(),
-            sandbox_policy: config.sandbox_policy.clone(),
-            windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-            cwd: config.cwd.clone(),
-            adam_home: config.adam_home.clone(),
-            thread_name: None,
-            original_config_do_not_use: Arc::clone(&config),
-            session_source: SessionSource::Exec,
-            dynamic_tools: Vec::new(),
-        };
-
-        let mut state = SessionState::new(session_configuration);
-        let initial = RateLimitSnapshot {
-            primary: Some(RateLimitWindow {
-                used_percent: 10.0,
-                window_minutes: Some(15),
-                resets_at: Some(1_700),
-            }),
-            secondary: None,
-            credits: Some(CreditsSnapshot {
-                has_credits: true,
-                unlimited: false,
-                balance: Some("10.00".to_string()),
-            }),
-            plan_type: Some(adam_protocol::account::PlanType::Plus),
-        };
-        state.set_rate_limits(initial.clone());
-
-        let update = RateLimitSnapshot {
-            primary: Some(RateLimitWindow {
-                used_percent: 40.0,
-                window_minutes: Some(30),
-                resets_at: Some(1_800),
-            }),
-            secondary: Some(RateLimitWindow {
-                used_percent: 5.0,
-                window_minutes: Some(60),
-                resets_at: Some(1_900),
-            }),
-            credits: None,
-            plan_type: None,
-        };
-        state.set_rate_limits(update.clone());
-
-        assert_eq!(
-            state.latest_rate_limits,
-            Some(RateLimitSnapshot {
-                primary: update.primary.clone(),
-                secondary: update.secondary,
-                credits: initial.credits,
-                plan_type: initial.plan_type,
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn set_rate_limits_updates_plan_type_when_present() {
-        let adam_home = tempfile::tempdir().expect("create temp dir");
-        let config = build_test_config(adam_home.path()).await;
-        let config = Arc::new(config);
-        let model = ModelsManager::get_model_offline(config.model.as_deref());
-        let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
-        let reasoning_effort = config.model_reasoning_effort;
-        let collaboration_mode = CollaborationMode {
-            mode: ModeKind::Custom,
-            settings: Settings {
-                model,
-                reasoning_effort,
-                developer_instructions: None,
-            },
-        };
-        let session_configuration = SessionConfiguration {
-            provider: config.model_provider.clone(),
-            collaboration_mode,
-            model_reasoning_summary: config.model_reasoning_summary,
-            developer_instructions: config.developer_instructions.clone(),
-            user_instructions: config.user_instructions.clone(),
-            personality: config.personality,
-            base_instructions: config
-                .base_instructions
-                .clone()
-                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
-            compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.approval_policy.clone(),
-            sandbox_policy: config.sandbox_policy.clone(),
-            windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-            cwd: config.cwd.clone(),
-            adam_home: config.adam_home.clone(),
-            thread_name: None,
-            original_config_do_not_use: Arc::clone(&config),
-            session_source: SessionSource::Exec,
-            dynamic_tools: Vec::new(),
-        };
-
-        let mut state = SessionState::new(session_configuration);
-        let initial = RateLimitSnapshot {
-            primary: Some(RateLimitWindow {
-                used_percent: 15.0,
-                window_minutes: Some(20),
-                resets_at: Some(1_600),
-            }),
-            secondary: Some(RateLimitWindow {
-                used_percent: 5.0,
-                window_minutes: Some(45),
-                resets_at: Some(1_650),
-            }),
-            credits: Some(CreditsSnapshot {
-                has_credits: true,
-                unlimited: false,
-                balance: Some("15.00".to_string()),
-            }),
-            plan_type: Some(adam_protocol::account::PlanType::Plus),
-        };
-        state.set_rate_limits(initial.clone());
-
-        let update = RateLimitSnapshot {
-            primary: Some(RateLimitWindow {
-                used_percent: 35.0,
-                window_minutes: Some(25),
-                resets_at: Some(1_700),
-            }),
-            secondary: None,
-            credits: None,
-            plan_type: Some(adam_protocol::account::PlanType::Pro),
-        };
-        state.set_rate_limits(update.clone());
-
-        assert_eq!(
-            state.latest_rate_limits,
-            Some(RateLimitSnapshot {
-                primary: update.primary,
-                secondary: update.secondary,
-                credits: initial.credits,
-                plan_type: update.plan_type,
-            })
-        );
-    }
-
     #[test]
     fn prefers_structured_content_when_present() {
         let ctr = CallToolResult {
@@ -6403,10 +6174,6 @@ mod tests {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
-            analytics_events_client: AnalyticsEventsClient::new(
-                Arc::clone(&config),
-                Arc::clone(&auth_manager),
-            ),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
@@ -6463,7 +6230,7 @@ mod tests {
             model_info.slug.as_str(),
             None,
             Some("test@test.com".to_string()),
-            Some(AuthMode::Chatgpt),
+            Some(AuthMode::ApiKey.to_string()),
             false,
             "test".to_string(),
             session_source,
@@ -6599,10 +6366,6 @@ mod tests {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
-            analytics_events_client: AnalyticsEventsClient::new(
-                Arc::clone(&config),
-                Arc::clone(&auth_manager),
-            ),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),

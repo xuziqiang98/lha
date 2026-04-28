@@ -5,7 +5,6 @@ pub use adam_llm_types::MessageItem;
 pub use adam_llm_types::MessageRole;
 pub use adam_llm_types::ModelInfo;
 pub use adam_llm_types::Personality;
-pub use adam_llm_types::RateLimitSnapshot;
 pub use adam_llm_types::ReasoningContentItem;
 pub use adam_llm_types::ReasoningEffort;
 pub use adam_llm_types::ReasoningItem;

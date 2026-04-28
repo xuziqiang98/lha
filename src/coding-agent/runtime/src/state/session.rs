@@ -12,7 +12,6 @@ use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
 use crate::dynamic_context_window::DynamicContextWindowKey;
 use crate::dynamic_context_window::DynamicContextWindowState;
-use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::truncate::TruncationPolicy;
@@ -23,7 +22,6 @@ pub(crate) struct SessionState {
     pub(crate) history: ContextManager,
     pub(crate) dynamic_context_windows:
         HashMap<DynamicContextWindowKey, Arc<Mutex<DynamicContextWindowState>>>,
-    pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
@@ -43,7 +41,6 @@ impl SessionState {
             session_configuration,
             history,
             dynamic_context_windows: HashMap::new(),
-            latest_rate_limits: None,
             server_reasoning_included: false,
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
@@ -108,19 +105,6 @@ impl SessionState {
         self.history.token_info()
     }
 
-    pub(crate) fn set_rate_limits(&mut self, snapshot: RateLimitSnapshot) {
-        self.latest_rate_limits = Some(merge_rate_limit_fields(
-            self.latest_rate_limits.as_ref(),
-            snapshot,
-        ));
-    }
-
-    pub(crate) fn token_info_and_rate_limits(
-        &self,
-    ) -> (Option<TokenUsageInfo>, Option<RateLimitSnapshot>) {
-        (self.token_info(), self.latest_rate_limits.clone())
-    }
-
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
         self.history.set_token_usage_full(context_window);
     }
@@ -158,18 +142,4 @@ impl SessionState {
     pub(crate) fn dependency_env(&self) -> HashMap<String, String> {
         self.dependency_env.clone()
     }
-}
-
-// Sometimes new snapshots don't include credits or plan information.
-fn merge_rate_limit_fields(
-    previous: Option<&RateLimitSnapshot>,
-    mut snapshot: RateLimitSnapshot,
-) -> RateLimitSnapshot {
-    if snapshot.credits.is_none() {
-        snapshot.credits = previous.and_then(|prior| prior.credits.clone());
-    }
-    if snapshot.plan_type.is_none() {
-        snapshot.plan_type = previous.and_then(|prior| prior.plan_type);
-    }
-    snapshot
 }

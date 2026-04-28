@@ -2,7 +2,6 @@
 members = [
     "src/core/agent-core",
     "src/core/agent-runtime",
-    "src/integrations/backend-client",
     "src/shared/ansi-escape",
     "src/shared/async-utils",
     "src/integrations/app-server",
@@ -10,11 +9,7 @@ members = [
     "src/resources/apply-patch",
     "src/shared/arg0",
     "src/coding-agent/feedback",
-    "src/coding-agent/chatgpt",
     "src/resources/codex-backend-openapi-models",
-    "src/integrations/cloud/cloud-requirements",
-    "src/integrations/cloud/cloud-tasks",
-    "src/integrations/cloud/cloud-tasks-client",
     "src/coding-agent/cli",
     "src/shared/common",
     "src/coding-agent/runtime",
@@ -25,7 +20,6 @@ members = [
     "src/resources/keyring-store",
     "src/resources/file-search",
     "src/platform/sandbox/linux",
-    "src/coding-agent/login",
     "src/integrations/mcp-server",
     "src/integrations/mcp-types",
     "src/platform/sandbox/process-hardening",
@@ -68,9 +62,6 @@ adam-app-server-protocol = { path = "src/integrations/app-server-protocol" }
 adam-apply-patch = { path = "src/resources/apply-patch" }
 adam-arg0 = { path = "src/shared/arg0" }
 adam-async-utils = { path = "src/shared/async-utils" }
-adam-backend-client = { path = "src/integrations/backend-client" }
-adam-cloud-requirements = { path = "src/integrations/cloud/cloud-requirements" }
-adam-chatgpt = { path = "src/coding-agent/chatgpt" }
 adam-cli = { path = "src/coding-agent/cli" }
 adam-client = { path = "src/llm/api/codex-client" }
 adam-common = { path = "src/shared/common" }
@@ -85,7 +76,6 @@ adam-git = { path = "src/shared/utils/git" }
 adam-keyring-store = { path = "src/resources/keyring-store" }
 adam-llm = { path = "src/llm/runtime" }
 adam-linux-sandbox = { path = "src/platform/sandbox/linux" }
-adam-login = { path = "src/coding-agent/login" }
 adam-llm-types = { path = "src/llm/types" }
 adam-mcp-server = { path = "src/integrations/mcp-server" }
 adam-otel = { path = "src/shared/otel" }

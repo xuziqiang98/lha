@@ -243,13 +243,16 @@ impl From<ModelInfo> for ModelPreset {
 }
 
 impl ModelPreset {
-    /// Filter models based on authentication mode.
+    /// Filter models based on API support.
     ///
-    /// In ChatGPT mode, all models are visible. Otherwise, only API-supported models are shown.
-    pub fn filter_by_auth(models: Vec<ModelPreset>, chatgpt_mode: bool) -> Vec<ModelPreset> {
+    /// When `include_non_api_models` is true, all models are visible. Otherwise, only API-supported models are shown.
+    pub fn filter_by_api_support(
+        models: Vec<ModelPreset>,
+        include_non_api_models: bool,
+    ) -> Vec<ModelPreset> {
         models
             .into_iter()
-            .filter(|model| chatgpt_mode || model.supported_in_api)
+            .filter(|model| include_non_api_models || model.supported_in_api)
             .collect()
     }
 

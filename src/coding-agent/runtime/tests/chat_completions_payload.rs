@@ -6,7 +6,6 @@ use std::sync::atomic::Ordering;
 
 use adam_agent::ContentItem;
 use adam_agent::models_manager::manager::ModelsManager;
-use adam_app_server_protocol::AuthMode;
 use adam_llm::RuntimeEndpoint;
 use adam_llm::ToolCallPayload;
 use adam_llm::TurnRequest;
@@ -87,7 +86,7 @@ async fn run_request(input: Vec<TranscriptItem>) -> Value {
         model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
-        Some(AuthMode::ApiKey),
+        Some("apikey".to_string()),
         false,
         "test".to_string(),
         SessionSource::Exec,
@@ -157,7 +156,7 @@ async fn build_client(provider: RuntimeEndpoint) -> TestRuntimeClient {
         model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
-        Some(AuthMode::ApiKey),
+        Some("apikey".to_string()),
         false,
         "test".to_string(),
         SessionSource::Exec,

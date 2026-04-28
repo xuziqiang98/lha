@@ -5,8 +5,6 @@ use adam_agent::config::Config;
 use adam_agent::default_client::build_reqwest_client;
 use adam_agent::models_manager::manager::ModelsManager;
 use adam_agent::protocol::SessionSource;
-use adam_llm::AuthContext;
-use adam_llm::AuthSource;
 use adam_llm::DefaultRuntimeClientFactory;
 use adam_llm::RuntimeBuildSpec;
 use adam_llm::RuntimeClient;
@@ -20,17 +18,6 @@ use adam_protocol::ThreadId;
 use adam_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use adam_protocol::openai_models::ModelInfo;
 use adam_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use async_trait::async_trait;
-
-#[derive(Default)]
-struct NoAuthSource;
-
-#[async_trait]
-impl AuthSource for NoAuthSource {
-    async fn current_auth(&self) -> adam_llm::Result<Option<AuthContext>> {
-        Ok(None)
-    }
-}
 
 pub struct TestRuntimeClient {
     inner: Arc<dyn RuntimeClient>,
@@ -63,7 +50,6 @@ impl TestRuntimeClient {
         }
         let runtime = runtime_factory.build_client(RuntimeBuildSpec {
             endpoint_id: config.model_provider_id.clone(),
-            auth_source: Arc::new(NoAuthSource),
             http_client: build_reqwest_client(),
             model_info: model_info.into(),
             otel_manager,

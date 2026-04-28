@@ -4,7 +4,6 @@ pub mod endpoint;
 pub mod error;
 mod proposed_plan_parser;
 pub mod provider;
-pub mod rate_limits;
 pub mod requests;
 pub mod sse;
 pub mod telemetry;

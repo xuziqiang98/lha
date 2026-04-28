@@ -1,4 +1,3 @@
-use adam_agent::AuthManager;
 use adam_agent::config::Config;
 use adam_agent::git_info::get_git_repo_root;
 use crossterm::event::KeyCode;
@@ -11,12 +10,6 @@ use ratatui::style::Color;
 use ratatui::widgets::Clear;
 use ratatui::widgets::WidgetRef;
 
-use adam_protocol::config_types::ForcedLoginMethod;
-
-use crate::LoginStatus;
-use crate::onboarding::auth::AuthModeWidget;
-use crate::onboarding::auth::SignInOption;
-use crate::onboarding::auth::SignInState;
 use crate::onboarding::trust_directory::TrustDirectorySelection;
 use crate::onboarding::trust_directory::TrustDirectoryWidget;
 use crate::onboarding::welcome::WelcomeWidget;
@@ -24,13 +17,10 @@ use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use color_eyre::eyre::Result;
-use std::sync::Arc;
-use std::sync::RwLock;
 
 #[allow(clippy::large_enum_variant)]
 enum Step {
     Welcome(WelcomeWidget),
-    Auth(AuthModeWidget),
     TrustDirectory(TrustDirectoryWidget),
 }
 
@@ -59,9 +49,6 @@ pub(crate) struct OnboardingScreen {
 
 pub(crate) struct OnboardingScreenArgs {
     pub show_trust_screen: bool,
-    pub show_login_screen: bool,
-    pub login_status: LoginStatus,
-    pub auth_manager: Arc<AuthManager>,
     pub config: Config,
 }
 
@@ -75,41 +62,16 @@ impl OnboardingScreen {
     pub(crate) fn new(tui: &mut Tui, args: OnboardingScreenArgs) -> Self {
         let OnboardingScreenArgs {
             show_trust_screen,
-            show_login_screen,
-            login_status,
-            auth_manager,
             config,
         } = args;
         let cwd = config.cwd.clone();
-        let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
-        let forced_login_method = config.forced_login_method;
         let adam_home = config.adam_home;
-        let cli_auth_credentials_store_mode = config.cli_auth_credentials_store_mode;
         let mut steps: Vec<Step> = Vec::new();
         steps.push(Step::Welcome(WelcomeWidget::new(
-            !matches!(login_status, LoginStatus::NotAuthenticated),
+            false,
             tui.frame_requester(),
             config.animations,
         )));
-        if show_login_screen {
-            let highlighted_mode = match forced_login_method {
-                Some(ForcedLoginMethod::Api) => SignInOption::ApiKey,
-                _ => SignInOption::ChatGpt,
-            };
-            steps.push(Step::Auth(AuthModeWidget {
-                request_frame: tui.frame_requester(),
-                highlighted_mode,
-                error: None,
-                sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
-                adam_home: adam_home.clone(),
-                cli_auth_credentials_store_mode,
-                login_status,
-                auth_manager,
-                forced_chatgpt_workspace_id,
-                forced_login_method,
-                animations_enabled: config.animations,
-            }))
-        }
         let is_git_repo = get_git_repo_root(&cwd).is_some();
         let highlighted = if is_git_repo {
             TrustDirectorySelection::Trust
@@ -166,12 +128,6 @@ impl OnboardingScreen {
         out
     }
 
-    fn is_auth_in_progress(&self) -> bool {
-        self.steps.iter().any(|step| {
-            matches!(step, Step::Auth(_)) && matches!(step.get_step_state(), StepState::InProgress)
-        })
-    }
-
     pub(crate) fn is_done(&self) -> bool {
         self.is_done
             || !self
@@ -198,27 +154,11 @@ impl OnboardingScreen {
     }
 
     pub fn config_updated(&self) -> bool {
-        self.steps.iter().any(|step| {
-            if let Step::Auth(widget) = step {
-                return widget
-                    .sign_in_state
-                    .read()
-                    .is_ok_and(|g| matches!(&*g, SignInState::ApiKeyConfigured));
-            }
-            false
-        })
+        false
     }
 
     fn is_api_key_entry_active(&self) -> bool {
-        self.steps.iter().any(|step| {
-            if let Step::Auth(widget) = step {
-                return widget
-                    .sign_in_state
-                    .read()
-                    .is_ok_and(|g| matches!(&*g, SignInState::ApiKeyEntry(_)));
-            }
-            false
-        })
+        false
     }
 }
 
@@ -249,11 +189,6 @@ impl KeyboardHandler for OnboardingScreen {
             _ => false,
         };
         if should_quit {
-            if self.is_auth_in_progress() {
-                // If the user cancels the auth menu, exit the app rather than
-                // leave the user at a prompt in an unauthed state.
-                self.should_exit = true;
-            }
             self.is_done = true;
         } else {
             if let Some(Step::Welcome(widget)) = self
@@ -373,7 +308,6 @@ impl KeyboardHandler for Step {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match self {
             Step::Welcome(widget) => widget.handle_key_event(key_event),
-            Step::Auth(widget) => widget.handle_key_event(key_event),
             Step::TrustDirectory(widget) => widget.handle_key_event(key_event),
         }
     }
@@ -381,7 +315,6 @@ impl KeyboardHandler for Step {
     fn handle_paste(&mut self, pasted: String) {
         match self {
             Step::Welcome(_) => {}
-            Step::Auth(widget) => widget.handle_paste(pasted),
             Step::TrustDirectory(widget) => widget.handle_paste(pasted),
         }
     }
@@ -391,7 +324,6 @@ impl StepStateProvider for Step {
     fn get_step_state(&self) -> StepState {
         match self {
             Step::Welcome(w) => w.get_step_state(),
-            Step::Auth(w) => w.get_step_state(),
             Step::TrustDirectory(w) => w.get_step_state(),
         }
     }
@@ -401,9 +333,6 @@ impl WidgetRef for Step {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         match self {
             Step::Welcome(widget) => {
-                widget.render_ref(area, buf);
-            }
-            Step::Auth(widget) => {
                 widget.render_ref(area, buf);
             }
             Step::TrustDirectory(widget) => {
@@ -420,9 +349,6 @@ pub(crate) async fn run_onboarding_app(
     use tokio_stream::StreamExt;
 
     let mut onboarding_screen = OnboardingScreen::new(tui, args);
-    // One-time guard to fully clear the screen after ChatGPT login success message is shown
-    let mut did_full_clear_after_success = false;
-
     tui.draw(u16::MAX, |frame| {
         frame.render_widget_ref(&onboarding_screen, frame.area());
     })?;
@@ -440,36 +366,6 @@ pub(crate) async fn run_onboarding_app(
                     onboarding_screen.handle_paste(text);
                 }
                 TuiEvent::Draw => {
-                    if !did_full_clear_after_success
-                        && onboarding_screen.steps.iter().any(|step| {
-                            if let Step::Auth(w) = step {
-                                w.sign_in_state.read().is_ok_and(|g| {
-                                    matches!(&*g, super::auth::SignInState::ChatGptSuccessMessage)
-                                })
-                            } else {
-                                false
-                            }
-                        })
-                    {
-                        // Reset any lingering SGR (underline/color) before clearing
-                        let _ = ratatui::crossterm::execute!(
-                            std::io::stdout(),
-                            ratatui::crossterm::style::SetAttribute(
-                                ratatui::crossterm::style::Attribute::Reset
-                            ),
-                            ratatui::crossterm::style::SetAttribute(
-                                ratatui::crossterm::style::Attribute::NoUnderline
-                            ),
-                            ratatui::crossterm::style::SetForegroundColor(
-                                ratatui::crossterm::style::Color::Reset
-                            ),
-                            ratatui::crossterm::style::SetBackgroundColor(
-                                ratatui::crossterm::style::Color::Reset
-                            )
-                        );
-                        let _ = tui.terminal.clear();
-                        did_full_clear_after_success = true;
-                    }
                     let _ = tui.draw(u16::MAX, |frame| {
                         frame.render_widget_ref(&onboarding_screen, frame.area());
                     });
@@ -482,116 +378,4 @@ pub(crate) async fn run_onboarding_app(
         config_updated: onboarding_screen.config_updated(),
         should_exit: onboarding_screen.should_exit(),
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::onboarding::auth::ApiKeyInputState;
-    use crate::onboarding::auth::AuthModeWidget;
-    use crate::onboarding::auth::SignInOption;
-    use crate::onboarding::auth::SignInState;
-    use adam_agent::auth::AuthCredentialsStoreMode;
-    use pretty_assertions::assert_eq;
-    use ratatui::layout::Rect;
-    use std::sync::Arc;
-    use std::sync::RwLock;
-    use tempfile::TempDir;
-
-    fn custom_provider_auth_widget() -> (AuthModeWidget, TempDir) {
-        let adam_home = TempDir::new().expect("tempdir");
-        let adam_home_path = adam_home.path().to_path_buf();
-        let widget = AuthModeWidget {
-            request_frame: FrameRequester::test_dummy(),
-            highlighted_mode: SignInOption::ApiKey,
-            error: None,
-            sign_in_state: Arc::new(RwLock::new(SignInState::ApiKeyEntry(
-                ApiKeyInputState::default(),
-            ))),
-            adam_home: adam_home_path.clone(),
-            cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-            login_status: LoginStatus::NotAuthenticated,
-            auth_manager: AuthManager::shared(
-                adam_home_path,
-                false,
-                AuthCredentialsStoreMode::File,
-            ),
-            forced_chatgpt_workspace_id: None,
-            forced_login_method: None,
-            animations_enabled: true,
-        };
-        (widget, adam_home)
-    }
-
-    fn row_text(buf: &Buffer, row: u16, width: u16) -> String {
-        (0..width)
-            .map(|col| buf[(col, row)].symbol())
-            .collect::<String>()
-            .trim_end()
-            .to_string()
-    }
-
-    #[test]
-    fn small_window_hides_welcome_ascii_to_preserve_api_key_input() {
-        let (auth_widget, _tmp) = custom_provider_auth_widget();
-        let screen = OnboardingScreen {
-            request_frame: FrameRequester::test_dummy(),
-            steps: vec![
-                Step::Welcome(WelcomeWidget::new(
-                    false,
-                    FrameRequester::test_dummy(),
-                    true,
-                )),
-                Step::Auth(auth_widget),
-            ],
-            is_done: false,
-            should_exit: false,
-        };
-
-        let area = Rect::new(0, 0, 80, 20);
-        let mut buf = Buffer::empty(area);
-        (&screen).render_ref(area, &mut buf);
-
-        let lines = (0..area.height)
-            .map(|row| row_text(&buf, row, area.width))
-            .collect::<Vec<String>>();
-
-        assert_eq!(lines.iter().any(|line| line.contains("#######")), false);
-        assert_eq!(
-            lines.iter().any(|line| line.starts_with("╭Provider ID")),
-            true
-        );
-    }
-
-    #[test]
-    fn tall_window_keeps_welcome_ascii_above_api_key_input() {
-        let (auth_widget, _tmp) = custom_provider_auth_widget();
-        let screen = OnboardingScreen {
-            request_frame: FrameRequester::test_dummy(),
-            steps: vec![
-                Step::Welcome(WelcomeWidget::new(
-                    false,
-                    FrameRequester::test_dummy(),
-                    true,
-                )),
-                Step::Auth(auth_widget),
-            ],
-            is_done: false,
-            should_exit: false,
-        };
-
-        let area = Rect::new(0, 0, 80, 28);
-        let mut buf = Buffer::empty(area);
-        (&screen).render_ref(area, &mut buf);
-
-        let lines = (0..area.height)
-            .map(|row| row_text(&buf, row, area.width))
-            .collect::<Vec<String>>();
-
-        assert_eq!(lines.iter().any(|line| line.contains("#######")), true);
-        assert_eq!(
-            lines.iter().any(|line| line.starts_with("╭Provider ID")),
-            true
-        );
-    }
 }

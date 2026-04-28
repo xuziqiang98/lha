@@ -16,54 +16,33 @@ async fn list_models_returns_api_key_models() -> Result<()> {
     let config = load_default_config_for_test(&adam_home).await;
     let manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("sk-test"),
-        built_in_runtime_endpoints()["openai"].clone(),
+        test_openai_endpoint(),
     );
     let models = manager
         .list_models(&config, RefreshStrategy::OnlineIfUncached)
         .await;
 
-    assert_eq!(expected_models(false), models);
+    assert_eq!(expected_models(), models);
 
     Ok(())
 }
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_models_returns_chatgpt_models() -> Result<()> {
-    let adam_home = tempdir()?;
-    let config = load_default_config_for_test(&adam_home).await;
-    let manager = ThreadManager::with_models_provider(
-        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-        built_in_runtime_endpoints()["openai"].clone(),
-    );
-    let models = manager
-        .list_models(&config, RefreshStrategy::OnlineIfUncached)
-        .await;
-
-    assert_eq!(expected_models(true), models);
-
-    Ok(())
+fn test_openai_endpoint() -> adam_llm::RuntimeEndpoint {
+    let mut endpoint = built_in_runtime_endpoints()["openai"].clone();
+    endpoint.env_key = None;
+    endpoint.env_key_instructions = None;
+    endpoint.experimental_bearer_token = Some("sk-test".to_string());
+    endpoint
 }
 
-fn expected_models(chatgpt_mode: bool) -> Vec<ModelPreset> {
+fn expected_models() -> Vec<ModelPreset> {
     let response: ModelsResponse = serde_json::from_str(include_str!("../../models.json"))
         .unwrap_or_else(|err| panic!("models.json should parse: {err}"));
     let builtin_presets = all_model_presets().clone();
     let remote_presets: Vec<ModelPreset> = response.models.into_iter().map(Into::into).collect();
-    let mut merged = ModelPreset::merge(remote_presets, builtin_presets.clone());
-    merged = ModelPreset::filter_by_auth(merged, chatgpt_mode);
-    let builtin_model_slugs = builtin_presets
-        .iter()
-        .map(|preset| preset.model.as_str())
-        .collect::<std::collections::HashSet<_>>();
+    let mut merged = ModelPreset::merge(remote_presets, builtin_presets);
+    merged = ModelPreset::filter_by_api_support(merged, false);
     for preset in &mut merged {
-        preset.model_provider_id = Some(
-            if chatgpt_mode || builtin_model_slugs.contains(preset.model.as_str()) {
-                "openai"
-            } else {
-                "test-provider"
-            }
-            .to_string(),
-        );
+        preset.model_provider_id = Some("openai".to_string());
     }
 
     for preset in &mut merged {

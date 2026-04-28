@@ -54,7 +54,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
     )
     .await;
 
-    let mut builder = test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let mut builder = test_codex().with_auth(CodexAuth::from_api_key("Test API Key"));
     builder = builder.with_config(|config| {
         config.features.enable(Feature::RemoteModels);
         config.model = Some("gpt-5".to_string());

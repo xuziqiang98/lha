@@ -1,12 +1,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::protocol::common::AuthMode;
-use adam_protocol::account::PlanType;
 use adam_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use adam_protocol::config_types::CollaborationMode;
 use adam_protocol::config_types::CollaborationModeMask;
-use adam_protocol::config_types::ForcedLoginMethod;
 use adam_protocol::config_types::Personality;
 use adam_protocol::config_types::ReasoningSummary;
 use adam_protocol::config_types::SandboxMode as CoreSandboxMode;
@@ -22,10 +19,7 @@ use adam_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use adam_protocol::protocol::AgentStatus as CoreAgentStatus;
 use adam_protocol::protocol::AskForApproval as CoreAskForApproval;
 use adam_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
-use adam_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use adam_protocol::protocol::NetworkAccess as CoreNetworkAccess;
-use adam_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
-use adam_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use adam_protocol::protocol::SessionSource as CoreSessionSource;
 use adam_protocol::protocol::SkillDependencies as CoreSkillDependencies;
 use adam_protocol::protocol::SkillErrorInfo as CoreSkillErrorInfo;
@@ -358,7 +352,6 @@ pub struct ProfileV2 {
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub web_search: Option<WebSearchMode>,
-    pub chatgpt_base_url: Option<String>,
     #[serde(default, flatten)]
     pub additional: HashMap<String, JsonValue>,
 }
@@ -384,8 +377,6 @@ pub struct Config {
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
-    pub forced_chatgpt_workspace_id: Option<String>,
-    pub forced_login_method: Option<ForcedLoginMethod>,
     pub web_search: Option<WebSearchMode>,
     pub tools: Option<ToolsV2>,
     pub profile: Option<String>,
@@ -812,164 +803,6 @@ impl From<CoreParsedCommand> for CommandAction {
             CoreParsedCommand::Unknown { cmd } => CommandAction::Unknown { command: cmd },
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
-#[ts(tag = "type")]
-#[ts(export_to = "v2/")]
-pub enum Account {
-    #[serde(rename = "apiKey", rename_all = "camelCase")]
-    #[ts(rename = "apiKey", rename_all = "camelCase")]
-    ApiKey {},
-
-    #[serde(rename = "chatgpt", rename_all = "camelCase")]
-    #[ts(rename = "chatgpt", rename_all = "camelCase")]
-    Chatgpt { email: String, plan_type: PlanType },
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type")]
-#[ts(tag = "type")]
-#[ts(export_to = "v2/")]
-pub enum LoginAccountParams {
-    #[serde(rename = "apiKey", rename_all = "camelCase")]
-    #[ts(rename = "apiKey", rename_all = "camelCase")]
-    ApiKey {
-        #[serde(rename = "apiKey")]
-        #[ts(rename = "apiKey")]
-        api_key: String,
-    },
-    #[serde(rename = "chatgpt")]
-    #[ts(rename = "chatgpt")]
-    Chatgpt,
-    /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
-    /// The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.
-    #[serde(rename = "chatgptAuthTokens")]
-    #[ts(rename = "chatgptAuthTokens")]
-    ChatgptAuthTokens {
-        /// ID token (JWT) supplied by the client.
-        ///
-        /// This token is used for identity and account metadata (email, plan type,
-        /// workspace id).
-        #[serde(rename = "idToken")]
-        #[ts(rename = "idToken")]
-        id_token: String,
-        /// Access token (JWT) supplied by the client.
-        /// This token is used for backend API requests.
-        #[serde(rename = "accessToken")]
-        #[ts(rename = "accessToken")]
-        access_token: String,
-    },
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
-#[ts(tag = "type")]
-#[ts(export_to = "v2/")]
-pub enum LoginAccountResponse {
-    #[serde(rename = "apiKey", rename_all = "camelCase")]
-    #[ts(rename = "apiKey", rename_all = "camelCase")]
-    ApiKey {},
-    #[serde(rename = "chatgpt", rename_all = "camelCase")]
-    #[ts(rename = "chatgpt", rename_all = "camelCase")]
-    Chatgpt {
-        // Use plain String for identifiers to avoid TS/JSON Schema quirks around uuid-specific types.
-        // Convert to/from UUIDs at the application layer as needed.
-        login_id: String,
-        /// URL the client should open in a browser to initiate the OAuth flow.
-        auth_url: String,
-    },
-    #[serde(rename = "chatgptAuthTokens", rename_all = "camelCase")]
-    #[ts(rename = "chatgptAuthTokens", rename_all = "camelCase")]
-    ChatgptAuthTokens {},
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct CancelLoginAccountParams {
-    pub login_id: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum CancelLoginAccountStatus {
-    Canceled,
-    NotFound,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct CancelLoginAccountResponse {
-    pub status: CancelLoginAccountStatus,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct LogoutAccountResponse {}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum ChatgptAuthTokensRefreshReason {
-    /// Codex attempted a backend request and received `401 Unauthorized`.
-    Unauthorized,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ChatgptAuthTokensRefreshParams {
-    pub reason: ChatgptAuthTokensRefreshReason,
-    /// Workspace/account identifier that Codex was previously using.
-    ///
-    /// Clients that manage multiple accounts/workspaces can use this as a hint
-    /// to refresh the token for the correct workspace.
-    ///
-    /// This may be `null` when the prior ID token did not include a workspace
-    /// identifier (`chatgpt_account_id`) or when the token could not be parsed.
-    pub previous_account_id: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ChatgptAuthTokensRefreshResponse {
-    pub id_token: String,
-    pub access_token: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct GetAccountRateLimitsResponse {
-    pub rate_limits: RateLimitSnapshot,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct GetAccountParams {
-    /// When `true`, requests a proactive token refresh before returning.
-    ///
-    /// In managed auth mode this triggers the normal refresh-token flow. In
-    /// external auth mode this flag is ignored. Clients should refresh tokens
-    /// themselves and call `account/login/start` with `chatgptAuthTokens`.
-    #[serde(default)]
-    pub refresh_token: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct GetAccountResponse {
-    pub account: Option<Account>,
-    pub requires_openai_auth: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
@@ -1696,13 +1529,6 @@ pub struct Thread {
     /// For all other responses and notifications returning a Thread,
     /// the turns field will be an empty list.
     pub turns: Vec<Turn>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct AccountUpdatedNotification {
-    pub auth_mode: Option<AuthMode>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -2742,85 +2568,6 @@ pub struct ToolRequestUserInputAnswer {
 /// EXPERIMENTAL. Response payload mapping question ids to answers.
 pub struct ToolRequestUserInputResponse {
     pub answers: HashMap<String, ToolRequestUserInputAnswer>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct AccountRateLimitsUpdatedNotification {
-    pub rate_limits: RateLimitSnapshot,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct RateLimitSnapshot {
-    pub primary: Option<RateLimitWindow>,
-    pub secondary: Option<RateLimitWindow>,
-    pub credits: Option<CreditsSnapshot>,
-    pub plan_type: Option<PlanType>,
-}
-
-impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
-    fn from(value: CoreRateLimitSnapshot) -> Self {
-        Self {
-            primary: value.primary.map(RateLimitWindow::from),
-            secondary: value.secondary.map(RateLimitWindow::from),
-            credits: value.credits.map(CreditsSnapshot::from),
-            plan_type: value.plan_type,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct RateLimitWindow {
-    pub used_percent: i32,
-    #[ts(type = "number | null")]
-    pub window_duration_mins: Option<i64>,
-    #[ts(type = "number | null")]
-    pub resets_at: Option<i64>,
-}
-
-impl From<CoreRateLimitWindow> for RateLimitWindow {
-    fn from(value: CoreRateLimitWindow) -> Self {
-        Self {
-            used_percent: value.used_percent.round() as i32,
-            window_duration_mins: value.window_minutes,
-            resets_at: value.resets_at,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct CreditsSnapshot {
-    pub has_credits: bool,
-    pub unlimited: bool,
-    pub balance: Option<String>,
-}
-
-impl From<CoreCreditsSnapshot> for CreditsSnapshot {
-    fn from(value: CoreCreditsSnapshot) -> Self {
-        Self {
-            has_credits: value.has_credits,
-            unlimited: value.unlimited,
-            balance: value.balance,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct AccountLoginCompletedNotification {
-    // Use plain String for identifiers to avoid TS/JSON Schema quirks around uuid-specific types.
-    // Convert to/from UUIDs at the application layer as needed.
-    pub login_id: Option<String>,
-    pub success: bool,
-    pub error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

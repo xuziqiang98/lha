@@ -12,6 +12,7 @@ use crate::bottom_pane::SkillsToggleView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::skills_helpers::skill_description;
 use crate::skills_helpers::skill_display_name;
+use adam_agent::connectors::AppInfo;
 use adam_agent::connectors::connector_mention_slug;
 use adam_agent::protocol::ListSkillsResponseEvent;
 use adam_agent::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -20,7 +21,6 @@ use adam_agent::skills::model::SkillDependencies;
 use adam_agent::skills::model::SkillInterface;
 use adam_agent::skills::model::SkillMetadata;
 use adam_agent::skills::model::SkillToolDependency;
-use adam_chatgpt::connectors::AppInfo;
 
 impl ChatWidget {
     pub(crate) fn open_skills_list(&mut self) {

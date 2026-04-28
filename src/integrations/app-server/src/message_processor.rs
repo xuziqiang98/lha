@@ -8,10 +8,6 @@ use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
 use adam_agent::AuthManager;
 use adam_agent::ThreadManager;
-use adam_agent::auth::ExternalAuthRefreshContext;
-use adam_agent::auth::ExternalAuthRefreshReason;
-use adam_agent::auth::ExternalAuthRefresher;
-use adam_agent::auth::ExternalAuthTokens;
 use adam_agent::config::Config;
 use adam_agent::config_loader::CloudRequirementsLoader;
 use adam_agent::config_loader::LoaderOverrides;
@@ -20,9 +16,6 @@ use adam_agent::default_client::USER_AGENT_SUFFIX;
 use adam_agent::default_client::get_codex_user_agent;
 use adam_agent::default_client::set_default_client_residency_requirement;
 use adam_agent::default_client::set_default_originator;
-use adam_app_server_protocol::ChatgptAuthTokensRefreshParams;
-use adam_app_server_protocol::ChatgptAuthTokensRefreshReason;
-use adam_app_server_protocol::ChatgptAuthTokensRefreshResponse;
 use adam_app_server_protocol::ClientInfo;
 use adam_app_server_protocol::ClientRequest;
 use adam_app_server_protocol::ConfigBatchWriteParams;
@@ -37,69 +30,11 @@ use adam_app_server_protocol::JSONRPCRequest;
 use adam_app_server_protocol::JSONRPCResponse;
 use adam_app_server_protocol::RequestId;
 use adam_app_server_protocol::ServerNotification;
-use adam_app_server_protocol::ServerRequestPayload;
 use adam_feedback::CodexFeedback;
 use adam_protocol::ThreadId;
 use adam_protocol::protocol::SessionSource;
-use async_trait::async_trait;
 use tokio::sync::broadcast;
-use tokio::time::Duration;
-use tokio::time::timeout;
 use toml::Value as TomlValue;
-
-const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
-
-#[derive(Clone)]
-struct ExternalAuthRefreshBridge {
-    outgoing: Arc<OutgoingMessageSender>,
-}
-
-impl ExternalAuthRefreshBridge {
-    fn map_reason(reason: ExternalAuthRefreshReason) -> ChatgptAuthTokensRefreshReason {
-        match reason {
-            ExternalAuthRefreshReason::Unauthorized => ChatgptAuthTokensRefreshReason::Unauthorized,
-        }
-    }
-}
-
-#[async_trait]
-impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
-    async fn refresh(
-        &self,
-        context: ExternalAuthRefreshContext,
-    ) -> std::io::Result<ExternalAuthTokens> {
-        let params = ChatgptAuthTokensRefreshParams {
-            reason: Self::map_reason(context.reason),
-            previous_account_id: context.previous_account_id,
-        };
-
-        let (request_id, rx) = self
-            .outgoing
-            .send_request_with_id(ServerRequestPayload::ChatgptAuthTokensRefresh(params))
-            .await;
-
-        let result = match timeout(EXTERNAL_AUTH_REFRESH_TIMEOUT, rx).await {
-            Ok(result) => result.map_err(|err| {
-                std::io::Error::other(format!("auth refresh request canceled: {err}"))
-            })?,
-            Err(_) => {
-                let _canceled = self.outgoing.cancel_request(&request_id).await;
-                return Err(std::io::Error::other(format!(
-                    "auth refresh request timed out after {}s",
-                    EXTERNAL_AUTH_REFRESH_TIMEOUT.as_secs()
-                )));
-            }
-        };
-
-        let response: ChatgptAuthTokensRefreshResponse =
-            serde_json::from_value(result).map_err(std::io::Error::other)?;
-
-        Ok(ExternalAuthTokens {
-            access_token: response.access_token,
-            id_token: response.id_token,
-        })
-    }
-}
 
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
@@ -136,15 +71,7 @@ impl MessageProcessor {
             config_warnings,
         } = args;
         let outgoing = Arc::new(outgoing);
-        let auth_manager = AuthManager::shared(
-            config.adam_home.clone(),
-            false,
-            config.cli_auth_credentials_store_mode,
-        );
-        auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
-        auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
-            outgoing: outgoing.clone(),
-        }));
+        let auth_manager = AuthManager::shared(config.adam_home.clone(), false);
         let thread_manager = Arc::new(ThreadManager::new(
             config.adam_home.clone(),
             auth_manager.clone(),

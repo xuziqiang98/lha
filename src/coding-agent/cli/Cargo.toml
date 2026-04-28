@@ -22,13 +22,10 @@ clap_complete = { workspace = true }
 adam-app-server = { workspace = true }
 adam-app-server-protocol = { workspace = true }
 adam-arg0 = { workspace = true }
-adam-chatgpt = { workspace = true }
-adam-cloud-tasks = { path = "../../integrations/cloud/cloud-tasks" }
 adam-common = { workspace = true, features = ["cli"] }
 adam-agent = { workspace = true }
 adam-exec = { workspace = true }
 adam-execpolicy = { workspace = true }
-adam-login = { workspace = true }
 adam-mcp-server = { workspace = true }
 adam-protocol = { workspace = true }
 adam-responses-api-proxy = { workspace = true }

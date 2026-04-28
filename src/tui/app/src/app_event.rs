@@ -10,13 +10,13 @@
 
 use std::path::PathBuf;
 
+use adam_agent::connectors::AppInfo;
 use adam_agent::protocol::Event;
-use adam_agent::protocol::RateLimitSnapshot;
-use adam_chatgpt::connectors::AppInfo;
 use adam_common::approval_presets::ApprovalPreset;
 use adam_file_search::FileMatch;
 use adam_protocol::ThreadId;
 use adam_protocol::openai_models::ModelPreset;
+use adam_protocol::openai_models::ReasoningEffort;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::changelog::ChangelogOutput;
@@ -29,7 +29,6 @@ use adam_agent::protocol::ReviewRequest;
 use adam_agent::protocol::SandboxPolicy;
 use adam_protocol::config_types::CollaborationModeMask;
 use adam_protocol::config_types::Personality;
-use adam_protocol::openai_models::ReasoningEffort;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -105,9 +104,6 @@ pub(crate) enum AppEvent {
         matches: Vec<FileMatch>,
     },
 
-    /// Result of refreshing rate limits
-    RateLimitSnapshotFetched(RateLimitSnapshot),
-
     /// Result of prefetching connectors.
     ConnectorsLoaded(Result<ConnectorsSnapshot, String>),
 
@@ -140,12 +136,6 @@ pub(crate) enum AppEvent {
     StopCommitAnimation,
     CommitTick,
 
-    /// Update the current reasoning effort in the running app and widget.
-    UpdateReasoningEffort(Option<ReasoningEffort>),
-
-    /// Update the current model slug in the running app and widget.
-    UpdateModel(String),
-
     /// Update the active collaboration mask in the running app and widget.
     UpdateCollaborationMode(CollaborationModeMask),
 
@@ -174,11 +164,6 @@ pub(crate) enum AppEvent {
 
     /// Open the full model picker (non-auto models).
     OpenAllModelsPopup {
-        models: Vec<ModelPreset>,
-    },
-
-    /// Open the model popup with a freshly refreshed model list.
-    OpenModelPopupWithPresets {
         models: Vec<ModelPreset>,
     },
 
@@ -250,18 +235,12 @@ pub(crate) enum AppEvent {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     UpdateWorldWritableWarningAcknowledged(bool),
 
-    /// Update whether the rate limit switch prompt has been acknowledged for the session.
-    UpdateRateLimitSwitchPromptHidden(bool),
-
     /// Persist the acknowledgement flag for the full access warning prompt.
     PersistFullAccessWarningAcknowledged,
 
     /// Persist the acknowledgement flag for the world-writable directories warning.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     PersistWorldWritableWarningAcknowledged,
-
-    /// Persist the acknowledgement flag for the rate limit switch prompt.
-    PersistRateLimitSwitchPromptHidden,
 
     /// Persist the acknowledgement flag for the model migration prompt.
     PersistModelMigrationPromptAcknowledged {

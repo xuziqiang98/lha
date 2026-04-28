@@ -1,4 +1,3 @@
-mod auth_fixtures;
 mod config;
 mod mcp_process;
 mod mock_model_server;
@@ -7,10 +6,6 @@ mod responses;
 mod rollout;
 
 use adam_app_server_protocol::JSONRPCResponse;
-pub use auth_fixtures::ChatGptAuthFixture;
-pub use auth_fixtures::ChatGptIdTokenClaims;
-pub use auth_fixtures::encode_id_token;
-pub use auth_fixtures::write_chatgpt_auth;
 pub use config::write_mock_responses_config_toml;
 pub use config::write_mock_responses_config_toml_with_options;
 pub use core_test_support::format_with_current_shell;

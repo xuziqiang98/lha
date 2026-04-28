@@ -127,39 +127,6 @@
         }
       ]
     },
-    "AuthCredentialsStoreMode": {
-      "description": "Determine where Codex should store CLI auth credentials.",
-      "oneOf": [
-        {
-          "description": "Persist credentials in ADAM_HOME/auth.json.",
-          "enum": [
-            "file"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Persist credentials in the keyring. Fail if unavailable.",
-          "enum": [
-            "keyring"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Use keyring when available; otherwise, fall back to a file in ADAM_HOME.",
-          "enum": [
-            "auto"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Store credentials in memory only for the current process.",
-          "enum": [
-            "ephemeral"
-          ],
-          "type": "string"
-        }
-      ]
-    },
     "ConfigProfile": {
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
@@ -169,9 +136,6 @@
         },
         "approval_policy": {
           "$ref": "#/definitions/AskForApproval"
-        },
-        "chatgpt_base_url": {
-          "type": "string"
         },
         "experimental_compact_prompt_file": {
           "$ref": "#/definitions/AbsolutePathBuf"
@@ -355,13 +319,6 @@
       },
       "type": "object"
     },
-    "ForcedLoginMethod": {
-      "enum": [
-        "chatgpt",
-        "api"
-      ],
-      "type": "string"
-    },
     "GhostSnapshotToml": {
       "additionalProperties": false,
       "properties": {
@@ -448,10 +405,6 @@
         },
         "hide_gpt5_1_migration_prompt": {
           "description": "Tracks whether the user has seen the model migration prompt",
-          "type": "boolean"
-        },
-        "hide_rate_limit_model_nudge": {
-          "description": "Tracks whether the user opted out of the rate limit model switch reminder.",
           "type": "boolean"
         },
         "hide_world_writable_warning": {
@@ -1062,22 +1015,9 @@
       ],
       "description": "Default approval policy for executing commands."
     },
-    "chatgpt_base_url": {
-      "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",
-      "type": "string"
-    },
     "check_for_update_on_startup": {
       "description": "When `true`, checks for Codex updates on startup and surfaces update prompts. Set to `false` only if your Codex updates are centrally managed. Defaults to `true`.",
       "type": "boolean"
-    },
-    "cli_auth_credentials_store": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/AuthCredentialsStoreMode"
-        }
-      ],
-      "default": null,
-      "description": "Preferred backend for storing CLI auth credentials. file (default): Use a file in the Adam home directory. keyring: Use an OS-specific keyring service. auto: Use the keyring if available, otherwise use a file."
     },
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
@@ -1238,20 +1178,6 @@
         }
       ],
       "description": "Optional URI-based file opener. If set, citations to files in the model output will be hyperlinked using the specified URI scheme."
-    },
-    "forced_chatgpt_workspace_id": {
-      "default": null,
-      "description": "When set, restricts ChatGPT login to a specific workspace identifier.",
-      "type": "string"
-    },
-    "forced_login_method": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/ForcedLoginMethod"
-        }
-      ],
-      "default": null,
-      "description": "When set, restricts the login mechanism users may use."
     },
     "ghost_snapshot": {
       "allOf": [

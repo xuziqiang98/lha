@@ -53,11 +53,7 @@ impl MessageProcessor {
         config: Arc<Config>,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
-        let auth_manager = AuthManager::shared(
-            config.adam_home.clone(),
-            false,
-            config.cli_auth_credentials_store_mode,
-        );
+        let auth_manager = AuthManager::shared(config.adam_home.clone(), false);
         let thread_manager = Arc::new(ThreadManager::new(
             config.adam_home.clone(),
             auth_manager,

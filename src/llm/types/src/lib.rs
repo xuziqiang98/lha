@@ -39,7 +39,4 @@ pub use transcript::ToolResultItem;
 pub use transcript::ToolResultPayload;
 pub use transcript::TranscriptItem;
 pub use transcript::UnknownItem;
-pub use usage::CreditsSnapshot;
-pub use usage::RateLimitSnapshot;
-pub use usage::RateLimitWindow;
 pub use usage::TokenUsage;

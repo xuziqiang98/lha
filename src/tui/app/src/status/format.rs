@@ -9,7 +9,6 @@ pub(crate) struct FieldFormatter {
     indent: &'static str,
     label_width: usize,
     value_offset: usize,
-    value_indent: String,
 }
 
 impl FieldFormatter {
@@ -31,7 +30,6 @@ impl FieldFormatter {
             indent: Self::INDENT,
             label_width,
             value_offset,
-            value_indent: " ".repeat(value_offset),
         }
     }
 
@@ -41,13 +39,6 @@ impl FieldFormatter {
         value_spans: Vec<Span<'static>>,
     ) -> Line<'static> {
         Line::from(self.full_spans(label, value_spans))
-    }
-
-    pub(crate) fn continuation(&self, mut spans: Vec<Span<'static>>) -> Line<'static> {
-        let mut all_spans = Vec::with_capacity(spans.len() + 1);
-        all_spans.push(Span::from(self.value_indent.clone()).dim());
-        all_spans.append(&mut spans);
-        Line::from(all_spans)
     }
 
     pub(crate) fn value_width(&self, available_inner_width: usize) -> usize {

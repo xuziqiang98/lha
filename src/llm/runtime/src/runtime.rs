@@ -9,7 +9,6 @@ use reqwest::Client as HttpClient;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::mpsc;
 
-use crate::AuthSource;
 use crate::ModelInfo;
 use crate::ReasoningEffort;
 use crate::ReasoningSummary;
@@ -79,7 +78,6 @@ pub trait SemanticRuntimeSession: Send {
 
 pub struct RuntimeBuildSpec {
     pub endpoint_id: String,
-    pub auth_source: Arc<dyn AuthSource>,
     pub http_client: HttpClient,
     pub model_info: ModelInfo,
     pub otel_manager: OtelManager,
@@ -113,7 +111,6 @@ impl DefaultPromptRuntimeFactory {
     fn build_prompt_runtime(&self, spec: RuntimeBuildSpec) -> Arc<dyn PromptRuntime> {
         let RuntimeBuildSpec {
             endpoint_id,
-            auth_source,
             http_client,
             model_info,
             otel_manager,
@@ -147,7 +144,6 @@ impl DefaultPromptRuntimeFactory {
             .then(|| self.chat_role_compatibility_handle(endpoint_id));
         let client = LlmClient::new(
             runtime_config,
-            auth_source,
             http_client,
             model_info,
             chat_role_compatibility,

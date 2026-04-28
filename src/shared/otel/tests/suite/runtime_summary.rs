@@ -26,7 +26,7 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         "gpt-5.1",
         Some("account-id".to_string()),
         None,
-        Some(AuthMode::ApiKey),
+        Some(AuthMode::ApiKey.to_string()),
         true,
         "tty".to_string(),
         SessionSource::Cli,

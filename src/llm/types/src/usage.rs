@@ -1,4 +1,3 @@
-use crate::PlanType;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -56,28 +55,4 @@ impl TokenUsage {
         self.reasoning_output_tokens += other.reasoning_output_tokens;
         self.total_tokens += other.total_tokens;
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-pub struct RateLimitSnapshot {
-    pub primary: Option<RateLimitWindow>,
-    pub secondary: Option<RateLimitWindow>,
-    pub credits: Option<CreditsSnapshot>,
-    pub plan_type: Option<PlanType>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-pub struct RateLimitWindow {
-    pub used_percent: f64,
-    #[ts(type = "number | null")]
-    pub window_minutes: Option<i64>,
-    #[ts(type = "number | null")]
-    pub resets_at: Option<i64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-pub struct CreditsSnapshot {
-    pub has_credits: bool,
-    pub unlimited: bool,
-    pub balance: Option<String>,
 }

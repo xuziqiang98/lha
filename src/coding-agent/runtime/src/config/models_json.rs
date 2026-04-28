@@ -49,8 +49,6 @@ pub struct ModelsEndpoint {
     pub stream_max_retries: Option<u64>,
     pub stream_idle_timeout_ms: Option<u64>,
     #[serde(default)]
-    pub requires_openai_auth: bool,
-    #[serde(default)]
     pub supports_realtime_streaming: bool,
     #[serde(default)]
     pub models: BTreeMap<String, ModelMetadata>,
@@ -160,7 +158,6 @@ impl ModelsJson {
                 runtime.request_max_retries = endpoint.request_max_retries;
                 runtime.stream_max_retries = endpoint.stream_max_retries;
                 runtime.stream_idle_timeout_ms = endpoint.stream_idle_timeout_ms;
-                runtime.requires_openai_auth = endpoint.requires_openai_auth;
                 runtime.set_realtime_turn_streaming_enabled(endpoint.supports_realtime_streaming);
                 endpoints.insert(provider_ref, runtime);
             }
