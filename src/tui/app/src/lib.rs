@@ -54,7 +54,6 @@ mod chatwidget;
 mod cli;
 mod clipboard_paste;
 mod collab;
-mod collaboration_modes;
 mod color;
 pub mod custom_terminal;
 mod cwd_prompt;
@@ -65,6 +64,7 @@ mod external_editor;
 mod file_search;
 mod get_git_diff;
 mod history_cell;
+mod identities;
 pub mod insert_history;
 mod key_hint;
 mod line_truncation;
@@ -900,7 +900,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.get().clone(),
             model,
             personality: None,
-            collaboration_mode: None,
+            identity: None,
             effort: config.model_reasoning_effort,
             summary: config.model_reasoning_summary,
             user_instructions: None,

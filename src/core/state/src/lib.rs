@@ -2,7 +2,7 @@
 //!
 //! This crate is intentionally small and focused: it extracts rollout metadata
 //! from JSONL rollouts and mirrors it into a local SQLite database. Backfill
-//! orchestration and rollout scanning live in `adam-coding-agent`.
+//! orchestration and rollout scanning live in `adam-agent`.
 
 mod extract;
 pub mod log_db;

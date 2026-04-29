@@ -36,7 +36,7 @@ pub(crate) struct CommandPopup {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CommandPopupFlags {
-    pub(crate) collaboration_modes_enabled: bool,
+    pub(crate) identities_enabled: bool,
     pub(crate) personality_command_enabled: bool,
     pub(crate) windows_degraded_sandbox_active: bool,
 }
@@ -45,7 +45,7 @@ impl CommandPopup {
     pub(crate) fn new(mut prompts: Vec<CustomPrompt>, flags: CommandPopupFlags) -> Self {
         // Keep built-in availability in sync with the composer.
         let builtins = slash_commands::builtins_for_input(
-            flags.collaboration_modes_enabled,
+            flags.identities_enabled,
             flags.personality_command_enabled,
             flags.windows_degraded_sandbox_active,
         );
@@ -458,7 +458,7 @@ mod tests {
     }
 
     #[test]
-    fn collab_command_hidden_when_collaboration_modes_disabled() {
+    fn identity_command_hidden_when_identities_disabled() {
         let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
         popup.on_composer_text_change("/".to_string());
 
@@ -471,48 +471,26 @@ mod tests {
             })
             .collect();
         assert!(
-            !cmds.contains(&"collab"),
-            "expected '/collab' to be hidden when collaboration modes are disabled, got {cmds:?}"
-        );
-        assert!(
-            !cmds.contains(&"plan"),
-            "expected '/plan' to be hidden when collaboration modes are disabled, got {cmds:?}"
+            !cmds.contains(&"identity"),
+            "expected '/identity' to be hidden when identities are disabled, got {cmds:?}"
         );
     }
 
     #[test]
-    fn collab_command_visible_when_collaboration_modes_enabled() {
+    fn identity_command_visible_when_identities_enabled() {
         let mut popup = CommandPopup::new(
             Vec::new(),
             CommandPopupFlags {
-                collaboration_modes_enabled: true,
+                identities_enabled: true,
                 personality_command_enabled: true,
                 windows_degraded_sandbox_active: false,
             },
         );
-        popup.on_composer_text_change("/collab".to_string());
+        popup.on_composer_text_change("/identity".to_string());
 
         match popup.selected_item() {
-            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "collab"),
-            other => panic!("expected collab to be selected for exact match, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn plan_command_visible_when_collaboration_modes_enabled() {
-        let mut popup = CommandPopup::new(
-            Vec::new(),
-            CommandPopupFlags {
-                collaboration_modes_enabled: true,
-                personality_command_enabled: true,
-                windows_degraded_sandbox_active: false,
-            },
-        );
-        popup.on_composer_text_change("/plan".to_string());
-
-        match popup.selected_item() {
-            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "plan"),
-            other => panic!("expected plan to be selected for exact match, got {other:?}"),
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "identity"),
+            other => panic!("expected identity to be selected for exact match, got {other:?}"),
         }
     }
 
@@ -521,7 +499,7 @@ mod tests {
         let mut popup = CommandPopup::new(
             Vec::new(),
             CommandPopupFlags {
-                collaboration_modes_enabled: true,
+                identities_enabled: true,
                 personality_command_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
@@ -547,7 +525,7 @@ mod tests {
         let mut popup = CommandPopup::new(
             Vec::new(),
             CommandPopupFlags {
-                collaboration_modes_enabled: true,
+                identities_enabled: true,
                 personality_command_enabled: true,
                 windows_degraded_sandbox_active: false,
             },

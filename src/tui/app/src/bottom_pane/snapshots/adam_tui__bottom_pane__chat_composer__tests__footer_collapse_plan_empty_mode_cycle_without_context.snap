@@ -1,5 +1,5 @@
 ---
-source: src/harness/tui/src/bottom_pane/chat_composer.rs
+source: src/tui/app/src/bottom_pane/chat_composer.rs
 expression: terminal.backend()
 ---
 "                                            "
@@ -10,4 +10,4 @@ expression: terminal.backend()
 "                                            "
 "                                            "
 "                                            "
-"  gpt-5.4   Plan mode (shift+tab to cycle)  "
+"  gpt-5.4 high            Identity planner  "

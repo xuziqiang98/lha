@@ -11,7 +11,7 @@ use std::path::Path;
 /// The cache will be treated as fresh (within TTL) and used instead of fetching from the network.
 pub fn write_models_cache(adam_home: &Path) -> std::io::Result<()> {
     let response: ModelsResponse =
-        serde_json::from_str(include_str!("../../../../coding-agent/runtime/models.json"))
+        serde_json::from_str(include_str!("../../../../agent/runtime/models.json"))
             .map_err(std::io::Error::other)?;
     let models: Vec<ModelInfo> = response
         .models

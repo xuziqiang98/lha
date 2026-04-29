@@ -1,0 +1,15 @@
+[package]
+name = "adam-identity"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "adam_identity"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+adam-protocol = { workspace = true }

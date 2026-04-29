@@ -865,20 +865,20 @@
           "type": "object"
         },
         {
-          "description": "EXPERIMENTAL - list collaboration mode presets.",
+          "description": "EXPERIMENTAL - list identity presets.",
           "properties": {
             "id": {
               "$ref": "#/definitions/RequestId"
             },
             "method": {
               "enum": [
-                "collaborationMode/list"
+                "identity/list"
               ],
-              "title": "CollaborationMode/listRequestMethod",
+              "title": "Identity/listRequestMethod",
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/v2/CollaborationModeListParams"
+              "$ref": "#/definitions/v2/IdentityListParams"
             }
           },
           "required": [
@@ -886,7 +886,7 @@
             "method",
             "params"
           ],
-          "title": "CollaborationMode/listRequest",
+          "title": "Identity/listRequest",
           "type": "object"
         },
         {
@@ -2249,13 +2249,13 @@
         {
           "description": "Agent has started a turn. v1 wire format uses `task_started`; accept `turn_started` for v2 interop.",
           "properties": {
-            "collaboration_mode_kind": {
+            "identity_kind": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/v2/ModeKind"
+                  "$ref": "#/definitions/v2/IdentityKind"
                 }
               ],
-              "default": "code"
+              "default": "nobody"
             },
             "model_context_window": {
               "format": "int64",
@@ -5171,6 +5171,15 @@
       ],
       "type": "object"
     },
+    "IdentityKind": {
+      "description": "Initial identity to use when the TUI starts.",
+      "enum": [
+        "nobody",
+        "planner",
+        "programmer"
+      ],
+      "type": "string"
+    },
     "ImageContent": {
       "description": "An image provided to or from an LLM.",
       "properties": {
@@ -5617,17 +5626,6 @@
           "type": "object"
         }
       ]
-    },
-    "ModeKind": {
-      "description": "Initial collaboration mode to use when the TUI starts.",
-      "enum": [
-        "plan",
-        "code",
-        "pair_programming",
-        "execute",
-        "custom"
-      ],
-      "type": "string"
     },
     "NetworkAccess": {
       "description": "Represents whether outbound network access is available to the agent.",
@@ -9619,96 +9617,6 @@
         ],
         "type": "string"
       },
-      "CollaborationMode": {
-        "description": "Collaboration mode for a Codex session.",
-        "properties": {
-          "mode": {
-            "$ref": "#/definitions/v2/ModeKind"
-          },
-          "settings": {
-            "$ref": "#/definitions/v2/Settings"
-          }
-        },
-        "required": [
-          "mode",
-          "settings"
-        ],
-        "type": "object"
-      },
-      "CollaborationModeListParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "EXPERIMENTAL - list collaboration mode presets.",
-        "title": "CollaborationModeListParams",
-        "type": "object"
-      },
-      "CollaborationModeListResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "EXPERIMENTAL - collaboration mode presets response.",
-        "properties": {
-          "data": {
-            "items": {
-              "$ref": "#/definitions/v2/CollaborationModeMask"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "data"
-        ],
-        "title": "CollaborationModeListResponse",
-        "type": "object"
-      },
-      "CollaborationModeMask": {
-        "description": "A mask for collaboration mode settings, allowing partial updates. All fields except `name` are optional, enabling selective updates.",
-        "properties": {
-          "developer_instructions": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "mode": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ModeKind"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "model": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "name": {
-            "type": "string"
-          },
-          "reasoning_effort": {
-            "anyOf": [
-              {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ReasoningEffort"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "type": "object"
-      },
       "CommandAction": {
         "oneOf": [
           {
@@ -10831,6 +10739,122 @@
         },
         "type": "object"
       },
+      "Identity": {
+        "description": "Identity for an Adam session.",
+        "properties": {
+          "kind": {
+            "$ref": "#/definitions/v2/IdentityKind"
+          },
+          "settings": {
+            "$ref": "#/definitions/v2/Settings"
+          }
+        },
+        "required": [
+          "kind",
+          "settings"
+        ],
+        "type": "object"
+      },
+      "IdentityCapabilities": {
+        "description": "Capabilities associated with an identity.",
+        "properties": {
+          "write_tools": {
+            "description": "Whether this identity is intended to have write-capable tools. This is currently metadata only; tool exposure is not filtered from this field yet.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "write_tools"
+        ],
+        "type": "object"
+      },
+      "IdentityKind": {
+        "description": "Initial identity to use when the TUI starts.",
+        "enum": [
+          "nobody",
+          "planner",
+          "programmer"
+        ],
+        "type": "string"
+      },
+      "IdentityListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - list identity presets.",
+        "title": "IdentityListParams",
+        "type": "object"
+      },
+      "IdentityListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - identity presets response.",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/IdentityMask"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "IdentityListResponse",
+        "type": "object"
+      },
+      "IdentityMask": {
+        "description": "A mask for identity settings, allowing partial updates. All fields except `name` are optional, enabling selective updates.",
+        "properties": {
+          "capabilities": {
+            "$ref": "#/definitions/v2/IdentityCapabilities"
+          },
+          "developer_instructions": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/IdentityKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ReasoningEffort"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "capabilities",
+          "name"
+        ],
+        "type": "object"
+      },
       "ImageContent": {
         "description": "An image provided to or from an LLM.",
         "properties": {
@@ -11127,17 +11151,6 @@
         "enum": [
           "replace",
           "upsert"
-        ],
-        "type": "string"
-      },
-      "ModeKind": {
-        "description": "Initial collaboration mode to use when the TUI starts.",
-        "enum": [
-          "plan",
-          "code",
-          "pair_programming",
-          "execute",
-          "custom"
         ],
         "type": "string"
       },
@@ -12095,7 +12108,7 @@
         ]
       },
       "Settings": {
-        "description": "Settings for a collaboration mode.",
+        "description": "Settings for an identity.",
         "properties": {
           "developer_instructions": {
             "type": [
@@ -14627,17 +14640,6 @@
             ],
             "description": "Override the approval policy for this turn and subsequent turns."
           },
-          "collaborationMode": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/CollaborationMode"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "EXPERIMENTAL - set a pre-set collaboration mode. Takes precedence over model, reasoning_effort, and developer instructions if set."
-          },
           "cwd": {
             "description": "Override the working directory for this turn and subsequent turns.",
             "type": [
@@ -14655,6 +14657,17 @@
               }
             ],
             "description": "Override the reasoning effort for this turn and subsequent turns."
+          },
+          "identity": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/Identity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "EXPERIMENTAL - set a pre-set identity. Takes precedence over model, reasoning_effort, and developer instructions if set."
           },
           "input": {
             "items": {

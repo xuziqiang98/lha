@@ -92,9 +92,9 @@ use adam_agent::windows_sandbox::WindowsSandboxLevelExt;
 use adam_otel::OtelManager;
 use adam_protocol::ThreadId;
 use adam_protocol::approvals::ElicitationRequestEvent;
-use adam_protocol::config_types::CollaborationMode;
-use adam_protocol::config_types::CollaborationModeMask;
-use adam_protocol::config_types::ModeKind;
+use adam_protocol::config_types::Identity;
+use adam_protocol::config_types::IdentityKind;
+use adam_protocol::config_types::IdentityMask;
 use adam_protocol::config_types::Personality;
 use adam_protocol::config_types::Settings;
 #[cfg(target_os = "windows")]
@@ -127,7 +127,7 @@ use tracing::debug;
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
-const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
+const PLAN_IMPLEMENTATION_NO: &str = "No, stay in planner identity";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 
 use crate::app_event::AppEvent;
@@ -141,10 +141,10 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
-use crate::bottom_pane::CollaborationModeIndicator;
 use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
 use crate::bottom_pane::ExperimentalFeatureItem;
 use crate::bottom_pane::ExperimentalFeaturesView;
+use crate::bottom_pane::IdentityIndicator;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
@@ -156,7 +156,6 @@ use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::bottom_pane::provider_config_view::ProviderConfigView;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::collab;
-use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
@@ -169,6 +168,7 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::WebSearchCell;
+use crate::identities;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::markdown::append_markdown;
@@ -376,7 +376,7 @@ pub(crate) enum TranscriptHostMode {
 /// intent (`Op` submissions and `AppEvent` requests).
 ///
 /// It is not responsible for running the agent itself; it reflects progress by updating UI state
-/// and by sending requests back to adam-coding-agent.
+/// and by sending requests back to adam-agent.
 ///
 /// Quit/interrupt behavior intentionally spans layers: the bottom pane owns local input routing
 /// (which view gets Ctrl+C), while `ChatWidget` owns process-level decisions such as interrupting
@@ -399,16 +399,16 @@ pub(crate) struct ChatWidget {
     /// where the overlay may briefly treat new tail content as already cached.
     active_cell_revision: u64,
     config: Config,
-    /// The unmasked collaboration mode settings (always Custom mode).
+    /// The unmasked identity settings.
     ///
-    /// Masks are applied on top of this base mode to derive the effective mode.
-    current_collaboration_mode: CollaborationMode,
-    /// The currently active collaboration mask, if any.
-    active_collaboration_mask: Option<CollaborationModeMask>,
-    /// User-selected reasoning effort overrides keyed by collaboration mode.
+    /// Masks are applied on top of this base identity to derive the effective identity.
+    current_identity: Identity,
+    /// The currently active identity mask, if any.
+    active_identity_mask: Option<IdentityMask>,
+    /// User-selected reasoning effort overrides keyed by identity.
     ///
-    /// A missing key means "use the preset default for this mode".
-    reasoning_effort_overrides: HashMap<ModeKind, Option<ReasoningEffortConfig>>,
+    /// A missing key means "use the preset default for this identity".
+    reasoning_effort_overrides: HashMap<IdentityKind, Option<ReasoningEffortConfig>>,
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
     otel_manager: OtelManager,
@@ -429,7 +429,7 @@ pub(crate) struct ChatWidget {
     turn_sleep_inhibitor: SleepInhibitor,
     task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
-    /// Tracks whether adam-coding-agent currently considers an agent turn to be in progress.
+    /// Tracks whether adam-agent currently considers an agent turn to be in progress.
     ///
     /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
     /// can update the status header without accidentally clearing the spinner for an active turn.
@@ -800,7 +800,7 @@ impl ChatWidget {
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
-        self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
+        self.current_identity = self.current_identity.with_updates(
             Some(model_for_header.clone()),
             Some(event.reasoning_effort),
             None,
@@ -819,7 +819,7 @@ impl ChatWidget {
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
-        // Ask adam-coding-agent to enumerate custom prompts for this session.
+        // Ask adam-agent to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
         self.submit_op(Op::ListSkills {
             cwds: Vec::new(),
@@ -916,7 +916,7 @@ impl ChatWidget {
     }
 
     fn on_plan_delta(&mut self, delta: String) {
-        if self.active_mode_kind() != ModeKind::Plan {
+        if self.active_identity_kind() != IdentityKind::Planner {
             return;
         }
         if !self.plan_item_active {
@@ -1079,13 +1079,13 @@ impl ChatWidget {
     }
 
     fn maybe_prompt_plan_implementation(&mut self) {
-        if !self.collaboration_modes_enabled() {
+        if !self.identities_enabled() {
             return;
         }
         if !self.queued_user_messages.is_empty() {
             return;
         }
-        if self.active_mode_kind() != ModeKind::Plan {
+        if self.active_identity_kind() != IdentityKind::Planner {
             return;
         }
         if !self.saw_plan_item_this_turn {
@@ -1099,25 +1099,28 @@ impl ChatWidget {
     }
 
     fn open_plan_implementation_prompt(&mut self) {
-        let code_mask = collaboration_modes::code_mask(self.thread_manager.as_ref());
-        let (implement_actions, implement_disabled_reason) = match code_mask {
+        let programmer_mask = identities::programmer_mask(self.thread_manager.as_ref());
+        let (implement_actions, implement_disabled_reason) = match programmer_mask {
             Some(mask) => {
                 let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                     tx.send(AppEvent::SubmitUserMessageWithMode {
                         text: user_text.clone(),
-                        collaboration_mode: mask.clone(),
+                        identity: mask.clone(),
                     });
                 })];
                 (actions, None)
             }
-            None => (Vec::new(), Some("Code mode unavailable".to_string())),
+            None => (
+                Vec::new(),
+                Some("programmer identity unavailable".to_string()),
+            ),
         };
 
         let items = vec![
             SelectionItem {
                 name: PLAN_IMPLEMENTATION_YES.to_string(),
-                description: Some("Switch to Code and start coding.".to_string()),
+                description: Some("Switch to programmer identity.".to_string()),
                 selected_description: None,
                 is_current: false,
                 actions: implement_actions,
@@ -2145,13 +2148,13 @@ impl ChatWidget {
         let model_for_header = model
             .clone()
             .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
-        let active_collaboration_mask =
-            Self::initial_collaboration_mask(&config, thread_manager.as_ref(), model_override);
-        let header_model = active_collaboration_mask
+        let active_identity_mask =
+            Self::initial_identity_mask(&config, thread_manager.as_ref(), model_override);
+        let header_model = active_identity_mask
             .as_ref()
             .and_then(|mask| mask.model.clone())
             .unwrap_or_else(|| model_for_header.clone());
-        let current_collaboration_mode =
+        let current_identity =
             Self::initial_custom_mode(header_model.clone(), config.model_reasoning_effort);
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
@@ -2180,8 +2183,8 @@ impl ChatWidget {
             skills_all: Vec::new(),
             skills_initial_state: None,
             reasoning_effort_overrides: HashMap::new(),
-            current_collaboration_mode,
-            active_collaboration_mask,
+            current_identity,
+            active_identity_mask,
             auth_manager,
             thread_manager,
             otel_manager,
@@ -2237,9 +2240,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
-        widget.bottom_pane.set_collaboration_modes_enabled(
-            widget.config.features.enabled(Feature::CollaborationModes),
-        );
+        widget
+            .bottom_pane
+            .set_identities_enabled(widget.config.features.enabled(Feature::Identities));
         widget.sync_personality_command_enabled();
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
@@ -2249,7 +2252,7 @@ impl ChatWidget {
                     WindowsSandboxLevel::RestrictedToken
                 ),
         );
-        widget.update_collaboration_mode_indicator();
+        widget.update_identity_indicator();
         widget.update_footer_info();
 
         widget
@@ -2287,13 +2290,13 @@ impl ChatWidget {
         let model_for_header = model
             .clone()
             .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
-        let active_collaboration_mask =
-            Self::initial_collaboration_mask(&config, thread_manager.as_ref(), model_override);
-        let header_model = active_collaboration_mask
+        let active_identity_mask =
+            Self::initial_identity_mask(&config, thread_manager.as_ref(), model_override);
+        let header_model = active_identity_mask
             .as_ref()
             .and_then(|mask| mask.model.clone())
             .unwrap_or_else(|| model_for_header.clone());
-        let current_collaboration_mode =
+        let current_identity =
             Self::initial_custom_mode(header_model.clone(), config.model_reasoning_effort);
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
@@ -2322,8 +2325,8 @@ impl ChatWidget {
             skills_all: Vec::new(),
             skills_initial_state: None,
             reasoning_effort_overrides: HashMap::new(),
-            current_collaboration_mode,
-            active_collaboration_mask,
+            current_identity,
+            active_identity_mask,
             auth_manager,
             thread_manager,
             otel_manager,
@@ -2379,9 +2382,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
-        widget.bottom_pane.set_collaboration_modes_enabled(
-            widget.config.features.enabled(Feature::CollaborationModes),
-        );
+        widget
+            .bottom_pane
+            .set_identities_enabled(widget.config.features.enabled(Feature::Identities));
         widget.sync_personality_command_enabled();
 
         widget
@@ -2415,9 +2418,9 @@ impl ChatWidget {
         let header_model = model
             .clone()
             .unwrap_or_else(|| session_configured.model.clone());
-        let active_collaboration_mask =
-            Self::initial_collaboration_mask(&config, thread_manager.as_ref(), model_override);
-        let header_model = active_collaboration_mask
+        let active_identity_mask =
+            Self::initial_identity_mask(&config, thread_manager.as_ref(), model_override);
+        let header_model = active_identity_mask
             .as_ref()
             .and_then(|mask| mask.model.clone())
             .unwrap_or(header_model);
@@ -2428,7 +2431,7 @@ impl ChatWidget {
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
-        let current_collaboration_mode =
+        let current_identity =
             Self::initial_custom_mode(header_model.clone(), initial_reasoning_effort);
         let transcript_host_mode = Self::transcript_host_mode_from_config(&config);
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
@@ -2455,8 +2458,8 @@ impl ChatWidget {
             skills_all: Vec::new(),
             skills_initial_state: None,
             reasoning_effort_overrides: HashMap::new(),
-            current_collaboration_mode,
-            active_collaboration_mask,
+            current_identity,
+            active_identity_mask,
             auth_manager,
             thread_manager,
             otel_manager,
@@ -2512,9 +2515,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
-        widget.bottom_pane.set_collaboration_modes_enabled(
-            widget.config.features.enabled(Feature::CollaborationModes),
-        );
+        widget
+            .bottom_pane
+            .set_identities_enabled(widget.config.features.enabled(Feature::Identities));
         widget.sync_personality_command_enabled();
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
@@ -2524,7 +2527,7 @@ impl ChatWidget {
                     WindowsSandboxLevel::RestrictedToken
                 ),
         );
-        widget.update_collaboration_mode_indicator();
+        widget.update_identity_indicator();
         widget.update_footer_info();
 
         widget
@@ -2594,16 +2597,6 @@ impl ChatWidget {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } if self.handle_transcript_scroll_key(key_event) => {}
-            KeyEvent {
-                code: KeyCode::BackTab,
-                kind: KeyEventKind::Press,
-                ..
-            } if self.collaboration_modes_enabled()
-                && !self.bottom_pane.is_task_running()
-                && self.bottom_pane.no_modal_or_popup_active() =>
-            {
-                self.cycle_collaboration_mode();
-            }
             KeyEvent {
                 code: KeyCode::Up,
                 modifiers: KeyModifiers::ALT,
@@ -2775,29 +2768,15 @@ impl ChatWidget {
             SlashCommand::Personality => {
                 self.open_personality_popup();
             }
-            SlashCommand::Plan => {
-                if !self.collaboration_modes_enabled() {
+            SlashCommand::Identity => {
+                if !self.identities_enabled() {
                     self.add_info_message(
-                        "Collaboration modes are disabled.".to_string(),
-                        Some("Enable collaboration modes to use /plan.".to_string()),
+                        "Identities are disabled.".to_string(),
+                        Some("Enable identities to use /identity.".to_string()),
                     );
                     return;
                 }
-                if let Some(mask) = collaboration_modes::plan_mask(self.thread_manager.as_ref()) {
-                    self.set_collaboration_mask(mask);
-                } else {
-                    self.add_info_message("Plan mode unavailable right now.".to_string(), None);
-                }
-            }
-            SlashCommand::Collab => {
-                if !self.collaboration_modes_enabled() {
-                    self.add_info_message(
-                        "Collaboration modes are disabled.".to_string(),
-                        Some("Enable collaboration modes to use /collab.".to_string()),
-                    );
-                    return;
-                }
-                self.open_collaboration_modes_popup();
+                self.open_identity_popup();
             }
             SlashCommand::Agent | SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
@@ -2978,7 +2957,7 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(AppEvent::CodexOp(Op::SetThreadName { name }));
             }
-            SlashCommand::Collab | SlashCommand::Plan => {
+            SlashCommand::Identity => {
                 let _ = trimmed;
                 self.dispatch_command(cmd);
             }
@@ -3168,9 +3147,9 @@ impl ChatWidget {
             }
         }
 
-        let effective_mode = self.effective_collaboration_mode();
-        let collaboration_mode = if self.collaboration_modes_enabled() {
-            self.active_collaboration_mask
+        let effective_mode = self.effective_identity();
+        let identity = if self.identities_enabled() {
+            self.active_identity_mask
                 .as_ref()
                 .map(|_| effective_mode.clone())
         } else {
@@ -3190,7 +3169,7 @@ impl ChatWidget {
             effort: effective_mode.reasoning_effort(),
             summary: self.config.model_reasoning_summary,
             final_output_json_schema: None,
-            collaboration_mode,
+            identity,
             personality,
         };
 
@@ -3649,7 +3628,7 @@ impl ChatWidget {
         let total_usage = token_info
             .map(|ti| &ti.total_token_usage)
             .unwrap_or(&default_usage);
-        let collaboration_mode = self.collaboration_mode_label();
+        let identity = self.identity_label();
         let reasoning_effort_override = Some(self.effective_reasoning_effort());
         self.add_to_history(crate::status::new_status_output_with_context_compact_count(
             &self.config,
@@ -3660,7 +3639,7 @@ impl ChatWidget {
             self.thread_name.clone(),
             self.forked_from,
             self.model_display_name(),
-            collaboration_mode,
+            identity,
             reasoning_effort_override,
             self.context_compact_count,
         ));
@@ -3778,7 +3757,7 @@ impl ChatWidget {
                         model: None,
                         effort: None,
                         summary: None,
-                        collaboration_mode: None,
+                        identity: None,
                         windows_sandbox_level: None,
                         personality: Some(personality),
                     }));
@@ -4001,31 +3980,27 @@ impl ChatWidget {
         });
     }
 
-    pub(crate) fn open_collaboration_modes_popup(&mut self) {
-        let presets = collaboration_modes::presets_for_tui(self.thread_manager.as_ref());
+    pub(crate) fn open_identity_popup(&mut self) {
+        let presets = identities::presets_for_tui(self.thread_manager.as_ref());
         if presets.is_empty() {
-            self.add_info_message(
-                "No collaboration modes are available right now.".to_string(),
-                None,
-            );
+            self.add_info_message("No identities are available right now.".to_string(), None);
             return;
         }
 
         let current_kind = self
-            .active_collaboration_mask
+            .active_identity_mask
             .as_ref()
-            .and_then(|mask| mask.mode)
+            .and_then(|mask| mask.kind)
             .or_else(|| {
-                collaboration_modes::default_mask(self.thread_manager.as_ref())
-                    .and_then(|mask| mask.mode)
+                identities::default_mask(self.thread_manager.as_ref()).and_then(|mask| mask.kind)
             });
         let items: Vec<SelectionItem> = presets
             .into_iter()
             .map(|mask| {
                 let name = mask.name.clone();
-                let is_current = current_kind == mask.mode;
+                let is_current = current_kind == mask.kind;
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::UpdateCollaborationMode(mask.clone()));
+                    tx.send(AppEvent::UpdateIdentity(mask.clone()));
                 })];
                 SelectionItem {
                     name,
@@ -4038,8 +4013,8 @@ impl ChatWidget {
             .collect();
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select Collaboration Mode".to_string()),
-            subtitle: Some("Pick a collaboration preset.".to_string()),
+            title: Some("Select Identity".to_string()),
+            subtitle: Some("Pick how Adam should behave for future turns.".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
@@ -4454,7 +4429,7 @@ impl ChatWidget {
                 model: None,
                 effort: None,
                 summary: None,
-                collaboration_mode: None,
+                identity: None,
                 personality: None,
             }));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
@@ -5036,15 +5011,15 @@ impl ChatWidget {
         if feature == Feature::Steer {
             self.bottom_pane.set_steer_enabled(enabled);
         }
-        if feature == Feature::CollaborationModes {
-            self.bottom_pane.set_collaboration_modes_enabled(enabled);
-            let settings = self.current_collaboration_mode.settings.clone();
-            self.current_collaboration_mode = CollaborationMode {
-                mode: ModeKind::Custom,
+        if feature == Feature::Identities {
+            self.bottom_pane.set_identities_enabled(enabled);
+            let settings = self.current_identity.settings.clone();
+            self.current_identity = Identity {
+                kind: IdentityKind::Nobody,
                 settings,
             };
-            self.active_collaboration_mask = None;
-            self.update_collaboration_mode_indicator();
+            self.active_identity_mask = None;
+            self.update_identity_indicator();
             self.refresh_model_display();
             self.update_footer_info();
             self.request_redraw();
@@ -5088,17 +5063,15 @@ impl ChatWidget {
             .unwrap_or(false)
     }
 
-    /// Set the reasoning effort in the stored collaboration mode.
+    /// Set the reasoning effort in the stored identity.
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
-        self.current_collaboration_mode =
-            self.current_collaboration_mode
-                .with_updates(None, Some(effort), None);
-        if self.collaboration_modes_enabled()
-            && let Some(mask) = self.active_collaboration_mask.as_mut()
+        self.current_identity = self.current_identity.with_updates(None, Some(effort), None);
+        if self.identities_enabled()
+            && let Some(mask) = self.active_identity_mask.as_mut()
         {
             mask.reasoning_effort = Some(effort);
             if let Some(mode) = mask
-                .mode
+                .kind
                 .filter(|mode| Self::stores_effort_override_for(*mode))
             {
                 self.reasoning_effort_overrides.insert(mode, effort);
@@ -5132,13 +5105,13 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    /// Set the model in the widget's config copy and stored collaboration mode.
+    /// Set the model in the widget's config copy and stored identity.
     pub(crate) fn set_model(&mut self, model: &str) {
-        self.current_collaboration_mode =
-            self.current_collaboration_mode
+        self.current_identity =
+            self.current_identity
                 .with_updates(Some(model.to_string()), None, None);
-        if self.collaboration_modes_enabled()
-            && let Some(mask) = self.active_collaboration_mask.as_mut()
+        if self.identities_enabled()
+            && let Some(mask) = self.active_identity_mask.as_mut()
         {
             mask.model = Some(model.to_string());
         }
@@ -5148,13 +5121,13 @@ impl ChatWidget {
     }
 
     pub(crate) fn current_model(&self) -> &str {
-        if !self.collaboration_modes_enabled() {
-            return self.current_collaboration_mode.model();
+        if !self.identities_enabled() {
+            return self.current_identity.model();
         }
-        self.active_collaboration_mask
+        self.active_identity_mask
             .as_ref()
             .and_then(|mask| mask.model.as_deref())
-            .unwrap_or_else(|| self.current_collaboration_mode.model())
+            .unwrap_or_else(|| self.current_identity.model())
     }
 
     fn sync_personality_command_enabled(&mut self) {
@@ -5186,18 +5159,13 @@ impl ChatWidget {
     }
 
     #[allow(dead_code)] // Used in tests
-    pub(crate) fn current_collaboration_mode(&self) -> &CollaborationMode {
-        &self.current_collaboration_mode
+    pub(crate) fn current_identity(&self) -> &Identity {
+        &self.current_identity
     }
 
     #[cfg(test)]
     pub(crate) fn current_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
         self.effective_reasoning_effort()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn active_collaboration_mode_kind(&self) -> ModeKind {
-        self.active_mode_kind()
     }
 
     #[cfg(test)]
@@ -5209,16 +5177,16 @@ impl ChatWidget {
         self.thread_id.is_some()
     }
 
-    fn collaboration_modes_enabled(&self) -> bool {
-        self.config.features.enabled(Feature::CollaborationModes)
+    fn identities_enabled(&self) -> bool {
+        self.config.features.enabled(Feature::Identities)
     }
 
     fn initial_custom_mode(
         model: String,
         reasoning_effort: Option<ReasoningEffortConfig>,
-    ) -> CollaborationMode {
-        CollaborationMode {
-            mode: ModeKind::Custom,
+    ) -> Identity {
+        Identity {
+            kind: IdentityKind::Nobody,
             settings: Settings {
                 model,
                 reasoning_effort,
@@ -5227,17 +5195,17 @@ impl ChatWidget {
         }
     }
 
-    fn initial_collaboration_mask(
+    fn initial_identity_mask(
         config: &Config,
         thread_manager: &ThreadManager,
         model_override: Option<&str>,
-    ) -> Option<CollaborationModeMask> {
-        if !config.features.enabled(Feature::CollaborationModes) {
+    ) -> Option<IdentityMask> {
+        if !config.features.enabled(Feature::Identities) {
             return None;
         }
-        let mut mask = match config.experimental_mode {
-            Some(kind) => collaboration_modes::mask_for_kind(thread_manager, kind)?,
-            None => collaboration_modes::default_mask(thread_manager)?,
+        let mut mask = match config.default_identity {
+            Some(kind) => identities::mask_for_kind(thread_manager, kind)?,
+            None => identities::default_mask(thread_manager)?,
         };
         if let Some(model_override) = model_override {
             mask.model = Some(model_override.to_string());
@@ -5245,21 +5213,18 @@ impl ChatWidget {
         Some(mask)
     }
 
-    fn active_mode_kind(&self) -> ModeKind {
-        self.active_collaboration_mask
+    fn active_identity_kind(&self) -> IdentityKind {
+        self.active_identity_mask
             .as_ref()
-            .and_then(|mask| mask.mode)
-            .unwrap_or(ModeKind::Custom)
+            .and_then(|mask| mask.kind)
+            .unwrap_or(IdentityKind::Nobody)
     }
 
-    fn stores_effort_override_for(mode: ModeKind) -> bool {
-        matches!(mode, ModeKind::Plan | ModeKind::Code)
+    fn stores_effort_override_for(mode: IdentityKind) -> bool {
+        matches!(mode, IdentityKind::Planner | IdentityKind::Programmer)
     }
 
-    fn apply_reasoning_effort_override(
-        &self,
-        mut mask: CollaborationModeMask,
-    ) -> CollaborationModeMask {
+    fn apply_reasoning_effort_override(&self, mut mask: IdentityMask) -> IdentityMask {
         if let Some(effort) = self.reasoning_effort_override_for_mask(&mask) {
             mask.reasoning_effort = Some(effort);
         }
@@ -5268,37 +5233,37 @@ impl ChatWidget {
 
     fn reasoning_effort_override_for_mask(
         &self,
-        mask: &CollaborationModeMask,
+        mask: &IdentityMask,
     ) -> Option<Option<ReasoningEffortConfig>> {
         let mode = mask
-            .mode
+            .kind
             .filter(|mode| Self::stores_effort_override_for(*mode))?;
         self.reasoning_effort_overrides.get(&mode).copied()
     }
 
     fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
-        if !self.collaboration_modes_enabled() {
-            return self.current_collaboration_mode.reasoning_effort();
+        if !self.identities_enabled() {
+            return self.current_identity.reasoning_effort();
         }
-        let current_effort = self.current_collaboration_mode.reasoning_effort();
-        self.active_collaboration_mask
+        let current_effort = self.current_identity.reasoning_effort();
+        self.active_identity_mask
             .as_ref()
             .and_then(|mask| mask.reasoning_effort)
             .unwrap_or(current_effort)
     }
 
-    fn effective_collaboration_mode(&self) -> CollaborationMode {
-        if !self.collaboration_modes_enabled() {
-            return self.current_collaboration_mode.clone();
+    fn effective_identity(&self) -> Identity {
+        if !self.identities_enabled() {
+            return self.current_identity.clone();
         }
-        self.active_collaboration_mask.as_ref().map_or_else(
-            || self.current_collaboration_mode.clone(),
-            |mask| self.current_collaboration_mode.apply_mask(mask),
+        self.active_identity_mask.as_ref().map_or_else(
+            || self.current_identity.clone(),
+            |mask| self.current_identity.apply_mask(mask),
         )
     }
 
     fn refresh_model_display(&mut self) {
-        let effective = self.effective_collaboration_mode();
+        let effective = self.effective_identity();
         self.session_header.set_model(effective.model());
     }
 
@@ -5311,36 +5276,32 @@ impl ChatWidget {
         }
     }
 
-    /// Get the label for the current collaboration mode.
-    fn collaboration_mode_label(&self) -> Option<&'static str> {
-        if !self.collaboration_modes_enabled() {
+    /// Get the label for the current identity.
+    fn identity_label(&self) -> Option<&'static str> {
+        if !self.identities_enabled() {
             return None;
         }
-        match self.active_mode_kind() {
-            ModeKind::Plan => Some("Plan"),
-            ModeKind::Code => Some("Code"),
-            ModeKind::PairProgramming => Some("Pair Programming"),
-            ModeKind::Execute => Some("Execute"),
-            ModeKind::Custom => None,
+        match self.active_identity_kind() {
+            IdentityKind::Nobody => Some("nobody"),
+            IdentityKind::Planner => Some("planner"),
+            IdentityKind::Programmer => Some("programmer"),
         }
     }
 
-    fn collaboration_mode_indicator(&self) -> Option<CollaborationModeIndicator> {
-        if !self.collaboration_modes_enabled() {
+    fn identity_indicator(&self) -> Option<IdentityIndicator> {
+        if !self.identities_enabled() {
             return None;
         }
-        match self.active_mode_kind() {
-            ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
-            ModeKind::Code => Some(CollaborationModeIndicator::Code),
-            ModeKind::PairProgramming => Some(CollaborationModeIndicator::PairProgramming),
-            ModeKind::Execute => Some(CollaborationModeIndicator::Execute),
-            ModeKind::Custom => None,
+        match self.active_identity_kind() {
+            IdentityKind::Nobody => Some(IdentityIndicator::Nobody),
+            IdentityKind::Planner => Some(IdentityIndicator::Planner),
+            IdentityKind::Programmer => Some(IdentityIndicator::Programmer),
         }
     }
 
-    fn update_collaboration_mode_indicator(&mut self) {
-        let indicator = self.collaboration_mode_indicator();
-        self.bottom_pane.set_collaboration_mode_indicator(indicator);
+    fn update_identity_indicator(&mut self) {
+        let indicator = self.identity_indicator();
+        self.bottom_pane.set_identity_indicator(indicator);
     }
 
     fn update_footer_info(&mut self) {
@@ -5381,31 +5342,17 @@ impl ChatWidget {
         }
     }
 
-    /// Cycle to the next collaboration mode variant (Plan -> Code -> Plan).
-    fn cycle_collaboration_mode(&mut self) {
-        if !self.collaboration_modes_enabled() {
-            return;
-        }
-
-        if let Some(next_mask) = collaboration_modes::next_mask(
-            self.thread_manager.as_ref(),
-            self.active_collaboration_mask.as_ref(),
-        ) {
-            self.set_collaboration_mask(next_mask);
-        }
-    }
-
-    /// Update the active collaboration mask.
+    /// Update the active identity mask.
     ///
-    /// When collaboration modes are enabled and a preset is selected (not Custom),
-    /// the current mode is attached to submissions as `Op::UserTurn { collaboration_mode: Some(...) }`.
-    pub(crate) fn set_collaboration_mask(&mut self, mask: CollaborationModeMask) {
-        if !self.collaboration_modes_enabled() {
+    /// When identities are enabled, the current identity is attached to submissions as
+    /// `Op::UserTurn { identity: Some(...) }`.
+    pub(crate) fn set_identity_mask(&mut self, mask: IdentityMask) {
+        if !self.identities_enabled() {
             return;
         }
-        let mask = collaboration_modes::normalize_mask(mask);
-        self.active_collaboration_mask = Some(self.apply_reasoning_effort_override(mask));
-        self.update_collaboration_mode_indicator();
+        let mask = identities::normalize_mask(mask);
+        self.active_identity_mask = Some(self.apply_reasoning_effort_override(mask));
+        self.update_identity_indicator();
         self.refresh_model_display();
         self.update_footer_info();
         self.request_redraw();
@@ -5768,12 +5715,8 @@ impl ChatWidget {
         self.bottom_pane.composer_is_empty()
     }
 
-    pub(crate) fn submit_user_message_with_mode(
-        &mut self,
-        text: String,
-        collaboration_mode: CollaborationModeMask,
-    ) {
-        self.set_collaboration_mask(collaboration_mode);
+    pub(crate) fn submit_user_message_with_mode(&mut self, text: String, identity: IdentityMask) {
+        self.set_identity_mask(identity);
         self.submit_user_message(text.into());
     }
 

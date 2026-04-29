@@ -51,7 +51,7 @@ struct StatusHistoryCell {
     approval: String,
     sandbox: String,
     agents_summary: String,
-    collaboration_mode: Option<String>,
+    identity: Option<String>,
     model_provider: Option<String>,
     thread_name: Option<String>,
     session_id: Option<String>,
@@ -70,7 +70,7 @@ pub(crate) fn new_status_output_with_context_compact_count(
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
     model_name: &str,
-    collaboration_mode: Option<&str>,
+    identity: Option<&str>,
     reasoning_effort_override: Option<Option<ReasoningEffort>>,
     context_compact_count: usize,
 ) -> CompositeHistoryCell {
@@ -84,7 +84,7 @@ pub(crate) fn new_status_output_with_context_compact_count(
         thread_name,
         forked_from,
         model_name,
-        collaboration_mode,
+        identity,
         reasoning_effort_override,
         context_compact_count,
     );
@@ -103,7 +103,7 @@ impl StatusHistoryCell {
         thread_name: Option<String>,
         forked_from: Option<ThreadId>,
         model_name: &str,
-        collaboration_mode: Option<&str>,
+        identity: Option<&str>,
         reasoning_effort_override: Option<Option<ReasoningEffort>>,
         context_compact_count: usize,
     ) -> Self {
@@ -177,7 +177,7 @@ impl StatusHistoryCell {
             approval,
             sandbox,
             agents_summary,
-            collaboration_mode: collaboration_mode.map(ToString::to_string),
+            identity: identity.map(ToString::to_string),
             model_provider,
             thread_name,
             session_id,
@@ -258,8 +258,8 @@ impl HistoryCell for StatusHistoryCell {
         if self.session_id.is_some() && self.forked_from.is_some() {
             push_label(&mut labels, &mut seen, "Forked from");
         }
-        if self.collaboration_mode.is_some() {
-            push_label(&mut labels, &mut seen, "Collaboration mode");
+        if self.identity.is_some() {
+            push_label(&mut labels, &mut seen, "Identity");
         }
         push_label(&mut labels, &mut seen, "Token usage");
         if self.token_usage.context_window.is_some() {
@@ -293,8 +293,8 @@ impl HistoryCell for StatusHistoryCell {
         if let Some(thread_name) = thread_name {
             lines.push(formatter.line("Thread name", vec![Span::from(thread_name.to_string())]));
         }
-        if let Some(collab_mode) = self.collaboration_mode.as_ref() {
-            lines.push(formatter.line("Collaboration mode", vec![Span::from(collab_mode.clone())]));
+        if let Some(collab_mode) = self.identity.as_ref() {
+            lines.push(formatter.line("Identity", vec![Span::from(collab_mode.clone())]));
         }
         if let Some(session) = self.session_id.as_ref() {
             lines.push(formatter.line("Session", vec![Span::from(session.clone())]));

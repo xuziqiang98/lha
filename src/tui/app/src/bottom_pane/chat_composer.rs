@@ -106,9 +106,9 @@ use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
 use super::command_popup::CommandPopupFlags;
 use super::file_search_popup::FileSearchPopup;
-use super::footer::CollaborationModeIndicator;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
+use super::footer::IdentityIndicator;
 use super::footer::SummaryLeft;
 use super::footer::esc_hint_mode;
 use super::footer::footer_height;
@@ -287,9 +287,9 @@ pub(crate) struct ChatComposer {
     mention_paths: HashMap<String, String>,
     /// When enabled, `Enter` submits immediately and `Tab` requests queuing behavior.
     steer_enabled: bool,
-    collaboration_modes_enabled: bool,
+    identities_enabled: bool,
     config: ChatComposerConfig,
-    collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    identity_indicator: Option<IdentityIndicator>,
     connectors_enabled: bool,
     personality_command_enabled: bool,
     windows_degraded_sandbox_active: bool,
@@ -380,9 +380,9 @@ impl ChatComposer {
             dismissed_mention_popup_token: None,
             mention_paths: HashMap::new(),
             steer_enabled: false,
-            collaboration_modes_enabled: false,
+            identities_enabled: false,
             config,
-            collaboration_mode_indicator: None,
+            identity_indicator: None,
             connectors_enabled: false,
             personality_command_enabled: false,
             windows_degraded_sandbox_active: false,
@@ -418,19 +418,16 @@ impl ChatComposer {
         self.steer_enabled = enabled;
     }
 
-    pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {
-        self.collaboration_modes_enabled = enabled;
+    pub fn set_identities_enabled(&mut self, enabled: bool) {
+        self.identities_enabled = enabled;
     }
 
     pub fn set_connectors_enabled(&mut self, enabled: bool) {
         self.connectors_enabled = enabled;
     }
 
-    pub fn set_collaboration_mode_indicator(
-        &mut self,
-        indicator: Option<CollaborationModeIndicator>,
-    ) {
-        self.collaboration_mode_indicator = indicator;
+    pub fn set_identity_indicator(&mut self, indicator: Option<IdentityIndicator>) {
+        self.identity_indicator = indicator;
     }
 
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
@@ -1843,7 +1840,7 @@ impl ChatComposer {
             if !treat_as_plain_text {
                 let is_builtin = slash_commands::find_builtin_command(
                     name,
-                    self.collaboration_modes_enabled,
+                    self.identities_enabled,
                     self.personality_command_enabled,
                     self.windows_degraded_sandbox_active,
                 )
@@ -2028,7 +2025,7 @@ impl ChatComposer {
             && rest.is_empty()
             && let Some(cmd) = slash_commands::find_builtin_command(
                 name,
-                self.collaboration_modes_enabled,
+                self.identities_enabled,
                 self.personality_command_enabled,
                 self.windows_degraded_sandbox_active,
             )
@@ -2056,7 +2053,7 @@ impl ChatComposer {
                 && !name.contains('/')
                 && let Some(cmd) = slash_commands::find_builtin_command(
                     name,
-                    self.collaboration_modes_enabled,
+                    self.identities_enabled,
                     self.personality_command_enabled,
                     self.windows_degraded_sandbox_active,
                 )
@@ -2400,7 +2397,6 @@ impl ChatComposer {
             use_shift_enter_hint: self.use_shift_enter_hint,
             is_task_running: self.is_task_running,
             quit_shortcut_key: self.quit_shortcut_key,
-            collaboration_modes_enabled: self.collaboration_modes_enabled,
             is_wsl,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
@@ -2556,7 +2552,7 @@ impl ChatComposer {
 
         if slash_commands::has_builtin_prefix(
             name,
-            self.collaboration_modes_enabled,
+            self.identities_enabled,
             self.personality_command_enabled,
             self.windows_degraded_sandbox_active,
         ) {
@@ -2608,12 +2604,12 @@ impl ChatComposer {
             }
             _ => {
                 if is_editing_slash_command_name {
-                    let collaboration_modes_enabled = self.collaboration_modes_enabled;
+                    let identities_enabled = self.identities_enabled;
                     let personality_command_enabled = self.personality_command_enabled;
                     let mut command_popup = CommandPopup::new(
                         self.custom_prompts.clone(),
                         CommandPopupFlags {
-                            collaboration_modes_enabled,
+                            identities_enabled,
                             personality_command_enabled,
                             windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
                         },
@@ -2897,7 +2893,7 @@ impl ChatComposer {
             ActivePopup::None => {
                 let footer_props = self.footer_props();
                 let show_cycle_hint =
-                    !footer_props.is_task_running && self.collaboration_mode_indicator.is_some();
+                    !footer_props.is_task_running && self.identity_indicator.is_some();
                 let custom_height = self.custom_footer_height();
                 let footer_hint_height =
                     custom_height.unwrap_or_else(|| footer_height(&footer_props));
@@ -2922,7 +2918,7 @@ impl ChatComposer {
                             Some(single_line_footer_layout(
                                 hint_rect,
                                 &footer_props,
-                                self.collaboration_mode_indicator,
+                                self.identity_indicator,
                                 show_cycle_hint,
                             ))
                         }
@@ -2939,7 +2935,7 @@ impl ChatComposer {
                                 hint_rect,
                                 buf,
                                 footer_props.clone(),
-                                self.collaboration_mode_indicator,
+                                self.identity_indicator,
                                 show_cycle_hint,
                                 false,
                                 false,
@@ -2964,7 +2960,7 @@ impl ChatComposer {
                         hint_rect,
                         buf,
                         footer_props,
-                        self.collaboration_mode_indicator,
+                        self.identity_indicator,
                         show_cycle_hint,
                         false,
                         false,
@@ -3386,10 +3382,10 @@ mod tests {
         fn setup_collab_footer(
             composer: &mut ChatComposer,
             context_percent: i64,
-            indicator: Option<CollaborationModeIndicator>,
+            indicator: Option<IdentityIndicator>,
         ) {
-            composer.set_collaboration_modes_enabled(true);
-            composer.set_collaboration_mode_indicator(indicator);
+            composer.set_identities_enabled(true);
+            composer.set_identity_indicator(indicator);
             composer.set_context_window(Some(context_percent), None);
             composer.set_footer_info(
                 "gpt-5.4".to_string(),
@@ -3404,7 +3400,7 @@ mod tests {
             120,
             true,
             |composer| {
-                setup_collab_footer(composer, 100, Some(CollaborationModeIndicator::Code));
+                setup_collab_footer(composer, 100, Some(IdentityIndicator::Programmer));
             },
         );
         snapshot_composer_state_with_width(
@@ -3412,7 +3408,7 @@ mod tests {
             60,
             true,
             |composer| {
-                setup_collab_footer(composer, 100, Some(CollaborationModeIndicator::Code));
+                setup_collab_footer(composer, 100, Some(IdentityIndicator::Programmer));
             },
         );
         snapshot_composer_state_with_width(
@@ -3420,7 +3416,7 @@ mod tests {
             44,
             true,
             |composer| {
-                setup_collab_footer(composer, 100, Some(CollaborationModeIndicator::Code));
+                setup_collab_footer(composer, 100, Some(IdentityIndicator::Programmer));
             },
         );
         snapshot_composer_state_with_width(
@@ -3428,7 +3424,7 @@ mod tests {
             26,
             true,
             |composer| {
-                setup_collab_footer(composer, 100, Some(CollaborationModeIndicator::Code));
+                setup_collab_footer(composer, 100, Some(IdentityIndicator::Programmer));
             },
         );
 
@@ -3438,7 +3434,7 @@ mod tests {
             120,
             true,
             |composer| {
-                setup_collab_footer(composer, 100, Some(CollaborationModeIndicator::Plan));
+                setup_collab_footer(composer, 100, Some(IdentityIndicator::Planner));
             },
         );
         snapshot_composer_state_with_width(
@@ -3446,7 +3442,7 @@ mod tests {
             60,
             true,
             |composer| {
-                setup_collab_footer(composer, 100, Some(CollaborationModeIndicator::Plan));
+                setup_collab_footer(composer, 100, Some(IdentityIndicator::Planner));
             },
         );
         snapshot_composer_state_with_width(
@@ -3454,7 +3450,7 @@ mod tests {
             44,
             true,
             |composer| {
-                setup_collab_footer(composer, 100, Some(CollaborationModeIndicator::Plan));
+                setup_collab_footer(composer, 100, Some(IdentityIndicator::Planner));
             },
         );
         snapshot_composer_state_with_width(
@@ -3462,7 +3458,7 @@ mod tests {
             26,
             true,
             |composer| {
-                setup_collab_footer(composer, 100, Some(CollaborationModeIndicator::Plan));
+                setup_collab_footer(composer, 100, Some(IdentityIndicator::Planner));
             },
         );
 
@@ -3472,7 +3468,7 @@ mod tests {
             120,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(CollaborationModeIndicator::Code));
+                setup_collab_footer(composer, 98, Some(IdentityIndicator::Programmer));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3483,7 +3479,7 @@ mod tests {
             50,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(CollaborationModeIndicator::Code));
+                setup_collab_footer(composer, 98, Some(IdentityIndicator::Programmer));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3494,7 +3490,7 @@ mod tests {
             40,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(CollaborationModeIndicator::Code));
+                setup_collab_footer(composer, 98, Some(IdentityIndicator::Programmer));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3505,7 +3501,7 @@ mod tests {
             30,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(CollaborationModeIndicator::Code));
+                setup_collab_footer(composer, 98, Some(IdentityIndicator::Programmer));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3516,7 +3512,7 @@ mod tests {
             20,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(CollaborationModeIndicator::Code));
+                setup_collab_footer(composer, 98, Some(IdentityIndicator::Programmer));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3529,7 +3525,7 @@ mod tests {
             120,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(CollaborationModeIndicator::Plan));
+                setup_collab_footer(composer, 98, Some(IdentityIndicator::Planner));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3540,7 +3536,7 @@ mod tests {
             50,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(CollaborationModeIndicator::Plan));
+                setup_collab_footer(composer, 98, Some(IdentityIndicator::Planner));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3551,7 +3547,7 @@ mod tests {
             40,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(CollaborationModeIndicator::Plan));
+                setup_collab_footer(composer, 98, Some(IdentityIndicator::Planner));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3562,7 +3558,7 @@ mod tests {
             30,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(CollaborationModeIndicator::Plan));
+                setup_collab_footer(composer, 98, Some(IdentityIndicator::Planner));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3573,7 +3569,7 @@ mod tests {
             20,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(CollaborationModeIndicator::Plan));
+                setup_collab_footer(composer, 98, Some(IdentityIndicator::Planner));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());

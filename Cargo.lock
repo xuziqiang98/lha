@@ -13,248 +13,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "adam-agent-core"
+name = "adam-agent"
 version = "0.95.0-alpha.1"
 dependencies = [
- "adam-async-utils",
- "adam-llm",
- "adam-llm-types",
- "async-trait",
- "futures",
- "pretty_assertions",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
-name = "adam-agent-runtime"
-version = "0.95.0-alpha.1"
-dependencies = [
- "adam-agent-core",
- "adam-llm",
- "adam-llm-types",
- "async-channel",
- "async-trait",
- "pretty_assertions",
- "serde_json",
- "thiserror 2.0.17",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
-name = "adam-ansi-escape"
-version = "0.95.0-alpha.1"
-dependencies = [
- "ansi-to-tui",
- "ratatui",
- "tracing",
-]
-
-[[package]]
-name = "adam-api"
-version = "0.95.0-alpha.1"
-dependencies = [
- "adam-client",
- "adam-llm-types",
- "anyhow",
- "assert_matches",
- "async-trait",
- "bytes",
- "eventsource-stream",
- "futures",
- "http",
- "pretty_assertions",
- "regex-lite",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
- "tokio",
- "tokio-test",
- "tokio-tungstenite",
- "tokio-util",
- "tracing",
- "url",
- "wiremock",
-]
-
-[[package]]
-name = "adam-app-server"
-version = "0.95.0-alpha.1"
-dependencies = [
- "adam-app-server-protocol",
- "adam-arg0",
- "adam-coding-agent",
- "adam-common",
- "adam-execpolicy",
- "adam-feedback",
- "adam-file-search",
- "adam-llm",
- "adam-protocol",
- "adam-rmcp-client",
- "adam-utils-absolute-path",
- "adam-utils-json-to-toml",
- "anyhow",
- "app_test_support",
- "async-trait",
- "axum",
- "base64",
- "chrono",
- "core_test_support",
- "mcp-types",
- "os_info",
- "pretty_assertions",
- "rmcp",
- "serde",
- "serde_json",
- "serial_test",
- "shlex",
- "tempfile",
- "time",
- "tokio",
- "toml 0.9.5",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "wiremock",
-]
-
-[[package]]
-name = "adam-app-server-protocol"
-version = "0.95.0-alpha.1"
-dependencies = [
- "adam-protocol",
- "adam-utils-absolute-path",
- "adam-utils-cargo-bin",
- "anyhow",
- "clap",
- "mcp-types",
- "pretty_assertions",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "similar",
- "strum_macros 0.27.2",
- "tempfile",
- "thiserror 2.0.17",
- "ts-rs",
- "uuid",
-]
-
-[[package]]
-name = "adam-apply-patch"
-version = "0.95.0-alpha.1"
-dependencies = [
- "adam-utils-cargo-bin",
- "anyhow",
- "assert_cmd",
- "assert_matches",
- "pretty_assertions",
- "similar",
- "tempfile",
- "thiserror 2.0.17",
- "tree-sitter",
- "tree-sitter-bash",
-]
-
-[[package]]
-name = "adam-arg0"
-version = "0.95.0-alpha.1"
-dependencies = [
- "adam-apply-patch",
- "adam-coding-agent",
- "adam-linux-sandbox",
- "anyhow",
- "dotenvy",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "adam-async-utils"
-version = "0.95.0-alpha.1"
-dependencies = [
- "async-trait",
- "pretty_assertions",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
-name = "adam-backend-openapi-models"
-version = "0.95.0-alpha.1"
-dependencies = [
- "serde",
- "serde_json",
- "serde_with",
-]
-
-[[package]]
-name = "adam-cli"
-version = "0.95.0-alpha.1"
-dependencies = [
- "adam-app-server",
- "adam-app-server-protocol",
- "adam-arg0",
- "adam-coding-agent",
- "adam-common",
- "adam-exec",
- "adam-execpolicy",
- "adam-mcp-server",
- "adam-protocol",
- "adam-responses-api-proxy",
- "adam-rmcp-client",
- "adam-stdio-to-uds",
- "adam-tui",
- "adam-utils-cargo-bin",
- "adam-windows-sandbox",
- "anyhow",
- "assert_cmd",
- "assert_matches",
- "clap",
- "clap_complete",
- "libc",
- "owo-colors",
- "predicates",
- "pretty_assertions",
- "regex-lite",
- "serde_json",
- "supports-color",
- "tempfile",
- "tokio",
- "toml 0.9.5",
- "tracing",
-]
-
-[[package]]
-name = "adam-client"
-version = "0.95.0-alpha.1"
-dependencies = [
- "async-trait",
- "bytes",
- "eventsource-stream",
- "futures",
- "http",
- "opentelemetry",
- "opentelemetry_sdk",
- "pretty_assertions",
- "rand 0.9.2",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "zstd",
-]
-
-[[package]]
-name = "adam-coding-agent"
-version = "0.95.0-alpha.1"
-dependencies = [
+ "adam-agent",
  "adam-agent-core",
  "adam-agent-runtime",
  "adam-api",
@@ -263,10 +25,10 @@ dependencies = [
  "adam-arg0",
  "adam-async-utils",
  "adam-client",
- "adam-coding-agent",
  "adam-execpolicy",
  "adam-file-search",
  "adam-git",
+ "adam-identity",
  "adam-keyring-store",
  "adam-llm",
  "adam-otel",
@@ -357,10 +119,249 @@ dependencies = [
 ]
 
 [[package]]
+name = "adam-agent-core"
+version = "0.95.0-alpha.1"
+dependencies = [
+ "adam-async-utils",
+ "adam-llm",
+ "adam-llm-types",
+ "async-trait",
+ "futures",
+ "pretty_assertions",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "adam-agent-runtime"
+version = "0.95.0-alpha.1"
+dependencies = [
+ "adam-agent-core",
+ "adam-llm",
+ "adam-llm-types",
+ "async-channel",
+ "async-trait",
+ "pretty_assertions",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "adam-ansi-escape"
+version = "0.95.0-alpha.1"
+dependencies = [
+ "ansi-to-tui",
+ "ratatui",
+ "tracing",
+]
+
+[[package]]
+name = "adam-api"
+version = "0.95.0-alpha.1"
+dependencies = [
+ "adam-client",
+ "adam-llm-types",
+ "anyhow",
+ "assert_matches",
+ "async-trait",
+ "bytes",
+ "eventsource-stream",
+ "futures",
+ "http",
+ "pretty_assertions",
+ "regex-lite",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-test",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "url",
+ "wiremock",
+]
+
+[[package]]
+name = "adam-app-server"
+version = "0.95.0-alpha.1"
+dependencies = [
+ "adam-agent",
+ "adam-app-server-protocol",
+ "adam-arg0",
+ "adam-common",
+ "adam-execpolicy",
+ "adam-feedback",
+ "adam-file-search",
+ "adam-llm",
+ "adam-protocol",
+ "adam-rmcp-client",
+ "adam-utils-absolute-path",
+ "adam-utils-json-to-toml",
+ "anyhow",
+ "app_test_support",
+ "async-trait",
+ "axum",
+ "base64",
+ "chrono",
+ "core_test_support",
+ "mcp-types",
+ "os_info",
+ "pretty_assertions",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "shlex",
+ "tempfile",
+ "time",
+ "tokio",
+ "toml 0.9.5",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
+name = "adam-app-server-protocol"
+version = "0.95.0-alpha.1"
+dependencies = [
+ "adam-protocol",
+ "adam-utils-absolute-path",
+ "adam-utils-cargo-bin",
+ "anyhow",
+ "clap",
+ "mcp-types",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "similar",
+ "strum_macros 0.27.2",
+ "tempfile",
+ "thiserror 2.0.17",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
+name = "adam-apply-patch"
+version = "0.95.0-alpha.1"
+dependencies = [
+ "adam-utils-cargo-bin",
+ "anyhow",
+ "assert_cmd",
+ "assert_matches",
+ "pretty_assertions",
+ "similar",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tree-sitter",
+ "tree-sitter-bash",
+]
+
+[[package]]
+name = "adam-arg0"
+version = "0.95.0-alpha.1"
+dependencies = [
+ "adam-agent",
+ "adam-apply-patch",
+ "adam-linux-sandbox",
+ "anyhow",
+ "dotenvy",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "adam-async-utils"
+version = "0.95.0-alpha.1"
+dependencies = [
+ "async-trait",
+ "pretty_assertions",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "adam-backend-openapi-models"
+version = "0.95.0-alpha.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_with",
+]
+
+[[package]]
+name = "adam-cli"
+version = "0.95.0-alpha.1"
+dependencies = [
+ "adam-agent",
+ "adam-app-server",
+ "adam-app-server-protocol",
+ "adam-arg0",
+ "adam-common",
+ "adam-exec",
+ "adam-execpolicy",
+ "adam-mcp-server",
+ "adam-protocol",
+ "adam-responses-api-proxy",
+ "adam-rmcp-client",
+ "adam-stdio-to-uds",
+ "adam-tui",
+ "adam-utils-cargo-bin",
+ "adam-windows-sandbox",
+ "anyhow",
+ "assert_cmd",
+ "assert_matches",
+ "clap",
+ "clap_complete",
+ "libc",
+ "owo-colors",
+ "predicates",
+ "pretty_assertions",
+ "regex-lite",
+ "serde_json",
+ "supports-color",
+ "tempfile",
+ "tokio",
+ "toml 0.9.5",
+ "tracing",
+]
+
+[[package]]
+name = "adam-client"
+version = "0.95.0-alpha.1"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "eventsource-stream",
+ "futures",
+ "http",
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "pretty_assertions",
+ "rand 0.9.2",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "zstd",
+]
+
+[[package]]
 name = "adam-common"
 version = "0.95.0-alpha.1"
 dependencies = [
- "adam-coding-agent",
+ "adam-agent",
  "adam-llm",
  "adam-protocol",
  "adam-utils-absolute-path",
@@ -374,8 +375,8 @@ dependencies = [
 name = "adam-exec"
 version = "0.95.0-alpha.1"
 dependencies = [
+ "adam-agent",
  "adam-arg0",
- "adam-coding-agent",
  "adam-common",
  "adam-llm",
  "adam-protocol",
@@ -468,6 +469,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "adam-identity"
+version = "0.95.0-alpha.1"
+dependencies = [
+ "adam-protocol",
+]
+
+[[package]]
 name = "adam-keyring-store"
 version = "0.95.0-alpha.1"
 dependencies = [
@@ -479,7 +487,7 @@ dependencies = [
 name = "adam-linux-sandbox"
 version = "0.95.0-alpha.1"
 dependencies = [
- "adam-coding-agent",
+ "adam-agent",
  "adam-utils-absolute-path",
  "clap",
  "landlock",
@@ -533,8 +541,8 @@ dependencies = [
 name = "adam-mcp-server"
 version = "0.95.0-alpha.1"
 dependencies = [
+ "adam-agent",
  "adam-arg0",
- "adam-coding-agent",
  "adam-common",
  "adam-protocol",
  "adam-utils-json-to-toml",
@@ -706,12 +714,12 @@ dependencies = [
 name = "adam-tui"
 version = "0.95.0-alpha.1"
 dependencies = [
+ "adam-agent",
  "adam-ansi-escape",
  "adam-api",
  "adam-app-server-protocol",
  "adam-arg0",
  "adam-cli",
- "adam-coding-agent",
  "adam-common",
  "adam-feedback",
  "adam-file-search",
@@ -1075,8 +1083,8 @@ checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 name = "app_test_support"
 version = "0.95.0-alpha.1"
 dependencies = [
+ "adam-agent",
  "adam-app-server-protocol",
- "adam-coding-agent",
  "adam-protocol",
  "adam-utils-cargo-bin",
  "anyhow",
@@ -1830,7 +1838,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 name = "core_test_support"
 version = "0.95.0-alpha.1"
 dependencies = [
- "adam-coding-agent",
+ "adam-agent",
  "adam-llm",
  "adam-otel",
  "adam-protocol",
@@ -3950,7 +3958,7 @@ dependencies = [
 name = "mcp_test_support"
 version = "0.95.0-alpha.1"
 dependencies = [
- "adam-coding-agent",
+ "adam-agent",
  "adam-mcp-server",
  "adam-utils-cargo-bin",
  "anyhow",

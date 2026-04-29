@@ -58,8 +58,6 @@ use adam_app_server_protocol::ArchiveConversationParams;
 use adam_app_server_protocol::ArchiveConversationResponse;
 use adam_app_server_protocol::AskForApproval;
 use adam_app_server_protocol::ClientRequest;
-use adam_app_server_protocol::CollaborationModeListParams;
-use adam_app_server_protocol::CollaborationModeListResponse;
 use adam_app_server_protocol::CommandExecParams;
 use adam_app_server_protocol::ConversationGitInfo;
 use adam_app_server_protocol::ConversationSummary;
@@ -77,6 +75,8 @@ use adam_app_server_protocol::GetUserAgentResponse;
 use adam_app_server_protocol::GetUserSavedConfigResponse;
 use adam_app_server_protocol::GitDiffToRemoteResponse;
 use adam_app_server_protocol::GitInfo as ApiGitInfo;
+use adam_app_server_protocol::IdentityListParams;
+use adam_app_server_protocol::IdentityListResponse;
 use adam_app_server_protocol::InputItem as WireInputItem;
 use adam_app_server_protocol::InterruptConversationParams;
 use adam_app_server_protocol::JSONRPCErrorError;
@@ -544,13 +544,12 @@ impl CodexMessageProcessor {
                     Self::list_models(outgoing, thread_manager, config, request_id, params).await;
                 });
             }
-            ClientRequest::CollaborationModeList { request_id, params } => {
+            ClientRequest::IdentityList { request_id, params } => {
                 let outgoing = self.outgoing.clone();
                 let thread_manager = self.thread_manager.clone();
 
                 tokio::spawn(async move {
-                    Self::list_collaboration_modes(outgoing, thread_manager, request_id, params)
-                        .await;
+                    Self::list_identities(outgoing, thread_manager, request_id, params).await;
                 });
             }
             ClientRequest::McpServerOauthLogin { request_id, params } => {
@@ -2501,15 +2500,15 @@ impl CodexMessageProcessor {
         outgoing.send_response(request_id, response).await;
     }
 
-    async fn list_collaboration_modes(
+    async fn list_identities(
         outgoing: Arc<OutgoingMessageSender>,
         thread_manager: Arc<ThreadManager>,
         request_id: RequestId,
-        params: CollaborationModeListParams,
+        params: IdentityListParams,
     ) {
-        let CollaborationModeListParams {} = params;
-        let items = thread_manager.list_collaboration_modes();
-        let response = CollaborationModeListResponse { data: items };
+        let IdentityListParams {} = params;
+        let items = thread_manager.list_identities();
+        let response = IdentityListResponse { data: items };
         outgoing.send_response(request_id, response).await;
     }
 
@@ -3448,7 +3447,7 @@ impl CodexMessageProcessor {
                 effort,
                 summary,
                 final_output_json_schema: output_schema,
-                collaboration_mode: None,
+                identity: None,
                 personality: None,
             })
             .await;
@@ -3650,7 +3649,7 @@ impl CodexMessageProcessor {
             || params.model.is_some()
             || params.effort.is_some()
             || params.summary.is_some()
-            || params.collaboration_mode.is_some()
+            || params.identity.is_some()
             || params.personality.is_some();
 
         // If any overrides are provided, update the session turn context first.
@@ -3664,7 +3663,7 @@ impl CodexMessageProcessor {
                     model: params.model,
                     effort: params.effort.map(Some),
                     summary: params.summary,
-                    collaboration_mode: params.collaboration_mode,
+                    identity: params.identity,
                     personality: params.personality,
                 })
                 .await;

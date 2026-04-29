@@ -6,8 +6,8 @@ use adam_app_server_protocol::ThreadStartResponse;
 use adam_app_server_protocol::TurnStartParams;
 use adam_app_server_protocol::TurnStartResponse;
 use adam_app_server_protocol::UserInput as V2UserInput;
-use adam_protocol::config_types::CollaborationMode;
-use adam_protocol::config_types::ModeKind;
+use adam_protocol::config_types::Identity;
+use adam_protocol::config_types::IdentityKind;
 use adam_protocol::config_types::Settings;
 use adam_protocol::openai_models::ReasoningEffort;
 use anyhow::Result;
@@ -55,8 +55,8 @@ async fn request_user_input_round_trip() -> Result<()> {
             }],
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
-            collaboration_mode: Some(CollaborationMode {
-                mode: ModeKind::Plan,
+            identity: Some(Identity {
+                kind: IdentityKind::Planner,
                 settings: Settings {
                     model: "mock-model".to_string(),
                     reasoning_effort: Some(ReasoningEffort::Medium),
@@ -112,10 +112,8 @@ async fn request_user_input_round_trip() -> Result<()> {
 }
 
 fn create_config_toml(adam_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
-    let features = std::collections::BTreeMap::from([(
-        adam_agent::features::Feature::CollaborationModes,
-        true,
-    )]);
+    let features =
+        std::collections::BTreeMap::from([(adam_agent::features::Feature::Identities, true)]);
     app_test_support::write_mock_responses_config_toml_with_options(
         adam_home,
         server_uri,

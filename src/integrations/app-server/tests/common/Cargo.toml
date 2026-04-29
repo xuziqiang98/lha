@@ -25,5 +25,5 @@ tokio = { workspace = true, features = [
 ] }
 uuid = { workspace = true }
 wiremock = { workspace = true }
-core_test_support = { path = "../../../../coding-agent/runtime/tests/common" }
+core_test_support = { path = "../../../../agent/runtime/tests/common" }
 shlex = { workspace = true }

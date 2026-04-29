@@ -16,12 +16,12 @@ use adam_app_server_protocol::AppsListParams;
 use adam_app_server_protocol::ArchiveConversationParams;
 use adam_app_server_protocol::ClientInfo;
 use adam_app_server_protocol::ClientNotification;
-use adam_app_server_protocol::CollaborationModeListParams;
 use adam_app_server_protocol::ConfigBatchWriteParams;
 use adam_app_server_protocol::ConfigReadParams;
 use adam_app_server_protocol::ConfigValueWriteParams;
 use adam_app_server_protocol::FeedbackUploadParams;
 use adam_app_server_protocol::ForkConversationParams;
+use adam_app_server_protocol::IdentityListParams;
 use adam_app_server_protocol::InitializeParams;
 use adam_app_server_protocol::InterruptConversationParams;
 use adam_app_server_protocol::JSONRPCError;
@@ -410,13 +410,13 @@ impl McpProcess {
         self.send_request("app/list", params).await
     }
 
-    /// Send a `collaborationMode/list` JSON-RPC request.
-    pub async fn send_list_collaboration_modes_request(
+    /// Send a `identity/list` JSON-RPC request.
+    pub async fn send_list_identities_request(
         &mut self,
-        params: CollaborationModeListParams,
+        params: IdentityListParams,
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
-        self.send_request("collaborationMode/list", params).await
+        self.send_request("identity/list", params).await
     }
 
     /// Send a `resumeConversation` JSON-RPC request.

@@ -1,10 +1,11 @@
 ---
-source: src/harness/tui/src/chatwidget/tests.rs
+source: src/tui/app/src/chatwidget/tests.rs
+assertion_line: 2013
 expression: popup
 ---
   Implement this plan?
 
-  1. Yes, implement this plan  Switch to Code and start coding.
-› 2. No, stay in Plan mode     Continue planning with the model.
+  1. Yes, implement this plan      Switch to programmer identity.
+› 2. No, stay in planner identity  Continue planning with the model.
 
   Press enter to confirm or esc to go back

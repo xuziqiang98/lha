@@ -138,26 +138,6 @@
       ],
       "type": "object"
     },
-    "CollaborationMode": {
-      "description": "Collaboration mode for a Codex session.",
-      "properties": {
-        "mode": {
-          "$ref": "#/definitions/ModeKind"
-        },
-        "settings": {
-          "$ref": "#/definitions/Settings"
-        }
-      },
-      "required": [
-        "mode",
-        "settings"
-      ],
-      "type": "object"
-    },
-    "CollaborationModeListParams": {
-      "description": "EXPERIMENTAL - list collaboration mode presets.",
-      "type": "object"
-    },
     "CommandExecParams": {
       "properties": {
         "command": {
@@ -525,6 +505,35 @@
       ],
       "type": "object"
     },
+    "Identity": {
+      "description": "Identity for an Adam session.",
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/IdentityKind"
+        },
+        "settings": {
+          "$ref": "#/definitions/Settings"
+        }
+      },
+      "required": [
+        "kind",
+        "settings"
+      ],
+      "type": "object"
+    },
+    "IdentityKind": {
+      "description": "Initial identity to use when the TUI starts.",
+      "enum": [
+        "nobody",
+        "planner",
+        "programmer"
+      ],
+      "type": "string"
+    },
+    "IdentityListParams": {
+      "description": "EXPERIMENTAL - list identity presets.",
+      "type": "object"
+    },
     "InitializeParams": {
       "properties": {
         "clientInfo": {
@@ -723,17 +732,6 @@
       "enum": [
         "replace",
         "upsert"
-      ],
-      "type": "string"
-    },
-    "ModeKind": {
-      "description": "Initial collaboration mode to use when the TUI starts.",
-      "enum": [
-        "plan",
-        "code",
-        "pair_programming",
-        "execute",
-        "custom"
       ],
       "type": "string"
     },
@@ -1447,7 +1445,7 @@
       "type": "object"
     },
     "Settings": {
-      "description": "Settings for a collaboration mode.",
+      "description": "Settings for an identity.",
       "properties": {
         "developer_instructions": {
           "type": [
@@ -2356,17 +2354,6 @@
           ],
           "description": "Override the approval policy for this turn and subsequent turns."
         },
-        "collaborationMode": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/CollaborationMode"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "EXPERIMENTAL - set a pre-set collaboration mode. Takes precedence over model, reasoning_effort, and developer instructions if set."
-        },
         "cwd": {
           "description": "Override the working directory for this turn and subsequent turns.",
           "type": [
@@ -2384,6 +2371,17 @@
             }
           ],
           "description": "Override the reasoning effort for this turn and subsequent turns."
+        },
+        "identity": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Identity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "EXPERIMENTAL - set a pre-set identity. Takes precedence over model, reasoning_effort, and developer instructions if set."
         },
         "input": {
           "items": {
@@ -3070,20 +3068,20 @@
       "type": "object"
     },
     {
-      "description": "EXPERIMENTAL - list collaboration mode presets.",
+      "description": "EXPERIMENTAL - list identity presets.",
       "properties": {
         "id": {
           "$ref": "#/definitions/RequestId"
         },
         "method": {
           "enum": [
-            "collaborationMode/list"
+            "identity/list"
           ],
-          "title": "CollaborationMode/listRequestMethod",
+          "title": "Identity/listRequestMethod",
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/CollaborationModeListParams"
+          "$ref": "#/definitions/IdentityListParams"
         }
       },
       "required": [
@@ -3091,7 +3089,7 @@
         "method",
         "params"
       ],
-      "title": "CollaborationMode/listRequest",
+      "title": "Identity/listRequest",
       "type": "object"
     },
     {

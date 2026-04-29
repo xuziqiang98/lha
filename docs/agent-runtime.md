@@ -1,6 +1,6 @@
 # Agent Runtime Layer
 
-`adam-agent-runtime` is the reusable, product-neutral agent SDK that sits between `adam-llm` and product runtimes such as `adam-coding-agent`.
+`adam-agent-runtime` is the reusable, product-neutral agent SDK that sits between `adam-llm` and product runtimes such as `adam-agent`.
 
 ## Layering
 
@@ -11,7 +11,7 @@ The intended stack is:
 - `adam-llm` is the model/runtime SDK boundary.
 - `adam-agent-core` is the low-level turn-stream kernel.
 - `adam-agent-runtime` is the stateful session SDK.
-- `adam-coding-agent` is one product-specific runtime built on top of those layers.
+- `adam-agent` is one product-specific runtime built on top of those layers.
 
 ## What `adam-agent-runtime` owns
 
@@ -38,15 +38,15 @@ It should also treat tool names such as `local_shell` as ordinary semantic tool
 identifiers; product-specific interpretation and defaulting stays in higher
 layers.
 
-Those concerns remain in `adam-coding-agent` or other higher-level crates.
+Those concerns remain in `adam-agent` or other higher-level crates.
 
 ## Current migration shape
 
 The current migration path is:
 
 1. Build new generic agents directly on `adam-agent-runtime`.
-2. Keep `adam-coding-agent` as the compatibility/product layer.
-3. Gradually move generic runtime behavior out of `src/coding-agent/runtime` and into `src/core/agent-runtime`.
+2. Keep `adam-agent` as the compatibility/product layer.
+3. Gradually move generic runtime behavior out of `src/agent/runtime` and into `src/core/agent-runtime`.
 
 This lets the workspace expose a small reusable agent SDK without forcing an all-at-once product rewrite.
 

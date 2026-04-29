@@ -7,11 +7,11 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
-use crate::config_types::CollaborationMode;
+use crate::config_types::Identity;
 use crate::config_types::SandboxMode;
 use crate::protocol::AskForApproval;
-use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
-use crate::protocol::COLLABORATION_MODE_OPEN_TAG;
+use crate::protocol::IDENTITY_CLOSE_TAG;
+use crate::protocol::IDENTITY_OPEN_TAG;
 use crate::protocol::NetworkAccess;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
@@ -187,16 +187,16 @@ impl DeveloperInstructions {
         )
     }
 
-    /// Returns developer instructions from a collaboration mode if they exist and are non-empty.
-    pub fn from_collaboration_mode(collaboration_mode: &CollaborationMode) -> Option<Self> {
-        collaboration_mode
+    /// Returns developer instructions from a identity if they exist and are non-empty.
+    pub fn from_identity(identity: &Identity) -> Option<Self> {
+        identity
             .settings
             .developer_instructions
             .as_ref()
             .filter(|instructions| !instructions.is_empty())
             .map(|instructions| {
                 DeveloperInstructions::new(format!(
-                    "{COLLABORATION_MODE_OPEN_TAG}{instructions}{COLLABORATION_MODE_CLOSE_TAG}"
+                    "{IDENTITY_OPEN_TAG}{instructions}{IDENTITY_CLOSE_TAG}"
                 ))
             })
     }
@@ -610,7 +610,7 @@ pub struct ShellCommandToolCallParams {
     pub justification: Option<String>,
 }
 
-// (Moved event mapping logic into adam-coding-agent to avoid coupling protocol to UI-facing events.)
+// (Moved event mapping logic into adam-agent to avoid coupling protocol to UI-facing events.)
 
 #[cfg(test)]
 mod tests {

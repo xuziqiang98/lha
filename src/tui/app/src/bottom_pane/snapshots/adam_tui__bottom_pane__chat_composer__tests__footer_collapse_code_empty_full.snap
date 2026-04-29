@@ -1,5 +1,6 @@
 ---
 source: src/tui/app/src/bottom_pane/chat_composer.rs
+assertion_line: 3284
 expression: terminal.backend()
 ---
 "                                                                                                                        "
@@ -10,4 +11,4 @@ expression: terminal.backend()
 "                                                                                                                        "
 "                                                                                                                        "
 "                                                                                                                        "
-"  gpt-5.4 high · 100% left · ~/Workspace/adam                                           Code mode (shift+tab to cycle)  "
+"  gpt-5.4 high · 100% left · ~/Workspace/adam                                                      Identity programmer  "

@@ -84,29 +84,27 @@ pub enum AltScreenMode {
     Never,
 }
 
-/// Initial collaboration mode to use when the TUI starts.
+/// Initial identity to use when the TUI starts.
 #[derive(
     Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, TS, Default,
 )]
 #[serde(rename_all = "snake_case")]
-pub enum ModeKind {
-    Plan,
+pub enum IdentityKind {
     #[default]
-    Code,
-    PairProgramming,
-    Execute,
-    Custom,
+    Nobody,
+    Planner,
+    Programmer,
 }
 
-/// Collaboration mode for a Codex session.
+/// Identity for an Adam session.
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
-pub struct CollaborationMode {
-    pub mode: ModeKind,
+pub struct Identity {
+    pub kind: IdentityKind,
     pub settings: Settings,
 }
 
-impl CollaborationMode {
+impl Identity {
     /// Returns a reference to the settings.
     fn settings_ref(&self) -> &Settings {
         &self.settings
@@ -120,13 +118,13 @@ impl CollaborationMode {
         self.settings_ref().reasoning_effort
     }
 
-    /// Updates the collaboration mode with new model and/or effort values.
+    /// Updates the identity with new model and/or effort values.
     ///
     /// - `model`: `Some(s)` to update the model, `None` to keep the current model
     /// - `effort`: `Some(Some(e))` to set effort to `e`, `Some(None)` to clear effort, `None` to keep current effort
     /// - `developer_instructions`: `Some(Some(s))` to set instructions, `Some(None)` to clear them, `None` to keep current
     ///
-    /// Returns a new `CollaborationMode` with updated values, preserving the mode.
+    /// Returns a new `Identity` with updated values, preserving the identity kind.
     pub fn with_updates(
         &self,
         model: Option<String>,
@@ -141,21 +139,21 @@ impl CollaborationMode {
                 .unwrap_or_else(|| settings.developer_instructions.clone()),
         };
 
-        CollaborationMode {
-            mode: self.mode,
+        Identity {
+            kind: self.kind,
             settings: updated_settings,
         }
     }
 
-    /// Applies a mask to this collaboration mode, returning a new collaboration mode
+    /// Applies a mask to this identity, returning a new identity
     /// with the mask values applied. Fields in the mask that are `Some` will override
     /// the corresponding fields, while `None` values will preserve the original values.
     ///
-    /// The `name` field in the mask is ignored as it's metadata for the mask itself.
-    pub fn apply_mask(&self, mask: &CollaborationModeMask) -> Self {
+    /// The `name` and `capabilities` fields in the mask are ignored as metadata for the mask itself.
+    pub fn apply_mask(&self, mask: &IdentityMask) -> Self {
         let settings = self.settings_ref();
-        CollaborationMode {
-            mode: mask.mode.unwrap_or(self.mode),
+        Identity {
+            kind: mask.kind.unwrap_or(self.kind),
             settings: Settings {
                 model: mask.model.clone().unwrap_or_else(|| settings.model.clone()),
                 reasoning_effort: mask.reasoning_effort.unwrap_or(settings.reasoning_effort),
@@ -168,7 +166,7 @@ impl CollaborationMode {
     }
 }
 
-/// Settings for a collaboration mode.
+/// Settings for an identity.
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, JsonSchema, TS)]
 pub struct Settings {
     pub model: String,
@@ -176,15 +174,24 @@ pub struct Settings {
     pub developer_instructions: Option<String>,
 }
 
-/// A mask for collaboration mode settings, allowing partial updates.
+/// Capabilities associated with an identity.
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, JsonSchema, TS)]
+pub struct IdentityCapabilities {
+    /// Whether this identity is intended to have write-capable tools.
+    /// This is currently metadata only; tool exposure is not filtered from this field yet.
+    pub write_tools: bool,
+}
+
+/// A mask for identity settings, allowing partial updates.
 /// All fields except `name` are optional, enabling selective updates.
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, JsonSchema, TS)]
-pub struct CollaborationModeMask {
+pub struct IdentityMask {
     pub name: String,
-    pub mode: Option<ModeKind>,
+    pub kind: Option<IdentityKind>,
     pub model: Option<String>,
     pub reasoning_effort: Option<Option<ReasoningEffort>>,
     pub developer_instructions: Option<Option<String>>,
+    pub capabilities: IdentityCapabilities,
 }
 
 #[cfg(test)]
@@ -194,30 +201,31 @@ mod tests {
 
     #[test]
     fn apply_mask_can_clear_optional_fields() {
-        let mode = CollaborationMode {
-            mode: ModeKind::Code,
+        let identity = Identity {
+            kind: IdentityKind::Programmer,
             settings: Settings {
                 model: "gpt-5.2-codex".to_string(),
                 reasoning_effort: Some(ReasoningEffort::High),
                 developer_instructions: Some("stay focused".to_string()),
             },
         };
-        let mask = CollaborationModeMask {
+        let mask = IdentityMask {
             name: "Clear".to_string(),
-            mode: None,
+            kind: None,
             model: None,
             reasoning_effort: Some(None),
             developer_instructions: Some(None),
+            capabilities: IdentityCapabilities { write_tools: true },
         };
 
-        let expected = CollaborationMode {
-            mode: ModeKind::Code,
+        let expected = Identity {
+            kind: IdentityKind::Programmer,
             settings: Settings {
                 model: "gpt-5.2-codex".to_string(),
                 reasoning_effort: None,
                 developer_instructions: None,
             },
         };
-        assert_eq!(expected, mode.apply_mask(&mask));
+        assert_eq!(expected, identity.apply_mask(&mask));
     }
 }

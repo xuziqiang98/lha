@@ -26,8 +26,8 @@ use adam_app_server_protocol::TurnStartResponse;
 use adam_app_server_protocol::TurnStartedNotification;
 use adam_app_server_protocol::TurnStatus;
 use adam_app_server_protocol::UserInput as V2UserInput;
-use adam_protocol::config_types::CollaborationMode;
-use adam_protocol::config_types::ModeKind;
+use adam_protocol::config_types::Identity;
+use adam_protocol::config_types::IdentityKind;
 use adam_protocol::config_types::Personality;
 use adam_protocol::config_types::Settings;
 use adam_protocol::openai_models::ReasoningEffort;
@@ -328,7 +328,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
 }
 
 #[tokio::test]
-async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
+async fn turn_start_accepts_identity_override_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -363,8 +363,8 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
 
-    let collaboration_mode = CollaborationMode {
-        mode: ModeKind::Custom,
+    let identity = Identity {
+        kind: IdentityKind::Nobody,
         settings: Settings {
             model: "mock-model-collab".to_string(),
             reasoning_effort: Some(ReasoningEffort::High),
@@ -383,7 +383,7 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
             effort: Some(ReasoningEffort::Low),
             summary: Some(ReasoningSummary::Auto),
             output_schema: None,
-            collaboration_mode: Some(collaboration_mode),
+            identity: Some(identity),
             ..Default::default()
         })
         .await?;
@@ -1008,7 +1008,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             summary: Some(ReasoningSummary::Auto),
             personality: None,
             output_schema: None,
-            collaboration_mode: None,
+            identity: None,
         })
         .await?;
     timeout(
@@ -1039,7 +1039,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             summary: Some(ReasoningSummary::Auto),
             personality: None,
             output_schema: None,
-            collaboration_mode: None,
+            identity: None,
         })
         .await?;
     timeout(

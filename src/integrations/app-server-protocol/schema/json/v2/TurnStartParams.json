@@ -33,30 +33,28 @@
       ],
       "type": "object"
     },
-    "CollaborationMode": {
-      "description": "Collaboration mode for a Codex session.",
+    "Identity": {
+      "description": "Identity for an Adam session.",
       "properties": {
-        "mode": {
-          "$ref": "#/definitions/ModeKind"
+        "kind": {
+          "$ref": "#/definitions/IdentityKind"
         },
         "settings": {
           "$ref": "#/definitions/Settings"
         }
       },
       "required": [
-        "mode",
+        "kind",
         "settings"
       ],
       "type": "object"
     },
-    "ModeKind": {
-      "description": "Initial collaboration mode to use when the TUI starts.",
+    "IdentityKind": {
+      "description": "Initial identity to use when the TUI starts.",
       "enum": [
-        "plan",
-        "code",
-        "pair_programming",
-        "execute",
-        "custom"
+        "nobody",
+        "planner",
+        "programmer"
       ],
       "type": "string"
     },
@@ -190,7 +188,7 @@
       ]
     },
     "Settings": {
-      "description": "Settings for a collaboration mode.",
+      "description": "Settings for an identity.",
       "properties": {
         "developer_instructions": {
           "type": [
@@ -373,17 +371,6 @@
       ],
       "description": "Override the approval policy for this turn and subsequent turns."
     },
-    "collaborationMode": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/CollaborationMode"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "EXPERIMENTAL - set a pre-set collaboration mode. Takes precedence over model, reasoning_effort, and developer instructions if set."
-    },
     "cwd": {
       "description": "Override the working directory for this turn and subsequent turns.",
       "type": [
@@ -401,6 +388,17 @@
         }
       ],
       "description": "Override the reasoning effort for this turn and subsequent turns."
+    },
+    "identity": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Identity"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "EXPERIMENTAL - set a pre-set identity. Takes precedence over model, reasoning_effort, and developer instructions if set."
     },
     "input": {
       "items": {

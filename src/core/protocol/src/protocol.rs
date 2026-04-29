@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use crate::ThreadId;
 use crate::approvals::ElicitationRequestEvent;
-use crate::config_types::CollaborationMode;
-use crate::config_types::ModeKind;
+use crate::config_types::Identity;
+use crate::config_types::IdentityKind;
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::WindowsSandboxLevel;
@@ -63,8 +63,8 @@ pub const USER_INSTRUCTIONS_OPEN_TAG: &str = "<user_instructions>";
 pub const USER_INSTRUCTIONS_CLOSE_TAG: &str = "</user_instructions>";
 pub const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
 pub const ENVIRONMENT_CONTEXT_CLOSE_TAG: &str = "</environment_context>";
-pub const COLLABORATION_MODE_OPEN_TAG: &str = "<collaboration_mode>";
-pub const COLLABORATION_MODE_CLOSE_TAG: &str = "</collaboration_mode>";
+pub const IDENTITY_OPEN_TAG: &str = "<identity>";
+pub const IDENTITY_CLOSE_TAG: &str = "</identity>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 
 /// Submission Queue Entry - requests from user
@@ -138,10 +138,10 @@ pub enum Op {
         // The JSON schema to use for the final assistant message
         final_output_json_schema: Option<Value>,
 
-        /// EXPERIMENTAL - set a pre-set collaboration mode.
+        /// EXPERIMENTAL - set a pre-set identity.
         /// Takes precedence over model, effort, and developer instructions if set.
         #[serde(skip_serializing_if = "Option::is_none")]
-        collaboration_mode: Option<CollaborationMode>,
+        identity: Option<Identity>,
 
         /// Optional personality override for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -187,10 +187,10 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none")]
         summary: Option<ReasoningSummaryConfig>,
 
-        /// EXPERIMENTAL - set a pre-set collaboration mode.
+        /// EXPERIMENTAL - set a pre-set identity.
         /// Takes precedence over model, effort, and developer instructions if set.
         #[serde(skip_serializing_if = "Option::is_none")]
-        collaboration_mode: Option<CollaborationMode>,
+        identity: Option<Identity>,
 
         /// Updated personality preference.
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -281,7 +281,7 @@ pub enum Op {
     Compact,
 
     /// Set a user-facing thread name in the persisted rollout metadata.
-    /// This is a local-only operation handled by adam-coding-agent; it does not
+    /// This is a local-only operation handled by adam-agent; it does not
     /// involve the model.
     SetThreadName { name: String },
 
@@ -1143,7 +1143,7 @@ pub struct TurnStartedEvent {
     // TODO(aibrahim): make this not optional
     pub model_context_window: Option<i64>,
     #[serde(default)]
-    pub collaboration_mode_kind: ModeKind,
+    pub identity_kind: IdentityKind,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -1686,7 +1686,7 @@ pub struct TurnContextItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub collaboration_mode: Option<CollaborationMode>,
+    pub identity: Option<Identity>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffortConfig>,
     pub summary: ReasoningSummaryConfig,

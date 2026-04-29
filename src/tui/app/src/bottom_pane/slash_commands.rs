@@ -12,17 +12,14 @@ use crate::slash_command::built_in_slash_commands;
 
 /// Return the built-ins that should be visible/usable for the current input.
 pub(crate) fn builtins_for_input(
-    collaboration_modes_enabled: bool,
+    identities_enabled: bool,
     personality_command_enabled: bool,
     allow_elevate_sandbox: bool,
 ) -> Vec<(&'static str, SlashCommand)> {
     built_in_slash_commands()
         .into_iter()
         .filter(|(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
-        .filter(|(_, cmd)| {
-            collaboration_modes_enabled
-                || !matches!(*cmd, SlashCommand::Collab | SlashCommand::Plan)
-        })
+        .filter(|(_, cmd)| identities_enabled || !matches!(*cmd, SlashCommand::Identity))
         .filter(|(_, cmd)| personality_command_enabled || *cmd != SlashCommand::Personality)
         .collect()
 }
@@ -30,14 +27,14 @@ pub(crate) fn builtins_for_input(
 /// Find a single built-in command by exact name, after applying the gating rules.
 pub(crate) fn find_builtin_command(
     name: &str,
-    collaboration_modes_enabled: bool,
+    identities_enabled: bool,
     personality_command_enabled: bool,
     allow_elevate_sandbox: bool,
 ) -> Option<SlashCommand> {
     let cmd = SlashCommand::from_str(name).ok()?;
 
     builtins_for_input(
-        collaboration_modes_enabled,
+        identities_enabled,
         personality_command_enabled,
         allow_elevate_sandbox,
     )
@@ -49,12 +46,12 @@ pub(crate) fn find_builtin_command(
 /// Whether any visible built-in fuzzily matches the provided prefix.
 pub(crate) fn has_builtin_prefix(
     name: &str,
-    collaboration_modes_enabled: bool,
+    identities_enabled: bool,
     personality_command_enabled: bool,
     allow_elevate_sandbox: bool,
 ) -> bool {
     builtins_for_input(
-        collaboration_modes_enabled,
+        identities_enabled,
         personality_command_enabled,
         allow_elevate_sandbox,
     )

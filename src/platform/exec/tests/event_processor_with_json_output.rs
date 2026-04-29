@@ -55,7 +55,7 @@ use adam_exec::exec_events::TurnStartedEvent;
 use adam_exec::exec_events::Usage;
 use adam_exec::exec_events::WebSearchItem;
 use adam_protocol::ThreadId;
-use adam_protocol::config_types::ModeKind;
+use adam_protocol::config_types::IdentityKind;
 use adam_protocol::models::WebSearchAction;
 use adam_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use adam_protocol::plan_tool::PlanItemArg;
@@ -119,7 +119,7 @@ fn task_started_produces_turn_started_event() {
         "t1",
         EventMsg::TurnStarted(adam_agent::protocol::TurnStartedEvent {
             model_context_window: Some(32_000),
-            collaboration_mode_kind: ModeKind::Custom,
+            identity_kind: IdentityKind::Nobody,
         }),
     ));
 

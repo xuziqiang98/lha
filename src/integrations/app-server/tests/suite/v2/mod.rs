@@ -1,8 +1,8 @@
 mod analytics;
-mod collaboration_mode_list;
 mod config_rpc;
 mod dynamic_tools;
 mod feedback_upload;
+mod identity_list;
 mod initialize;
 mod output_schema;
 mod plan_item;

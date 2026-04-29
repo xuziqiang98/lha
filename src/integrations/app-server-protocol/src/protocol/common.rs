@@ -175,10 +175,10 @@ client_request_definitions! {
         params: v2::ModelListParams,
         response: v2::ModelListResponse,
     },
-    /// EXPERIMENTAL - list collaboration mode presets.
-    CollaborationModeList => "collaborationMode/list" {
-        params: v2::CollaborationModeListParams,
-        response: v2::CollaborationModeListResponse,
+    /// EXPERIMENTAL - list identity presets.
+    IdentityList => "identity/list" {
+        params: v2::IdentityListParams,
+        response: v2::IdentityListResponse,
     },
 
     McpServerOauthLogin => "mcpServer/oauth/login" {
@@ -743,14 +743,14 @@ mod tests {
     }
 
     #[test]
-    fn serialize_list_collaboration_modes() -> Result<()> {
-        let request = ClientRequest::CollaborationModeList {
+    fn serialize_list_identities() -> Result<()> {
+        let request = ClientRequest::IdentityList {
             request_id: RequestId::Integer(7),
-            params: v2::CollaborationModeListParams::default(),
+            params: v2::IdentityListParams::default(),
         };
         assert_eq!(
             json!({
-                "method": "collaborationMode/list",
+                "method": "identity/list",
                 "id": 7,
                 "params": {}
             }),

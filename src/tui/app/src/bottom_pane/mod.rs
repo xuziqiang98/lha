@@ -65,7 +65,7 @@ pub(crate) mod provider_config_view;
 mod skill_popup;
 mod skills_toggle_view;
 mod slash_commands;
-pub(crate) use footer::CollaborationModeIndicator;
+pub(crate) use footer::IdentityIndicator;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
 pub(crate) use feedback_view::feedback_disabled_params;
@@ -234,8 +234,8 @@ impl BottomPane {
         self.composer.set_steer_enabled(enabled);
     }
 
-    pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {
-        self.composer.set_collaboration_modes_enabled(enabled);
+    pub fn set_identities_enabled(&mut self, enabled: bool) {
+        self.composer.set_identities_enabled(enabled);
         self.request_redraw();
     }
 
@@ -249,11 +249,8 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub fn set_collaboration_mode_indicator(
-        &mut self,
-        indicator: Option<CollaborationModeIndicator>,
-    ) {
-        self.composer.set_collaboration_mode_indicator(indicator);
+    pub fn set_identity_indicator(&mut self, indicator: Option<IdentityIndicator>) {
+        self.composer.set_identity_indicator(indicator);
         self.request_redraw();
     }
 

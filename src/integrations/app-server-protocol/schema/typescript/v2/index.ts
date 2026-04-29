@@ -12,8 +12,6 @@ export type { CollabAgentState } from "./CollabAgentState";
 export type { CollabAgentStatus } from "./CollabAgentStatus";
 export type { CollabAgentTool } from "./CollabAgentTool";
 export type { CollabAgentToolCallStatus } from "./CollabAgentToolCallStatus";
-export type { CollaborationModeListParams } from "./CollaborationModeListParams";
-export type { CollaborationModeListResponse } from "./CollaborationModeListResponse";
 export type { CommandAction } from "./CommandAction";
 export type { CommandExecParams } from "./CommandExecParams";
 export type { CommandExecResponse } from "./CommandExecResponse";
@@ -50,6 +48,8 @@ export type { FileChangeRequestApprovalParams } from "./FileChangeRequestApprova
 export type { FileChangeRequestApprovalResponse } from "./FileChangeRequestApprovalResponse";
 export type { FileUpdateChange } from "./FileUpdateChange";
 export type { GitInfo } from "./GitInfo";
+export type { IdentityListParams } from "./IdentityListParams";
+export type { IdentityListResponse } from "./IdentityListResponse";
 export type { ItemCompletedNotification } from "./ItemCompletedNotification";
 export type { ItemStartedNotification } from "./ItemStartedNotification";
 export type { ListMcpServerStatusParams } from "./ListMcpServerStatusParams";

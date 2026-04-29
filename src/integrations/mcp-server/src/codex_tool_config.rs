@@ -167,7 +167,7 @@ impl CodexToolCallParam {
             compact_prompt,
         } = self;
 
-        // Build the `ConfigOverrides` recognized by adam-coding-agent.
+        // Build the `ConfigOverrides` recognized by adam-agent.
         let overrides = ConfigOverrides {
             model,
             config_profile: profile,

@@ -40,13 +40,13 @@ test:
 
 # Regenerate the json schema for config.toml from the current config types.
 write-config-schema:
-    cargo run -p adam-coding-agent --bin adam-write-config-schema
+    cargo run -p adam-agent --bin adam-write-config-schema
 
 write-models-schema:
-    cargo run -p adam-coding-agent --bin adam-write-models-schema
+    cargo run -p adam-agent --bin adam-write-models-schema
 
 write-state-schema:
-    cargo run -p adam-coding-agent --bin adam-write-state-schema
+    cargo run -p adam-agent --bin adam-write-state-schema
 
 # Regenerate vendored app-server protocol schema artifacts.
 write-app-server-schema:

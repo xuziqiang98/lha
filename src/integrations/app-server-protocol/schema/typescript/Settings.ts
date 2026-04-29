@@ -4,6 +4,6 @@
 import type { ReasoningEffort } from "./ReasoningEffort";
 
 /**
- * Settings for a collaboration mode.
+ * Settings for an identity.
  */
 export type Settings = { model: string, reasoning_effort: ReasoningEffort | null, developer_instructions: string | null, };

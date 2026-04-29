@@ -706,13 +706,13 @@
         {
           "description": "Agent has started a turn. v1 wire format uses `task_started`; accept `turn_started` for v2 interop.",
           "properties": {
-            "collaboration_mode_kind": {
+            "identity_kind": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/ModeKind"
+                  "$ref": "#/definitions/IdentityKind"
                 }
               ],
-              "default": "code"
+              "default": "nobody"
             },
             "model_context_window": {
               "format": "int64",
@@ -3186,6 +3186,15 @@
       ],
       "type": "object"
     },
+    "IdentityKind": {
+      "description": "Initial identity to use when the TUI starts.",
+      "enum": [
+        "nobody",
+        "planner",
+        "programmer"
+      ],
+      "type": "string"
+    },
     "ImageContent": {
       "description": "An image provided to or from an LLM.",
       "properties": {
@@ -3326,17 +3335,6 @@
           "type": "object"
         }
       ]
-    },
-    "ModeKind": {
-      "description": "Initial collaboration mode to use when the TUI starts.",
-      "enum": [
-        "plan",
-        "code",
-        "pair_programming",
-        "execute",
-        "custom"
-      ],
-      "type": "string"
     },
     "NetworkAccess": {
       "description": "Represents whether outbound network access is available to the agent.",
@@ -5390,13 +5388,13 @@
     {
       "description": "Agent has started a turn. v1 wire format uses `task_started`; accept `turn_started` for v2 interop.",
       "properties": {
-        "collaboration_mode_kind": {
+        "identity_kind": {
           "allOf": [
             {
-              "$ref": "#/definitions/ModeKind"
+              "$ref": "#/definitions/IdentityKind"
             }
           ],
-          "default": "code"
+          "default": "nobody"
         },
         "model_context_window": {
           "format": "int64",

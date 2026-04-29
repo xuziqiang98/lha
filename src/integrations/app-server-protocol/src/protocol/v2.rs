@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use adam_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
-use adam_protocol::config_types::CollaborationMode;
-use adam_protocol::config_types::CollaborationModeMask;
+use adam_protocol::config_types::Identity;
+use adam_protocol::config_types::IdentityMask;
 use adam_protocol::config_types::Personality;
 use adam_protocol::config_types::ReasoningSummary;
 use adam_protocol::config_types::SandboxMode as CoreSandboxMode;
@@ -849,18 +849,18 @@ pub struct ModelListResponse {
     pub next_cursor: Option<String>,
 }
 
-/// EXPERIMENTAL - list collaboration mode presets.
+/// EXPERIMENTAL - list identity presets.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct CollaborationModeListParams {}
+pub struct IdentityListParams {}
 
-/// EXPERIMENTAL - collaboration mode presets response.
+/// EXPERIMENTAL - identity presets response.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct CollaborationModeListResponse {
-    pub data: Vec<CollaborationModeMask>,
+pub struct IdentityListResponse {
+    pub data: Vec<IdentityMask>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1660,9 +1660,9 @@ pub struct TurnStartParams {
     /// Optional JSON Schema used to constrain the final assistant message for this turn.
     pub output_schema: Option<JsonValue>,
 
-    /// EXPERIMENTAL - set a pre-set collaboration mode.
+    /// EXPERIMENTAL - set a pre-set identity.
     /// Takes precedence over model, reasoning_effort, and developer instructions if set.
-    pub collaboration_mode: Option<CollaborationMode>,
+    pub identity: Option<Identity>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

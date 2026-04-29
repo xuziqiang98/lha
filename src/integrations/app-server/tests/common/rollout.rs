@@ -133,7 +133,7 @@ pub fn create_fake_rollout_with_cwds(
                 sandbox_policy: SandboxPolicy::ReadOnly,
                 model: "mock-model".to_string(),
                 personality: None,
-                collaboration_mode: None,
+                identity: None,
                 effort: None,
                 summary: ReasoningSummary::Auto,
                 user_instructions: None,

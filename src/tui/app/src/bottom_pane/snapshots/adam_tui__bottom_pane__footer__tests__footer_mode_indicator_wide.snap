@@ -1,5 +1,6 @@
 ---
 source: src/tui/app/src/bottom_pane/footer.rs
+assertion_line: 894
 expression: terminal.backend()
 ---
-"  gpt-5.4 high · 100% left · ~/Workspace/adam                                           Plan mode (shift+tab to cycle)  "
+"  gpt-5.4 high · 100% left · ~/Workspace/adam                                                         Identity planner  "

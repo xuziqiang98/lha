@@ -27,7 +27,7 @@ use adam_agent::features::Feature;
 use adam_agent::protocol::AskForApproval;
 use adam_agent::protocol::ReviewRequest;
 use adam_agent::protocol::SandboxPolicy;
-use adam_protocol::config_types::CollaborationModeMask;
+use adam_protocol::config_types::IdentityMask;
 use adam_protocol::config_types::Personality;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,8 +136,8 @@ pub(crate) enum AppEvent {
     StopCommitAnimation,
     CommitTick,
 
-    /// Update the active collaboration mask in the running app and widget.
-    UpdateCollaborationMode(CollaborationModeMask),
+    /// Update the active identity mask in the running app and widget.
+    UpdateIdentity(IdentityMask),
 
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),
@@ -282,10 +282,10 @@ pub(crate) enum AppEvent {
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
 
-    /// Submit a user message with an explicit collaboration mask.
+    /// Submit a user message with an explicit identity mask.
     SubmitUserMessageWithMode {
         text: String,
-        collaboration_mode: CollaborationModeMask,
+        identity: IdentityMask,
     },
 
     /// Open the approval popup.

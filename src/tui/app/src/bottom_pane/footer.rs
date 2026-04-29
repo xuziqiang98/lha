@@ -19,10 +19,8 @@
 //!    - When the queue hint is active, prefer keeping that queue hint visible,
 //!      even if it means dropping the right-side context earlier; the queue
 //!      hint may also be shortened before it is removed.
-//!    - When the queue hint is not active but the mode cycle hint is applicable,
-//!      drop "? for shortcuts" before dropping "(shift+tab to cycle)".
-//!    - If "(shift+tab to cycle)" cannot fit, also hide the right-side
-//!      context to avoid too many state transitions in quick succession.
+//!    - When the queue hint is not active but the identity indicator is present,
+//!      drop "? for shortcuts" before dropping the right-side context.
 //!    - Finally, try a mode-only line (with and without context), and fall
 //!      back to no left-side footer if nothing can fit.
 //! 3. When collapse chooses a specific line, callers render it via
@@ -59,7 +57,6 @@ pub(crate) struct FooterProps {
     pub(crate) esc_backtrack_hint: bool,
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) is_task_running: bool,
-    pub(crate) collaboration_modes_enabled: bool,
     pub(crate) is_wsl: bool,
     /// Which key the user must press again to quit.
     ///
@@ -73,40 +70,29 @@ pub(crate) struct FooterProps {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CollaborationModeIndicator {
-    Plan,
-    Code,
-    PairProgramming,
-    Execute,
+pub(crate) enum IdentityIndicator {
+    Nobody,
+    Planner,
+    Programmer,
 }
 
-const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
 const FOOTER_CONTEXT_GAP_COLS: u16 = 1;
 
-impl CollaborationModeIndicator {
-    fn label(self, show_cycle_hint: bool) -> String {
-        let suffix = if show_cycle_hint {
-            format!(" ({MODE_CYCLE_HINT})")
-        } else {
-            String::new()
-        };
+impl IdentityIndicator {
+    fn label(self, _show_cycle_hint: bool) -> String {
         match self {
-            CollaborationModeIndicator::Plan => format!("Plan mode{suffix}"),
-            CollaborationModeIndicator::Code => format!("Code mode{suffix}"),
-            CollaborationModeIndicator::PairProgramming => {
-                format!("Pair Programming mode{suffix}")
-            }
-            CollaborationModeIndicator::Execute => format!("Execute mode{suffix}"),
+            IdentityIndicator::Nobody => "Identity nobody".to_string(),
+            IdentityIndicator::Planner => "Identity planner".to_string(),
+            IdentityIndicator::Programmer => "Identity programmer".to_string(),
         }
     }
 
     fn styled_span(self, show_cycle_hint: bool) -> Span<'static> {
         let label = self.label(show_cycle_hint);
         match self {
-            CollaborationModeIndicator::Plan => Span::from(label).magenta(),
-            CollaborationModeIndicator::Code => Span::from(label).magenta(),
-            CollaborationModeIndicator::PairProgramming => Span::from(label).cyan(),
-            CollaborationModeIndicator::Execute => Span::from(label).dim(),
+            IdentityIndicator::Nobody => Span::from(label).dim(),
+            IdentityIndicator::Planner => Span::from(label).magenta(),
+            IdentityIndicator::Programmer => Span::from(label).magenta(),
         }
     }
 }
@@ -190,13 +176,13 @@ pub(crate) fn render_footer_line(area: Rect, buf: &mut Buffer, line: Line<'stati
 /// This is intentionally not part of the width-based collapse/fallback logic.
 /// Transient instructional states (shortcut overlay, Esc hint, quit reminder)
 /// prioritize "what to do next" instructions and currently suppress the
-/// collaboration mode label entirely. When collapse logic has already chosen a
+/// identity label entirely. When collapse logic has already chosen a
 /// specific single line, prefer `render_footer_line`.
 pub(crate) fn render_footer_from_props(
     area: Rect,
     buf: &mut Buffer,
     props: FooterProps,
-    collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    identity_indicator: Option<IdentityIndicator>,
     show_cycle_hint: bool,
     show_shortcuts_hint: bool,
     show_queue_hint: bool,
@@ -204,7 +190,7 @@ pub(crate) fn render_footer_from_props(
     Paragraph::new(prefix_lines(
         footer_from_props_lines(
             props,
-            collaboration_mode_indicator,
+            identity_indicator,
             show_cycle_hint,
             show_shortcuts_hint,
             show_queue_hint,
@@ -234,11 +220,10 @@ struct FooterInfoState {
 }
 
 fn mode_indicator_line(
-    collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    identity_indicator: Option<IdentityIndicator>,
     show_cycle_hint: bool,
 ) -> Option<Line<'static>> {
-    collaboration_mode_indicator
-        .map(|indicator| Line::from(vec![indicator.styled_span(show_cycle_hint)]))
+    identity_indicator.map(|indicator| Line::from(vec![indicator.styled_span(show_cycle_hint)]))
 }
 
 fn footer_info_line(props: &FooterProps, state: FooterInfoState) -> Line<'static> {
@@ -313,22 +298,18 @@ fn footer_info_variants(props: &FooterProps) -> Vec<(FooterInfoState, Line<'stat
 pub(crate) fn single_line_footer_layout(
     area: Rect,
     props: &FooterProps,
-    collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    identity_indicator: Option<IdentityIndicator>,
     show_cycle_hint: bool,
 ) -> (SummaryLeft, Option<Line<'static>>) {
     let left_variants = footer_info_variants(props);
     let right_variants = if show_cycle_hint {
         [
-            mode_indicator_line(collaboration_mode_indicator, true),
-            mode_indicator_line(collaboration_mode_indicator, false),
+            mode_indicator_line(identity_indicator, true),
+            mode_indicator_line(identity_indicator, false),
             None,
         ]
     } else {
-        [
-            mode_indicator_line(collaboration_mode_indicator, false),
-            None,
-            None,
-        ]
+        [mode_indicator_line(identity_indicator, false), None, None]
     };
 
     for right_line in right_variants
@@ -457,7 +438,7 @@ pub(crate) fn render_footer_hint_items(area: Rect, buf: &mut Buffer, items: &[(S
 /// formats the chosen/default content.
 fn footer_from_props_lines(
     props: FooterProps,
-    _collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    _identity_indicator: Option<IdentityIndicator>,
     _show_cycle_hint: bool,
     _show_shortcuts_hint: bool,
     _show_queue_hint: bool,
@@ -479,7 +460,6 @@ fn footer_from_props_lines(
                 use_shift_enter_hint: props.use_shift_enter_hint,
                 esc_backtrack_hint: props.esc_backtrack_hint,
                 is_wsl: props.is_wsl,
-                collaboration_modes_enabled: props.collaboration_modes_enabled,
             };
             shortcut_overlay_lines(state)
         }
@@ -513,7 +493,6 @@ struct ShortcutsState {
     use_shift_enter_hint: bool,
     esc_backtrack_hint: bool,
     is_wsl: bool,
-    collaboration_modes_enabled: bool,
 }
 
 fn quit_shortcut_reminder_line(key: KeyBinding) -> Line<'static> {
@@ -546,7 +525,6 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut edit_previous = Line::from("");
     let mut quit = Line::from("");
     let mut show_transcript = Line::from("");
-    let mut change_mode = Line::from("");
 
     for descriptor in SHORTCUTS {
         if let Some(text) = descriptor.overlay_entry(state) {
@@ -561,7 +539,6 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::EditPrevious => edit_previous = text,
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
-                ShortcutId::ChangeMode => change_mode = text,
             }
         }
     }
@@ -577,9 +554,6 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         edit_previous,
         quit,
     ];
-    if change_mode.width() > 0 {
-        ordered.push(change_mode);
-    }
     ordered.push(Line::from(""));
     ordered.push(show_transcript);
 
@@ -659,7 +633,6 @@ enum ShortcutId {
     EditPrevious,
     Quit,
     ShowTranscript,
-    ChangeMode,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -680,7 +653,6 @@ enum DisplayCondition {
     WhenShiftEnterHint,
     WhenNotShiftEnterHint,
     WhenUnderWSL,
-    WhenCollaborationModesEnabled,
 }
 
 impl DisplayCondition {
@@ -690,7 +662,6 @@ impl DisplayCondition {
             DisplayCondition::WhenShiftEnterHint => state.use_shift_enter_hint,
             DisplayCondition::WhenNotShiftEnterHint => !state.use_shift_enter_hint,
             DisplayCondition::WhenUnderWSL => state.is_wsl,
-            DisplayCondition::WhenCollaborationModesEnabled => state.collaboration_modes_enabled,
         }
     }
 }
@@ -833,15 +804,6 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         prefix: "",
         label: " to view transcript",
     },
-    ShortcutDescriptor {
-        id: ShortcutId::ChangeMode,
-        bindings: &[ShortcutBinding {
-            key: key_hint::shift(KeyCode::Tab),
-            condition: DisplayCondition::WhenCollaborationModesEnabled,
-        }],
-        prefix: "",
-        label: " to change mode",
-    },
 ];
 
 #[cfg(test)]
@@ -860,7 +822,6 @@ mod tests {
             esc_backtrack_hint: false,
             use_shift_enter_hint: false,
             is_task_running: false,
-            collaboration_modes_enabled: false,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
@@ -879,7 +840,7 @@ mod tests {
         name: &str,
         width: u16,
         props: FooterProps,
-        collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+        identity_indicator: Option<IdentityIndicator>,
     ) {
         let height = footer_height(&props).max(1);
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -894,7 +855,7 @@ mod tests {
                     let (summary_left, right_line) = single_line_footer_layout(
                         area,
                         &props,
-                        collaboration_mode_indicator,
+                        identity_indicator,
                         show_cycle_hint,
                     );
                     match summary_left {
@@ -903,7 +864,7 @@ mod tests {
                                 area,
                                 f.buffer_mut(),
                                 props.clone(),
-                                collaboration_mode_indicator,
+                                identity_indicator,
                                 show_cycle_hint,
                                 false,
                                 false,
@@ -922,7 +883,7 @@ mod tests {
                         area,
                         f.buffer_mut(),
                         props,
-                        collaboration_mode_indicator,
+                        identity_indicator,
                         show_cycle_hint,
                         false,
                         false,
@@ -954,15 +915,6 @@ mod tests {
                 mode: FooterMode::ShortcutOverlay,
                 esc_backtrack_hint: true,
                 use_shift_enter_hint: true,
-                ..test_footer_props(FooterMode::ShortcutOverlay)
-            },
-        );
-
-        snapshot_footer(
-            "footer_shortcuts_collaboration_modes_enabled",
-            FooterProps {
-                mode: FooterMode::ShortcutOverlay,
-                collaboration_modes_enabled: true,
                 ..test_footer_props(FooterMode::ShortcutOverlay)
             },
         );
@@ -1035,7 +987,6 @@ mod tests {
 
         let props = FooterProps {
             mode: FooterMode::ComposerEmpty,
-            collaboration_modes_enabled: true,
             ..test_footer_props(FooterMode::ComposerEmpty)
         };
 
@@ -1043,21 +994,21 @@ mod tests {
             "footer_mode_indicator_wide",
             120,
             props.clone(),
-            Some(CollaborationModeIndicator::Plan),
+            Some(IdentityIndicator::Planner),
         );
 
         snapshot_footer_with_mode_indicator(
             "footer_mode_indicator_code_wide",
             120,
             props.clone(),
-            Some(CollaborationModeIndicator::Code),
+            Some(IdentityIndicator::Programmer),
         );
 
         snapshot_footer_with_mode_indicator(
             "footer_mode_indicator_narrow_overlap_hides",
             50,
             props,
-            Some(CollaborationModeIndicator::Plan),
+            Some(IdentityIndicator::Planner),
         );
 
         snapshot_footer_with_mode_indicator(
@@ -1067,13 +1018,12 @@ mod tests {
                 model_name: "gpt-5.4-super-long-model-name".to_string(),
                 ..test_footer_props(FooterMode::ComposerEmpty)
             },
-            Some(CollaborationModeIndicator::Plan),
+            Some(IdentityIndicator::Planner),
         );
 
         let props = FooterProps {
             mode: FooterMode::ComposerEmpty,
             is_task_running: true,
-            collaboration_modes_enabled: true,
             ..test_footer_props(FooterMode::ComposerEmpty)
         };
 
@@ -1081,7 +1031,7 @@ mod tests {
             "footer_mode_indicator_running_hides_hint",
             120,
             props,
-            Some(CollaborationModeIndicator::Plan),
+            Some(IdentityIndicator::Planner),
         );
     }
 
@@ -1141,7 +1091,6 @@ mod tests {
                 use_shift_enter_hint: false,
                 esc_backtrack_hint: false,
                 is_wsl,
-                collaboration_modes_enabled: false,
             })
             .expect("shortcut binding")
             .key;
