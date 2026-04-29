@@ -8,6 +8,7 @@ use adam_agent_runtime::SessionSnapshot;
 use adam_agent_runtime::SessionStatus;
 use adam_llm::RuntimeEndpoint;
 use adam_llm::RuntimeMetadata;
+use adam_protocol::config_types::IdentityKind;
 use adam_protocol::config_types::Personality;
 use adam_protocol::models::ContentItem;
 use adam_protocol::models::TranscriptItem;
@@ -26,6 +27,7 @@ use crate::state_db::StateDbHandle;
 #[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {
     pub model: String,
+    pub identity_kind: IdentityKind,
     pub model_provider_id: String,
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,

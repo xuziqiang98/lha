@@ -92,6 +92,7 @@ fn session_configured_produces_thread_started_event() {
             forked_from_id: None,
             thread_name: None,
             model: "codex-mini-latest".to_string(),
+            identity_kind: IdentityKind::Nobody,
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::ReadOnly,

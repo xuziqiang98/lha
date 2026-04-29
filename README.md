@@ -5,11 +5,13 @@ From the repository root:
 
 ```
 cargo build -p adam-cli --bin adam --release
+cargo build -p adam-exec --bin adam-exec --release
 
 export PATH="<adam binary path>:$PATH" >> ~/.bashrc
 ```
 
 The resulting binary is written to `target/release/adam`.
+The `adam-exec` binary is written to `target/release/adam-exec`.
 
 ## Structure
 

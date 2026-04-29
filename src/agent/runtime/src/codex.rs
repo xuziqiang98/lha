@@ -565,6 +565,7 @@ impl SessionConfiguration {
     fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
         ThreadConfigSnapshot {
             model: self.identity.model().to_string(),
+            identity_kind: self.identity.kind,
             model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy.get().clone(),
@@ -1051,6 +1052,7 @@ impl Session {
                 forked_from_id,
                 thread_name: session_configuration.thread_name.clone(),
                 model: session_configuration.identity.model().to_string(),
+                identity_kind: session_configuration.identity.kind,
                 model_provider_id: config.model_provider_id.clone(),
                 approval_policy: session_configuration.approval_policy.value(),
                 sandbox_policy: session_configuration.sandbox_policy.get().clone(),

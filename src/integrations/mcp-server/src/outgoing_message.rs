@@ -238,6 +238,7 @@ mod tests {
     use adam_agent::protocol::SandboxPolicy;
     use adam_agent::protocol::SessionConfiguredEvent;
     use adam_protocol::ThreadId;
+    use adam_protocol::config_types::IdentityKind;
     use adam_protocol::openai_models::ReasoningEffort;
     use anyhow::Result;
     use pretty_assertions::assert_eq;
@@ -260,6 +261,7 @@ mod tests {
                 forked_from_id: None,
                 thread_name: None,
                 model: "gpt-4o".to_string(),
+                identity_kind: IdentityKind::Nobody,
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::ReadOnly,
@@ -301,6 +303,7 @@ mod tests {
             forked_from_id: None,
             thread_name: None,
             model: "gpt-4o".to_string(),
+            identity_kind: IdentityKind::Nobody,
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::ReadOnly,
@@ -338,6 +341,7 @@ mod tests {
                 "type": "session_configured",
                 "session_id": session_configured_event.session_id,
                 "model": "gpt-4o",
+                "identity_kind": "nobody",
                 "model_provider_id": "test-provider",
                 "approval_policy": "never",
                 "sandbox_policy": {
@@ -366,6 +370,7 @@ mod tests {
             forked_from_id: None,
             thread_name: None,
             model: "gpt-4o".to_string(),
+            identity_kind: IdentityKind::Nobody,
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::ReadOnly,
@@ -404,6 +409,7 @@ mod tests {
                 "type": "session_configured",
                 "session_id": session_configured_event.session_id,
                 "model": "gpt-4o",
+                "identity_kind": "nobody",
                 "model_provider_id": "test-provider",
                 "approval_policy": "never",
                 "sandbox_policy": {

@@ -2200,6 +2200,9 @@ pub struct SessionConfiguredEvent {
     /// Tell the client what model is being queried.
     pub model: String,
 
+    /// Identity currently active for this session.
+    pub identity_kind: IdentityKind,
+
     pub model_provider_id: String,
 
     /// When to escalate for approval for execution
@@ -2740,6 +2743,7 @@ mod tests {
                 forked_from_id: None,
                 thread_name: None,
                 model: "codex-mini-latest".to_string(),
+                identity_kind: IdentityKind::Nobody,
                 model_provider_id: "openai".to_string(),
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::ReadOnly,
@@ -2758,6 +2762,7 @@ mod tests {
                 "type": "session_configured",
                 "session_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
                 "model": "codex-mini-latest",
+                "identity_kind": "nobody",
                 "model_provider_id": "openai",
                 "approval_policy": "never",
                 "sandbox_policy": {

@@ -1021,6 +1021,14 @@
               "minimum": 0.0,
               "type": "integer"
             },
+            "identity_kind": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/IdentityKind"
+                }
+              ],
+              "description": "Identity currently active for this session."
+            },
             "initial_messages": {
               "description": "Optional initial messages (as events) for resumed sessions. When present, UIs can use these to seed the history.",
               "items": {
@@ -1087,6 +1095,7 @@
             "cwd",
             "history_entry_count",
             "history_log_id",
+            "identity_kind",
             "model",
             "model_provider_id",
             "sandbox_policy",
@@ -5703,6 +5712,14 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "identity_kind": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/IdentityKind"
+            }
+          ],
+          "description": "Identity currently active for this session."
+        },
         "initial_messages": {
           "description": "Optional initial messages (as events) for resumed sessions. When present, UIs can use these to seed the history.",
           "items": {
@@ -5769,6 +5786,7 @@
         "cwd",
         "history_entry_count",
         "history_log_id",
+        "identity_kind",
         "model",
         "model_provider_id",
         "sandbox_policy",

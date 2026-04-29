@@ -157,8 +157,11 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             VERSION
         );
 
-        let mut entries =
-            create_config_summary_entries(config, session_configured_event.model.as_str());
+        let mut entries = create_config_summary_entries(
+            config,
+            session_configured_event.model.as_str(),
+            session_configured_event.identity_kind,
+        );
         entries.push((
             "session id",
             session_configured_event.session_id.to_string(),
