@@ -70,6 +70,14 @@ pub struct McpProcess {
 
 pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
 
+fn ensure_models_json(adam_home: &Path) -> std::io::Result<()> {
+    let models_json = adam_home.join("models.json");
+    if !models_json.exists() {
+        std::fs::write(models_json, r#"{"providers":{}}"#)?;
+    }
+    Ok(())
+}
+
 impl McpProcess {
     pub async fn new(adam_home: &Path) -> anyhow::Result<Self> {
         Self::new_with_env(adam_home, &[]).await
@@ -84,6 +92,7 @@ impl McpProcess {
         adam_home: &Path,
         env_overrides: &[(&str, Option<&str>)],
     ) -> anyhow::Result<Self> {
+        ensure_models_json(adam_home)?;
         let program = adam_utils_cargo_bin::cargo_bin("adam-app-server")
             .context("should find binary for adam-app-server")?;
         let mut cmd = Command::new(program);

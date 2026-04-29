@@ -524,12 +524,13 @@ mod tests {
         cli_overrides: Vec<(String, TomlValue)>,
     ) -> (TempDir, Config) {
         let home = TempDir::new().expect("create temp dir");
-        let config = ConfigBuilder::default()
+        let mut config = ConfigBuilder::default()
             .adam_home(home.path().to_path_buf())
             .cli_overrides(cli_overrides)
             .build()
             .await
             .expect("load default test config");
+        config.provider_config_required = false;
         (home, config)
     }
 

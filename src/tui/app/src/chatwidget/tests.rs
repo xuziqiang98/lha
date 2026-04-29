@@ -111,6 +111,7 @@ async fn test_config() -> Config {
     std::mem::forget(adam_home);
     ConfigBuilder::default()
         .adam_home(adam_home_path)
+        .provider_config_required(false)
         .build()
         .await
         .expect("config")
@@ -200,6 +201,7 @@ async fn session_configured_updates_footer_reasoning_effort_immediately() {
     let adam_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()
         .adam_home(adam_home.path().to_path_buf())
+        .provider_config_required(false)
         .cli_overrides(vec![(
             "features.identities".to_string(),
             TomlValue::Boolean(true),
@@ -224,7 +226,9 @@ async fn session_configured_updates_footer_reasoning_effort_immediately() {
         auth_manager,
         feedback: adam_feedback::CodexFeedback::new(),
         is_first_run: true,
-        model: Some(resolved_model.clone()),
+        startup: ChatWidgetStartup::Configured {
+            model: Some(resolved_model.clone()),
+        },
         otel_manager,
     };
 
@@ -1587,7 +1591,9 @@ async fn helpers_are_available_and_do_not_panic() {
         auth_manager,
         feedback: adam_feedback::CodexFeedback::new(),
         is_first_run: true,
-        model: Some(resolved_model),
+        startup: ChatWidgetStartup::Configured {
+            model: Some(resolved_model),
+        },
         otel_manager,
     };
     let mut w = ChatWidget::new(init);
@@ -1634,6 +1640,7 @@ async fn make_chatwidget_manual_with_scrollback_mode(
     let app_event_tx = AppEventSender::new(tx_raw);
     let (op_tx, op_rx) = unbounded_channel::<Op>();
     let mut cfg = test_config().await;
+    cfg.provider_config_required = false;
     match transcript_host_mode {
         TranscriptHostMode::TerminalScrollback => {
             cfg.features.disable(Feature::TuiManagedScrollback);
@@ -2576,7 +2583,7 @@ async fn ctrl_c_shutdown_works_with_caps_lock() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL));
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::Immediate)));
 }
 
 #[tokio::test]
@@ -2584,7 +2591,7 @@ async fn ctrl_d_quits_without_prompt() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
-    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::Immediate)));
 }
 
 #[tokio::test]
@@ -3153,6 +3160,7 @@ async fn identities_default_to_nobody_on_startup() {
     let adam_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()
         .adam_home(adam_home.path().to_path_buf())
+        .provider_config_required(false)
         .cli_overrides(vec![(
             "features.identities".to_string(),
             TomlValue::Boolean(true),
@@ -3177,7 +3185,9 @@ async fn identities_default_to_nobody_on_startup() {
         auth_manager,
         feedback: adam_feedback::CodexFeedback::new(),
         is_first_run: true,
-        model: Some(resolved_model.clone()),
+        startup: ChatWidgetStartup::Configured {
+            model: Some(resolved_model.clone()),
+        },
         otel_manager,
     };
 
@@ -3191,6 +3201,7 @@ async fn default_identity_plan_applies_on_startup() {
     let adam_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()
         .adam_home(adam_home.path().to_path_buf())
+        .provider_config_required(false)
         .cli_overrides(vec![
             ("features.identities".to_string(), TomlValue::Boolean(true)),
             (
@@ -3218,7 +3229,9 @@ async fn default_identity_plan_applies_on_startup() {
         auth_manager,
         feedback: adam_feedback::CodexFeedback::new(),
         is_first_run: true,
-        model: Some(resolved_model.clone()),
+        startup: ChatWidgetStartup::Configured {
+            model: Some(resolved_model.clone()),
+        },
         otel_manager,
     };
 
@@ -3232,6 +3245,7 @@ async fn default_identity_plan_preserves_configured_effort_on_startup() {
     let adam_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()
         .adam_home(adam_home.path().to_path_buf())
+        .provider_config_required(false)
         .cli_overrides(vec![
             ("features.identities".to_string(), TomlValue::Boolean(true)),
             (
@@ -3263,7 +3277,9 @@ async fn default_identity_plan_preserves_configured_effort_on_startup() {
         auth_manager,
         feedback: adam_feedback::CodexFeedback::new(),
         is_first_run: true,
-        model: Some(resolved_model.clone()),
+        startup: ChatWidgetStartup::Configured {
+            model: Some(resolved_model.clone()),
+        },
         otel_manager,
     };
 
@@ -3519,7 +3535,7 @@ async fn slash_quit_requests_exit() {
 
     chat.dispatch_command(SlashCommand::Quit);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::Immediate)));
 }
 
 #[tokio::test]
@@ -3528,7 +3544,7 @@ async fn slash_exit_requests_exit() {
 
     chat.dispatch_command(SlashCommand::Exit);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::Immediate)));
 }
 
 #[tokio::test]
@@ -4922,6 +4938,150 @@ async fn providers_command_opens_provider_wizard() {
     assert!(
         popup.contains("Step 1/6: Provider ID"),
         "expected provider wizard to start on provider id:\n{popup}"
+    );
+    assert!(
+        popup.contains("~/.adam/models.json"),
+        "expected provider wizard copy to mention models.json:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn missing_models_json_blocks_model_submit_and_opens_provider_wizard() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.config.provider_config_required = true;
+
+    chat.submit_user_message("hello".to_string().into());
+
+    assert!(
+        op_rx.try_recv().is_err(),
+        "missing models.json must not submit a model turn"
+    );
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Configure a custom API provider"),
+        "expected provider wizard to be shown:\n{popup}"
+    );
+    let cells = drain_insert_history(&mut rx);
+    let blob = lines_to_single_string(cells.last().expect("info message cell"));
+    assert!(blob.contains("Configure a model provider before starting a session."));
+}
+
+#[tokio::test]
+async fn missing_models_json_routes_model_command_to_provider_wizard() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.provider_config_required = true;
+
+    chat.dispatch_command(SlashCommand::Model);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Configure a custom API provider"),
+        "expected provider wizard to be shown:\n{popup}"
+    );
+    let cells = drain_insert_history(&mut rx);
+    let blob = lines_to_single_string(cells.last().expect("info message cell"));
+    assert!(blob.contains("Configure a model provider before choosing a model."));
+}
+
+#[tokio::test]
+async fn required_provider_config_ctrl_c_exits_immediately() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.config.provider_config_required = true;
+    chat.open_provider_popup();
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::Immediate)));
+    assert!(
+        op_rx.try_recv().is_err(),
+        "ctrl+c should not send shutdown ops"
+    );
+}
+
+#[tokio::test]
+async fn missing_models_json_placeholder_header_shows_no_provider_configured() {
+    let adam_home = tempdir().expect("tempdir");
+    let mut cfg = ConfigBuilder::default()
+        .adam_home(adam_home.path().to_path_buf())
+        .provider_config_required(false)
+        .build()
+        .await
+        .expect("config");
+    cfg.provider_config_required = true;
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let thread_manager = Arc::new(ThreadManager::new(
+        cfg.adam_home.clone(),
+        auth_manager.clone(),
+        cfg.model_provider_id.as_str(),
+        cfg.model_provider.clone(),
+        SessionSource::Cli,
+    ));
+    let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+    let app_event_tx = AppEventSender::new(tx_raw);
+    let init = ChatWidgetInit {
+        config: cfg.clone(),
+        thread_manager,
+        frame_requester: FrameRequester::test_dummy(),
+        app_event_tx,
+        initial_user_message: None,
+        enhanced_keys_supported: false,
+        auth_manager,
+        feedback: adam_feedback::CodexFeedback::new(),
+        is_first_run: true,
+        startup: ChatWidgetStartup::NeedsProviderConfig,
+        otel_manager: test_otel_manager(&cfg, "No provider configured"),
+    };
+
+    let chat = ChatWidget::new(init);
+    let active_cell = chat.active_cell.as_ref().expect("placeholder header");
+    let rendered = lines_to_single_string(&active_cell.display_lines(120));
+    assert!(rendered.contains("No provider configured"));
+    assert!(!rendered.contains("loading"));
+}
+
+#[tokio::test]
+async fn missing_models_json_startup_does_not_emit_info_history_cell() {
+    let adam_home = tempdir().expect("tempdir");
+    let mut cfg = ConfigBuilder::default()
+        .adam_home(adam_home.path().to_path_buf())
+        .provider_config_required(false)
+        .build()
+        .await
+        .expect("config");
+    cfg.provider_config_required = true;
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let thread_manager = Arc::new(ThreadManager::new(
+        cfg.adam_home.clone(),
+        auth_manager.clone(),
+        cfg.model_provider_id.as_str(),
+        cfg.model_provider.clone(),
+        SessionSource::Cli,
+    ));
+    let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+    let app_event_tx = AppEventSender::new(tx_raw);
+    let init = ChatWidgetInit {
+        config: cfg.clone(),
+        thread_manager,
+        frame_requester: FrameRequester::test_dummy(),
+        app_event_tx,
+        initial_user_message: None,
+        enhanced_keys_supported: false,
+        auth_manager,
+        feedback: adam_feedback::CodexFeedback::new(),
+        is_first_run: true,
+        startup: ChatWidgetStartup::NeedsProviderConfig,
+        otel_manager: test_otel_manager(&cfg, "No provider configured"),
+    };
+
+    let chat = ChatWidget::new(init);
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Configure a custom API provider"),
+        "expected provider wizard to be shown:\n{popup}"
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "startup should not emit transcript history cells for required provider config"
     );
 }
 

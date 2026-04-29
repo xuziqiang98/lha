@@ -14,6 +14,14 @@ use std::path::Path;
 
 pub const MODELS_JSON_FILE: &str = "models.json";
 
+pub fn models_json_path(adam_home: &Path) -> std::path::PathBuf {
+    adam_home.join(MODELS_JSON_FILE)
+}
+
+pub fn has_models_json(adam_home: &Path) -> bool {
+    models_json_path(adam_home).is_file()
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
@@ -80,7 +88,7 @@ pub struct ModelMetadata {
 
 impl ModelsJson {
     pub fn load_from_adam_home(adam_home: &Path) -> io::Result<Self> {
-        let path = adam_home.join(MODELS_JSON_FILE);
+        let path = models_json_path(adam_home);
         match std::fs::read_to_string(&path) {
             Ok(contents) => {
                 let config: Self = serde_json::from_str(&contents).map_err(|err| {

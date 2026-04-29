@@ -122,6 +122,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::unbounded_channel;
 use tracing::debug;
 
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
@@ -324,8 +325,13 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) feedback: adam_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
-    pub(crate) model: Option<String>,
+    pub(crate) startup: ChatWidgetStartup,
     pub(crate) otel_manager: OtelManager,
+}
+
+pub(crate) enum ChatWidgetStartup {
+    Configured { model: Option<String> },
+    NeedsProviderConfig,
 }
 
 #[allow(dead_code)]
@@ -2129,25 +2135,38 @@ impl ChatWidget {
             auth_manager,
             feedback,
             is_first_run,
-            model,
+            startup,
             otel_manager,
         } = common;
         let app_event_tx = app_event_tx.bind_history_to_widget();
+        let (model, needs_provider_config) = match startup {
+            ChatWidgetStartup::Configured { model } => (model, false),
+            ChatWidgetStartup::NeedsProviderConfig => (None, true),
+        };
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
         config.model = model.clone();
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
-        let codex_op_tx = spawn_agent(
-            config.clone(),
-            app_event_tx.clone(),
-            Arc::clone(&thread_manager),
-        );
+        let (codex_op_tx, _) = unbounded_channel::<Op>();
+        let codex_op_tx = if needs_provider_config {
+            codex_op_tx
+        } else {
+            spawn_agent(
+                config.clone(),
+                app_event_tx.clone(),
+                Arc::clone(&thread_manager),
+            )
+        };
 
         let model_override = model.as_deref();
-        let model_for_header = model
-            .clone()
-            .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
+        let model_for_header = model.clone().unwrap_or_else(|| {
+            if needs_provider_config {
+                "No provider configured".to_string()
+            } else {
+                DEFAULT_MODEL_DISPLAY_NAME.to_string()
+            }
+        });
         let active_identity_mask =
             Self::initial_identity_mask(&config, thread_manager.as_ref(), model_override);
         let header_model = active_identity_mask
@@ -2259,6 +2278,10 @@ impl ChatWidget {
             .bottom_pane
             .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
 
+        if needs_provider_config {
+            widget.open_provider_popup();
+        }
+
         widget
     }
 
@@ -2276,10 +2299,13 @@ impl ChatWidget {
             auth_manager,
             feedback,
             is_first_run,
-            model,
+            startup,
             otel_manager,
         } = common;
         let app_event_tx = app_event_tx.bind_history_to_widget();
+        let ChatWidgetStartup::Configured { model } = startup else {
+            panic!("new_with_op_sender requires configured startup");
+        };
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
         config.model = model.clone();
@@ -2405,11 +2431,14 @@ impl ChatWidget {
             enhanced_keys_supported,
             auth_manager,
             feedback,
-            model,
+            startup,
             otel_manager,
             ..
         } = common;
         let app_event_tx = app_event_tx.bind_history_to_widget();
+        let ChatWidgetStartup::Configured { model } = startup else {
+            panic!("new_from_existing requires configured startup");
+        };
         let model = model.filter(|m| !m.trim().is_empty());
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
@@ -3070,6 +3099,14 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        if self.config.provider_config_required {
+            self.add_info_message(
+                "Configure a model provider before starting a session.".to_string(),
+                Some("Use the provider setup form to create ~/.adam/models.json.".to_string()),
+            );
+            self.open_provider_popup();
+            return;
+        }
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
@@ -3546,13 +3583,18 @@ impl ChatWidget {
         self.app_event_tx.send(AppEvent::Exit(ExitMode::Immediate));
     }
 
-    /// Request a shutdown-first quit.
+    /// Request a user-initiated quit.
     ///
-    /// This is used for explicit quit commands (`/quit`, `/exit`, `/logout`) and for
-    /// the double-press Ctrl+C/Ctrl+D quit shortcut.
+    /// When a session thread exists we prefer a graceful shutdown so the agent can flush state.
+    /// If startup has not produced a thread yet, exit immediately instead of waiting on a
+    /// `ShutdownComplete` event that can never arrive.
     fn request_quit_without_confirmation(&self) {
-        self.app_event_tx
-            .send(AppEvent::Exit(ExitMode::ShutdownFirst));
+        let exit_mode = if self.thread_id.is_some() {
+            ExitMode::ShutdownFirst
+        } else {
+            ExitMode::Immediate
+        };
+        self.app_event_tx.send(AppEvent::Exit(exit_mode));
     }
 
     fn request_redraw(&mut self) {
@@ -3688,6 +3730,14 @@ impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "All models"
     /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {
+        if self.config.provider_config_required {
+            self.add_info_message(
+                "Configure a model provider before choosing a model.".to_string(),
+                Some("Add a provider to create ~/.adam/models.json.".to_string()),
+            );
+            self.open_provider_popup();
+            return;
+        }
         if !self.is_session_configured() {
             self.add_info_message(
                 "Model selection is disabled until startup completes.".to_string(),
@@ -3719,6 +3769,15 @@ impl ChatWidget {
             self.frame_requester.clone(),
         )));
         self.request_redraw();
+    }
+
+    pub(crate) fn attach_started_thread(
+        &mut self,
+        thread: std::sync::Arc<adam_agent::CodexThread>,
+        session_configured: adam_agent::protocol::SessionConfiguredEvent,
+    ) {
+        self.codex_op_tx =
+            spawn_agent_from_existing(thread, session_configured, self.app_event_tx.clone());
     }
 
     pub(crate) fn open_personality_popup(&mut self) {
@@ -5092,6 +5151,7 @@ impl ChatWidget {
         self.config.model_context_window = config.model_context_window;
         self.config.model_auto_compact_token_limit = config.model_auto_compact_token_limit;
         self.config.model_providers = config.model_providers.clone();
+        self.config.provider_config_required = config.provider_config_required;
         if update_active_provider {
             self.config.model_provider_id = config.model_provider_id.clone();
             self.config.model_provider = config.model_provider.clone();
@@ -5376,8 +5436,13 @@ impl ChatWidget {
     /// Build a placeholder header cell while the session is configuring.
     fn placeholder_session_header_cell(config: &Config) -> Box<dyn HistoryCell> {
         let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
+        let placeholder_model = if config.provider_config_required {
+            "No provider configured".to_string()
+        } else {
+            DEFAULT_MODEL_DISPLAY_NAME.to_string()
+        };
         Box::new(history_cell::SessionHeaderHistoryCell::new_with_style(
-            DEFAULT_MODEL_DISPLAY_NAME.to_string(),
+            placeholder_model,
             placeholder_style,
             None,
             config.cwd.clone(),
@@ -5616,6 +5681,13 @@ impl ChatWidget {
     /// If the same quit shortcut is pressed again before expiry, this requests a shutdown-first
     /// quit.
     fn on_ctrl_c(&mut self) {
+        if self.config.provider_config_required {
+            self.quit_shortcut_expires_at = None;
+            self.quit_shortcut_key = None;
+            self.request_immediate_exit();
+            return;
+        }
+
         let key = key_hint::ctrl(KeyCode::Char('c'));
         let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
         if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {

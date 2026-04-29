@@ -267,6 +267,10 @@ pub struct Config {
     /// Info needed to make an API request to the model.
     pub model_provider: RuntimeEndpoint,
 
+    /// True when ADAM_HOME/models.json is missing and the TUI should require
+    /// explicit provider configuration before starting a model session.
+    pub provider_config_required: bool,
+
     /// Optionally specify the personality of the model
     pub personality: Option<Personality>,
 
@@ -504,6 +508,7 @@ pub struct ConfigBuilder {
     loader_overrides: Option<LoaderOverrides>,
     cloud_requirements: CloudRequirementsLoader,
     fallback_cwd: Option<PathBuf>,
+    provider_config_required: Option<bool>,
 }
 
 impl ConfigBuilder {
@@ -537,6 +542,11 @@ impl ConfigBuilder {
         self
     }
 
+    pub fn provider_config_required(mut self, provider_config_required: bool) -> Self {
+        self.provider_config_required = Some(provider_config_required);
+        self
+    }
+
     pub async fn build(self) -> std::io::Result<Config> {
         let Self {
             adam_home,
@@ -545,6 +555,7 @@ impl ConfigBuilder {
             loader_overrides,
             cloud_requirements,
             fallback_cwd,
+            provider_config_required,
         } = self;
         let adam_home = adam_home.map_or_else(find_adam_home, std::io::Result::Ok)?;
         let cli_overrides = cli_overrides.unwrap_or_default();
@@ -591,6 +602,7 @@ impl ConfigBuilder {
             harness_overrides,
             adam_home,
             config_layer_stack,
+            provider_config_required,
         )
     }
 }
@@ -631,6 +643,7 @@ impl Config {
             },
             self.adam_home.clone(),
             self.config_layer_stack.clone(),
+            Some(false),
         )?;
         Ok((
             config.model_context_window,
@@ -695,6 +708,7 @@ impl Config {
             ConfigOverrides::default(),
             adam_home,
             ConfigLayerStack::default(),
+            None,
         )
     }
 
@@ -1488,7 +1502,7 @@ impl Config {
     ) -> std::io::Result<Self> {
         // Note this ignores requirements.toml enforcement for tests.
         let config_layer_stack = ConfigLayerStack::default();
-        Self::load_config_with_layer_stack(cfg, overrides, adam_home, config_layer_stack)
+        Self::load_config_with_layer_stack(cfg, overrides, adam_home, config_layer_stack, None)
     }
 
     pub(crate) fn load_config_with_layer_stack(
@@ -1496,6 +1510,7 @@ impl Config {
         overrides: ConfigOverrides,
         adam_home: PathBuf,
         config_layer_stack: ConfigLayerStack,
+        provider_config_required_override: Option<bool>,
     ) -> std::io::Result<Self> {
         let requirements = config_layer_stack.requirements().clone();
         let user_instructions = Self::load_instructions(Some(&adam_home));
@@ -1611,6 +1626,8 @@ impl Config {
             || config_profile.sandbox_mode.is_some()
             || cfg.sandbox_mode.is_some();
 
+        let provider_config_required = provider_config_required_override
+            .unwrap_or_else(|| cfg!(not(test)) && !models_json::has_models_json(&adam_home));
         let models_json = ModelsJson::load_from_adam_home(&adam_home)?;
         let state_json = load_state(&adam_home)?;
         let mut model_providers = built_in_runtime_endpoints();
@@ -1843,6 +1860,7 @@ impl Config {
             model_auto_compact_token_limit,
             model_provider_id,
             model_provider,
+            provider_config_required,
             cwd: resolved_cwd,
             approval_policy: constrained_approval_policy,
             sandbox_policy: constrained_sandbox_policy,
@@ -4190,6 +4208,7 @@ model_verbosity = "high"
                 model_auto_compact_token_limit: None,
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
+                provider_config_required: false,
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 enforce_residency: Constrained::allow_any(None),
@@ -4275,6 +4294,7 @@ model_verbosity = "high"
             model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
+            provider_config_required: false,
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             enforce_residency: Constrained::allow_any(None),
@@ -4375,6 +4395,7 @@ model_verbosity = "high"
             model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
+            provider_config_required: false,
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             enforce_residency: Constrained::allow_any(None),
@@ -4461,6 +4482,7 @@ model_verbosity = "high"
             model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
+            provider_config_required: false,
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             enforce_residency: Constrained::allow_any(None),

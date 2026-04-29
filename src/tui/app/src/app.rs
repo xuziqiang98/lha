@@ -876,7 +876,9 @@ impl App {
             auth_manager: self.auth_manager.clone(),
             feedback: self.feedback.clone(),
             is_first_run: false,
-            model: Some(self.chat_widget.current_model().to_string()),
+            startup: crate::chatwidget::ChatWidgetStartup::Configured {
+                model: Some(self.chat_widget.current_model().to_string()),
+            },
             otel_manager: self.otel_manager.clone(),
         }
     }
@@ -946,6 +948,7 @@ impl App {
         self.config.config_layer_stack = reloaded.config_layer_stack.clone();
         self.config.config_profiles = reloaded.config_profiles.clone();
         self.config.model_providers = reloaded.model_providers.clone();
+        self.config.provider_config_required = reloaded.provider_config_required;
         self.activate_runtime_provider(provider_id, provider, model, true)
             .await;
 
@@ -1151,6 +1154,22 @@ impl App {
             .await
         {
             Ok(()) => {
+                if self.chat_widget.thread_id().is_none() {
+                    match self.server.start_thread(self.config.clone()).await {
+                        Ok(new_thread) => {
+                            self.chat_widget.attach_started_thread(
+                                new_thread.thread,
+                                new_thread.session_configured,
+                            );
+                        }
+                        Err(err) => {
+                            self.chat_widget.add_error_message(format!(
+                                "Saved provider `{provider_label}` with model `{model}`, but failed to start a session: {err}."
+                            ));
+                            return;
+                        }
+                    }
+                }
                 self.chat_widget.add_info_message(
                     format!(
                         "Switched this session to provider `{provider_label}` with model `{model}`."
@@ -1632,31 +1651,35 @@ impl App {
             config.model_provider.clone(),
             SessionSource::Cli,
         ));
-        let mut model = thread_manager
-            .get_default_model(&config.model, &config, CatalogRefreshStrategy::Offline)
-            .await?;
-        let available_models = thread_manager
-            .list_models(&config, CatalogRefreshStrategy::Offline)
+        let mut model = None;
+        if !config.provider_config_required {
+            let mut resolved_model = thread_manager
+                .get_default_model(&config.model, &config, CatalogRefreshStrategy::Offline)
+                .await?;
+            let available_models = thread_manager
+                .list_models(&config, CatalogRefreshStrategy::Offline)
+                .await;
+            let exit_info = handle_model_migration_prompt_if_needed(
+                tui,
+                &mut config,
+                resolved_model.as_str(),
+                &app_event_tx,
+                available_models,
+            )
             .await;
-        let exit_info = handle_model_migration_prompt_if_needed(
-            tui,
-            &mut config,
-            model.as_str(),
-            &app_event_tx,
-            available_models,
-        )
-        .await;
-        if let Some(exit_info) = exit_info {
-            return Ok(exit_info);
-        }
-        if let Some(updated_model) = config.model.clone() {
-            model = updated_model;
+            if let Some(exit_info) = exit_info {
+                return Ok(exit_info);
+            }
+            if let Some(updated_model) = config.model.clone() {
+                resolved_model = updated_model;
+            }
+            model = Some(resolved_model);
         }
 
         let otel_manager = OtelManager::new(
             ThreadId::new(),
-            model.as_str(),
-            model.as_str(),
+            model.as_deref().unwrap_or("No provider configured"),
+            model.as_deref().unwrap_or("No provider configured"),
             None,
             None,
             None,
@@ -1683,7 +1706,13 @@ impl App {
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    model: Some(model.clone()),
+                    startup: if config.provider_config_required {
+                        crate::chatwidget::ChatWidgetStartup::NeedsProviderConfig
+                    } else {
+                        crate::chatwidget::ChatWidgetStartup::Configured {
+                            model: model.clone(),
+                        }
+                    },
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new(init)
@@ -1711,7 +1740,9 @@ impl App {
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    model: config.model.clone(),
+                    startup: crate::chatwidget::ChatWidgetStartup::Configured {
+                        model: config.model.clone(),
+                    },
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
@@ -1739,7 +1770,9 @@ impl App {
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    model: config.model.clone(),
+                    startup: crate::chatwidget::ChatWidgetStartup::Configured {
+                        model: config.model.clone(),
+                    },
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
@@ -1991,7 +2024,11 @@ impl App {
                     auth_manager: self.auth_manager.clone(),
                     feedback: self.feedback.clone(),
                     is_first_run: false,
-                    model: Some(model),
+                    startup: if self.config.provider_config_required {
+                        crate::chatwidget::ChatWidgetStartup::NeedsProviderConfig
+                    } else {
+                        crate::chatwidget::ChatWidgetStartup::Configured { model: Some(model) }
+                    },
                     otel_manager: self.otel_manager.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init);

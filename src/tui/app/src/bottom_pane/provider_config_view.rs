@@ -312,7 +312,7 @@ impl Renderable for ProviderConfigView {
             vec!["> ".into(), "Configure a custom API provider".bold()].into(),
             "".into(),
             format!("  Step {}/6: {}", state.step.index(), state.step.title()).into(),
-            "  This saves the provider and model to ~/.adam/config.toml.".into(),
+            "  This saves the provider to ~/.adam/models.json and selects the model for future sessions.".into(),
             "".into(),
             format!(
                 "  Provider ID: {}",

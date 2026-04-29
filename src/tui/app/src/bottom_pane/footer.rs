@@ -90,7 +90,7 @@ impl IdentityIndicator {
     fn styled_span(self, show_cycle_hint: bool) -> Span<'static> {
         let label = self.label(show_cycle_hint);
         match self {
-            IdentityIndicator::Nobody => Span::from(label).dim(),
+            IdentityIndicator::Nobody => Span::from(label).magenta(),
             IdentityIndicator::Planner => Span::from(label).magenta(),
             IdentityIndicator::Programmer => Span::from(label).magenta(),
         }
@@ -813,6 +813,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Color;
     use ratatui::style::Modifier;
     use ratatui::style::Style;
 
@@ -1060,6 +1061,16 @@ mod tests {
         assert_eq!(model_style, context_style);
         assert_eq!(effort_style, context_style);
         assert_eq!(cwd_style, context_style);
+    }
+
+    #[test]
+    fn nobody_identity_indicator_is_magenta() {
+        let line = mode_indicator_line(Some(IdentityIndicator::Nobody), true)
+            .expect("identity indicator should render");
+        let style = span_style(&line, "Identity nobody");
+
+        assert_eq!(style.fg, Some(Color::Magenta));
+        assert!(!style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]

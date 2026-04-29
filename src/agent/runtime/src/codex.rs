@@ -620,6 +620,7 @@ impl SessionConfiguration {
         config.model_provider_id = model_provider_id.clone();
         config.model_provider = provider.clone();
         config.model = Some(model);
+        config.provider_config_required = false;
         config.model_providers.insert(model_provider_id, provider);
         self.original_config_do_not_use = Arc::new(config);
     }
@@ -6058,11 +6059,13 @@ mod tests {
     }
 
     async fn build_test_config(adam_home: &Path) -> Config {
-        ConfigBuilder::default()
+        let mut config = ConfigBuilder::default()
             .adam_home(adam_home.to_path_buf())
             .build()
             .await
-            .expect("load default test config")
+            .expect("load default test config");
+        config.provider_config_required = false;
+        config
     }
 
     async fn make_session_for_messages_model(model_context_window: Option<i64>) -> Session {

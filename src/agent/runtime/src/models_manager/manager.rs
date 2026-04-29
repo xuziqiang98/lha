@@ -231,6 +231,12 @@ impl ModelsManager {
         config: &Config,
         refresh_strategy: RefreshStrategy,
     ) -> CoreResult<String> {
+        if config.provider_config_required {
+            return Err(CodexErr::Fatal(
+                "No model provider is configured. Add a provider to ~/.adam/models.json before starting a session."
+                    .to_string(),
+            ));
+        }
         if let Some(model) = model.as_ref() {
             return Ok(model.to_string());
         }
@@ -2235,6 +2241,8 @@ remote_models = false
     #[tokio::test]
     async fn get_default_model_without_remote_models_uses_builtin_gpt_5_3_codex() {
         let adam_home = tempdir().expect("temp dir");
+        std::fs::write(adam_home.path().join("models.json"), r#"{"providers":{}}"#)
+            .expect("write models.json");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let manager = ModelsManager::new(
@@ -2530,6 +2538,8 @@ model = "claude-sonnet-4-5"
     #[tokio::test]
     async fn get_default_model_with_messages_provider_requires_explicit_model() {
         let adam_home = tempdir().expect("temp dir");
+        std::fs::write(adam_home.path().join("models.json"), r#"{"providers":{}}"#)
+            .expect("write models.json");
         let auth_manager = Arc::new(AuthManager::new(
             adam_home.path().to_path_buf(),
             false,
@@ -2551,6 +2561,38 @@ model = "claude-sonnet-4-5"
         assert_eq!(
             err.to_string(),
             "Fatal error: dialect = \"messages\" requires an explicit model"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_default_model_requires_provider_config_when_models_json_missing() {
+        let adam_home = tempdir().expect("temp dir");
+        let auth_manager = Arc::new(AuthManager::new(
+            adam_home.path().to_path_buf(),
+            false,
+            AuthCredentialsStoreMode::File,
+        ));
+        let manager = ModelsManager::with_provider(
+            adam_home.path().to_path_buf(),
+            auth_manager,
+            OPENAI_PROVIDER_ID,
+            RuntimeEndpoint::openai(),
+        );
+        let mut config = ConfigBuilder::default()
+            .adam_home(adam_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load config");
+        config.provider_config_required = true;
+
+        let err = manager
+            .get_default_model(&None, &config, RefreshStrategy::Offline)
+            .await
+            .expect_err("missing models.json should require provider setup");
+
+        assert_eq!(
+            err.to_string(),
+            "Fatal error: No model provider is configured. Add a provider to ~/.adam/models.json before starting a session."
         );
     }
 

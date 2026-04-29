@@ -79,6 +79,7 @@ pub async fn load_default_config_for_test(adam_home: &TempDir) -> Config {
     ConfigBuilder::default()
         .adam_home(adam_home.path().to_path_buf())
         .harness_overrides(default_test_overrides())
+        .provider_config_required(false)
         .build()
         .await
         .expect("defaults for test should always succeed")

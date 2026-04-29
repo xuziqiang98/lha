@@ -114,6 +114,7 @@ pub(crate) async fn apply_role_to_config(
         },
         config.adam_home.clone(),
         config_layer_stack,
+        Some(config.provider_config_required),
     )
     .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
     *config = next_config;

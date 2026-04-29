@@ -34,8 +34,11 @@ impl TestCodexExecBuilder {
 }
 
 pub fn test_codex_exec() -> TestCodexExecBuilder {
+    let home = TempDir::new().expect("create temp home");
+    std::fs::write(home.path().join("models.json"), r#"{"providers":{}}"#)
+        .expect("write test models.json");
     TestCodexExecBuilder {
-        home: TempDir::new().expect("create temp home"),
+        home,
         cwd: TempDir::new().expect("create temp cwd"),
     }
 }
