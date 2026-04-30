@@ -63,6 +63,7 @@ mod truncate;
 mod unified_exec;
 pub mod web_search;
 pub mod windows_sandbox;
+mod workflow;
 pub use adam_protocol::protocol::InitialHistory;
 pub use thread_manager::NewThread;
 pub use thread_manager::ThreadManager;

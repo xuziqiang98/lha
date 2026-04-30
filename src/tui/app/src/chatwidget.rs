@@ -3442,7 +3442,8 @@ impl ChatWidget {
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
-            | EventMsg::DynamicToolCallRequest(_) => {}
+            | EventMsg::DynamicToolCallRequest(_)
+            | EventMsg::WorkflowUpdate(_) => {}
             EventMsg::ItemCompleted(event) => {
                 if let adam_protocol::items::TurnItem::ContextCompaction(_) = &event.item {
                     // Replay omits the outer event id, but legacy compact events still follow

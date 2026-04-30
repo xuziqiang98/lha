@@ -34,6 +34,8 @@ use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
+use crate::workflow::WorkflowRolloutItem;
+use crate::workflow::WorkflowUpdateEvent;
 use adam_git::GhostCommit;
 pub use adam_llm_types::TokenUsage;
 use adam_utils_absolute_path::AbsolutePathBuf;
@@ -783,6 +785,8 @@ pub enum EventMsg {
     RequestUserInput(RequestUserInputEvent),
 
     DynamicToolCallRequest(DynamicToolCallRequest),
+
+    WorkflowUpdate(WorkflowUpdateEvent),
 
     ElicitationRequest(ElicitationRequestEvent),
 
@@ -1628,6 +1632,7 @@ pub enum RolloutItem {
     GhostSnapshot(GhostSnapshotRecord),
     Compacted(CompactedItem),
     TurnContext(TurnContextItem),
+    Workflow(WorkflowRolloutItem),
     EventMsg(EventMsg),
 }
 
@@ -1668,9 +1673,10 @@ impl From<CompactedItem> for TranscriptItem {
 }
 
 pub const ROLLOUT_SCHEMA_VERSION_V3: u32 = 3;
+pub const ROLLOUT_SCHEMA_VERSION_V4: u32 = 4;
 
 pub fn current_rollout_schema_version() -> u32 {
-    ROLLOUT_SCHEMA_VERSION_V3
+    ROLLOUT_SCHEMA_VERSION_V4
 }
 
 fn default_rollout_schema_version() -> u32 {
@@ -2502,9 +2508,9 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn current_rollout_schema_version_is_v3() {
-        assert_eq!(current_rollout_schema_version(), ROLLOUT_SCHEMA_VERSION_V3);
-        assert_eq!(current_rollout_schema_version(), 3);
+    fn current_rollout_schema_version_is_v4() {
+        assert_eq!(current_rollout_schema_version(), ROLLOUT_SCHEMA_VERSION_V4);
+        assert_eq!(current_rollout_schema_version(), 4);
     }
 
     #[test]
@@ -2527,7 +2533,7 @@ mod tests {
         let value = serde_json::to_value(SessionMeta::default())?;
         assert_eq!(
             value.get("rollout_schema_version"),
-            Some(&json!(ROLLOUT_SCHEMA_VERSION_V3))
+            Some(&json!(ROLLOUT_SCHEMA_VERSION_V4))
         );
         Ok(())
     }

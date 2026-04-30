@@ -16,6 +16,8 @@ use adam_protocol::openai_models::ReasoningEffort;
 use adam_protocol::protocol::AskForApproval;
 use adam_protocol::protocol::SandboxPolicy;
 use adam_protocol::protocol::SessionSource;
+#[cfg(any(test, feature = "test-support"))]
+use adam_protocol::workflow::WorkflowDefinition;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -130,6 +132,17 @@ impl CodexThread {
             .record_conversation_items(&turn_context, &[item])
             .await;
         self.codex.session.flush_rollout().await;
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn set_workflow_for_testing(
+        &self,
+        definition: WorkflowDefinition,
+    ) -> std::result::Result<(), Vec<adam_protocol::workflow::WorkflowValidationError>> {
+        self.codex
+            .session
+            .set_workflow_for_testing(definition)
+            .await
     }
 
     pub async fn update_model_provider(&self, provider: RuntimeEndpoint) {

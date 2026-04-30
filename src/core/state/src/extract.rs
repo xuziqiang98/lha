@@ -22,7 +22,7 @@ pub fn apply_rollout_item(
         RolloutItem::TurnContext(turn_ctx) => apply_turn_context(metadata, turn_ctx),
         RolloutItem::EventMsg(event) => apply_event_msg(metadata, event),
         RolloutItem::TranscriptItem(item) => apply_response_item(metadata, item),
-        RolloutItem::GhostSnapshot(_) | RolloutItem::Compacted(_) => {}
+        RolloutItem::GhostSnapshot(_) | RolloutItem::Compacted(_) | RolloutItem::Workflow(_) => {}
     }
     if metadata.model_provider.is_empty() {
         metadata.model_provider = default_provider.to_string();

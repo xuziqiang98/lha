@@ -172,7 +172,7 @@ async fn thread_list_skips_unsupported_rollouts() -> Result<()> {
         "2025-01-01T12:00:00Z",
         "valid",
         Some("mock_provider"),
-        Some(adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3),
+        Some(adam_protocol::protocol::current_rollout_schema_version()),
     )?;
     create_fake_rollout_with_schema_version(
         adam_home.path(),

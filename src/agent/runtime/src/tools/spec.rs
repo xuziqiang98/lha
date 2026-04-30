@@ -24,6 +24,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -45,6 +46,8 @@ pub(crate) struct ToolsConfig {
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub agent_jobs_tools: bool,
     pub agent_jobs_worker_tools: bool,
+    pub workflow_tools: bool,
+    pub workflow_allowed_tools: Option<BTreeSet<String>>,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -115,6 +118,8 @@ impl ToolsConfig {
             agent_roles: BTreeMap::new(),
             agent_jobs_tools,
             agent_jobs_worker_tools,
+            workflow_tools: false,
+            workflow_allowed_tools: None,
         }
     }
 
@@ -122,10 +127,22 @@ impl ToolsConfig {
         self.agent_roles = agent_roles;
         self
     }
+
+    pub fn with_workflow_tools(mut self, allowed_tools: Option<BTreeSet<String>>) -> Self {
+        self.workflow_tools = true;
+        self.workflow_allowed_tools = allowed_tools;
+        self
+    }
 }
 
 fn tool_is_exposed_for_runtime(config: &ToolsConfig, spec: &ToolDescriptor) -> bool {
-    !config.restrict_tool_specs_to_functions || matches!(spec, ToolDescriptor::Function(_))
+    let allowed_by_runtime =
+        !config.restrict_tool_specs_to_functions || matches!(spec, ToolDescriptor::Function(_));
+    let allowed_by_workflow = config
+        .workflow_allowed_tools
+        .as_ref()
+        .is_none_or(|allowed| allowed.contains(spec.name()));
+    allowed_by_runtime && allowed_by_workflow
 }
 
 fn maybe_push_spec(builder: &mut ToolRegistryBuilder, config: &ToolsConfig, spec: ToolDescriptor) {
@@ -1537,6 +1554,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
+    use crate::tools::handlers::WorkflowHandler;
     let mut builder = ToolRegistryBuilder::new();
 
     let shell_handler = Arc::new(ShellHandler);
@@ -1549,6 +1567,7 @@ pub(crate) fn build_specs(
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler);
+    let workflow_handler = Arc::new(WorkflowHandler);
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
@@ -1663,6 +1682,16 @@ pub(crate) fn build_specs(
             create_request_user_input_tool(),
             "request_user_input",
             request_user_input_handler,
+        );
+    }
+
+    if config.workflow_tools {
+        maybe_push_spec_and_register_handler(
+            &mut builder,
+            config,
+            crate::tools::handlers::WORKFLOW_SUBMIT_ARTIFACT_TOOL.clone(),
+            "workflow_submit_artifact",
+            workflow_handler,
         );
     }
 

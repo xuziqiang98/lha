@@ -9,6 +9,7 @@ use adam_protocol::protocol::SessionMeta;
 use adam_protocol::protocol::SessionMetaLine;
 use adam_protocol::protocol::SessionSource;
 use adam_protocol::protocol::TurnContextItem;
+use adam_protocol::protocol::current_rollout_schema_version;
 use anyhow::Result;
 use serde_json::json;
 use std::fs;
@@ -84,7 +85,7 @@ pub fn create_fake_rollout_with_cwds(
         cwd: session_cwd,
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
-        rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+        rollout_schema_version: current_rollout_schema_version(),
         source: SessionSource::Cli,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
@@ -182,7 +183,7 @@ pub fn create_fake_rollout_with_source(
         cwd: PathBuf::from("/"),
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
-        rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+        rollout_schema_version: current_rollout_schema_version(),
         source,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
@@ -257,8 +258,7 @@ pub fn create_fake_rollout_with_schema_version(
         cwd: PathBuf::from("/"),
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
-        rollout_schema_version: schema_version
-            .unwrap_or(adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3),
+        rollout_schema_version: schema_version.unwrap_or_else(current_rollout_schema_version),
         source: SessionSource::Cli,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
@@ -340,7 +340,7 @@ pub fn create_fake_rollout_with_text_elements(
         cwd: PathBuf::from("/"),
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
-        rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+        rollout_schema_version: current_rollout_schema_version(),
         source: SessionSource::Cli,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,

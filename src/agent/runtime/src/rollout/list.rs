@@ -18,13 +18,13 @@ use uuid::Uuid;
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
 use super::is_unsupported_rollout_schema_error;
+use super::recorder::is_supported_rollout_schema_version;
 use super::recorder::validate_rollout_line_schema_version;
 use crate::path_utils;
 use crate::protocol::EventMsg;
 use crate::state_db;
 use adam_file_search as file_search;
 use adam_protocol::ThreadId;
-use adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3;
 use adam_protocol::protocol::RolloutItem;
 use adam_protocol::protocol::RolloutLine;
 use adam_protocol::protocol::SessionMetaLine;
@@ -1037,7 +1037,9 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
 
         match rollout_line.item {
             RolloutItem::SessionMeta(session_meta_line) => {
-                if session_meta_line.meta.rollout_schema_version != ROLLOUT_SCHEMA_VERSION_V3 {
+                if !is_supported_rollout_schema_version(
+                    session_meta_line.meta.rollout_schema_version,
+                ) {
                     return Err(super::recorder::unsupported_rollout_schema_error(
                         session_meta_line.meta.rollout_schema_version,
                     ));
@@ -1070,7 +1072,9 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             RolloutItem::TurnContext(_) => {
                 // Not included in `head`; skip.
             }
-            RolloutItem::GhostSnapshot(_) | RolloutItem::Compacted(_) => {
+            RolloutItem::GhostSnapshot(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::Workflow(_) => {
                 // Not included in `head`; skip.
             }
             RolloutItem::EventMsg(ev) => {

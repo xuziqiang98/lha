@@ -15,6 +15,7 @@ use crate::dynamic_context_window::DynamicContextWindowState;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::truncate::TruncationPolicy;
+use crate::workflow::WorkflowSession;
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
@@ -26,6 +27,7 @@ pub(crate) struct SessionState {
     pub(crate) dependency_env: HashMap<String, String>,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
     pub(crate) ghost_snapshots: Vec<GhostSnapshotRecord>,
+    pub(crate) workflow: Option<WorkflowSession>,
     /// Whether the session's initial context has been seeded into history.
     ///
     /// TODO(owen): This is a temporary solution to avoid updating a thread's updated_at
@@ -45,6 +47,7 @@ impl SessionState {
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
             ghost_snapshots: Vec::new(),
+            workflow: None,
             initial_context_seeded: false,
         }
     }

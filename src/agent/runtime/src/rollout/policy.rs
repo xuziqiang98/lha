@@ -10,9 +10,10 @@ pub(crate) fn is_persisted_response_item(item: &RolloutItem) -> bool {
         RolloutItem::EventMsg(ev) => should_persist_event_msg(ev),
         RolloutItem::GhostSnapshot(_) => true,
         // Persist Adam executive markers so we can analyze flows (e.g., compaction, API turns).
-        RolloutItem::Compacted(_) | RolloutItem::TurnContext(_) | RolloutItem::SessionMeta(_) => {
-            true
-        }
+        RolloutItem::Compacted(_)
+        | RolloutItem::TurnContext(_)
+        | RolloutItem::Workflow(_)
+        | RolloutItem::SessionMeta(_) => true,
     }
 }
 
@@ -76,6 +77,7 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::ExecApprovalRequest(_)
         | EventMsg::RequestUserInput(_)
         | EventMsg::DynamicToolCallRequest(_)
+        | EventMsg::WorkflowUpdate(_)
         | EventMsg::ElicitationRequest(_)
         | EventMsg::ApplyPatchApprovalRequest(_)
         | EventMsg::BackgroundEvent(_)

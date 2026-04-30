@@ -45,6 +45,7 @@ use adam_protocol::protocol::RolloutLine;
 use adam_protocol::protocol::SessionMeta;
 use adam_protocol::protocol::SessionMetaLine;
 use adam_protocol::protocol::SessionSource;
+use adam_protocol::protocol::current_rollout_schema_version;
 use adam_state::ThreadMetadataBuilder;
 
 #[derive(Debug)]
@@ -77,7 +78,7 @@ pub(crate) fn unsupported_rollout_schema_error(found: u32) -> IoError {
         ErrorKind::InvalidData,
         UnsupportedRolloutSchema {
             found: Some(found),
-            expected: ROLLOUT_SCHEMA_VERSION_V3,
+            expected: current_rollout_schema_version(),
         },
     )
 }
@@ -87,9 +88,13 @@ pub(crate) fn unsupported_rollout_schema_missing_error() -> IoError {
         ErrorKind::InvalidData,
         UnsupportedRolloutSchema {
             found: None,
-            expected: ROLLOUT_SCHEMA_VERSION_V3,
+            expected: current_rollout_schema_version(),
         },
     )
+}
+
+pub(crate) fn is_supported_rollout_schema_version(version: u32) -> bool {
+    version == ROLLOUT_SCHEMA_VERSION_V3 || version == current_rollout_schema_version()
 }
 
 pub fn is_unsupported_rollout_schema_error(err: &IoError) -> bool {
@@ -123,7 +128,7 @@ pub(crate) fn validate_rollout_line_schema_version(value: &Value) -> std::io::Re
         return Err(unsupported_rollout_schema_missing_error());
     };
 
-    if version != ROLLOUT_SCHEMA_VERSION_V3 {
+    if !is_supported_rollout_schema_version(version) {
         return Err(unsupported_rollout_schema_error(version));
     }
 
@@ -382,7 +387,7 @@ impl RolloutRecorder {
                         cwd: config.cwd.clone(),
                         originator: originator().value,
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
-                        rollout_schema_version: ROLLOUT_SCHEMA_VERSION_V3,
+                        rollout_schema_version: current_rollout_schema_version(),
                         source,
                         model_provider: Some(config.model_provider_id.clone()),
                         base_instructions: Some(base_instructions),
@@ -505,9 +510,9 @@ impl RolloutRecorder {
             match serde_json::from_value::<RolloutLine>(v.clone()) {
                 Ok(rollout_line) => match rollout_line.item {
                     RolloutItem::SessionMeta(session_meta_line) => {
-                        if session_meta_line.meta.rollout_schema_version
-                            != ROLLOUT_SCHEMA_VERSION_V3
-                        {
+                        if !is_supported_rollout_schema_version(
+                            session_meta_line.meta.rollout_schema_version,
+                        ) {
                             return Err(unsupported_rollout_schema_error(
                                 session_meta_line.meta.rollout_schema_version,
                             ));
@@ -530,6 +535,9 @@ impl RolloutRecorder {
                     }
                     RolloutItem::TurnContext(item) => {
                         items.push(RolloutItem::TurnContext(item));
+                    }
+                    RolloutItem::Workflow(item) => {
+                        items.push(RolloutItem::Workflow(item));
                     }
                     RolloutItem::EventMsg(_ev) => {
                         items.push(RolloutItem::EventMsg(_ev));

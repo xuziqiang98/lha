@@ -4692,7 +4692,7 @@ mod tests {
                 "cwd": "/",
                 "originator": "adam",
                 "cli_version": "0.0.0",
-                "rollout_schema_version": adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+                "rollout_schema_version": adam_protocol::protocol::current_rollout_schema_version(),
                 "model_provider": "test-provider"
             }),
             json!({

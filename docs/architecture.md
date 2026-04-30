@@ -66,6 +66,13 @@ Today, `src/agent/runtime` still contains substantial Adam-specific policy aroun
 
 Follow-on extractions should continue to live between `src/core` and the product-specific parts of `src/agent`, without collapsing the existing `src/llm` SDK boundary. Today that reusable session/runtime layer is `adam-agent-runtime`.
 
+Workflow identities are an Adam-specific runtime policy in this layering. Their
+shared protocol and rollout types belong in `src/core/protocol`, while workflow
+state machines, artifact validation, tool filtering, and identity-specific
+prompt injection belong in `src/agent/runtime`. See
+`docs/workflow-identities.md` for the detailed design. They should not move into
+`adam-agent-runtime` until the reusable/product-specific boundary is clearer.
+
 The important nuance is that this extraction is not yet the same thing as migrating the product runtime. `adam-agent-runtime` and `adam-llm` now provide the cleaner SDK-facing layer, while `src/agent/runtime` still owns the main Adam session loop, persistence integration, and product-specific tool behavior. `ThreadManager` and `CodexThread` therefore remain Adam-facing compatibility wrappers over the existing product runtime rather than a full rewrite on top of `adam-agent-runtime`.
 
 ## Workspace Root

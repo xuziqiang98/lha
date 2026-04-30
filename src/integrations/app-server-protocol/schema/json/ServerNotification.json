@@ -2177,6 +2177,53 @@
         },
         {
           "properties": {
+            "completed_steps": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "current_step": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "last_error": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WorkflowValidationError"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "$ref": "#/definitions/WorkflowStatus"
+            },
+            "type": {
+              "enum": [
+                "workflow_update"
+              ],
+              "title": "WorkflowUpdateEventMsgType",
+              "type": "string"
+            },
+            "workflow_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "completed_steps",
+            "status",
+            "type",
+            "workflow_id"
+          ],
+          "title": "WorkflowUpdateEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
             "id": {
               "$ref": "#/definitions/RequestId"
             },
@@ -7428,6 +7475,34 @@
         "extraCount",
         "failedScan",
         "samplePaths"
+      ],
+      "type": "object"
+    },
+    "WorkflowStatus": {
+      "enum": [
+        "not_started",
+        "in_progress",
+        "completed",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "WorkflowValidationError": {
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "path"
       ],
       "type": "object"
     }

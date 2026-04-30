@@ -63,6 +63,7 @@ pub(crate) fn builder_from_items(
         | RolloutItem::GhostSnapshot(_)
         | RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
+        | RolloutItem::Workflow(_)
         | RolloutItem::EventMsg(_) => None,
     }) && let Some(builder) = builder_from_session_meta(session_meta, rollout_path)
     {
@@ -318,7 +319,7 @@ mod tests {
             cwd: dir.path().to_path_buf(),
             originator: "cli".to_string(),
             cli_version: "0.0.0".to_string(),
-            rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+            rollout_schema_version: adam_protocol::protocol::current_rollout_schema_version(),
             source: SessionSource::default(),
             model_provider: Some("openai".to_string()),
             base_instructions: None,

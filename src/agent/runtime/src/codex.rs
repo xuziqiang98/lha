@@ -33,6 +33,10 @@ use crate::terminal;
 use crate::truncate::TruncationPolicy;
 use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
+use crate::workflow::ArtifactSubmission;
+use crate::workflow::WorkflowSession;
+use crate::workflow::WorkflowSubmissionResult;
+use crate::workflow::WorkflowTurnContext;
 use adam_agent_core::kernel::AgentKernel;
 use adam_agent_core::kernel::TurnEventProcessor;
 use adam_agent_core::kernel::TurnEventUpdate;
@@ -72,6 +76,8 @@ use adam_protocol::protocol::TurnContextItem;
 use adam_protocol::protocol::TurnStartedEvent;
 use adam_protocol::request_user_input::RequestUserInputArgs;
 use adam_protocol::request_user_input::RequestUserInputResponse;
+#[cfg(any(test, feature = "test-support"))]
+use adam_protocol::workflow::WorkflowDefinition;
 use adam_rmcp_client::ElicitationResponse;
 use adam_rmcp_client::OAuthCredentialsStoreMode;
 use async_channel::Receiver;
@@ -492,6 +498,7 @@ pub(crate) struct TurnContext {
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
+    pub(crate) workflow: Option<WorkflowTurnContext>,
 }
 
 impl TurnContext {
@@ -505,6 +512,19 @@ impl TurnContext {
         self.compact_prompt
             .as_deref()
             .unwrap_or(compact::SUMMARIZATION_PROMPT)
+    }
+}
+
+fn append_workflow_developer_instructions(
+    base: Option<String>,
+    workflow: Option<&WorkflowTurnContext>,
+) -> Option<String> {
+    match workflow.and_then(WorkflowTurnContext::developer_instructions) {
+        Some(workflow_instructions) => Some(match base {
+            Some(base) if !base.trim().is_empty() => format!("{base}\n\n{workflow_instructions}"),
+            _ => workflow_instructions,
+        }),
+        None => base,
     }
 }
 
@@ -763,6 +783,7 @@ impl Session {
         per_turn_config: Config,
         model_info: ModelInfo,
         dynamic_context_window: Option<Arc<std::sync::Mutex<DynamicContextWindowState>>>,
+        workflow: Option<WorkflowTurnContext>,
         conversation_id: ThreadId,
         sub_id: String,
     ) -> TurnContext {
@@ -785,7 +806,7 @@ impl Session {
             session_configuration.session_source.clone(),
         );
 
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             declared_tool_contract: session_configuration.provider.enforce_declared_tool_names(),
             features: &per_turn_config.features,
@@ -793,12 +814,20 @@ impl Session {
             session_source: session_configuration.session_source.clone(),
         })
         .with_agent_roles(per_turn_config.agent_roles.clone());
+        if let Some(workflow) = workflow.as_ref() {
+            tools_config = tools_config.with_workflow_tools(workflow.allowed_tools());
+        }
+
+        let developer_instructions = append_workflow_developer_instructions(
+            session_configuration.developer_instructions.clone(),
+            workflow.as_ref(),
+        );
 
         TurnContext {
             sub_id,
             runtime,
             cwd: session_configuration.cwd.clone(),
-            developer_instructions: session_configuration.developer_instructions.clone(),
+            developer_instructions,
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
             identity: session_configuration.identity.clone(),
@@ -814,6 +843,7 @@ impl Session {
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
             dynamic_tools: session_configuration.dynamic_tools.clone(),
+            workflow,
         }
     }
 
@@ -1350,6 +1380,10 @@ impl Session {
                     .supports_dynamic_context_window_probe(),
             )
             .await;
+        let workflow = {
+            let state = self.state.lock().await;
+            state.workflow.as_ref().map(WorkflowSession::snapshot)
+        };
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
             Arc::clone(&self.services.runtime_factory),
@@ -1359,12 +1393,14 @@ impl Session {
             per_turn_config,
             model_info,
             dynamic_context_window,
+            workflow,
             self.conversation_id,
             sub_id,
         );
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
         }
+        let _ = turn_context.workflow.as_ref();
         Arc::new(turn_context)
     }
 
@@ -1393,6 +1429,47 @@ impl Session {
     pub(crate) async fn current_identity(&self) -> Identity {
         let state = self.state.lock().await;
         state.session_configuration.identity.clone()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) async fn set_workflow_for_testing(
+        &self,
+        definition: WorkflowDefinition,
+    ) -> Result<(), Vec<adam_protocol::workflow::WorkflowValidationError>> {
+        let workflow = WorkflowSession::new(definition)?;
+        let started_item = workflow.started_item("workflow-test");
+        {
+            let mut state = self.state.lock().await;
+            state.workflow = Some(workflow);
+        }
+        if let Some(item) = started_item {
+            self.persist_rollout_items(&[item]).await;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn submit_workflow_artifact(
+        &self,
+        turn_context: &TurnContext,
+        submission: ArtifactSubmission,
+    ) -> WorkflowSubmissionResult {
+        let (result, items) = {
+            let mut state = self.state.lock().await;
+            let Some(workflow) = state.workflow.as_mut() else {
+                return WorkflowSubmissionResult::Rejected {
+                    workflow_id: "".to_string(),
+                    step_id: submission.step_id,
+                    errors: vec![adam_protocol::workflow::WorkflowValidationError::new(
+                        "workflow_unavailable",
+                        "/step_id",
+                        "workflow_submit_artifact is unavailable because the active identity has no workflow",
+                    )],
+                };
+            };
+            workflow.submit_artifact(&turn_context.sub_id, submission)
+        };
+        self.persist_rollout_items(&items).await;
+        result
     }
 
     fn build_environment_update_item(
@@ -3349,6 +3426,7 @@ async fn spawn_review_thread(
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
+        workflow: None,
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -6190,6 +6268,7 @@ mod tests {
             per_turn_config,
             model_info,
             None,
+            None,
             conversation_id,
             "turn_id".to_string(),
         );
@@ -6381,6 +6460,7 @@ mod tests {
             &session_configuration,
             per_turn_config,
             model_info,
+            None,
             None,
             conversation_id,
             "turn_id".to_string(),
