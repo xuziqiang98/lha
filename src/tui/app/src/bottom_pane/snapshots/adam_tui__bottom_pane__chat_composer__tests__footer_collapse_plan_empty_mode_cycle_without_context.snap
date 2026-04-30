@@ -3,7 +3,7 @@ source: src/tui/app/src/bottom_pane/chat_composer.rs
 expression: terminal.backend()
 ---
 "                                            "
-"› Ask Codex to do anything                  "
+"› Ask Adam to do anything                   "
 "                                            "
 "                                            "
 "                                            "

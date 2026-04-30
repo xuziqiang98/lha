@@ -52,7 +52,7 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
     let test = builder
         .build(&server)
         .await
-        .expect("create test Codex conversation");
+        .expect("create test Adam conversation");
 
     test.submit_turn("hello tools").await.expect("submit turn");
 

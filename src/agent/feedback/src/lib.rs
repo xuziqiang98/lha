@@ -30,7 +30,7 @@ const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
 const FEEDBACK_TAGS_TARGET: &str = "feedback_tags";
 const MAX_FEEDBACK_TAGS: usize = 64;
 const FEEDBACK_SUBDIR: &str = "feedback";
-const LOG_FILENAME: &str = "codex-logs.log";
+const LOG_FILENAME: &str = "adam-logs.log";
 const METADATA_FILENAME: &str = "metadata.json";
 
 #[derive(Clone)]
@@ -223,7 +223,7 @@ impl CodexLogSnapshot {
 
     pub fn save_to_temp_file(&self) -> io::Result<PathBuf> {
         let dir = std::env::temp_dir();
-        let filename = format!("codex-feedback-{}.log", self.thread_id);
+        let filename = format!("adam-feedback-{}.log", self.thread_id);
         let path = dir.join(filename);
         fs::write(&path, self.as_bytes())?;
         Ok(path)

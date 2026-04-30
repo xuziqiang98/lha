@@ -192,13 +192,13 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
         let exec_env = attempt
             .env_for(spec)
-            .map_err(|err| ToolError::Codex(err.into()))?;
+            .map_err(|err| ToolError::Adam(err.into()))?;
         self.manager
             .open_session_with_exec_env(&exec_env, req.tty)
             .await
             .map_err(|err| match err {
                 UnifiedExecError::SandboxDenied { output, .. } => {
-                    ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                    ToolError::Adam(CodexErr::Sandbox(SandboxErr::Denied {
                         output: Box::new(output),
                     }))
                 }

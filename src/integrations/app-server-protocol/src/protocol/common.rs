@@ -234,17 +234,17 @@ client_request_definitions! {
         params: v1::GetConversationSummaryParams,
         response: v1::GetConversationSummaryResponse,
     },
-    /// List recorded Codex conversations (rollouts) with optional pagination and search.
+    /// List recorded Adam conversations (rollouts) with optional pagination and search.
     ListConversations {
         params: v1::ListConversationsParams,
         response: v1::ListConversationsResponse,
     },
-    /// Resume a recorded Codex conversation from a rollout file.
+    /// Resume a recorded Adam conversation from a rollout file.
     ResumeConversation {
         params: v1::ResumeConversationParams,
         response: v1::ResumeConversationResponse,
     },
-    /// Fork a recorded Codex conversation into a new session.
+    /// Fork a recorded Adam conversation into a new session.
     ForkConversation {
         params: v1::ForkConversationParams,
         response: v1::ForkConversationResponse,
@@ -548,7 +548,7 @@ server_notification_definitions! {
     TurnPlanUpdated => "turn/plan/updated" (v2::TurnPlanUpdatedNotification),
     ItemStarted => "item/started" (v2::ItemStartedNotification),
     ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
-    /// This event is internal-only. Used by Codex Cloud.
+    /// This event is internal-only. Used by Adam Cloud.
     RawTranscriptItemCompleted => "rawTranscriptItem/completed" (v2::RawTranscriptItemCompletedNotification),
     AgentMessageDelta => "item/agentMessage/delta" (v2::AgentMessageDeltaNotification),
     /// EXPERIMENTAL - proposed plan streaming deltas for plan items.

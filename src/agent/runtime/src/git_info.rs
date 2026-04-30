@@ -22,7 +22,7 @@ use tokio::time::timeout;
 ///
 /// Note that this does **not** detect *work‑trees* created with
 /// `git worktree add` where the checkout lives outside the main repository
-/// directory. If you need Codex to work from such a checkout simply pass the
+/// directory. If you need Adam to work from such a checkout simply pass the
 /// `--allow-no-git-exec` CLI flag that disables the repo requirement.
 pub fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
     let mut dir = base_dir.to_path_buf();

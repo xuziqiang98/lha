@@ -1678,7 +1678,7 @@ async fn make_chatwidget_manual_with_scrollback_mode(
         frame_requester: FrameRequester::test_dummy(),
         has_input_focus: true,
         enhanced_keys_supported: false,
-        placeholder_text: "Ask Codex to do anything".to_string(),
+        placeholder_text: "Ask Adam to do anything".to_string(),
         disable_paste_burst: false,
         animations_enabled: cfg.animations,
         skills: None,
@@ -1800,7 +1800,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         frame_requester: frame_requester.clone(),
         has_input_focus: true,
         enhanced_keys_supported: false,
-        placeholder_text: "Ask Codex to do anything".to_string(),
+        placeholder_text: "Ask Adam to do anything".to_string(),
         disable_paste_burst: false,
         animations_enabled: cfg.animations,
         skills: None,
@@ -3095,7 +3095,7 @@ async fn slash_init_skips_when_project_doc_exists() {
 
     match op_rx.try_recv() {
         Err(TryRecvError::Empty) => {}
-        other => panic!("expected no Codex op to be sent, got {other:?}"),
+        other => panic!("expected no Adam op to be sent, got {other:?}"),
     }
 
     let cells = drain_insert_history(&mut rx);
@@ -4085,7 +4085,7 @@ async fn experimental_features_exit_without_changes_emits_no_updates() {
         vec![ExperimentalFeatureItem {
             feature: Feature::TuiManagedScrollback,
             name: "TUI-managed scrollback".to_string(),
-            description: "Render committed transcript inside Codex.".to_string(),
+            description: "Render committed transcript inside Adam.".to_string(),
             enabled: false,
         }],
         chat.app_event_tx.clone(),
@@ -4108,7 +4108,7 @@ async fn experimental_features_reverting_changes_emits_no_updates() {
         vec![ExperimentalFeatureItem {
             feature: Feature::TuiManagedScrollback,
             name: "TUI-managed scrollback".to_string(),
-            description: "Render committed transcript inside Codex.".to_string(),
+            description: "Render committed transcript inside Adam.".to_string(),
             enabled: false,
         }],
         chat.app_event_tx.clone(),
@@ -5225,7 +5225,7 @@ async fn approvals_popup_navigation_skips_disabled() {
 //
 // Snapshot test: command approval modal
 //
-// Synthesizes a Codex ExecApprovalRequest event to trigger the approval modal
+// Synthesizes a Adam ExecApprovalRequest event to trigger the approval modal
 // and snapshots the visual output using the ratatui TestBackend.
 #[tokio::test]
 async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {

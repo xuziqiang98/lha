@@ -66,7 +66,7 @@
       "type": "string"
     },
     "AskForApproval2": {
-      "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
+      "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Adam.",
       "oneOf": [
         {
           "description": "Under this policy, only \"known safe\" commands—as determined by `is_safe_command()`—that **only read files** are auto‑approved. Everything else will ask the user to approve.",
@@ -1930,7 +1930,7 @@
         },
         "experimentalRawEvents": {
           "default": false,
-          "description": "If true, opt into emitting raw response items on the event stream.\n\nThis is for internal use only (e.g. Codex Cloud). (TODO): Figure out a better way to categorize internal / experimental events & protocols.",
+          "description": "If true, opt into emitting raw response items on the event stream.\n\nThis is for internal use only (e.g. Adam Cloud). (TODO): Figure out a better way to categorize internal / experimental events & protocols.",
           "type": "boolean"
         },
         "model": {
@@ -3357,7 +3357,7 @@
       "type": "object"
     },
     {
-      "description": "List recorded Codex conversations (rollouts) with optional pagination and search.",
+      "description": "List recorded Adam conversations (rollouts) with optional pagination and search.",
       "properties": {
         "id": {
           "$ref": "#/definitions/RequestId"
@@ -3382,7 +3382,7 @@
       "type": "object"
     },
     {
-      "description": "Resume a recorded Codex conversation from a rollout file.",
+      "description": "Resume a recorded Adam conversation from a rollout file.",
       "properties": {
         "id": {
           "$ref": "#/definitions/RequestId"
@@ -3407,7 +3407,7 @@
       "type": "object"
     },
     {
-      "description": "Fork a recorded Codex conversation into a new session.",
+      "description": "Fork a recorded Adam conversation into a new session.",
       "properties": {
         "id": {
           "$ref": "#/definitions/RequestId"

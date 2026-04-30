@@ -23,6 +23,6 @@ expression: term.backend().vt100().screen().contents()
   ↳ Hello, world! 16
   ↳ Hello, world! 17
 
-› Ask Codex to do anything
+› Ask Adam to do anything
 
   gpt-5.3-codex · 100% left · ~/Workspace/adam/src/tui/app

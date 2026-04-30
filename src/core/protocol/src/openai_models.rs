@@ -167,7 +167,7 @@ pub struct ModelUpgrade {
     pub migration_markdown: Option<String>,
 }
 
-/// Metadata describing a Codex-supported model.
+/// Metadata describing a Adam-supported model.
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct ModelPreset {
     /// Stable identifier for the preset.

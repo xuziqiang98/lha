@@ -1,4 +1,4 @@
-//! Configuration object accepted by the `codex` MCP tool-call.
+//! Configuration object accepted by the `adam` MCP tool-call.
 
 use adam_agent::config::Config;
 use adam_agent::config::ConfigOverrides;
@@ -16,11 +16,11 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// Client-supplied configuration for a `codex` tool-call.
+/// Client-supplied configuration for an `adam` tool-call.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "kebab-case")]
 pub struct CodexToolCallParam {
-    /// The *initial user prompt* to start the Codex conversation.
+    /// The *initial user prompt* to start the Adam conversation.
     pub prompt: String,
 
     /// Optional override for the model name (e.g. 'gpt-5.2', 'gpt-5.2-codex').
@@ -105,7 +105,7 @@ impl From<CodexToolCallSandboxMode> for SandboxMode {
     }
 }
 
-/// Builds a `Tool` definition (JSON schema etc.) for the Codex tool-call.
+/// Builds a `Tool` definition (JSON schema etc.) for the Adam tool-call.
 pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
     let schema = SchemaSettings::draft2019_09()
         .with(|s| {
@@ -117,7 +117,7 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
 
     #[expect(clippy::expect_used)]
     let schema_value =
-        serde_json::to_value(&schema).expect("Codex tool schema should serialise to JSON");
+        serde_json::to_value(&schema).expect("Adam tool schema should serialise to JSON");
 
     let tool_input_schema =
         serde_json::from_value::<ToolInputSchema>(schema_value).unwrap_or_else(|e| {
@@ -125,12 +125,13 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
         });
 
     Tool {
-        name: "codex".to_string(),
-        title: Some("Codex".to_string()),
+        name: "adam".to_string(),
+        title: Some("Adam".to_string()),
         input_schema: tool_input_schema,
         output_schema: Some(codex_tool_output_schema()),
         description: Some(
-            "Run a Codex session. Accepts configuration parameters matching the Codex Config struct.".to_string(),
+            "Run an Adam session. Accepts configuration parameters matching the Adam Config struct."
+                .to_string(),
         ),
         annotations: None,
     }
@@ -148,7 +149,7 @@ fn codex_tool_output_schema() -> ToolOutputSchema {
 }
 
 impl CodexToolCallParam {
-    /// Returns the initial user prompt to start the Codex conversation and the
+    /// Returns the initial user prompt to start the Adam conversation and the
     /// effective Config object generated from the supplied parameters.
     pub async fn into_config(
         self,
@@ -201,13 +202,13 @@ pub struct CodexToolCallReplyParam {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     conversation_id: Option<String>,
 
-    /// The thread id for this Codex session.
+    /// The thread id for this Adam session.
     /// This field is required, but we keep it optional here for backward
     /// compatibility for clients that still use conversationId.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     thread_id: Option<String>,
 
-    /// The *next user prompt* to continue the Codex conversation.
+    /// The *next user prompt* to continue the Adam conversation.
     pub prompt: String,
 }
 
@@ -227,7 +228,7 @@ impl CodexToolCallReplyParam {
     }
 }
 
-/// Builds a `Tool` definition for the `codex-reply` tool-call.
+/// Builds a `Tool` definition for the `adam-reply` tool-call.
 pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
     let schema = SchemaSettings::draft2019_09()
         .with(|s| {
@@ -239,7 +240,7 @@ pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
 
     #[expect(clippy::expect_used)]
     let schema_value =
-        serde_json::to_value(&schema).expect("Codex reply tool schema should serialise to JSON");
+        serde_json::to_value(&schema).expect("Adam reply tool schema should serialise to JSON");
 
     let tool_input_schema =
         serde_json::from_value::<ToolInputSchema>(schema_value).unwrap_or_else(|e| {
@@ -247,12 +248,12 @@ pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
         });
 
     Tool {
-        name: "codex-reply".to_string(),
-        title: Some("Codex Reply".to_string()),
+        name: "adam-reply".to_string(),
+        title: Some("Adam Reply".to_string()),
         input_schema: tool_input_schema,
         output_schema: Some(codex_tool_output_schema()),
         description: Some(
-            "Continue a Codex conversation by providing the thread id and prompt.".to_string(),
+            "Continue an Adam conversation by providing the thread id and prompt.".to_string(),
         ),
         annotations: None,
     }
@@ -279,7 +280,7 @@ mod tests {
         let tool = create_tool_for_codex_tool_call_param();
         let tool_json = serde_json::to_value(&tool).expect("tool serializes");
         let expected_tool_json = serde_json::json!({
-          "description": "Run a Codex session. Accepts configuration parameters matching the Codex Config struct.",
+          "description": "Run an Adam session. Accepts configuration parameters matching the Adam Config struct.",
           "inputSchema": {
             "properties": {
               "approval-policy": {
@@ -322,7 +323,7 @@ mod tests {
                 "type": "string"
               },
               "prompt": {
-                "description": "The *initial user prompt* to start the Codex conversation.",
+                "description": "The *initial user prompt* to start the Adam conversation.",
                 "type": "string"
               },
               "sandbox": {
@@ -340,7 +341,7 @@ mod tests {
             ],
             "type": "object"
           },
-          "name": "codex",
+          "name": "adam",
           "outputSchema": {
             "properties": {
               "content": {
@@ -356,7 +357,7 @@ mod tests {
             ],
             "type": "object"
           },
-          "title": "Codex"
+          "title": "Adam"
         });
         assert_eq!(expected_tool_json, tool_json);
     }
@@ -366,7 +367,7 @@ mod tests {
         let tool = create_tool_for_codex_tool_call_reply_param();
         let tool_json = serde_json::to_value(&tool).expect("tool serializes");
         let expected_tool_json = serde_json::json!({
-          "description": "Continue a Codex conversation by providing the thread id and prompt.",
+          "description": "Continue an Adam conversation by providing the thread id and prompt.",
           "inputSchema": {
             "properties": {
               "conversationId": {
@@ -374,11 +375,11 @@ mod tests {
                 "type": "string"
               },
               "prompt": {
-                "description": "The *next user prompt* to continue the Codex conversation.",
+                "description": "The *next user prompt* to continue the Adam conversation.",
                 "type": "string"
               },
               "threadId": {
-                "description": "The thread id for this Codex session. This field is required, but we keep it optional here for backward compatibility for clients that still use conversationId.",
+                "description": "The thread id for this Adam session. This field is required, but we keep it optional here for backward compatibility for clients that still use conversationId.",
                 "type": "string"
               }
             },
@@ -387,7 +388,7 @@ mod tests {
             ],
             "type": "object",
           },
-          "name": "codex-reply",
+          "name": "adam-reply",
           "outputSchema": {
             "properties": {
               "content": {
@@ -403,7 +404,7 @@ mod tests {
             ],
             "type": "object"
           },
-          "title": "Codex Reply",
+          "title": "Adam Reply",
         });
         assert_eq!(expected_tool_json, tool_json);
     }

@@ -10,7 +10,7 @@ use crate::protocol::SandboxPolicy;
 /// Experimental environment variable that will be set to some non-empty value
 /// if both of the following are true:
 ///
-/// 1. The process was spawned by Codex as part of a shell tool call.
+/// 1. The process was spawned by Adam as part of a shell tool call.
 /// 2. SandboxPolicy.has_full_network_access() was false for the tool call.
 ///
 /// We may try to have just one environment variable for all sandboxing
@@ -60,7 +60,7 @@ pub(crate) async fn spawn_child_async(
         cmd.env(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR, "1");
     }
 
-    // If this Codex process dies (including being killed via SIGKILL), we want
+    // If this Adam process dies (including being killed via SIGKILL), we want
     // any child processes that were spawned as part of a `"shell"` tool call
     // to also be terminated.
 

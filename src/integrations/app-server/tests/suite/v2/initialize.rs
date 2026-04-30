@@ -23,8 +23,8 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     let message = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.initialize_with_client_info(ClientInfo {
-            name: "codex_vscode".to_string(),
-            title: Some("Codex VS Code Extension".to_string()),
+            name: "adam_vscode".to_string(),
+            title: Some("Adam VS Code Extension".to_string()),
             version: "0.1.0".to_string(),
         }),
     )
@@ -35,7 +35,7 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     };
     let InitializeResponse { user_agent } = to_response::<InitializeResponse>(response)?;
 
-    assert!(user_agent.starts_with("codex_vscode/"));
+    assert!(user_agent.starts_with("adam_vscode/"));
     Ok(())
 }
 
@@ -48,8 +48,8 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
     let mut mcp = McpProcess::new_with_env(
         adam_home.path(),
         &[(
-            "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
-            Some("codex_originator_via_env_var"),
+            "ADAM_INTERNAL_ORIGINATOR_OVERRIDE",
+            Some("adam_originator_via_env_var"),
         )],
     )
     .await?;
@@ -57,8 +57,8 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
     let message = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.initialize_with_client_info(ClientInfo {
-            name: "codex_vscode".to_string(),
-            title: Some("Codex VS Code Extension".to_string()),
+            name: "adam_vscode".to_string(),
+            title: Some("Adam VS Code Extension".to_string()),
             version: "0.1.0".to_string(),
         }),
     )
@@ -69,7 +69,7 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
     };
     let InitializeResponse { user_agent } = to_response::<InitializeResponse>(response)?;
 
-    assert!(user_agent.starts_with("codex_originator_via_env_var/"));
+    assert!(user_agent.starts_with("adam_originator_via_env_var/"));
     Ok(())
 }
 
@@ -81,7 +81,7 @@ async fn initialize_rejects_invalid_client_name() -> Result<()> {
     create_config_toml(adam_home.path(), &server.uri(), "never")?;
     let mut mcp = McpProcess::new_with_env(
         adam_home.path(),
-        &[("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", None)],
+        &[("ADAM_INTERNAL_ORIGINATOR_OVERRIDE", None)],
     )
     .await?;
 

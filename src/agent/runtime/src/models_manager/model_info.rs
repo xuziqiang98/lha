@@ -314,7 +314,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             context_window: Some(CONTEXT_WINDOW_272K),
         )
     } else {
-        warn!("Unknown model {slug} is used. This will degrade the performance of Codex.");
+        warn!("Unknown model {slug} is used. This will degrade the performance of Adam.");
         model_info!(
             slug,
             context_window: None,

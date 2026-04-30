@@ -1,4 +1,4 @@
-//! The main Codex TUI chat surface.
+//! The main Adam TUI chat surface.
 //!
 //! `ChatWidget` consumes protocol events, builds and updates history cells, and drives rendering
 //! for both the main viewport and overlay UIs.
@@ -2848,7 +2848,7 @@ impl ChatWidget {
                     }
 
                     self.otel_manager.counter(
-                        "codex.windows_sandbox.setup_elevated_sandbox_command",
+                        "adam.windows_sandbox.setup_elevated_sandbox_command",
                         1,
                         &[],
                     );
@@ -3838,7 +3838,7 @@ impl ChatWidget {
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Select Personality".bold()));
         header.push(Line::from(
-            "Choose a communication style for Codex. Disable in /experimental.".dim(),
+            "Choose a communication style for Adam. Disable in /experimental.".dim(),
         ));
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
@@ -4558,7 +4558,7 @@ impl ChatWidget {
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
         let title_line = Line::from("Enable full access?").bold();
         let info_line = Line::from(vec![
-            "When Codex runs with full access, it can edit any file on your computer and run commands with network, without your approval. "
+            "When Adam runs with full access, it can edit any file on your computer and run commands with network, without your approval. "
                 .into(),
             "Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior."
                 .fg(Color::Red),
@@ -4792,7 +4792,7 @@ impl ChatWidget {
                 Self::preset_matches_current(current_approval, current_sandbox, preset)
             });
         self.otel_manager
-            .counter("codex.windows_sandbox.elevated_prompt_shown", 1, &[]);
+            .counter("adam.windows_sandbox.elevated_prompt_shown", 1, &[]);
 
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(
@@ -4826,7 +4826,7 @@ impl ChatWidget {
             Box::new({
                 let otel = self.otel_manager.clone();
                 move |_tx| {
-                    otel.counter("codex.windows_sandbox.elevated_prompt_decline", 1, &[]);
+                    otel.counter("adam.windows_sandbox.elevated_prompt_decline", 1, &[]);
                 }
             }),
         );
@@ -4837,7 +4837,7 @@ impl ChatWidget {
                 name: "Set up agent sandbox (requires elevation)".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    accept_otel.counter("codex.windows_sandbox.elevated_prompt_accept", 1, &[]);
+                    accept_otel.counter("adam.windows_sandbox.elevated_prompt_accept", 1, &[]);
                     tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
                         preset: preset.clone(),
                     });
@@ -4921,7 +4921,7 @@ impl ChatWidget {
             Box::new({
                 let otel = self.otel_manager.clone();
                 move |_tx| {
-                    otel.counter("codex.windows_sandbox.fallback_stay_current", 1, &[]);
+                    otel.counter("adam.windows_sandbox.fallback_stay_current", 1, &[]);
                 }
             }),
         );
@@ -4933,7 +4933,7 @@ impl ChatWidget {
                     let otel = self.otel_manager.clone();
                     let preset = elevated_preset;
                     move |tx| {
-                        otel.counter("codex.windows_sandbox.fallback_retry_elevated", 1, &[]);
+                        otel.counter("adam.windows_sandbox.fallback_retry_elevated", 1, &[]);
                         tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
                             preset: preset.clone(),
                         });
@@ -4949,7 +4949,7 @@ impl ChatWidget {
                     let otel = self.otel_manager.clone();
                     let preset = legacy_preset;
                     move |tx| {
-                        otel.counter("codex.windows_sandbox.fallback_use_legacy", 1, &[]);
+                        otel.counter("adam.windows_sandbox.fallback_use_legacy", 1, &[]);
                         tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
                             preset: preset.clone(),
                             mode: WindowsSandboxEnableMode::Legacy,
@@ -5594,7 +5594,7 @@ impl ChatWidget {
                 (
                     "Press Enter to view the install link.",
                     "Install link unavailable.",
-                    "Install this app in your browser, then reload Codex.",
+                    "Install this app in your browser, then reload Adam.",
                 )
             };
             if let Some(install_url) = connector.install_url.clone() {
@@ -6245,7 +6245,7 @@ impl Notification {
             }
             Notification::EditApprovalRequested { cwd, changes } => {
                 format!(
-                    "Codex wants to edit {}",
+                    "Adam wants to edit {}",
                     if changes.len() == 1 {
                         #[allow(clippy::unwrap_used)]
                         display_path_for(changes.first().unwrap(), cwd)

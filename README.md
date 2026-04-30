@@ -19,7 +19,7 @@ The workspace is organized under [`src/`](./src) with seven top-level domains:
 
 - `llm`: model runtime SDK, provider adapters, and wire-level API clients
 - `core`: shared protocol and session state types
-- `coding-agent`: Codex-specific runtime, CLI, login, and product logic
+- `coding-agent`: Adam-specific runtime, CLI, login, and product logic
 - `tui`: terminal user interface application
 - `integrations`: app-server, MCP, backend, and cloud-facing adapters
 - `platform`: sandboxing, execution, and IPC primitives

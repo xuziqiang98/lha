@@ -151,11 +151,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         session_configured_event: &SessionConfiguredEvent,
     ) {
         const VERSION: &str = env!("CARGO_PKG_VERSION");
-        ts_msg!(
-            self,
-            "OpenAI Codex v{} (research preview)\n--------",
-            VERSION
-        );
+        ts_msg!(self, "Adam v{} (research preview)\n--------", VERSION);
 
         let mut entries = create_config_summary_entries(
             config,
@@ -305,7 +301,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 ts_msg!(
                     self,
                     "{}\n{}",
-                    "codex".style(self.italic).style(self.magenta),
+                    "adam".style(self.italic).style(self.magenta),
                     message,
                 );
             }
@@ -549,7 +545,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 ts_msg!(
                     self,
                     "{} {}",
-                    "codex session".style(self.magenta).style(self.bold),
+                    "adam session".style(self.magenta).style(self.bold),
                     conversation_id.to_string().style(self.dimmed)
                 );
 

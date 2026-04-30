@@ -52,7 +52,7 @@ pub(crate) async fn init_if_enabled(
                 config.adam_home.display()
             );
             if let Some(otel) = otel {
-                otel.counter("codex.db.init", 1, &[("status", "init_error")]);
+                otel.counter("adam.db.init", 1, &[("status", "init_error")]);
             }
             return None;
         }

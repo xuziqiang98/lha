@@ -42,7 +42,7 @@ use tracing::warn;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
 
-/// Represents a newly created Codex thread (formerly called a conversation), including the first event
+/// Represents a newly created Adam thread (formerly called a conversation), including the first event
 /// (which is [`EventMsg::SessionConfigured`]).
 pub struct NewThread {
     pub thread_id: ThreadId,

@@ -528,12 +528,12 @@ impl LlmClientSession {
                     if handling == DeveloperRoleHandling::Preserve && contains_developer_message {
                         self.record_chat_role_supports_developer();
                     }
-                    return Ok((stream, estimated_input_tokens));
+                    Ok((stream, estimated_input_tokens))
                 }
                 Err(ApiError::Transport(TransportError::Http { status, .. }))
                     if status == StatusCode::UNAUTHORIZED =>
                 {
-                    return Err(unauthorized_error(status));
+                    Err(unauthorized_error(status))
                 }
                 Err(err)
                     if handling == DeveloperRoleHandling::Preserve
@@ -556,16 +556,16 @@ impl LlmClientSession {
                     let retry_estimated_input_tokens =
                         estimate_chat_input_tokens_from_request_body(&retry_request.body);
                     match client.stream_request(retry_request).await {
-                        Ok(stream) => return Ok((stream, retry_estimated_input_tokens)),
+                        Ok(stream) => Ok((stream, retry_estimated_input_tokens)),
                         Err(ApiError::Transport(TransportError::Http { status, .. }))
                             if status == StatusCode::UNAUTHORIZED =>
                         {
-                            return Err(unauthorized_error(status));
+                            Err(unauthorized_error(status))
                         }
-                        Err(err) => return Err(err.into()),
+                        Err(err) => Err(err.into()),
                     }
                 }
-                Err(err) => return Err(err.into()),
+                Err(err) => Err(err.into()),
             }
         }
     }
@@ -596,15 +596,13 @@ impl LlmClientSession {
                 .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
 
             match client.stream_request(request).await {
-                Ok(stream) => {
-                    return Ok(map_response_stream(stream, self.state.otel_manager.clone()));
-                }
+                Ok(stream) => Ok(map_response_stream(stream, self.state.otel_manager.clone())),
                 Err(ApiError::Transport(TransportError::Http { status, .. }))
                     if status == StatusCode::UNAUTHORIZED =>
                 {
-                    return Err(unauthorized_error(status));
+                    Err(unauthorized_error(status))
                 }
-                Err(err) => return Err(err.into()),
+                Err(err) => Err(err.into()),
             }
         }
     }
@@ -634,15 +632,13 @@ impl LlmClientSession {
                 .stream_prompt(&self.state.model_info.slug, &api_prompt, options)
                 .await
             {
-                Ok(stream) => {
-                    return Ok(map_response_stream(stream, self.state.otel_manager.clone()));
-                }
+                Ok(stream) => Ok(map_response_stream(stream, self.state.otel_manager.clone())),
                 Err(ApiError::Transport(TransportError::Http { status, .. }))
                     if status == StatusCode::UNAUTHORIZED =>
                 {
-                    return Err(unauthorized_error(status));
+                    Err(unauthorized_error(status))
                 }
-                Err(err) => return Err(err.into()),
+                Err(err) => Err(err.into()),
             }
         }
     }
@@ -672,10 +668,10 @@ impl LlmClientSession {
 
             let stream_result = connection.stream_request(request).await?;
             self.websocket_last_items = prompt.input.clone();
-            return Ok(map_response_stream(
+            Ok(map_response_stream(
                 stream_result,
                 self.state.otel_manager.clone(),
-            ));
+            ))
         }
     }
 

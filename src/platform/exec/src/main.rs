@@ -1,7 +1,7 @@
 //! Entry-point for the `adam-exec` binary.
 //!
 //! When this CLI is invoked normally, it parses the standard `adam-exec` CLI
-//! options and launches the non-interactive Codex agent. However, if it is
+//! options and launches the non-interactive Adam agent. However, if it is
 //! invoked with arg0 as `adam-linux-sandbox`, we instead treat the invocation
 //! as a request to run the logic for the standalone `adam-linux-sandbox`
 //! executable (i.e., parse any -s args and then run a *sandboxed* command under

@@ -249,7 +249,7 @@ impl App {
     /// Re-render the full transcript into terminal-managed scrollback in one pass.
     ///
     /// In classic terminal scrollback mode this is a best-effort refresh after rollback trims the
-    /// local transcript. We only replace Codex's queued history lines here; already committed
+    /// local transcript. We only replace Adam's queued history lines here; already committed
     /// terminal scrollback remains under the user's terminal control.
     pub(crate) fn render_transcript_once(&mut self, tui: &mut tui::Tui) {
         self.has_emitted_history_lines = false;

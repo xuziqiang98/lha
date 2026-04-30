@@ -95,7 +95,7 @@ pub struct Cli {
     /// Disable alternate screen mode
     ///
     /// Runs the TUI in inline mode so the outer shell/tmux scrollback remains available.
-    /// Codex conversation history is still browsed inside the app.
+    /// Adam conversation history is still browsed inside the app.
     #[arg(long = "no-alt-screen", default_value_t = false)]
     pub no_alt_screen: bool,
 

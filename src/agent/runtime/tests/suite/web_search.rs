@@ -51,7 +51,7 @@ async fn web_search_mode_cached_sets_external_web_access_false() {
     let test = builder
         .build(&server)
         .await
-        .expect("create test Codex conversation");
+        .expect("create test Adam conversation");
 
     test.submit_turn("hello cached web search")
         .await
@@ -83,7 +83,7 @@ async fn web_search_mode_takes_precedence_over_legacy_flags() {
     let test = builder
         .build(&server)
         .await
-        .expect("create test Codex conversation");
+        .expect("create test Adam conversation");
 
     test.submit_turn("hello cached+live flags")
         .await
@@ -116,7 +116,7 @@ async fn web_search_mode_defaults_to_cached_when_unset() {
     let test = builder
         .build(&server)
         .await
-        .expect("create test Codex conversation");
+        .expect("create test Adam conversation");
 
     test.submit_turn_with_policy("hello default cached web search", SandboxPolicy::ReadOnly)
         .await
@@ -152,7 +152,7 @@ async fn web_search_mode_updates_between_turns_with_sandbox_policy() {
     let test = builder
         .build(&server)
         .await
-        .expect("create test Codex conversation");
+        .expect("create test Adam conversation");
 
     test.submit_turn_with_policy("hello cached", SandboxPolicy::ReadOnly)
         .await
@@ -210,7 +210,7 @@ async fn web_search_mode_defaults_to_disabled_for_azure_responses() {
     let test = builder
         .build(&server)
         .await
-        .expect("create test Codex conversation");
+        .expect("create test Adam conversation");
 
     test.submit_turn_with_policy(
         "hello azure default web search",

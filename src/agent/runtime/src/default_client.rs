@@ -22,11 +22,11 @@ use std::sync::RwLock;
 ///
 /// A space is automatically added between the suffix and the rest of the User-Agent string.
 /// The full user agent string is returned from the mcp initialize response.
-/// Parenthesis will be added by Codex. This should only specify what goes inside of the parenthesis.
+/// Parenthesis will be added by Adam. This should only specify what goes inside of the parenthesis.
 pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 pub const DEFAULT_ORIGINATOR: &str = "adam_cli_rs";
-pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
-pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
+pub const ADAM_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "ADAM_INTERNAL_ORIGINATOR_OVERRIDE";
+pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-adam-residency";
 
 #[derive(Debug, Clone)]
 pub struct Originator {
@@ -44,7 +44,7 @@ pub enum SetOriginatorError {
 }
 
 fn get_originator_value(provided: Option<String>) -> Originator {
-    let value = std::env::var(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR)
+    let value = std::env::var(ADAM_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR)
         .ok()
         .or(provided)
         .unwrap_or(DEFAULT_ORIGINATOR.to_string());
@@ -94,7 +94,7 @@ pub fn originator() -> Originator {
         return originator.clone();
     }
 
-    if std::env::var(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR).is_ok() {
+    if std::env::var(ADAM_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR).is_ok() {
         let originator = get_originator_value(None);
         if let Ok(mut guard) = ORIGINATOR.write() {
             match guard.as_ref() {
@@ -110,11 +110,11 @@ pub fn originator() -> Originator {
 
 pub fn is_first_party_originator(originator_value: &str) -> bool {
     originator_value == DEFAULT_ORIGINATOR
-        || originator_value == "codex_vscode"
-        || originator_value.starts_with("Codex ")
+        || originator_value == "adam_vscode"
+        || originator_value.starts_with("Adam ")
 }
 
-pub fn get_codex_user_agent() -> String {
+pub fn get_adam_user_agent() -> String {
     let build_version = env!("CARGO_PKG_VERSION");
     let os_info = os_info::get();
     let originator = originator();
@@ -156,17 +156,17 @@ fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
         .collect();
     if !sanitized.is_empty() && HeaderValue::from_str(sanitized.as_str()).is_ok() {
         tracing::warn!(
-            "Sanitized Codex user agent because provided suffix contained invalid header characters"
+            "Sanitized Adam user agent because provided suffix contained invalid header characters"
         );
         sanitized
     } else if HeaderValue::from_str(fallback).is_ok() {
         tracing::warn!(
-            "Falling back to base Codex user agent because provided suffix could not be sanitized"
+            "Falling back to base Adam user agent because provided suffix could not be sanitized"
         );
         fallback.to_string()
     } else {
         tracing::warn!(
-            "Falling back to default Codex originator because base user agent string is invalid"
+            "Falling back to default Adam originator because base user agent string is invalid"
         );
         originator().value
     }
@@ -199,7 +199,7 @@ pub fn build_reqwest_client_with_options(options: ReqwestClientOptions) -> reqwe
         };
         headers.insert(RESIDENCY_HEADER_NAME, value);
     }
-    let ua = get_codex_user_agent();
+    let ua = get_adam_user_agent();
 
     let mut builder = reqwest::Client::builder()
         // Set UA via dedicated helper to avoid header validation pitfalls
@@ -226,8 +226,8 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn test_get_codex_user_agent() {
-        let user_agent = get_codex_user_agent();
+    fn test_get_adam_user_agent() {
+        let user_agent = get_adam_user_agent();
         let originator = originator().value;
         let prefix = format!("{originator}/");
         assert!(user_agent.starts_with(&prefix));
@@ -236,8 +236,8 @@ mod tests {
     #[test]
     fn is_first_party_originator_matches_known_values() {
         assert_eq!(is_first_party_originator(DEFAULT_ORIGINATOR), true);
-        assert_eq!(is_first_party_originator("codex_vscode"), true);
-        assert_eq!(is_first_party_originator("Codex Something Else"), true);
+        assert_eq!(is_first_party_originator("adam_vscode"), true);
+        assert_eq!(is_first_party_originator("Adam Something Else"), true);
         assert_eq!(is_first_party_originator("adam_cli"), false);
         assert_eq!(is_first_party_originator("Other"), false);
     }
@@ -284,8 +284,8 @@ mod tests {
             .expect("originator header missing");
         assert_eq!(originator_header.to_str().unwrap(), originator().value);
 
-        // User-Agent matches the computed Codex UA for that originator
-        let expected_ua = get_codex_user_agent();
+        // User-Agent matches the computed Adam UA for that originator
+        let expected_ua = get_adam_user_agent();
         let ua_header = headers
             .get("user-agent")
             .expect("user-agent header missing");
@@ -338,7 +338,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn test_macos() {
         use regex_lite::Regex;
-        let user_agent = get_codex_user_agent();
+        let user_agent = get_adam_user_agent();
         let originator = regex_lite::escape(originator().value.as_str());
         let re = Regex::new(&format!(
             r"^{originator}/\d+\.\d+\.\d+ \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\) (\S+)$"

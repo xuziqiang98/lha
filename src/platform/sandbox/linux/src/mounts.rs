@@ -59,7 +59,7 @@ fn collect_read_only_mount_targets(
             // rather than silently skipping protections.
             if !ro_subpath.as_path().exists() {
                 return Err(CodexErr::UnsupportedOperation(format!(
-                    "Sandbox expected to protect {path}, but it does not exist. Ensure the repository contains this path or create it before running Codex.",
+                    "Sandbox expected to protect {path}, but it does not exist. Ensure the repository contains this path or create it before running Adam.",
                     path = ro_subpath.as_path().display()
                 )));
             }
@@ -281,7 +281,7 @@ mod tests {
         assert_eq!(
             message,
             format!(
-                "Sandbox expected to protect {path}, but it does not exist. Ensure the repository contains this path or create it before running Codex.",
+                "Sandbox expected to protect {path}, but it does not exist. Ensure the repository contains this path or create it before running Adam.",
                 path = tempdir.path().join("missing").display()
             )
         );

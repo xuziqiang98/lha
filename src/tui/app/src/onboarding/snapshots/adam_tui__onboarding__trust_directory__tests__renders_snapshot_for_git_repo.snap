@@ -1,13 +1,13 @@
 ---
-source: src/harness/tui/src/onboarding/trust_directory.rs
+source: src/tui/app/src/onboarding/trust_directory.rs
 expression: terminal.backend()
 ---
-> You are running Codex in /workspace/project
+> You are running Adam in /workspace/project
 
-  Since this folder is version controlled, you may wish to allow Codex
+  Since this folder is version controlled, you may wish to allow Adam
   to work in this folder without asking for approval.
 
-› 1. Yes, allow Codex to work in this folder without asking for       
+› 1. Yes, allow Adam to work in this folder without asking for        
      approval                                                         
   2. No, ask me to approve edits and commands
 

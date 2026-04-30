@@ -1,4 +1,4 @@
-//! Defines the protocol for a Codex session between a client and an agent.
+//! Defines the protocol for a Adam session between a client and an agent.
 //!
 //! Uses a SQ (Submission Queue) / EQ (Event Queue) pattern to asynchronously communicate
 //! between user and agent.
@@ -65,7 +65,7 @@ pub const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
 pub const ENVIRONMENT_CONTEXT_CLOSE_TAG: &str = "</environment_context>";
 pub const IDENTITY_OPEN_TAG: &str = "<identity>";
 pub const IDENTITY_CLOSE_TAG: &str = "</identity>";
-pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
+pub const USER_MESSAGE_BEGIN: &str = "## My request for Adam:";
 
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -285,10 +285,10 @@ pub enum Op {
     /// involve the model.
     SetThreadName { name: String },
 
-    /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
+    /// Request Adam to undo a turn (turn are stacked so it is the same effect as CMD + Z).
     Undo,
 
-    /// Request Codex to drop the last N user turns from in-memory context.
+    /// Request Adam to drop the last N user turns from in-memory context.
     ///
     /// This does not attempt to revert local filesystem changes. Clients are
     /// responsible for undoing any edits on disk.
@@ -315,7 +315,7 @@ pub enum Op {
 }
 
 /// Determines the conditions under which the user is consulted to approve
-/// running the command proposed by Codex.
+/// running the command proposed by Adam.
 #[derive(
     Debug,
     Clone,
@@ -954,7 +954,7 @@ pub enum AgentStatus {
     NotFound,
 }
 
-/// Codex errors that we expose to clients.
+/// Adam errors that we expose to clients.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -2513,7 +2513,7 @@ mod tests {
             "id": ThreadId::new(),
             "timestamp": "2025-01-01T00:00:00Z",
             "cwd": "/tmp",
-            "originator": "codex",
+            "originator": "adam",
             "cli_version": "0.0.0",
             "model_provider": null,
             "base_instructions": null

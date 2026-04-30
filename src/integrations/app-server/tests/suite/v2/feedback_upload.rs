@@ -67,7 +67,7 @@ async fn feedback_upload_persists_local_bundle() -> Result<()> {
     );
     assert!(response.saved_path.exists());
     assert!(response.saved_path.join("metadata.json").exists());
-    assert!(response.saved_path.join("codex-logs.log").exists());
+    assert!(response.saved_path.join("adam-logs.log").exists());
 
     let rollout_file = rollout_path(adam_home.path(), "2025-02-01T10-00-00", &response.thread_id);
     let rollout_name = rollout_file
@@ -81,7 +81,7 @@ async fn feedback_upload_persists_local_bundle() -> Result<()> {
     assert_eq!(metadata["classification"], "bug");
     assert_eq!(metadata["reason"], "details");
     assert_eq!(metadata["includeLogs"], true);
-    assert_eq!(metadata["files"]["logs"], "codex-logs.log");
+    assert_eq!(metadata["files"]["logs"], "adam-logs.log");
     assert_eq!(
         metadata["files"]["rollout"],
         rollout_name.to_string_lossy().to_string()

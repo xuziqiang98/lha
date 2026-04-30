@@ -1134,7 +1134,7 @@ impl App {
             .await
             .map_err(|err| {
                 format!(
-                    "Saved model `{model}` with provider `{provider_id}`, but failed to activate it in this session: {err}. Restart Codex to use the updated settings."
+                    "Saved model `{model}` with provider `{provider_id}`, but failed to activate it in this session: {err}. Restart Adam to use the updated settings."
                 )
             })?;
         self.apply_model_selection_to_runtime(&model, effort);
@@ -1182,7 +1182,7 @@ impl App {
             }
             Err(err) => {
                 self.chat_widget.add_error_message(format!(
-                    "Saved provider `{provider_label}` with model `{model}`, but failed to activate it in this session: {err}. Restart Codex to use the updated settings."
+                    "Saved provider `{provider_label}` with model `{model}`, but failed to activate it in this session: {err}. Restart Adam to use the updated settings."
                 ));
             }
         }
@@ -2376,11 +2376,11 @@ impl App {
             }
             AppEvent::OpenWindowsSandboxFallbackPrompt { preset, reason } => {
                 self.otel_manager
-                    .counter("codex.windows_sandbox.fallback_prompt_shown", 1, &[]);
+                    .counter("adam.windows_sandbox.fallback_prompt_shown", 1, &[]);
                 self.chat_widget.clear_windows_sandbox_setup_status();
                 if let Some(started_at) = self.windows_sandbox.setup_started_at.take() {
                     self.otel_manager.record_duration(
-                        "codex.windows_sandbox.elevated_setup_duration_ms",
+                        "adam.windows_sandbox.elevated_setup_duration_ms",
                         started_at.elapsed(),
                         &[("result", "failure")],
                     );
@@ -2423,7 +2423,7 @@ impl App {
                         let event = match result {
                             Ok(()) => {
                                 otel_manager.counter(
-                                    "codex.windows_sandbox.elevated_setup_success",
+                                    "adam.windows_sandbox.elevated_setup_success",
                                     1,
                                     &[],
                                 );
@@ -2451,7 +2451,7 @@ impl App {
                                     tags.push(("message", message));
                                 }
                                 otel_manager.counter(
-                                    "codex.windows_sandbox.elevated_setup_failure",
+                                    "adam.windows_sandbox.elevated_setup_failure",
                                     1,
                                     &tags,
                                 );
@@ -2479,7 +2479,7 @@ impl App {
                     self.chat_widget.clear_windows_sandbox_setup_status();
                     if let Some(started_at) = self.windows_sandbox.setup_started_at.take() {
                         self.otel_manager.record_duration(
-                            "codex.windows_sandbox.elevated_setup_duration_ms",
+                            "adam.windows_sandbox.elevated_setup_duration_ms",
                             started_at.elapsed(),
                             &[("result", "success")],
                         );
@@ -3081,9 +3081,9 @@ impl App {
             Err(external_editor::EditorError::MissingEditor) => {
                 self.chat_widget
                     .add_to_history(history_cell::new_error_event(
-                    "Cannot open external editor: set $VISUAL or $EDITOR before starting Codex."
-                        .to_string(),
-                ));
+                        "Cannot open external editor: set $VISUAL or $EDITOR before starting Adam."
+                            .to_string(),
+                    ));
                 self.reset_external_editor_state(tui);
                 return;
             }

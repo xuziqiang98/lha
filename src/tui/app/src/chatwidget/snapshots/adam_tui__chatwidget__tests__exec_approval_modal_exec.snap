@@ -1,5 +1,5 @@
 ---
-source: src/harness/tui/src/chatwidget/tests.rs
+source: src/tui/app/src/chatwidget/tests.rs
 expression: "format!(\"{buf:?}\")"
 ---
 Buffer {
@@ -14,7 +14,7 @@ Buffer {
         "  $ echo hello world                                                            ",
         "                                                                                ",
         "› 1. Yes, proceed (y)                                                           ",
-        "  2. No, and tell Codex what to do differently (esc)                            ",
+        "  2. No, and tell Adam what to do differently (esc)                             ",
         "                                                                                ",
         "  Press enter to confirm or esc to cancel                                       ",
     ],
@@ -28,8 +28,8 @@ Buffer {
         x: 7, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 8, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
         x: 21, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 48, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 51, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 47, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 50, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 2, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
     ]
 }

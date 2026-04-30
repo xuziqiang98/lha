@@ -1,13 +1,13 @@
 ---
-source: src/harness/tui/src/bottom_pane/list_selection_view.rs
+source: src/tui/app/src/bottom_pane/list_selection_view.rs
 expression: "render_lines_with_width(&view, 80)"
 ---
                                                                                 
   Select Model and Effort                                                       
                                                                                 
-› 1. gpt-5.1-codex (current)  Optimized for Codex. Balance of reasoning         
-                              quality and coding ability.                       
-  2. gpt-5.1-codex-mini       Optimized for Codex. Cheaper, faster, but less    
+› 1. gpt-5.1-codex (current)  Optimized for Adam. Balance of reasoning quality  
+                              and coding ability.                               
+  2. gpt-5.1-codex-mini       Optimized for Adam. Cheaper, faster, but less     
                               capable.                                          
   3. gpt-4.1-codex            Legacy model. Use when you need compatibility     
                               with older automations.

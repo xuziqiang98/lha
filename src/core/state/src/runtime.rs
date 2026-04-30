@@ -43,7 +43,7 @@ use tracing::warn;
 
 pub const STATE_DB_FILENAME: &str = "state.sqlite";
 
-const METRIC_DB_INIT: &str = "codex.db.init";
+const METRIC_DB_INIT: &str = "adam.db.init";
 
 #[derive(Clone)]
 pub struct StateRuntime {

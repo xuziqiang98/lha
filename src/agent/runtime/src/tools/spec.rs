@@ -955,7 +955,7 @@ fn create_test_sync_tool() -> ToolDescriptor {
 
     ToolDescriptor::Function(ResponsesApiTool {
         name: "test_sync_tool".to_string(),
-        description: "Internal synchronization helper used by Codex integration tests.".to_string(),
+        description: "Internal synchronization helper used by Adam integration tests.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,

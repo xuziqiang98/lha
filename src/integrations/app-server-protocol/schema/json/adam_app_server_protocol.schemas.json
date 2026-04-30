@@ -233,7 +233,7 @@
       "type": "object"
     },
     "AskForApproval": {
-      "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
+      "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Adam.",
       "oneOf": [
         {
           "description": "Under this policy, only \"known safe\" commands—as determined by `is_safe_command()`—that **only read files** are auto‑approved. Everything else will ask the user to approve.",
@@ -1154,7 +1154,7 @@
           "type": "object"
         },
         {
-          "description": "List recorded Codex conversations (rollouts) with optional pagination and search.",
+          "description": "List recorded Adam conversations (rollouts) with optional pagination and search.",
           "properties": {
             "id": {
               "$ref": "#/definitions/RequestId"
@@ -1179,7 +1179,7 @@
           "type": "object"
         },
         {
-          "description": "Resume a recorded Codex conversation from a rollout file.",
+          "description": "Resume a recorded Adam conversation from a rollout file.",
           "properties": {
             "id": {
               "$ref": "#/definitions/RequestId"
@@ -1204,7 +1204,7 @@
           "type": "object"
         },
         {
-          "description": "Fork a recorded Codex conversation into a new session.",
+          "description": "Fork a recorded Adam conversation into a new session.",
           "properties": {
             "id": {
               "$ref": "#/definitions/RequestId"
@@ -1542,7 +1542,7 @@
       "title": "ClientRequest"
     },
     "CodexErrorInfo": {
-      "description": "Codex errors that we expose to clients.",
+      "description": "Adam errors that we expose to clients.",
       "oneOf": [
         {
           "enum": [
@@ -7039,7 +7039,7 @@
           "type": "object"
         },
         {
-          "description": "This event is internal-only. Used by Codex Cloud.",
+          "description": "This event is internal-only. Used by Adam Cloud.",
           "properties": {
             "method": {
               "enum": [
@@ -12654,7 +12654,7 @@
                 "$ref": "#/definitions/v2/SessionSource"
               }
             ],
-            "description": "Origin of the thread (CLI, VSCode, codex exec, codex app-server, etc.)."
+            "description": "Origin of the thread (CLI, VSCode, adam exec, adam app-server, etc.)."
           },
           "turns": {
             "description": "Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.",
@@ -13775,7 +13775,7 @@
           },
           "experimentalRawEvents": {
             "default": false,
-            "description": "If true, opt into emitting raw response items on the event stream.\n\nThis is for internal use only (e.g. Codex Cloud). (TODO): Figure out a better way to categorize internal / experimental events & protocols.",
+            "description": "If true, opt into emitting raw response items on the event stream.\n\nThis is for internal use only (e.g. Adam Cloud). (TODO): Figure out a better way to categorize internal / experimental events & protocols.",
             "type": "boolean"
           },
           "model": {

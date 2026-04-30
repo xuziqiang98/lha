@@ -11,7 +11,7 @@ export type ThreadStartParams = { model: string | null, modelProvider: string | 
 /**
  * If true, opt into emitting raw response items on the event stream.
  *
- * This is for internal use only (e.g. Codex Cloud).
+ * This is for internal use only (e.g. Adam Cloud).
  * (TODO): Figure out a better way to categorize internal / experimental events & protocols.
  */
 experimentalRawEvents: boolean, };

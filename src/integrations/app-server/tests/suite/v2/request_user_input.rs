@@ -99,7 +99,7 @@ async fn request_user_input_round_trip() -> Result<()> {
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("adam/event/task_complete"),
     )
     .await??;
     timeout(

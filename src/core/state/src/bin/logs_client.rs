@@ -13,7 +13,7 @@ use owo_colors::OwoColorize;
 
 #[derive(Debug, Parser)]
 #[command(name = "codex-state-logs")]
-#[command(about = "Tail Codex logs from state.sqlite with simple filters")]
+#[command(about = "Tail Adam logs from state.sqlite with simple filters")]
 struct Args {
     /// Path to ADAM_HOME. Defaults to $ADAM_HOME or ~/.adam.
     #[arg(long, env = "ADAM_HOME")]

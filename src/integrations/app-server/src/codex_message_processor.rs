@@ -26,7 +26,7 @@ use adam_agent::config::state_json::AdamStateStore;
 use adam_agent::config::types::McpServerTransportConfig;
 use adam_agent::config_loader::CloudRequirementsLoader;
 use adam_agent::connectors;
-use adam_agent::default_client::get_codex_user_agent;
+use adam_agent::default_client::get_adam_user_agent;
 use adam_agent::error::CodexErr;
 use adam_agent::exec::ExecParams;
 use adam_agent::exec_env::create_env;
@@ -234,7 +234,7 @@ struct EffectiveModelSelection {
     provider: RuntimeEndpoint,
 }
 
-/// Handles JSON-RPC messages for Codex threads (and legacy conversation APIs).
+/// Handles JSON-RPC messages for Adam threads (and legacy conversation APIs).
 pub(crate) struct CodexMessageProcessor {
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
@@ -633,7 +633,7 @@ impl CodexMessageProcessor {
     }
 
     async fn get_user_agent(&self, request_id: RequestId) {
-        let user_agent = get_codex_user_agent();
+        let user_agent = get_adam_user_agent();
         let response = GetUserAgentResponse { user_agent };
         self.outgoing.send_response(request_id, response).await;
     }
@@ -4087,7 +4087,7 @@ impl CodexMessageProcessor {
 
                         outgoing_for_task
                             .send_notification(OutgoingNotification {
-                                method: format!("codex/event/{event_formatted}"),
+                                method: format!("adam/event/{event_formatted}"),
                                 params: Some(params.into()),
                             })
                             .await;
@@ -4690,7 +4690,7 @@ mod tests {
                 "id": conversation_id.to_string(),
                 "timestamp": timestamp,
                 "cwd": "/",
-                "originator": "codex",
+                "originator": "adam",
                 "cli_version": "0.0.0",
                 "rollout_schema_version": adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
                 "model_provider": "test-provider"

@@ -13,8 +13,8 @@ The Rust workspace is organized around the current top-level domains under `src/
   - `src/core/agent-runtime` owns the reusable stateful agent SDK that builds on `adam-agent-core`.
   - `src/core/protocol` defines shared protocol types.
   - `src/core/state` owns durable state and storage primitives.
-- `src/agent`: the Codex agent runtime and product logic.
-  - `src/agent/runtime` contains Codex-specific agent policy, tool orchestration, model management, config, and prompt assembly.
+- `src/agent`: the Adam agent runtime and product logic.
+  - `src/agent/runtime` contains Adam-specific agent policy, tool orchestration, model management, config, and prompt assembly.
   - `src/agent/cli`, `login`, `feedback`, and `chatgpt` provide supporting product surfaces around that runtime.
 - `src/tui`: the terminal UI surface.
   - `src/tui/app` is the interactive TUI built on top of `adam-agent`.
@@ -50,23 +50,23 @@ The intended dependency flow is:
 - `src/shared` and `src/resources` stay near the leaves.
 - `src/llm` provides model-facing SDK primitives.
 - `src/core` provides product-neutral protocol, state, and agent-loop primitives.
-- `src/agent` owns Codex-specific agent behavior and orchestration on top of those primitives.
+- `src/agent` owns Adam-specific agent behavior and orchestration on top of those primitives.
 - UI and protocol surfaces such as `src/tui`, `src/platform/exec`, and `src/integrations/app-server` sit above the coding-agent runtime.
 
 This is the target mental model for the workspace. Some older crates still reflect historical layering decisions, but new work should follow this direction.
 
 ## Current Boundary Note
 
-Today, `src/agent/runtime` still contains substantial Codex-specific policy around the reusable loop. The current directory layout should be read as:
+Today, `src/agent/runtime` still contains substantial Adam-specific policy around the reusable loop. The current directory layout should be read as:
 
 - `src/llm`: model SDK boundary
 - `src/core`: shared product primitives, including the extracted agent-loop kernel and the reusable in-memory agent runtime
-- `src/agent`: Codex orchestration and product behavior
+- `src/agent`: Adam orchestration and product behavior
 - `src/tui`: presentation layer
 
 Follow-on extractions should continue to live between `src/core` and the product-specific parts of `src/agent`, without collapsing the existing `src/llm` SDK boundary. Today that reusable session/runtime layer is `adam-agent-runtime`.
 
-The important nuance is that this extraction is not yet the same thing as migrating the product runtime. `adam-agent-runtime` and `adam-llm` now provide the cleaner SDK-facing layer, while `src/agent/runtime` still owns the main Codex session loop, persistence integration, and product-specific tool behavior. `ThreadManager` and `CodexThread` therefore remain Codex-facing compatibility wrappers over the existing product runtime rather than a full rewrite on top of `adam-agent-runtime`.
+The important nuance is that this extraction is not yet the same thing as migrating the product runtime. `adam-agent-runtime` and `adam-llm` now provide the cleaner SDK-facing layer, while `src/agent/runtime` still owns the main Adam session loop, persistence integration, and product-specific tool behavior. `ThreadManager` and `CodexThread` therefore remain Adam-facing compatibility wrappers over the existing product runtime rather than a full rewrite on top of `adam-agent-runtime`.
 
 ## Workspace Root
 

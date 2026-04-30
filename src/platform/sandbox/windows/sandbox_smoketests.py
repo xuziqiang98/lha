@@ -1,5 +1,5 @@
 # sandbox_smoketests.py
-# Run a suite of smoke tests against the Windows sandbox via the Codex CLI
+# Run a suite of smoke tests against the Windows sandbox via the Adam CLI
 # Requires: Python 3.8+ on Windows. No pip requirements.
 
 import os
@@ -10,10 +10,10 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 def _resolve_codex_cmd() -> List[str]:
-    """Resolve the Codex CLI to invoke `codex sandbox windows`.
+    """Resolve the Adam CLI to invoke `codex sandbox windows`.
 
     Prefer local builds (debug first), then fall back to PATH.
-    Returns the argv prefix to run Codex.
+    Returns the argv prefix to run Adam.
     """
     root = Path(__file__).parent
     ws_root = root.parent
@@ -38,7 +38,7 @@ def _resolve_codex_cmd() -> List[str]:
         return ["codex"]
 
     raise FileNotFoundError(
-        "Codex CLI not found. Build it first, e.g.\n"
+        "Adam CLI not found. Build it first, e.g.\n"
         "  cargo build -p adam-cli --release\n"
         "or for debug:\n"
         "  cargo build -p adam-cli\n"

@@ -471,7 +471,7 @@ fn restore_to_commit_inner(
 ) -> Result<(), GitToolingError> {
     // `git restore` resets the working tree to the snapshot commit.
     // We intentionally avoid --staged to preserve user's staged changes.
-    // While this might leave some Codex-staged changes in the index (if Codex ran `git add`),
+    // While this might leave some Adam-staged changes in the index (if Adam ran `git add`),
     // it prevents data loss for users who use the index as a save point.
     // Data safety > cleanliness.
     // Example:
@@ -884,7 +884,7 @@ fn default_commit_identity() -> Vec<(OsString, OsString)> {
     vec![
         (
             OsString::from("GIT_AUTHOR_NAME"),
-            OsString::from("Codex Snapshot"),
+            OsString::from("Adam Snapshot"),
         ),
         (
             OsString::from("GIT_AUTHOR_EMAIL"),
@@ -892,7 +892,7 @@ fn default_commit_identity() -> Vec<(OsString, OsString)> {
         ),
         (
             OsString::from("GIT_COMMITTER_NAME"),
-            OsString::from("Codex Snapshot"),
+            OsString::from("Adam Snapshot"),
         ),
         (
             OsString::from("GIT_COMMITTER_EMAIL"),

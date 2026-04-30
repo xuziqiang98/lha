@@ -25,7 +25,7 @@ fn experimental_tooltips() -> Vec<&'static str> {
         .collect()
 }
 
-/// Pick a random tooltip to show to the user when starting Codex.
+/// Pick a random tooltip to show to the user when starting Adam.
 pub(crate) fn random_tooltip() -> Option<String> {
     let mut rng = rand::rng();
     pick_tooltip(&mut rng).map(str::to_string)

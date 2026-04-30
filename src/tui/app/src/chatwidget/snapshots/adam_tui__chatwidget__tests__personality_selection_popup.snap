@@ -3,7 +3,7 @@ source: src/harness/tui/src/chatwidget/tests.rs
 expression: popup
 ---
   Select Personality
-  Choose a communication style for Codex. Disable in /experimental.
+  Choose a communication style for Adam. Disable in /experimental.
 
 › 1. Friendly (current)  Warm, collaborative, and helpful.
   2. Pragmatic           Concise, task-focused, and direct.

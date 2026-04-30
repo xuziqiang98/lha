@@ -101,7 +101,7 @@ async fn send_user_turn_accepts_output_schema_v1() -> Result<()> {
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("adam/event/task_complete"),
     )
     .await??;
 
@@ -203,7 +203,7 @@ async fn send_user_turn_output_schema_is_per_turn_v1() -> Result<()> {
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("adam/event/task_complete"),
     )
     .await??;
 
@@ -251,7 +251,7 @@ async fn send_user_turn_output_schema_is_per_turn_v1() -> Result<()> {
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("adam/event/task_complete"),
     )
     .await??;
 

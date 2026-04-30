@@ -133,7 +133,7 @@ pub enum Feature {
     Identities,
     /// Enable personality selection in the TUI.
     Personality,
-    /// Prevent the computer from sleeping while Codex is running a turn.
+    /// Prevent the computer from sleeping while Adam is running a turn.
     PreventIdleSleep,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
@@ -450,7 +450,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Experimental {
             name: "Shell snapshot",
             menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
-            announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
+            announcement: "NEW! Try shell snapshotting to make your Adam faster. Enable in /experimental!",
         },
         default_enabled: false,
     },
@@ -459,7 +459,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "tui_managed_scrollback",
         stage: Stage::Experimental {
             name: "TUI-managed scrollback",
-            menu_description: "Render committed transcript inside Codex so resize can reflow history. Experimental; applies to new or resumed sessions.",
+            menu_description: "Render committed transcript inside Adam so resize can reflow history. Experimental; applies to new or resumed sessions.",
             announcement: "NEW! Try TUI-managed scrollback in /experimental. It can reflow on resize, but may still have rendering bugs.",
         },
         default_enabled: false,
@@ -628,7 +628,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         )) {
             Stage::Experimental {
                 name: "Prevent sleep while running",
-                menu_description: "Keep your computer awake while Codex is running a thread.",
+                menu_description: "Keep your computer awake while Adam is running a thread.",
                 announcement: "NEW: Prevent sleep while running is now available in /experimental.",
             }
         } else {
@@ -795,7 +795,7 @@ mod tests {
         );
         assert_eq!(
             Some(
-                "Render committed transcript inside Codex so resize can reflow history. Experimental; applies to new or resumed sessions.",
+                "Render committed transcript inside Adam so resize can reflow history. Experimental; applies to new or resumed sessions.",
             ),
             stage.experimental_menu_description()
         );
@@ -822,7 +822,7 @@ mod tests {
                 stage.experimental_menu_name()
             );
             assert_eq!(
-                Some("Keep your computer awake while Codex is running a thread."),
+                Some("Keep your computer awake while Adam is running a thread."),
                 stage.experimental_menu_description()
             );
             assert_eq!(

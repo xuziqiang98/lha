@@ -5,9 +5,9 @@ expression: popup
   Save logs locally?
 
   The following files will be saved under ADAM_HOME/feedback:
-    • codex-logs.log
+    • adam-logs.log
 
-› 1. Yes  Save the current Codex session logs locally for troubleshooting.
+› 1. Yes  Save the current Adam session logs locally for troubleshooting.
   2. No   Save feedback only, without logs.
 
   Press enter to confirm or esc to go back

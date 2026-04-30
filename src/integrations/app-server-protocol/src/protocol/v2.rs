@@ -1016,7 +1016,7 @@ pub struct ThreadStartParams {
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
     /// If true, opt into emitting raw response items on the event stream.
     ///
-    /// This is for internal use only (e.g. Codex Cloud).
+    /// This is for internal use only (e.g. Adam Cloud).
     /// (TODO): Figure out a better way to categorize internal / experimental events & protocols.
     #[serde(default)]
     pub experimental_raw_events: bool,
@@ -1520,7 +1520,7 @@ pub struct Thread {
     pub cwd: PathBuf,
     /// Version of the CLI that created the thread.
     pub cli_version: String,
-    /// Origin of the thread (CLI, VSCode, codex exec, codex app-server, etc.).
+    /// Origin of the thread (CLI, VSCode, adam exec, adam app-server, etc.).
     pub source: SessionSource,
     /// Optional Git metadata captured when the thread was created.
     pub git_info: Option<GitInfo>,

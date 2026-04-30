@@ -42,7 +42,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
     if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+            "Skipping test because it cannot execute when network is disabled in a Adam sandbox."
         );
         return Ok(());
     }
@@ -131,7 +131,7 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
 
     let task_started_notification: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_started"),
+        mcp.read_stream_until_notification_message("adam/event/task_started"),
     )
     .await??;
     let task_started_event: Event = serde_json::from_value(
@@ -147,7 +147,7 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
     let task_finished_notification: JSONRPCNotification = loop {
         let notification: JSONRPCNotification = timeout(
             DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("codex/event/task_complete"),
+            mcp.read_stream_until_notification_message("adam/event/task_complete"),
         )
         .await??;
         let event: Event = serde_json::from_value(
@@ -191,7 +191,7 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
 async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+            "Skipping test because it cannot execute when network is disabled in a Adam sandbox."
         );
         return Ok(());
     }
@@ -317,7 +317,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     // Wait for first TurnComplete
     let _ = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("adam/event/task_complete"),
     )
     .await??;
 
@@ -351,7 +351,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     // If any Request is seen while waiting for task_complete, the helper will error and the test fails.
     let _ = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("adam/event/task_complete"),
     )
     .await??;
 
@@ -364,7 +364,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
 async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<()> {
     if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+            "Skipping test because it cannot execute when network is disabled in a Adam sandbox."
         );
         return Ok(());
     }
@@ -460,7 +460,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
     .await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("adam/event/task_complete"),
     )
     .await??;
     mcp.clear_message_buffer();
@@ -489,7 +489,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
 
     let exec_begin_notification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/exec_command_begin"),
+        mcp.read_stream_until_notification_message("adam/event/exec_command_begin"),
     )
     .await??;
     let params = exec_begin_notification
@@ -513,7 +513,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("adam/event/task_complete"),
     )
     .await??;
 

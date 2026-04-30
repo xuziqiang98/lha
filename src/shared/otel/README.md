@@ -1,6 +1,6 @@
 # adam-otel
 
-`adam-otel` is the OpenTelemetry integration crate for Codex. It provides:
+`adam-otel` is the OpenTelemetry integration crate for Adam. It provides:
 
 - Trace/log/metrics exporters and tracing subscriber layers (`adam_otel::otel_provider`).
 - A structured event helper (`adam_otel::OtelManager`).
@@ -51,7 +51,7 @@ if let Some(provider) = OtelProvider::from(&settings)? {
 ## OtelManager (events)
 
 `OtelManager` adds consistent metadata to tracing events and helps record
-Codex-specific events.
+Adam-specific events.
 
 ```rust
 use adam_otel::OtelManager;
@@ -79,7 +79,7 @@ Modes:
 - In-memory: records via `opentelemetry_sdk::metrics::InMemoryMetricExporter` for tests/assertions; call `shutdown()` to flush.
 
 `adam-otel` also provides `OtelExporter::Statsig`, a shorthand for exporting OTLP/HTTP JSON metrics
-to Statsig using Codex-internal defaults.
+to Statsig using Adam-internal defaults.
 
 Statsig ingestion (OTLP/HTTP JSON) example:
 

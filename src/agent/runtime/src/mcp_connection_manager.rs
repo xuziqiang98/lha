@@ -861,9 +861,9 @@ async fn start_server_task(
         client_info: Implementation {
             name: "codex-mcp-client".to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
-            title: Some("Codex".into()),
-            // This field is used by Codex when it is an MCP
-            // server: it should not be used when Codex is
+            title: Some("Adam".into()),
+            // This field is used by Adam when it is an MCP
+            // server: it should not be used when Adam is
             // an MCP client.
             user_agent: None,
         },

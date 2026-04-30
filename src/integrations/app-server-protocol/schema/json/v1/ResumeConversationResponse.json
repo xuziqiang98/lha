@@ -129,7 +129,7 @@
       "type": "object"
     },
     "AskForApproval": {
-      "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
+      "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Adam.",
       "oneOf": [
         {
           "description": "Under this policy, only \"known safe\" commands—as determined by `is_safe_command()`—that **only read files** are auto‑approved. Everything else will ask the user to approve.",
@@ -256,7 +256,7 @@
       "type": "object"
     },
     "CodexErrorInfo": {
-      "description": "Codex errors that we expose to clients.",
+      "description": "Adam errors that we expose to clients.",
       "oneOf": [
         {
           "enum": [

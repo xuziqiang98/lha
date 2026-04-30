@@ -220,7 +220,7 @@ use adam_utils_readiness::Readiness;
 use adam_utils_readiness::ReadinessFlag;
 use tokio::sync::watch;
 
-/// The high-level interface to the Codex system.
+/// The high-level interface to the Adam system.
 /// It operates as a queue pair where you send submissions and receive events.
 pub struct Codex {
     pub(crate) next_id: AtomicU64,
@@ -343,7 +343,7 @@ impl Codex {
             dynamic_tools,
         };
 
-        // Generate a unique ID for the lifetime of this Codex session.
+        // Generate a unique ID for the lifetime of this Adam session.
         let session_source_clone = session_configuration.session_source.clone();
         let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
 
@@ -401,7 +401,7 @@ impl Codex {
         Ok(id)
     }
 
-    /// Use sparingly: prefer `submit()` so Codex is responsible for generating
+    /// Use sparingly: prefer `submit()` so Adam is responsible for generating
     /// unique IDs for each submission.
     pub async fn submit_with_id(&self, sub: Submission) -> CodexResult<()> {
         self.tx_sub
@@ -545,7 +545,7 @@ pub(crate) struct SessionConfiguration {
     /// `ConfigureSession` operation so that the business-logic layer can
     /// operate deterministically.
     cwd: PathBuf,
-    /// Directory containing all Codex state for this session.
+    /// Directory containing all Adam state for this session.
     adam_home: PathBuf,
     /// Optional user-facing name for the thread, updated during the session.
     thread_name: Option<String>,
@@ -1177,7 +1177,7 @@ impl Session {
                             EventMsg::Warning(WarningEvent {
                                 message: format!(
                                     "This session was recorded with model `{prev}` but is resuming with `{curr}`. \
-                         Consider switching back to `{prev}` as it may affect Codex performance."
+                         Consider switching back to `{prev}` as it may affect Adam performance."
                                 ),
                             }),
                         )
@@ -3185,7 +3185,7 @@ mod handlers {
             .unified_exec_manager
             .terminate_all_processes()
             .await;
-        info!("Shutting down Codex instance");
+        info!("Shutting down Adam instance");
         let history = sess.clone_history().await;
         let turn_count = history
             .raw_items()
@@ -3742,11 +3742,11 @@ pub(crate) async fn run_turn(
                 run_auto_compact(&sess, &turn_context).await;
                 continue;
             }
-            Err(SamplingRequestError::Codex(CodexErr::TurnAborted)) => {
+            Err(SamplingRequestError::Adam(CodexErr::TurnAborted)) => {
                 // Aborted turn is reported via a different event.
                 break;
             }
-            Err(SamplingRequestError::Codex(CodexErr::InvalidImageRequest())) => {
+            Err(SamplingRequestError::Adam(CodexErr::InvalidImageRequest())) => {
                 has_sent_sampling_request = true;
                 preflight_compaction_attempted = false;
                 let mut state = sess.state.lock().await;
@@ -3764,7 +3764,7 @@ pub(crate) async fn run_turn(
                 sess.send_event(&turn_context, event).await;
                 break;
             }
-            Err(SamplingRequestError::Codex(e)) => {
+            Err(SamplingRequestError::Adam(e)) => {
                 info!("Turn error: {e:#}");
                 let event = EventMsg::Error(e.to_error_event(None));
                 sess.send_event(&turn_context, event).await;
@@ -4043,7 +4043,7 @@ async fn run_sampling_request(
         .or_cancel(&cancellation_token)
         .await
         .map_err(CodexErr::from)
-        .map_err(SamplingRequestError::Codex)?;
+        .map_err(SamplingRequestError::Adam)?;
     let connectors_for_tools = if turn_context
         .runtime
         .config()
@@ -4124,9 +4124,9 @@ async fn run_sampling_request(
             request_input_tokens,
         }),
         Err(CodexErr::UsageLimitReached(e)) => {
-            Err(SamplingRequestError::Codex(CodexErr::UsageLimitReached(e)))
+            Err(SamplingRequestError::Adam(CodexErr::UsageLimitReached(e)))
         }
-        Err(err) => Err(SamplingRequestError::Codex(err)),
+        Err(err) => Err(SamplingRequestError::Adam(err)),
     }
 }
 
@@ -4134,7 +4134,7 @@ async fn run_sampling_request(
 enum SamplingRequestError {
     ContextWindowExceeded { request_input_tokens: Option<i64> },
     PreflightCompactRequired,
-    Codex(CodexErr),
+    Adam(CodexErr),
 }
 
 #[derive(Debug)]

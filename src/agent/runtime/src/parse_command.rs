@@ -19,7 +19,7 @@ pub fn extract_shell_command(command: &[String]) -> Option<(&str, &str)> {
 
 /// DO NOT REVIEW THIS CODE BY HAND
 /// This parsing code is quite complex and not easy to hand-modify.
-/// The easiest way to iterate is to add unit tests and have Codex fix the implementation.
+/// The easiest way to iterate is to add unit tests and have Adam fix the implementation.
 /// To encourage this, the tests have been put directly below this function rather than at the bottom of the
 ///
 /// Parses metadata out of an arbitrary command.
@@ -42,7 +42,7 @@ pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
 
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
-/// Tests are at the top to encourage using TDD + Codex to fix the implementation.
+/// Tests are at the top to encourage using TDD + Adam to fix the implementation.
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;

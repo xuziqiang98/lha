@@ -30,8 +30,8 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test]
 async fn test_send_message_success() -> Result<()> {
-    // Spin up a mock responses server that immediately ends the Codex turn.
-    // Two Codex turns hit the mock model (session start + send-user-message). Provide two SSE responses.
+    // Spin up a mock responses server that immediately ends the Adam turn.
+    // Two Adam turns hit the mock model (session start + send-user-message). Provide two SSE responses.
     let server = responses::start_mock_server().await;
     let body1 = responses::sse(vec![
         responses::ev_response_created("resp-1"),
@@ -119,7 +119,7 @@ async fn send_message(
     // Note this also ensures that the final request to the server was made.
     let task_finished_notification: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("adam/event/task_complete"),
     )
     .await??;
     let serde_json::Value::Object(map) = task_finished_notification
@@ -136,7 +136,7 @@ async fn send_message(
 
     let raw_attempt = tokio::time::timeout(
         std::time::Duration::from_millis(200),
-        mcp.read_stream_until_notification_message("codex/event/raw_transcript_item"),
+        mcp.read_stream_until_notification_message("adam/event/raw_transcript_item"),
     )
     .await;
     assert!(
@@ -228,7 +228,7 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
 
     let _ = tokio::time::timeout(
         std::time::Duration::from_millis(250),
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("adam/event/task_complete"),
     )
     .await;
 
@@ -237,7 +237,7 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
 
 #[tokio::test]
 async fn test_send_message_session_not_found() -> Result<()> {
-    // Start MCP without creating a Codex session
+    // Start MCP without creating a Adam session
     let adam_home = TempDir::new()?;
     let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -289,17 +289,17 @@ async fn read_raw_transcript_item(
 ) -> TranscriptItem {
     let raw_notification: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/raw_transcript_item"),
+        mcp.read_stream_until_notification_message("adam/event/raw_transcript_item"),
     )
     .await
-    .expect("codex/event/raw_transcript_item notification timeout")
-    .expect("codex/event/raw_transcript_item notification resp");
+    .expect("adam/event/raw_transcript_item notification timeout")
+    .expect("adam/event/raw_transcript_item notification resp");
 
     let serde_json::Value::Object(params) = raw_notification
         .params
-        .expect("codex/event/raw_transcript_item should have params")
+        .expect("adam/event/raw_transcript_item should have params")
     else {
-        panic!("codex/event/raw_transcript_item should have params");
+        panic!("adam/event/raw_transcript_item should have params");
     };
 
     let conversation_id_value = params

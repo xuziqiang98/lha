@@ -27,7 +27,7 @@ The intended stack is:
 
 - Rollout persistence and thread indexing
 - SQLite-backed session state
-- Codex protocol `Op` / `EventMsg`
+- Adam protocol `Op` / `EventMsg`
 - Approval, sandbox, exec-policy, and coding tool UX
 - Skills, project-doc injection, review flows, and subagents
 

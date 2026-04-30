@@ -412,7 +412,7 @@ def define_struct(
         else:
             fields.append(StructField("pub", rs_prop.name, prop_type, rs_prop.serde, rs_prop.ts))
 
-    # Special-case: add Codex-specific user_agent to Implementation
+    # Special-case: add Adam-specific user_agent to Implementation
     if name == "Implementation":
         fields.append(
             StructField(
@@ -421,7 +421,7 @@ def define_struct(
                 "Option<String>",
                 '#[serde(default, skip_serializing_if = "Option::is_none")]',
                 '#[ts(optional)]',
-                "This is an extra field that the Codex MCP server sends as part of InitializeResult.",
+                "This is an extra field that the Adam MCP server sends as part of InitializeResult.",
             )
         )
 

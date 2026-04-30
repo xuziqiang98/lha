@@ -13,7 +13,7 @@ use adam_agent::config_loader::CloudRequirementsLoader;
 use adam_agent::config_loader::LoaderOverrides;
 use adam_agent::default_client::SetOriginatorError;
 use adam_agent::default_client::USER_AGENT_SUFFIX;
-use adam_agent::default_client::get_codex_user_agent;
+use adam_agent::default_client::get_adam_user_agent;
 use adam_agent::default_client::set_default_client_residency_requirement;
 use adam_agent::default_client::set_default_originator;
 use adam_app_server_protocol::ClientInfo;
@@ -167,7 +167,7 @@ impl MessageProcessor {
                             }
                             SetOriginatorError::AlreadyInitialized => {
                                 // No-op. This is expected to happen if the originator is already set via env var.
-                                // TODO(owen): Once we remove support for CODEX_INTERNAL_ORIGINATOR_OVERRIDE,
+                                // TODO(owen): Once we remove support for ADAM_INTERNAL_ORIGINATOR_OVERRIDE,
                                 // this will be an unexpected state and we can return a JSON-RPC error indicating
                                 // internal server error.
                             }
@@ -179,7 +179,7 @@ impl MessageProcessor {
                         *suffix = Some(user_agent_suffix);
                     }
 
-                    let user_agent = get_codex_user_agent();
+                    let user_agent = get_adam_user_agent();
                     let response = InitializeResponse { user_agent };
                     self.outgoing.send_response(request_id, response).await;
 

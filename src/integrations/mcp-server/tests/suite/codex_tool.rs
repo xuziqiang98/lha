@@ -43,7 +43,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 async fn test_shell_command_approval_triggers_elicitation() {
     if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+            "Skipping test because it cannot execute when network is disabled in a Adam sandbox."
         );
         return;
     }
@@ -95,7 +95,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     // In turn, it should reply with a tool call, which the MCP should forward
     // as an elicitation.
     let codex_request_id = mcp_process
-        .send_codex_tool_call(CodexToolCallParam {
+        .send_adam_tool_call(CodexToolCallParam {
             prompt: "run `git init`".to_string(),
             ..Default::default()
         })
@@ -183,7 +183,7 @@ fn create_expected_elicitation_request(
     thread_id: adam_protocol::ThreadId,
 ) -> anyhow::Result<JSONRPCRequest> {
     let expected_message = format!(
-        "Allow Codex to run `{}` in `{}`?",
+        "Allow Adam to run `{}` in `{}`?",
         shlex::try_join(command.iter().map(std::convert::AsRef::as_ref))?,
         workdir.to_string_lossy()
     );
@@ -217,7 +217,7 @@ fn create_expected_elicitation_request(
 async fn test_patch_approval_triggers_elicitation() {
     if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+            "Skipping test because it cannot execute when network is disabled in a Adam sandbox."
         );
         return;
     }
@@ -255,7 +255,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
 
     // Send a "codex" tool request that will trigger the apply_patch command
     let codex_request_id = mcp_process
-        .send_codex_tool_call(CodexToolCallParam {
+        .send_adam_tool_call(CodexToolCallParam {
             cwd: Some(cwd.path().to_string_lossy().to_string()),
             prompt: "please modify the test file".to_string(),
             ..Default::default()
@@ -357,7 +357,7 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
         )?])
         .await;
 
-    // Run `codex mcp` with a specific config.toml.
+    // Run `adam mcp` with a specific config.toml.
     let adam_home = TempDir::new()?;
     create_config_toml(adam_home.path(), &server.uri())?;
     let mut mcp_process = McpProcess::new(adam_home.path()).await?;
@@ -365,7 +365,7 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
 
     // Send a "codex" tool request, which should hit the completions endpoint.
     let codex_request_id = mcp_process
-        .send_codex_tool_call(CodexToolCallParam {
+        .send_adam_tool_call(CodexToolCallParam {
             prompt: "How are you?".to_string(),
             base_instructions: Some("You are a helpful assistant.".to_string()),
             developer_instructions: Some("Foreshadow upcoming tool calls.".to_string()),
@@ -447,7 +447,7 @@ fn create_expected_patch_approval_elicitation_request(
     if let Some(r) = &reason {
         message_lines.push(r.clone());
     }
-    message_lines.push("Allow Codex to apply proposed code changes?".to_string());
+    message_lines.push("Allow Adam to apply proposed code changes?".to_string());
 
     Ok(JSONRPCRequest {
         jsonrpc: JSONRPC_VERSION.into(),
@@ -497,7 +497,7 @@ async fn create_mcp_process(responses: Vec<String>) -> anyhow::Result<McpHandle>
     })
 }
 
-/// Create a Codex config that uses the mock server as the model provider.
+/// Create a Adam config that uses the mock server as the model provider.
 /// It also uses `approval_policy = "untrusted"` so that we exercise the
 /// elicitation code path for shell commands.
 fn create_config_toml(adam_home: &Path, server_uri: &str) -> std::io::Result<()> {

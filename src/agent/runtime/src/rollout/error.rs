@@ -20,7 +20,7 @@ fn map_rollout_io_error(io_err: &std::io::Error, adam_home: &Path) -> Option<Cod
     let sessions_dir = adam_home.join(SESSIONS_SUBDIR);
     let hint = match io_err.kind() {
         ErrorKind::PermissionDenied => format!(
-            "Codex cannot access session files at {} (permission denied). If sessions were created using sudo, fix ownership: sudo chown -R $(whoami) {}",
+            "Adam cannot access session files at {} (permission denied). If sessions were created using sudo, fix ownership: sudo chown -R $(whoami) {}",
             sessions_dir.display(),
             adam_home.display()
         ),
@@ -29,7 +29,7 @@ fn map_rollout_io_error(io_err: &std::io::Error, adam_home: &Path) -> Option<Cod
             sessions_dir.display()
         ),
         ErrorKind::AlreadyExists => format!(
-            "Session storage path {} is blocked by an existing file. Remove or rename it so Codex can create sessions.",
+            "Session storage path {} is blocked by an existing file. Remove or rename it so Adam can create sessions.",
             sessions_dir.display()
         ),
         ErrorKind::InvalidData | ErrorKind::InvalidInput => format!(
@@ -37,7 +37,7 @@ fn map_rollout_io_error(io_err: &std::io::Error, adam_home: &Path) -> Option<Cod
             sessions_dir.display()
         ),
         ErrorKind::IsADirectory | ErrorKind::NotADirectory => format!(
-            "Session storage path {} has an unexpected type. Ensure it is a directory Codex can use for session files.",
+            "Session storage path {} has an unexpected type. Ensure it is a directory Adam can use for session files.",
             sessions_dir.display()
         ),
         _ => return None,

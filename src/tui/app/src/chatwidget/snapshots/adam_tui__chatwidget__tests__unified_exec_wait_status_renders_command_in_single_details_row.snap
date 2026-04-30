@@ -7,6 +7,6 @@ expression: rendered
   └ cargo test -p adam-agent -- --exact
 
 
-› Ask Codex to do anything
+› Ask Adam to do anything
 
   gpt-5.3-codex · 100% left

@@ -45,7 +45,7 @@ experimental_bearer_token = "sk-test"
     std::fs::write(adam_home.join("config.toml"), config_contents)?;
 
     let CodexCliOutput { exit_code, output } = run_codex_cli(adam_home, cwd).await?;
-    assert_ne!(0, exit_code, "Codex CLI should exit nonzero.");
+    assert_ne!(0, exit_code, "Adam CLI should exit nonzero.");
     assert!(
         output.contains("ERROR: Failed to initialize codex:"),
         "expected startup error in output, got: {output}"

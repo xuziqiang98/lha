@@ -22,7 +22,7 @@ pub fn is_wsl() -> bool {
     }
 }
 
-/// Returns true when Codex is likely running in an environment without a usable GUI.
+/// Returns true when Adam is likely running in an environment without a usable GUI.
 ///
 /// This is intentionally conservative and is used by frontends to avoid flows that would try to
 /// open a browser (e.g. device-code auth fallback).

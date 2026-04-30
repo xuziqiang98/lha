@@ -92,7 +92,7 @@ pub fn build_provider(
     })
 }
 
-/// Filter predicate for exporting only Codex-owned events via OTEL.
+/// Filter predicate for exporting only Adam-owned events via OTEL.
 /// Keeps events that originated from adam_otel module
 pub fn codex_export_filter(meta: &tracing::Metadata<'_>) -> bool {
     meta.target().starts_with("adam_otel")

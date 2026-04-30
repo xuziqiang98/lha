@@ -248,7 +248,7 @@ pub async fn run_main(
     // Ensure the file is only readable and writable by the current user.
     // Doing the equivalent to `chmod 600` on Windows is quite a bit more code
     // and requires the Windows API crates, so we can reconsider that when
-    // Codex CLI is officially supported on Windows.
+    // Adam CLI is officially supported on Windows.
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -728,7 +728,7 @@ impl Drop for TerminalRestoreGuard {
 /// - If `--no-alt-screen` is explicitly passed, always disable alternate screen
 /// - Otherwise, respect the `tui.alternate_screen` config setting:
 ///   - `always`: Use alternate screen everywhere (original behavior)
-///   - `never`: Inline mode only, preserving the outer terminal scrollback while Codex history is
+///   - `never`: Inline mode only, preserving the outer terminal scrollback while Adam history is
 ///     browsed in-app
 ///   - `auto` (default): Auto-detect the terminal multiplexer and disable alternate screen
 ///     only in Zellij, enabling it everywhere else

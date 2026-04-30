@@ -82,7 +82,7 @@ struct ThreadEventEnvelope {
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     if let Err(err) = set_default_originator("adam_exec".to_string()) {
-        tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
+        tracing::warn!(?err, "Failed to set adam exec originator override {err:?}");
     }
 
     let Cli {
@@ -155,7 +155,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let adam_home = match find_adam_home() {
         Ok(adam_home) => adam_home,
         Err(err) => {
-            eprintln!("Error finding codex home: {err}");
+            eprintln!("Error finding adam home: {err}");
             std::process::exit(1);
         }
     };
@@ -362,11 +362,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     };
 
-    // Print the effective configuration and initial request so users can see what Codex
+    // Print the effective configuration and initial request so users can see what Adam
     // is using.
     event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
 
-    info!("Codex initialized with event: {session_configured:?}");
+    info!("Adam initialized with event: {session_configured:?}");
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ThreadEventEnvelope>();
     let attached_threads = Arc::new(Mutex::new(HashSet::from([primary_thread_id])));
@@ -377,7 +377,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         tokio::spawn(async move {
             if tokio::signal::ctrl_c().await.is_ok() {
                 tracing::debug!("Keyboard interrupt");
-                // Immediately notify Codex to abort any in-flight task.
+                // Immediately notify Adam to abort any in-flight task.
                 thread.submit(Op::Interrupt).await.ok();
             }
         });

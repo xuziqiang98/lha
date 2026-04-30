@@ -32,7 +32,7 @@ use crate::error::CodexErr;
 use crate::models_manager::manager::ModelsManager;
 use adam_protocol::protocol::InitialHistory;
 
-/// Start an interactive sub-Codex thread and return IO channels.
+/// Start an interactive sub-agent thread and return IO channels.
 ///
 /// The returned `events_rx` yields non-approval events emitted by the sub-agent.
 /// Approval requests are handled via `parent_session` and are not surfaced.

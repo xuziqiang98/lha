@@ -158,7 +158,7 @@ impl McpProcess {
                     },
                     "serverInfo": {
                         "name": "adam-mcp-server",
-                        "title": "Codex",
+                        "title": "Adam",
                         "version": build_version,
                         "user_agent": user_agent
                     },
@@ -181,12 +181,9 @@ impl McpProcess {
 
     /// Returns the id used to make the request so it can be used when
     /// correlating notifications.
-    pub async fn send_codex_tool_call(
-        &mut self,
-        params: CodexToolCallParam,
-    ) -> anyhow::Result<i64> {
+    pub async fn send_adam_tool_call(&mut self, params: CodexToolCallParam) -> anyhow::Result<i64> {
         let codex_tool_call_params = CallToolRequestParams {
-            name: "codex".to_string(),
+            name: "adam".to_string(),
             arguments: Some(serde_json::to_value(params)?),
         };
         self.send_request(
@@ -294,7 +291,7 @@ impl McpProcess {
     }
 
     /// Reads notifications until a legacy TurnComplete event is observed:
-    /// Method "codex/event" with params.msg.type == "task_complete".
+    /// Method "adam/event" with params.msg.type == "task_complete".
     pub async fn read_stream_until_legacy_task_complete_notification(
         &mut self,
     ) -> anyhow::Result<JSONRPCNotification> {
@@ -304,7 +301,7 @@ impl McpProcess {
             let message = self.read_jsonrpc_message().await?;
             match message {
                 JSONRPCMessage::Notification(notification) => {
-                    let is_match = if notification.method == "codex/event" {
+                    let is_match = if notification.method == "adam/event" {
                         if let Some(params) = &notification.params {
                             params
                                 .get("msg")
