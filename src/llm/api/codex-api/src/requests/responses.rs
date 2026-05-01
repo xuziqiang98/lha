@@ -172,42 +172,52 @@ impl<'a> ResponsesRequestBuilder<'a> {
 
 fn transcript_item_to_provider_value(item: &TranscriptItem) -> Result<Value, ApiError> {
     Ok(match item {
-        TranscriptItem::Message {
-            role,
-            content,
-            end_turn,
-            ..
-        } => json!({
+        TranscriptItem::Message { role, content, .. } => json!({
             "type": "message",
             "role": role,
             "content": content,
-            "end_turn": end_turn,
         }),
         TranscriptItem::Reasoning {
             summary,
             content,
             encrypted_content,
             ..
-        } => json!({
-            "type": "reasoning",
-            "summary": summary,
-            "content": content,
-            "encrypted_content": encrypted_content,
-        }),
+        } => {
+            let mut value = json!({
+                "type": "reasoning",
+                "summary": summary,
+            });
+            if let Some(obj) = value.as_object_mut() {
+                if let Some(content) = content {
+                    obj.insert("content".to_string(), json!(content));
+                }
+                if let Some(encrypted_content) = encrypted_content {
+                    obj.insert("encrypted_content".to_string(), json!(encrypted_content));
+                }
+            }
+            value
+        }
         TranscriptItem::HostedActivity {
             activity_type,
             status,
             payload,
             ..
-        } => json!({
-            "type": if activity_type == "web_search" {
-                "web_search_call"
-            } else {
-                "hosted_activity"
-            },
-            "status": status,
-            "action": payload,
-        }),
+        } => {
+            let mut value = json!({
+                "type": if activity_type == "web_search" {
+                    "web_search_call"
+                } else {
+                    "hosted_activity"
+                },
+                "action": payload,
+            });
+            if let Some(obj) = value.as_object_mut()
+                && let Some(status) = status
+            {
+                obj.insert("status".to_string(), json!(status));
+            }
+            value
+        }
         TranscriptItem::ToolCall {
             call_id,
             tool_name,
@@ -271,6 +281,7 @@ mod tests {
     use super::*;
     use crate::provider::RetryConfig;
     use crate::provider::WireApi;
+    use adam_llm_types::ContentItem;
     use http::HeaderValue;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
@@ -291,6 +302,98 @@ mod tests {
             },
             stream_idle_timeout: Duration::from_secs(5),
         }
+    }
+
+    #[test]
+    fn responses_request_omits_message_end_turn() {
+        let provider = provider("openai", "https://api.openai.com/v1");
+        let input = vec![TranscriptItem::Message {
+            id: None,
+            role: "user".into(),
+            content: vec![ContentItem::InputText {
+                text: "hello".to_string(),
+            }],
+            end_turn: None,
+        }];
+
+        let request = ResponsesRequestBuilder::new("gpt-test", "inst", &input)
+            .build(&provider)
+            .expect("request");
+
+        assert_eq!(
+            &request.body["input"][0],
+            &json!({
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}],
+            })
+        );
+    }
+
+    #[test]
+    fn responses_request_never_sends_message_end_turn() {
+        let provider = provider("openai", "https://api.openai.com/v1");
+        let input = vec![TranscriptItem::Message {
+            id: None,
+            role: "assistant".into(),
+            content: Vec::new(),
+            end_turn: Some(true),
+        }];
+
+        let request = ResponsesRequestBuilder::new("gpt-test", "inst", &input)
+            .build(&provider)
+            .expect("request");
+
+        assert_eq!(request.body["input"][0].get("end_turn"), None);
+        assert_eq!(
+            &request.body["input"][0],
+            &json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+            })
+        );
+    }
+
+    #[test]
+    fn responses_request_omits_known_optional_null_fields() {
+        let provider = provider("openai", "https://api.openai.com/v1");
+        let input = vec![
+            TranscriptItem::Reasoning {
+                id: "rs_1".to_string(),
+                summary: Vec::new(),
+                content: None,
+                encrypted_content: None,
+            },
+            TranscriptItem::HostedActivity {
+                id: None,
+                activity_type: "web_search".to_string(),
+                status: None,
+                payload: json!({"query": "rust"}),
+            },
+        ];
+
+        let request = ResponsesRequestBuilder::new("gpt-test", "inst", &input)
+            .build(&provider)
+            .expect("request");
+
+        assert_eq!(request.body["input"][0].get("content"), None);
+        assert_eq!(request.body["input"][0].get("encrypted_content"), None);
+        assert_eq!(
+            &request.body["input"][0],
+            &json!({
+                "type": "reasoning",
+                "summary": [],
+            })
+        );
+        assert_eq!(request.body["input"][1].get("status"), None);
+        assert_eq!(
+            &request.body["input"][1],
+            &json!({
+                "type": "web_search_call",
+                "action": {"query": "rust"},
+            })
+        );
     }
 
     #[test]

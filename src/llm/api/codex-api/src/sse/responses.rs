@@ -160,6 +160,7 @@ struct ResponseCompletedOutputTokensDetails {
 pub struct ResponsesStreamEvent {
     #[serde(rename = "type")]
     pub(crate) kind: String,
+    error: Option<Error>,
     response: Option<Value>,
     item: Option<Value>,
     delta: Option<String>,
@@ -184,6 +185,15 @@ pub fn process_responses_event(
     event: ResponsesStreamEvent,
 ) -> std::result::Result<Option<ResponseEvent>, ResponsesEventError> {
     match event.kind.as_str() {
+        "error" => {
+            let Some(error) = event.error else {
+                return Err(ResponsesEventError::Api(ApiError::Stream(
+                    "responses stream returned unknown error".to_string(),
+                )));
+            };
+
+            return Err(ResponsesEventError::Api(api_error_from_error_event(error)));
+        }
         "response.output_item.done" => {
             if let Some(item_val) = event.item {
                 if let Some(item) = parse_response_item(item_val) {
@@ -309,6 +319,21 @@ pub fn process_responses_event(
     }
 
     Ok(None)
+}
+
+fn api_error_from_error_event(error: Error) -> ApiError {
+    let message = error
+        .message
+        .unwrap_or_else(|| "responses stream returned unknown error".to_string());
+    match error.r#type.as_deref() {
+        Some("invalid_request_error") => ApiError::InvalidRequest { message },
+        Some("rate_limit_error") => ApiError::RateLimit(message),
+        Some("overloaded_error") => ApiError::Retryable {
+            message,
+            delay: None,
+        },
+        _ => ApiError::Stream(message),
+    }
 }
 
 fn parse_response_item(item: Value) -> Option<TranscriptItem> {
@@ -707,6 +732,71 @@ mod tests {
             }
             other => panic!("unexpected second event: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn error_event_invalid_request_is_reported() {
+        let raw_error = json!({
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "bad request"
+            },
+            "status": 400
+        })
+        .to_string();
+        let sse1 = format!("event: error\ndata: {raw_error}\n\n");
+
+        let events = collect_events(&[sse1.as_bytes()]).await;
+
+        assert_eq!(events.len(), 1);
+        assert_matches!(
+            &events[0],
+            Err(ApiError::InvalidRequest { message }) if message == "bad request"
+        );
+    }
+
+    #[tokio::test]
+    async fn error_event_prevents_stream_closed_masking() {
+        let raw_error = json!({
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "Unknown parameter: 'input[0].end_turn'."
+            },
+            "status": 400
+        })
+        .to_string();
+        let sse1 = format!("event: error\ndata: {raw_error}\n\n");
+        let sse2 = "data: [DONE]\n\n";
+
+        let events = collect_events(&[sse1.as_bytes(), sse2.as_bytes()]).await;
+
+        assert_eq!(events.len(), 1);
+        assert_matches!(
+            &events[0],
+            Err(ApiError::InvalidRequest { message })
+                if message == "Unknown parameter: 'input[0].end_turn'."
+        );
+    }
+
+    #[tokio::test]
+    async fn error_event_without_payload_is_stream_error() {
+        let raw_error = json!({
+            "type": "error",
+            "status": 500
+        })
+        .to_string();
+        let sse1 = format!("event: error\ndata: {raw_error}\n\n");
+
+        let events = collect_events(&[sse1.as_bytes()]).await;
+
+        assert_eq!(events.len(), 1);
+        assert_matches!(
+            &events[0],
+            Err(ApiError::Stream(message))
+                if message == "responses stream returned unknown error"
+        );
     }
 
     #[tokio::test]
