@@ -25,6 +25,7 @@ use crate::dynamic_context_window::DynamicContextWindowState;
 use crate::dynamic_context_window::DynamicContextWindowSuccess;
 use crate::error::Result;
 use crate::features::Feature;
+use crate::models_manager::manager::ModelsManager;
 use adam_llm::RuntimeEndpoint;
 
 struct TurnRuntimeState {
@@ -223,6 +224,24 @@ impl TurnRuntime {
         )
     }
 
+    pub(crate) async fn derive_runtime_for_model(
+        &self,
+        models_manager: &ModelsManager,
+        model: &str,
+    ) -> Self {
+        let config = self.config();
+        let model_info = models_manager.get_model_info(model, &config).await;
+        self.derive_runtime(
+            config,
+            model_info,
+            self.dynamic_context_window(),
+            self.get_otel_manager(),
+            self.get_reasoning_effort(),
+            self.get_reasoning_summary(),
+            self.get_session_source(),
+        )
+    }
+
     pub(crate) fn record_dynamic_context_window_success(
         &self,
         input_tokens: i64,
@@ -310,7 +329,6 @@ impl TurnRuntime {
             })
     }
 
-    #[cfg(test)]
     pub(crate) fn dynamic_context_window(&self) -> Option<Arc<Mutex<DynamicContextWindowState>>> {
         self.state.dynamic_context_window.clone()
     }

@@ -18,6 +18,7 @@ use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::SkillsConfig;
 use crate::config::types::Tui;
+use crate::config::types::TuiBuddy;
 use crate::config::types::UriBasedFileOpener;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStack;
@@ -360,6 +361,9 @@ pub struct Config {
     /// - `always`: Always use alternate screen (original behavior).
     /// - `never`: Never use alternate screen (inline mode, preserves scrollback).
     pub tui_alternate_screen: AltScreenMode,
+
+    /// Tiny companion rendered next to the TUI composer.
+    pub tui_buddy: TuiBuddy,
 
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
@@ -1965,6 +1969,11 @@ impl Config {
                 .as_ref()
                 .map(|t| t.alternate_screen)
                 .unwrap_or_default(),
+            tui_buddy: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.buddy.clone())
+                .unwrap_or_default(),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -2276,6 +2285,7 @@ job_max_runtime_seconds = 0
                 show_tooltips: true,
                 default_identity: None,
                 alternate_screen: AltScreenMode::Auto,
+                buddy: TuiBuddy::default(),
             }
         );
     }
@@ -4266,6 +4276,7 @@ model_verbosity = "high"
                 analytics_enabled: Some(true),
                 feedback_enabled: true,
                 tui_alternate_screen: AltScreenMode::Auto,
+                tui_buddy: TuiBuddy::default(),
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -4352,6 +4363,7 @@ model_verbosity = "high"
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
+            tui_buddy: TuiBuddy::default(),
             otel: OtelConfig::default(),
         };
 
@@ -4453,6 +4465,7 @@ model_verbosity = "high"
             analytics_enabled: Some(false),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
+            tui_buddy: TuiBuddy::default(),
             otel: OtelConfig::default(),
         };
 
@@ -4540,6 +4553,7 @@ model_verbosity = "high"
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
+            tui_buddy: TuiBuddy::default(),
             otel: OtelConfig::default(),
         };
 
@@ -4801,8 +4815,11 @@ mcp_oauth_callback_port = 5678
 
 #[cfg(test)]
 mod notifications_tests {
+    use crate::config::types::BuddyObserverConfig;
+    use crate::config::types::BuddySpecies;
     use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
+    use crate::config::types::TuiBuddy;
     use assert_matches::assert_matches;
     use serde::Deserialize;
 
@@ -4812,6 +4829,8 @@ mod notifications_tests {
         notifications: Notifications,
         #[serde(default)]
         notification_method: NotificationMethod,
+        #[serde(default)]
+        buddy: TuiBuddy,
     }
 
     #[derive(Deserialize, Debug, PartialEq)]
@@ -4852,5 +4871,37 @@ mod notifications_tests {
         let parsed: RootTomlTest =
             toml::from_str(toml).expect("deserialize notification_method=\"bel\"");
         assert_eq!(parsed.tui.notification_method, NotificationMethod::Bel);
+    }
+
+    #[test]
+    fn test_tui_buddy_config() {
+        let toml = r#"
+            [tui.buddy]
+            enabled = true
+            muted = false
+            name = "Byte"
+            species = "duck"
+
+            [tui.buddy.observer]
+            enabled = true
+            cooldown_seconds = 42
+            max_reaction_chars = 64
+        "#;
+        let parsed: RootTomlTest = toml::from_str(toml).expect("deserialize tui buddy config");
+        assert_eq!(
+            parsed.tui.buddy,
+            TuiBuddy {
+                enabled: true,
+                muted: false,
+                name: Some("Byte".to_string()),
+                species: Some(BuddySpecies::Duck),
+                observer: BuddyObserverConfig {
+                    enabled: true,
+                    model: None,
+                    cooldown_seconds: 42,
+                    max_reaction_chars: 64,
+                },
+            }
+        );
     }
 }

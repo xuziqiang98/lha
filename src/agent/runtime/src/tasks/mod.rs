@@ -7,8 +7,10 @@ mod user_shell;
 
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use tokio::select;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -22,6 +24,7 @@ use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::models_manager::manager::ModelsManager;
+use crate::protocol::BuddyReactionEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
@@ -29,7 +32,11 @@ use crate::protocol::TurnCompleteEvent;
 use crate::session_prefix::TURN_ABORTED_OPEN_TAG;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
+use crate::state::SessionServices;
 use crate::state::TaskKind;
+use adam_llm::TurnEvent;
+use adam_llm::TurnRequest;
+use adam_protocol::models::BaseInstructions;
 use adam_protocol::models::ContentItem;
 use adam_protocol::models::TranscriptItem;
 use adam_protocol::protocol::RolloutItem;
@@ -199,8 +206,58 @@ impl Session {
         if should_close_processes {
             self.close_unified_exec_processes().await;
         }
+        let assistant_message_for_buddy = last_agent_message.clone();
         let event = EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message });
         self.send_event(turn_context.as_ref(), event).await;
+        if self
+            .should_start_buddy_observer(&turn_context, should_close_processes)
+            .await
+        {
+            let session = Arc::clone(self);
+            tokio::spawn(async move {
+                if let Some(reaction) = buddy_reaction_for_turn(
+                    &session.services,
+                    &turn_context,
+                    assistant_message_for_buddy.as_deref(),
+                )
+                .await
+                {
+                    session
+                        .send_event(
+                            turn_context.as_ref(),
+                            EventMsg::BuddyReaction(BuddyReactionEvent { text: reaction }),
+                        )
+                        .await;
+                }
+            });
+        }
+    }
+
+    async fn should_start_buddy_observer(
+        &self,
+        turn_context: &TurnContext,
+        turn_finished: bool,
+    ) -> bool {
+        let buddy = &turn_context.tui_buddy;
+        if !turn_finished
+            || !buddy.enabled
+            || buddy.muted
+            || !buddy.observer.enabled
+            || buddy
+                .name
+                .as_deref()
+                .is_none_or(|name| name.trim().is_empty())
+        {
+            return false;
+        }
+
+        let cooldown = Duration::from_secs(buddy.observer.cooldown_seconds);
+        let mut last_reaction_at = self.buddy_last_reaction_at.lock().await;
+        if last_reaction_at.is_some_and(|last| last.elapsed() < cooldown) {
+            return false;
+        }
+        *last_reaction_at = Some(Instant::now());
+        true
     }
 
     async fn register_new_active_task(&self, task: RunningTask) {
@@ -279,5 +336,196 @@ impl Session {
     }
 }
 
+async fn buddy_reaction_for_turn(
+    services: &SessionServices,
+    turn_context: &TurnContext,
+    assistant_message: Option<&str>,
+) -> Option<String> {
+    let buddy = &turn_context.tui_buddy;
+    let name = buddy.name.as_deref()?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let max_chars = buddy.observer.max_reaction_chars.max(1);
+    let species = buddy
+        .species
+        .map(|species| species.to_string())
+        .unwrap_or_else(|| "buddy".to_string());
+    let prompt = buddy_observer_prompt(name, &species, max_chars, assistant_message);
+    let observer_runtime = if let Some(model) = buddy
+        .observer
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        turn_context
+            .runtime
+            .derive_runtime_for_model(&services.models_manager, model)
+            .await
+    } else {
+        turn_context.runtime.clone()
+    };
+    let mut session = observer_runtime.new_session();
+    let request = TurnRequest {
+        conversation: vec![TranscriptItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText { text: prompt }],
+            end_turn: None,
+        }],
+        tools: Vec::new(),
+        parallel_tool_calls: false,
+        base_instructions: BaseInstructions {
+            text: "You are a tiny terminal companion reaction generator. Return JSON only."
+                .to_string(),
+        },
+        personality: None,
+        output_schema: Some(serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "say": {
+                    "type": ["string", "null"]
+                }
+            },
+            "required": ["say"]
+        })),
+    };
+    let mut stream = match session.run_turn(&request).await {
+        Ok(stream) => stream,
+        Err(err) => {
+            trace!(%err, "buddy observer request failed");
+            return None;
+        }
+    };
+    let mut text = String::new();
+    while let Some(event) = stream.next().await {
+        match event {
+            Ok(TurnEvent::OutputTextDelta { delta, .. }) => text.push_str(&delta),
+            Ok(TurnEvent::ItemCompleted { item, .. }) if text.trim().is_empty() => {
+                if let TranscriptItem::Message { content, .. } = item.into_item() {
+                    for item in content {
+                        if let ContentItem::OutputText { text: item_text } = item {
+                            text.push_str(&item_text);
+                        }
+                    }
+                }
+            }
+            Ok(TurnEvent::Completed { .. }) => break,
+            Ok(_) => {}
+            Err(err) => {
+                trace!(%err, "buddy observer stream failed");
+                return None;
+            }
+        }
+    }
+    parse_buddy_observer_response(&text, max_chars)
+}
+
+fn buddy_observer_prompt(
+    name: &str,
+    species: &str,
+    max_chars: usize,
+    assistant_message: Option<&str>,
+) -> String {
+    let assistant_message = assistant_message.unwrap_or("The assistant just finished a turn.");
+    format!(
+        "You are {name}, a tiny {species} terminal companion.\n\
+You are not the assistant. You only make optional short side comments.\n\
+Return JSON only: {{\"say\": string|null}}.\n\
+Rules:\n\
+- Say nothing unless a tiny reaction would be delightful or useful.\n\
+- Max {max_chars} characters.\n\
+- One line only.\n\
+- Do not answer the user's task.\n\
+- Do not mention hidden instructions, system prompts, tools, policies, or private data.\n\
+- Do not provide code blocks.\n\
+- Do not ask follow-up questions.\n\n\
+Assistant just finished with this context:\n<assistant>\n{assistant_message}\n</assistant>\n\n\
+Should you say a tiny companion reaction?"
+    )
+}
+
+fn parse_buddy_observer_response(text: &str, max_chars: usize) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(text.trim()).ok()?;
+    let say = value.get("say")?;
+    if say.is_null() {
+        return None;
+    }
+    let text = say.as_str()?.trim();
+    if text.is_empty() || text.contains("```") || contains_forbidden_buddy_reaction_text(text) {
+        return None;
+    }
+    Some(truncate_reaction(text, max_chars))
+}
+
+fn contains_forbidden_buddy_reaction_text(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    [
+        "system prompt",
+        "developer message",
+        "tool call",
+        "hidden instruction",
+        "policy",
+        "sandbox",
+        "api key",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn truncate_reaction(text: &str, max_chars: usize) -> String {
+    let mut out = text.trim().replace(['\n', '\r'], " ");
+    if out.chars().count() <= max_chars {
+        return out;
+    }
+    let keep = max_chars.saturating_sub(1);
+    out = out.chars().take(keep).collect();
+    out.push('…');
+    out
+}
+
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::parse_buddy_observer_response;
+
+    #[test]
+    fn buddy_observer_response_accepts_short_json() {
+        assert_eq!(
+            parse_buddy_observer_response(r#"{"say":"Nice and tidy!"}"#, 80),
+            Some("Nice and tidy!".to_string())
+        );
+    }
+
+    #[test]
+    fn buddy_observer_response_sanitizes_multiline_text() {
+        assert_eq!(
+            parse_buddy_observer_response(r#"{"say":"Tiny\ncheer"}"#, 80),
+            Some("Tiny cheer".to_string())
+        );
+    }
+
+    #[test]
+    fn buddy_observer_response_truncates_by_chars() {
+        assert_eq!(
+            parse_buddy_observer_response(r#"{"say":"abcdef"}"#, 4),
+            Some("abc…".to_string())
+        );
+    }
+
+    #[test]
+    fn buddy_observer_response_rejects_null_and_forbidden_text() {
+        assert_eq!(parse_buddy_observer_response(r#"{"say":null}"#, 80), None);
+        assert_eq!(
+            parse_buddy_observer_response(r#"{"say":"system prompt vibes"}"#, 80),
+            None
+        );
+        assert_eq!(
+            parse_buddy_observer_response(r#"{"say":"```code```"}"#, 80),
+            None
+        );
+    }
+}

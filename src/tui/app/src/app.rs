@@ -1,5 +1,6 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
+use crate::app_event::BuddyConfigEdit;
 use crate::app_event::ExitMode;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
@@ -52,6 +53,7 @@ use adam_agent::config::edit::ConfigEdit;
 use adam_agent::config::edit::ConfigEditsBuilder;
 use adam_agent::config::model_ref::ModelRef;
 use adam_agent::config::state_json::AdamStateStore;
+use adam_agent::config::types::TuiBuddy;
 use adam_agent::config_loader::ConfigLayerStackOrdering;
 use adam_agent::features::Feature;
 use adam_agent::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
@@ -668,6 +670,35 @@ fn normalize_harness_overrides_for_cwd(
     Ok(overrides)
 }
 
+fn set_buddy_path(path: &[&str], value: toml_edit::Item) -> ConfigEdit {
+    let mut segments = vec!["tui".to_string(), "buddy".to_string()];
+    segments.extend(path.iter().map(|segment| (*segment).to_string()));
+    ConfigEdit::SetPath { segments, value }
+}
+
+fn buddy_success_message(config: &TuiBuddy) -> String {
+    match config
+        .name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+    {
+        Some(name) => {
+            let species = config
+                .species
+                .map(|species| species.to_string())
+                .unwrap_or_else(|| "buddy".to_string());
+            if config.enabled && !config.muted {
+                format!("Buddy ready: {name} the {species}")
+            } else if config.muted {
+                format!("Buddy muted: {name} the {species}")
+            } else {
+                format!("Buddy hidden: {name} the {species}")
+            }
+        }
+        None => "Buddy settings updated".to_string(),
+    }
+}
+
 impl App {
     fn uses_terminal_scrollback(&self) -> bool {
         self.chat_widget.transcript_host_mode()
@@ -895,6 +926,64 @@ impl App {
             .await
             .wrap_err_with(|| format!("Failed to rebuild config for cwd {cwd_display}"))?;
         Ok(config)
+    }
+
+    async fn persist_buddy_config(&mut self, edit: BuddyConfigEdit) {
+        let mut next = self.config.tui_buddy.clone();
+        let mut edits: Vec<ConfigEdit> = Vec::new();
+
+        match edit {
+            BuddyConfigEdit::Hatch { name, species } => {
+                next.enabled = true;
+                next.muted = false;
+                next.name = Some(name.clone());
+                next.species = Some(species);
+                edits.push(set_buddy_path(&["enabled"], toml_edit::value(true)));
+                edits.push(set_buddy_path(&["muted"], toml_edit::value(false)));
+                edits.push(set_buddy_path(&["name"], toml_edit::value(name)));
+                edits.push(set_buddy_path(
+                    &["species"],
+                    toml_edit::value(species.to_string()),
+                ));
+            }
+            BuddyConfigEdit::SetEnabled(enabled) => {
+                next.enabled = enabled;
+                edits.push(set_buddy_path(&["enabled"], toml_edit::value(enabled)));
+            }
+            BuddyConfigEdit::SetMuted(muted) => {
+                next.muted = muted;
+                edits.push(set_buddy_path(&["muted"], toml_edit::value(muted)));
+            }
+            BuddyConfigEdit::Rename(name) => {
+                next.name = Some(name.clone());
+                edits.push(set_buddy_path(&["name"], toml_edit::value(name)));
+            }
+            BuddyConfigEdit::SetObserverEnabled(enabled) => {
+                next.observer.enabled = enabled;
+                edits.push(set_buddy_path(
+                    &["observer", "enabled"],
+                    toml_edit::value(enabled),
+                ));
+            }
+        }
+
+        match ConfigEditsBuilder::new(&self.config.adam_home)
+            .with_edits(edits)
+            .apply()
+            .await
+        {
+            Ok(()) => {
+                self.config.tui_buddy = next.clone();
+                self.chat_widget.set_buddy_config(next.clone());
+                self.chat_widget
+                    .add_info_message(buddy_success_message(&next), None);
+            }
+            Err(err) => {
+                tracing::error!(error = %err, "failed to persist buddy config");
+                self.chat_widget
+                    .add_error_message(format!("Failed to save buddy settings: {err}"));
+            }
+        }
     }
 
     fn apply_runtime_policy_overrides(&mut self, config: &mut Config) {
@@ -2654,6 +2743,9 @@ impl App {
                         }
                     }
                 }
+            }
+            AppEvent::PersistBuddyConfig { edit } => {
+                self.persist_buddy_config(edit).await;
             }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
                 self.runtime_approval_policy_override = Some(policy);

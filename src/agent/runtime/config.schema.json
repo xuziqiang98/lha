@@ -127,6 +127,48 @@
         }
       ]
     },
+    "BuddyObserverConfig": {
+      "additionalProperties": false,
+      "description": "Model-powered buddy reaction settings.",
+      "properties": {
+        "cooldown_seconds": {
+          "default": 60,
+          "description": "Minimum seconds between reactions.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable model-powered short reactions after completed turns.",
+          "type": "boolean"
+        },
+        "max_reaction_chars": {
+          "default": 80,
+          "description": "Maximum characters in a reaction.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "model": {
+          "default": null,
+          "description": "Optional model override for the observer.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "BuddySpecies": {
+      "description": "Supported TUI buddy species.",
+      "enum": [
+        "duck",
+        "cat",
+        "blob",
+        "robot",
+        "turtle"
+      ],
+      "type": "string"
+    },
     "ConfigProfile": {
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
@@ -915,6 +957,26 @@
           "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
           "type": "boolean"
         },
+        "buddy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiBuddy"
+            }
+          ],
+          "default": {
+            "enabled": false,
+            "muted": false,
+            "name": null,
+            "observer": {
+              "cooldown_seconds": 60,
+              "enabled": false,
+              "max_reaction_chars": 80,
+              "model": null
+            },
+            "species": null
+          },
+          "description": "Tiny companion rendered next to the TUI composer."
+        },
         "default_identity": {
           "allOf": [
             {
@@ -946,6 +1008,51 @@
           "default": true,
           "description": "Show startup tooltips in the TUI welcome screen. Defaults to `true`.",
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "TuiBuddy": {
+      "additionalProperties": false,
+      "description": "TUI buddy companion settings.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Show the buddy next to the composer when a buddy has been hatched.",
+          "type": "boolean"
+        },
+        "muted": {
+          "default": false,
+          "description": "Suppress the buddy and any reactions without deleting its saved name/species.",
+          "type": "boolean"
+        },
+        "name": {
+          "default": null,
+          "description": "User-visible buddy name.",
+          "type": "string"
+        },
+        "observer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/BuddyObserverConfig"
+            }
+          ],
+          "default": {
+            "cooldown_seconds": 60,
+            "enabled": false,
+            "max_reaction_chars": 80,
+            "model": null
+          },
+          "description": "Optional model-powered reaction settings."
+        },
+        "species": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/BuddySpecies"
+            }
+          ],
+          "default": null,
+          "description": "Buddy species used to pick the face and label."
         }
       },
       "type": "object"

@@ -24,6 +24,7 @@ export type { AskForApproval } from "./AskForApproval";
 export type { AudioContent } from "./AudioContent";
 export type { BackgroundEventEvent } from "./BackgroundEventEvent";
 export type { BlobResourceContents } from "./BlobResourceContents";
+export type { BuddyReactionEvent } from "./BuddyReactionEvent";
 export type { ByteRange } from "./ByteRange";
 export type { CallToolResult } from "./CallToolResult";
 export type { ClientInfo } from "./ClientInfo";

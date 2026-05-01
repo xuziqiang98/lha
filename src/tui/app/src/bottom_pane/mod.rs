@@ -26,6 +26,7 @@ use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
+use adam_agent::config::types::TuiBuddy;
 use adam_agent::features::Features;
 use adam_agent::skills::model::SkillMetadata;
 use adam_file_search::FileMatch;
@@ -184,6 +185,8 @@ impl BottomPane {
             placeholder_text,
             disable_paste_burst,
         );
+        composer.set_frame_requester(frame_requester.clone());
+        composer.set_animations_enabled(animations_enabled);
         composer.set_skill_mentions(skills);
 
         Self {
@@ -775,6 +778,31 @@ impl BottomPane {
 
     pub(crate) fn request_redraw_in(&self, dur: Duration) {
         self.frame_requester.schedule_frame_in(dur);
+    }
+
+    pub(crate) fn set_buddy_config(&mut self, config: TuiBuddy) {
+        self.composer.set_buddy_config(config);
+        self.request_redraw();
+    }
+
+    pub(crate) fn buddy_config(&self) -> &TuiBuddy {
+        self.composer.buddy_config()
+    }
+
+    pub(crate) fn buddy_is_hatched(&self) -> bool {
+        self.composer.buddy_is_hatched()
+    }
+
+    pub(crate) fn pet_buddy(&mut self) {
+        self.composer.pet_buddy();
+        self.request_redraw();
+        self.request_redraw_in(Duration::from_millis(2500));
+    }
+
+    pub(crate) fn set_buddy_reaction(&mut self, text: String) {
+        self.composer.set_buddy_reaction(text);
+        self.request_redraw();
+        self.request_redraw_in(Duration::from_secs(10));
     }
 
     // --- History helpers ---

@@ -786,6 +786,27 @@
           "type": "object"
         },
         {
+          "description": "Tiny TUI buddy companion reaction. This is UI-only and not part of the model transcript.",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "buddy_reaction"
+              ],
+              "title": "BuddyReactionEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "title": "BuddyReactionEventMsg",
+          "type": "object"
+        },
+        {
           "description": "Agent text output message",
           "properties": {
             "message": {

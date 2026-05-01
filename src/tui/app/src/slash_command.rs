@@ -19,6 +19,7 @@ pub enum SlashCommand {
     #[strum(serialize = "setup-elevated-sandbox")]
     ElevateSandbox,
     Experimental,
+    Buddy,
     Skills,
     Review,
     Rename,
@@ -78,6 +79,7 @@ impl SlashCommand {
             SlashCommand::Permissions => "choose what Adam is allowed to do",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
             SlashCommand::Experimental => "toggle experimental features",
+            SlashCommand::Buddy => "manage your TUI buddy companion",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Adam",
             SlashCommand::Rollout => "print the rollout file path",
@@ -112,6 +114,7 @@ impl SlashCommand {
             SlashCommand::Diff
             | SlashCommand::Changelog
             | SlashCommand::Rename
+            | SlashCommand::Buddy
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Status
@@ -177,6 +180,12 @@ mod tests {
     #[test]
     fn clean_alias_parses_to_stop_command() {
         assert_eq!(SlashCommand::from_str("clean"), Ok(SlashCommand::Stop));
+    }
+
+    #[test]
+    fn buddy_command_is_available_during_task() {
+        assert_eq!(SlashCommand::from_str("buddy"), Ok(SlashCommand::Buddy));
+        assert!(SlashCommand::Buddy.available_during_task());
     }
 
     #[test]

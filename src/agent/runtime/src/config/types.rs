@@ -486,10 +486,118 @@ pub struct Tui {
     /// scrollback in terminal multiplexers like Zellij that follow the xterm spec.
     #[serde(default)]
     pub alternate_screen: AltScreenMode,
+
+    /// Tiny companion rendered next to the TUI composer.
+    #[serde(default)]
+    pub buddy: TuiBuddy,
 }
 
 const fn default_true() -> bool {
     true
+}
+
+fn default_buddy_reaction_cooldown_seconds() -> u64 {
+    60
+}
+
+fn default_buddy_max_reaction_chars() -> usize {
+    80
+}
+
+/// TUI buddy companion settings.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiBuddy {
+    /// Show the buddy next to the composer when a buddy has been hatched.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Suppress the buddy and any reactions without deleting its saved name/species.
+    #[serde(default)]
+    pub muted: bool,
+
+    /// User-visible buddy name.
+    #[serde(default)]
+    pub name: Option<String>,
+
+    /// Buddy species used to pick the face and label.
+    #[serde(default)]
+    pub species: Option<BuddySpecies>,
+
+    /// Optional model-powered reaction settings.
+    #[serde(default)]
+    pub observer: BuddyObserverConfig,
+}
+
+/// Supported TUI buddy species.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum BuddySpecies {
+    Duck,
+    Cat,
+    Blob,
+    Robot,
+    Turtle,
+}
+
+impl std::fmt::Display for BuddySpecies {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            BuddySpecies::Duck => "duck",
+            BuddySpecies::Cat => "cat",
+            BuddySpecies::Blob => "blob",
+            BuddySpecies::Robot => "robot",
+            BuddySpecies::Turtle => "turtle",
+        };
+        write!(f, "{value}")
+    }
+}
+
+impl std::str::FromStr for BuddySpecies {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "duck" => Ok(BuddySpecies::Duck),
+            "cat" => Ok(BuddySpecies::Cat),
+            "blob" => Ok(BuddySpecies::Blob),
+            "robot" => Ok(BuddySpecies::Robot),
+            "turtle" => Ok(BuddySpecies::Turtle),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Model-powered buddy reaction settings.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct BuddyObserverConfig {
+    /// Enable model-powered short reactions after completed turns.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Optional model override for the observer.
+    #[serde(default)]
+    pub model: Option<String>,
+
+    /// Minimum seconds between reactions.
+    #[serde(default = "default_buddy_reaction_cooldown_seconds")]
+    pub cooldown_seconds: u64,
+
+    /// Maximum characters in a reaction.
+    #[serde(default = "default_buddy_max_reaction_chars")]
+    pub max_reaction_chars: usize,
+}
+
+impl Default for BuddyObserverConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: None,
+            cooldown_seconds: default_buddy_reaction_cooldown_seconds(),
+            max_reaction_chars: default_buddy_max_reaction_chars(),
+        }
+    }
 }
 
 /// Settings for notices we display to users via the tui and app-server clients

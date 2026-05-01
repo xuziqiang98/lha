@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use crate::AuthManager;
 use crate::SandboxState;
@@ -468,6 +469,7 @@ pub(crate) struct Session {
     features: Features,
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    pub(crate) buddy_last_reaction_at: Mutex<Option<Instant>>,
     pending_input_epoch: AtomicU64,
     pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
@@ -499,6 +501,7 @@ pub(crate) struct TurnContext {
     pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) workflow: Option<WorkflowTurnContext>,
+    pub(crate) tui_buddy: crate::config::types::TuiBuddy,
 }
 
 impl TurnContext {
@@ -844,6 +847,7 @@ impl Session {
             truncation_policy: model_info.truncation_policy.into(),
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             workflow,
+            tui_buddy: per_turn_config.tui_buddy.clone(),
         }
     }
 
@@ -1067,6 +1071,7 @@ impl Session {
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
+            buddy_last_reaction_at: Mutex::new(None),
             pending_input_epoch: AtomicU64::new(0),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -3427,6 +3432,7 @@ async fn spawn_review_thread(
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
         workflow: None,
+        tui_buddy: parent_turn_context.tui_buddy.clone(),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -6281,6 +6287,7 @@ mod tests {
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
+            buddy_last_reaction_at: Mutex::new(None),
             pending_input_epoch: AtomicU64::new(0),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -6474,6 +6481,7 @@ mod tests {
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
+            buddy_last_reaction_at: Mutex::new(None),
             pending_input_epoch: AtomicU64::new(0),
             services,
             next_internal_sub_id: AtomicU64::new(0),

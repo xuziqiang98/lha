@@ -49,6 +49,7 @@ mod app_backtrack;
 mod app_event;
 mod app_event_sender;
 mod bottom_pane;
+mod buddy;
 mod changelog;
 mod chatwidget;
 mod cli;

@@ -132,11 +132,15 @@ use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::prompt_args::prompt_argument_names;
 use crate::bottom_pane::prompt_args::prompt_command_with_arg_placeholders;
 use crate::bottom_pane::prompt_args::prompt_has_numeric_placeholders;
+use crate::buddy;
+use crate::buddy::state::BuddyState;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
+use crate::tui::FrameRequester;
+use adam_agent::config::types::TuiBuddy;
 use adam_agent::terminal::Multiplexer;
 use adam_common::fuzzy_match::fuzzy_match;
 use adam_protocol::custom_prompts::CustomPrompt;
@@ -294,6 +298,9 @@ pub(crate) struct ChatComposer {
     personality_command_enabled: bool,
     windows_degraded_sandbox_active: bool,
     is_zellij: bool,
+    buddy_state: BuddyState,
+    frame_requester: Option<FrameRequester>,
+    animations_enabled: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -390,6 +397,9 @@ impl ChatComposer {
                 adam_agent::terminal::terminal_info().multiplexer,
                 Some(Multiplexer::Zellij { .. })
             ),
+            buddy_state: BuddyState::default(),
+            frame_requester: None,
+            animations_enabled: true,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -433,6 +443,37 @@ impl ChatComposer {
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
         self.personality_command_enabled = enabled;
     }
+
+    pub(crate) fn set_frame_requester(&mut self, frame_requester: FrameRequester) {
+        self.frame_requester = Some(frame_requester);
+    }
+
+    pub(crate) fn set_animations_enabled(&mut self, enabled: bool) {
+        self.animations_enabled = enabled;
+    }
+
+    pub(crate) fn set_buddy_config(&mut self, config: TuiBuddy) {
+        self.buddy_state.set_config(config);
+    }
+
+    pub(crate) fn buddy_config(&self) -> &TuiBuddy {
+        self.buddy_state.config()
+    }
+
+    pub(crate) fn buddy_is_hatched(&self) -> bool {
+        self.buddy_state.is_hatched()
+    }
+
+    pub(crate) fn pet_buddy(&mut self) {
+        if self.buddy_state.is_visible() {
+            self.buddy_state.pet();
+        }
+    }
+
+    pub(crate) fn set_buddy_reaction(&mut self, text: String) {
+        self.buddy_state.set_reaction(text);
+    }
+
     /// Centralized feature gating keeps config checks out of call sites.
     fn popups_enabled(&self) -> bool {
         self.config.popups_enabled
@@ -2057,7 +2098,10 @@ impl ChatComposer {
                     self.personality_command_enabled,
                     self.windows_degraded_sandbox_active,
                 )
-                && matches!(cmd, SlashCommand::Review | SlashCommand::Rename)
+                && matches!(
+                    cmd,
+                    SlashCommand::Review | SlashCommand::Rename | SlashCommand::Buddy
+                )
             {
                 self.textarea.set_text_clearing_elements("");
                 return Some(InputResult::CommandWithArgs(cmd, rest.to_string()));
@@ -2879,7 +2923,23 @@ impl Renderable for ChatComposer {
 
 impl ChatComposer {
     pub(crate) fn render_with_mask(&self, area: Rect, buf: &mut Buffer, mask_char: Option<char>) {
-        let [composer_rect, textarea_rect, popup_rect] = self.layout_areas(area);
+        let [composer_rect, mut textarea_rect, popup_rect] = self.layout_areas(area);
+        let buddy_width = buddy::render::reserved_width(&self.buddy_state, area.width);
+        let buddy_rect = if buddy_width > 0 && composer_rect.width > buddy_width + 2 {
+            let buddy_x = composer_rect
+                .x
+                .saturating_add(composer_rect.width.saturating_sub(buddy_width));
+            let available = buddy_x.saturating_sub(textarea_rect.x).saturating_sub(1);
+            textarea_rect.width = textarea_rect.width.min(available);
+            Some(Rect::new(
+                buddy_x,
+                composer_rect.y,
+                buddy_width,
+                composer_rect.height,
+            ))
+        } else {
+            None
+        };
         match &self.active_popup {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
@@ -3038,6 +3098,21 @@ impl ChatComposer {
                     Line::from(vec![placeholder])
                         .render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
                 }
+            }
+        }
+
+        if let Some(buddy_rect) = buddy_rect {
+            buddy::render::render_buddy(
+                buddy_rect,
+                buf,
+                &self.buddy_state,
+                self.animations_enabled,
+            );
+            if self.animations_enabled
+                && self.buddy_state.is_visible()
+                && let Some(frame_requester) = &self.frame_requester
+            {
+                frame_requester.schedule_frame_in(Duration::from_millis(500));
             }
         }
     }

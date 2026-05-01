@@ -33,6 +33,7 @@ use crate::version::CODEX_CLI_VERSION;
 use adam_agent::config::Config;
 use adam_agent::config::ConstraintResult;
 use adam_agent::config::types::Notifications;
+use adam_agent::config::types::TuiBuddy;
 use adam_agent::connectors;
 use adam_agent::features::FEATURES;
 use adam_agent::features::Feature;
@@ -132,6 +133,7 @@ const PLAN_IMPLEMENTATION_NO: &str = "No, stay in planner identity";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 
 use crate::app_event::AppEvent;
+use crate::app_event::BuddyConfigEdit;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::ExitMode;
 #[cfg(target_os = "windows")]
@@ -155,6 +157,9 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::bottom_pane::provider_config_view::ProviderConfigView;
+use crate::buddy::model::DEFAULT_BUDDY_NAME;
+use crate::buddy::model::DEFAULT_BUDDY_SPECIES;
+use crate::buddy::model::validate_buddy_name;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::collab;
 use crate::diff_render::display_path_for;
@@ -2263,6 +2268,7 @@ impl ChatWidget {
             .bottom_pane
             .set_identities_enabled(widget.config.features.enabled(Feature::Identities));
         widget.sync_personality_command_enabled();
+        widget.sync_buddy_config_from_config();
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
             adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
@@ -2412,6 +2418,7 @@ impl ChatWidget {
             .bottom_pane
             .set_identities_enabled(widget.config.features.enabled(Feature::Identities));
         widget.sync_personality_command_enabled();
+        widget.sync_buddy_config_from_config();
 
         widget
     }
@@ -2548,6 +2555,7 @@ impl ChatWidget {
             .bottom_pane
             .set_identities_enabled(widget.config.features.enabled(Feature::Identities));
         widget.sync_personality_command_enabled();
+        widget.sync_buddy_config_from_config();
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
             adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
@@ -2864,6 +2872,9 @@ impl ChatWidget {
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
             }
+            SlashCommand::Buddy => {
+                self.show_buddy_status();
+            }
             SlashCommand::Quit | SlashCommand::Exit => {
                 self.request_quit_without_confirmation();
             }
@@ -2990,6 +3001,9 @@ impl ChatWidget {
                 let _ = trimmed;
                 self.dispatch_command(cmd);
             }
+            SlashCommand::Buddy => {
+                self.dispatch_buddy_command(trimmed);
+            }
             SlashCommand::Review if !trimmed.is_empty() => {
                 self.app_event_tx.send(AppEvent::StartReview {
                     review_request: ReviewRequest {
@@ -3001,6 +3015,125 @@ impl ChatWidget {
                 });
             }
             _ => self.dispatch_command(cmd),
+        }
+    }
+
+    pub(crate) fn set_buddy_config(&mut self, config: TuiBuddy) {
+        self.config.tui_buddy = config.clone();
+        self.bottom_pane.set_buddy_config(config);
+    }
+
+    fn sync_buddy_config_from_config(&mut self) {
+        self.bottom_pane
+            .set_buddy_config(self.config.tui_buddy.clone());
+    }
+
+    fn show_buddy_status(&mut self) {
+        let config = self.bottom_pane.buddy_config();
+        let Some(name) = config
+            .name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+        else {
+            self.add_info_message(
+                "No buddy yet. Run /buddy hatch [name].".to_string(),
+                Some("Commands: /buddy hatch, /buddy pet, /buddy talk on".to_string()),
+            );
+            return;
+        };
+        let species = config.species.unwrap_or(DEFAULT_BUDDY_SPECIES);
+        let visible = config.enabled && !config.muted;
+        let talk = if config.observer.enabled { "on" } else { "off" };
+        self.add_info_message(
+            format!("Buddy: {name} the {species}"),
+            Some(format!(
+                "Visible: {} · Talk: {talk} · Commands: /buddy pet, /buddy hide, /buddy rename <name>",
+                if visible { "yes" } else { "no" }
+            )),
+        );
+    }
+
+    fn dispatch_buddy_command(&mut self, args: &str) {
+        let mut parts = args.split_whitespace();
+        let Some(action) = parts.next() else {
+            self.show_buddy_status();
+            return;
+        };
+
+        match action {
+            "hatch" => {
+                let raw_name = parts.collect::<Vec<_>>().join(" ");
+                let name = if raw_name.trim().is_empty() {
+                    DEFAULT_BUDDY_NAME.to_string()
+                } else {
+                    match validate_buddy_name(&raw_name) {
+                        Ok(name) => name,
+                        Err(message) => {
+                            self.add_error_message(message.to_string());
+                            return;
+                        }
+                    }
+                };
+                self.app_event_tx.send(AppEvent::PersistBuddyConfig {
+                    edit: BuddyConfigEdit::Hatch {
+                        name,
+                        species: DEFAULT_BUDDY_SPECIES,
+                    },
+                });
+            }
+            "pet" => {
+                if !self.bottom_pane.buddy_is_hatched() {
+                    self.add_info_message(
+                        "No buddy to pet yet.".to_string(),
+                        Some("Run /buddy hatch [name] first.".to_string()),
+                    );
+                    return;
+                }
+                self.bottom_pane.pet_buddy();
+            }
+            "hide" => self.app_event_tx.send(AppEvent::PersistBuddyConfig {
+                edit: BuddyConfigEdit::SetEnabled(false),
+            }),
+            "show" => {
+                if !self.bottom_pane.buddy_is_hatched() {
+                    self.add_info_message(
+                        "No buddy to show yet.".to_string(),
+                        Some("Run /buddy hatch [name] first.".to_string()),
+                    );
+                    return;
+                }
+                self.app_event_tx.send(AppEvent::PersistBuddyConfig {
+                    edit: BuddyConfigEdit::SetEnabled(true),
+                });
+            }
+            "mute" => self.app_event_tx.send(AppEvent::PersistBuddyConfig {
+                edit: BuddyConfigEdit::SetMuted(true),
+            }),
+            "unmute" => self.app_event_tx.send(AppEvent::PersistBuddyConfig {
+                edit: BuddyConfigEdit::SetMuted(false),
+            }),
+            "rename" => {
+                let raw_name = parts.collect::<Vec<_>>().join(" ");
+                match validate_buddy_name(&raw_name) {
+                    Ok(name) => self.app_event_tx.send(AppEvent::PersistBuddyConfig {
+                        edit: BuddyConfigEdit::Rename(name),
+                    }),
+                    Err(message) => self.add_error_message(message.to_string()),
+                }
+            }
+            "talk" => match parts.next() {
+                Some("on") => self.app_event_tx.send(AppEvent::PersistBuddyConfig {
+                    edit: BuddyConfigEdit::SetObserverEnabled(true),
+                }),
+                Some("off") => self.app_event_tx.send(AppEvent::PersistBuddyConfig {
+                    edit: BuddyConfigEdit::SetObserverEnabled(false),
+                }),
+                _ => self.add_error_message("Usage: /buddy talk on|off".to_string()),
+            },
+            _ => self.add_error_message(
+                "Usage: /buddy [hatch [name]|pet|show|hide|mute|unmute|rename <name>|talk on|talk off]"
+                    .to_string(),
+            ),
         }
     }
 
@@ -3320,6 +3453,9 @@ impl ChatWidget {
             }
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
+            }
+            EventMsg::BuddyReaction(ev) => {
+                self.bottom_pane.set_buddy_reaction(ev.text);
             }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::Error(ErrorEvent {

@@ -723,6 +723,9 @@ pub enum EventMsg {
     /// Optional means unknown — UIs should not display when `None`.
     TokenCount(TokenCountEvent),
 
+    /// Tiny TUI buddy companion reaction. This is UI-only and not part of the model transcript.
+    BuddyReaction(BuddyReactionEvent),
+
     /// Agent text output message
     AgentMessage(AgentMessageEvent),
 
@@ -1261,6 +1264,11 @@ impl fmt::Display for FinalOutput {
             }
         )
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct BuddyReactionEvent {
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
