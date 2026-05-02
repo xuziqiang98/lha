@@ -149,6 +149,10 @@ impl CodexThread {
         self.codex.update_model_provider(provider).await;
     }
 
+    pub async fn update_tui_buddy(&self, buddy: crate::config::types::TuiBuddy) {
+        self.codex.update_tui_buddy(buddy).await;
+    }
+
     pub async fn switch_provider_and_model(
         &self,
         model_provider_id: String,

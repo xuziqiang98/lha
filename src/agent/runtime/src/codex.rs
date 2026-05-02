@@ -440,6 +440,19 @@ impl Codex {
         self.session.update_model_provider(provider).await;
     }
 
+    pub(crate) async fn update_tui_buddy(&self, buddy: crate::config::types::TuiBuddy) {
+        if let Err(err) = self
+            .session
+            .update_settings(SessionSettingsUpdate {
+                tui_buddy: Some(buddy),
+                ..Default::default()
+            })
+            .await
+        {
+            warn!(%err, "failed to update tui buddy settings");
+        }
+    }
+
     pub(crate) async fn switch_provider_and_model(
         &self,
         model_provider_id: String,
@@ -683,6 +696,11 @@ impl SessionConfiguration {
         if let Some(cwd) = updates.cwd.clone() {
             next_configuration.cwd = cwd;
         }
+        if let Some(tui_buddy) = updates.tui_buddy.clone() {
+            let mut config = (*next_configuration.original_config_do_not_use).clone();
+            config.tui_buddy = tui_buddy;
+            next_configuration.original_config_do_not_use = Arc::new(config);
+        }
         Ok(next_configuration)
     }
 }
@@ -697,6 +715,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     pub(crate) personality: Option<Personality>,
+    pub(crate) tui_buddy: Option<crate::config::types::TuiBuddy>,
 }
 
 impl Session {
@@ -2865,6 +2884,7 @@ mod handlers {
                         reasoning_summary: Some(summary),
                         final_output_json_schema: Some(final_output_json_schema),
                         personality,
+                        tui_buddy: None,
                     },
                 )
             }
@@ -6518,6 +6538,39 @@ mod tests {
             .await;
         assert_eq!(turn_context.runtime.endpoint(), endpoint);
         assert_eq!(turn_context.runtime.config().model_provider, endpoint);
+    }
+
+    #[tokio::test]
+    async fn update_tui_buddy_refreshes_session_and_new_turns() {
+        let (session, _turn_context) = make_session_and_context().await;
+        let updated = crate::config::types::TuiBuddy {
+            enabled: true,
+            muted: false,
+            name: Some("Quack".to_string()),
+            species: Some(crate::config::types::BuddySpecies::Duck),
+            observer: crate::config::types::BuddyObserverConfig {
+                enabled: true,
+                model: Some("gpt-4.1-mini".to_string()),
+                cooldown_seconds: 3,
+                max_reaction_chars: 42,
+            },
+        };
+
+        session
+            .update_settings(SessionSettingsUpdate {
+                tui_buddy: Some(updated.clone()),
+                ..Default::default()
+            })
+            .await
+            .expect("update buddy settings");
+
+        let config = session.get_config().await;
+        assert_eq!(config.tui_buddy, updated);
+
+        let turn_context = session
+            .new_default_turn_with_sub_id("updated-buddy".to_string())
+            .await;
+        assert_eq!(turn_context.tui_buddy, updated);
     }
 
     #[tokio::test]

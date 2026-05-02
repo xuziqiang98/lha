@@ -366,6 +366,11 @@ async fn buddy_reaction_for_turn(
     } else {
         turn_context.runtime.clone()
     };
+    let output_schema = buddy_observer_output_schema_for_runtime(
+        observer_runtime
+            .runtime_capabilities()
+            .supports_output_schema,
+    );
     let mut session = observer_runtime.new_session();
     let request = TurnRequest {
         conversation: vec![TranscriptItem::Message {
@@ -381,16 +386,7 @@ async fn buddy_reaction_for_turn(
                 .to_string(),
         },
         personality: None,
-        output_schema: Some(serde_json::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "say": {
-                    "type": ["string", "null"]
-                }
-            },
-            "required": ["say"]
-        })),
+        output_schema,
     };
     let mut stream = match session.run_turn(&request).await {
         Ok(stream) => stream,
@@ -421,6 +417,23 @@ async fn buddy_reaction_for_turn(
         }
     }
     parse_buddy_observer_response(&text, max_chars)
+}
+
+fn buddy_observer_output_schema_for_runtime(
+    supports_output_schema: bool,
+) -> Option<serde_json::Value> {
+    supports_output_schema.then(|| {
+        serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "say": {
+                    "type": ["string", "null"]
+                }
+            },
+            "required": ["say"]
+        })
+    })
 }
 
 fn buddy_observer_prompt(
@@ -490,7 +503,30 @@ fn truncate_reaction(text: &str, max_chars: usize) -> String {
 mod tests {
     use pretty_assertions::assert_eq;
 
+    use super::buddy_observer_output_schema_for_runtime;
     use super::parse_buddy_observer_response;
+
+    #[test]
+    fn buddy_observer_output_schema_is_set_when_supported() {
+        assert_eq!(
+            buddy_observer_output_schema_for_runtime(true),
+            Some(serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "say": {
+                        "type": ["string", "null"]
+                    }
+                },
+                "required": ["say"]
+            }))
+        );
+    }
+
+    #[test]
+    fn buddy_observer_output_schema_is_omitted_when_unsupported() {
+        assert_eq!(buddy_observer_output_schema_for_runtime(false), None);
+    }
 
     #[test]
     fn buddy_observer_response_accepts_short_json() {

@@ -973,6 +973,14 @@ impl App {
             .await
         {
             Ok(()) => {
+                if let Some(thread_id) = self.chat_widget.thread_id() {
+                    match self.server.get_thread(thread_id).await {
+                        Ok(thread) => thread.update_tui_buddy(next.clone()).await,
+                        Err(err) => {
+                            tracing::warn!(%err, "failed to update active thread buddy settings");
+                        }
+                    }
+                }
                 self.config.tui_buddy = next.clone();
                 self.chat_widget.set_buddy_config(next.clone());
                 self.chat_widget
