@@ -504,12 +504,16 @@ fn default_buddy_max_reaction_chars() -> usize {
     80
 }
 
+fn default_tui_buddy_enabled() -> bool {
+    true
+}
+
 /// TUI buddy companion settings.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiBuddy {
-    /// Show the buddy next to the composer when a buddy has been hatched.
-    #[serde(default)]
+    /// Show the generated buddy next to the composer.
+    #[serde(default = "default_tui_buddy_enabled")]
     pub enabled: bool,
 
     /// Suppress the buddy and any reactions without deleting its saved name/species.
@@ -524,9 +528,41 @@ pub struct TuiBuddy {
     #[serde(default)]
     pub species: Option<BuddySpecies>,
 
+    /// Optional eye variant used in richer sprite rendering.
+    #[serde(default)]
+    pub eye: Option<BuddyEye>,
+
+    /// Optional hat/accessory for richer sprite rendering.
+    #[serde(default)]
+    pub hat: Option<BuddyHat>,
+
+    /// Optional rarity used for styling accents.
+    #[serde(default)]
+    pub rarity: Option<BuddyRarity>,
+
+    /// Whether the buddy should render with shiny accents.
+    #[serde(default)]
+    pub shiny: Option<bool>,
+
     /// Optional model-powered reaction settings.
     #[serde(default)]
     pub observer: BuddyObserverConfig,
+}
+
+impl Default for TuiBuddy {
+    fn default() -> Self {
+        Self {
+            enabled: default_tui_buddy_enabled(),
+            muted: false,
+            name: None,
+            species: None,
+            eye: None,
+            hat: None,
+            rarity: None,
+            shiny: None,
+            observer: BuddyObserverConfig::default(),
+        }
+    }
 }
 
 /// Supported TUI buddy species.
@@ -538,6 +574,19 @@ pub enum BuddySpecies {
     Blob,
     Robot,
     Turtle,
+    Goose,
+    Dragon,
+    Octopus,
+    Owl,
+    Penguin,
+    Snail,
+    Ghost,
+    Axolotl,
+    Capybara,
+    Cactus,
+    Rabbit,
+    Mushroom,
+    Chonk,
 }
 
 impl std::fmt::Display for BuddySpecies {
@@ -548,6 +597,19 @@ impl std::fmt::Display for BuddySpecies {
             BuddySpecies::Blob => "blob",
             BuddySpecies::Robot => "robot",
             BuddySpecies::Turtle => "turtle",
+            BuddySpecies::Goose => "goose",
+            BuddySpecies::Dragon => "dragon",
+            BuddySpecies::Octopus => "octopus",
+            BuddySpecies::Owl => "owl",
+            BuddySpecies::Penguin => "penguin",
+            BuddySpecies::Snail => "snail",
+            BuddySpecies::Ghost => "ghost",
+            BuddySpecies::Axolotl => "axolotl",
+            BuddySpecies::Capybara => "capybara",
+            BuddySpecies::Cactus => "cactus",
+            BuddySpecies::Rabbit => "rabbit",
+            BuddySpecies::Mushroom => "mushroom",
+            BuddySpecies::Chonk => "chonk",
         };
         write!(f, "{value}")
     }
@@ -563,8 +625,104 @@ impl std::str::FromStr for BuddySpecies {
             "blob" => Ok(BuddySpecies::Blob),
             "robot" => Ok(BuddySpecies::Robot),
             "turtle" => Ok(BuddySpecies::Turtle),
+            "goose" => Ok(BuddySpecies::Goose),
+            "dragon" => Ok(BuddySpecies::Dragon),
+            "octopus" => Ok(BuddySpecies::Octopus),
+            "owl" => Ok(BuddySpecies::Owl),
+            "penguin" => Ok(BuddySpecies::Penguin),
+            "snail" => Ok(BuddySpecies::Snail),
+            "ghost" => Ok(BuddySpecies::Ghost),
+            "axolotl" => Ok(BuddySpecies::Axolotl),
+            "capybara" => Ok(BuddySpecies::Capybara),
+            "cactus" => Ok(BuddySpecies::Cactus),
+            "rabbit" => Ok(BuddySpecies::Rabbit),
+            "mushroom" => Ok(BuddySpecies::Mushroom),
+            "chonk" => Ok(BuddySpecies::Chonk),
             _ => Err(()),
         }
+    }
+}
+
+/// Supported buddy eye variants for richer sprite rendering.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum BuddyEye {
+    Dot,
+    Sparkle,
+    Cross,
+    Circle,
+    At,
+    #[default]
+    Degree,
+}
+
+impl std::fmt::Display for BuddyEye {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            BuddyEye::Dot => "dot",
+            BuddyEye::Sparkle => "sparkle",
+            BuddyEye::Cross => "cross",
+            BuddyEye::Circle => "circle",
+            BuddyEye::At => "at",
+            BuddyEye::Degree => "degree",
+        };
+        write!(f, "{value}")
+    }
+}
+
+/// Supported buddy hat/accessory variants.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum BuddyHat {
+    #[default]
+    None,
+    Crown,
+    TopHat,
+    Propeller,
+    Halo,
+    Wizard,
+    Beanie,
+    TinyDuck,
+}
+
+impl std::fmt::Display for BuddyHat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            BuddyHat::None => "none",
+            BuddyHat::Crown => "crown",
+            BuddyHat::TopHat => "top-hat",
+            BuddyHat::Propeller => "propeller",
+            BuddyHat::Halo => "halo",
+            BuddyHat::Wizard => "wizard",
+            BuddyHat::Beanie => "beanie",
+            BuddyHat::TinyDuck => "tiny-duck",
+        };
+        write!(f, "{value}")
+    }
+}
+
+/// Rarity used for buddy accent styling.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum BuddyRarity {
+    #[default]
+    Common,
+    Uncommon,
+    Rare,
+    Epic,
+    Legendary,
+}
+
+impl std::fmt::Display for BuddyRarity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            BuddyRarity::Common => "common",
+            BuddyRarity::Uncommon => "uncommon",
+            BuddyRarity::Rare => "rare",
+            BuddyRarity::Epic => "epic",
+            BuddyRarity::Legendary => "legendary",
+        };
+        write!(f, "{value}")
     }
 }
 

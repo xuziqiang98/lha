@@ -3,11 +3,11 @@ source: src/tui/app/src/bottom_pane/chat_composer.rs
 expression: terminal.backend()
 ---
 "                                                                                                    "
+"                                                                                           .----.   "
+"                                                                                          ( @  @ )  "
+"                                                                                          (______)  "
+"                                                                                         /\/\/\/\\  "
+"                                                                                           Echo     "
 "› Ask Adam to do anything                                                                           "
-"                                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
 "                                                                                                    "
 "  esc again to edit previous message                                                                "

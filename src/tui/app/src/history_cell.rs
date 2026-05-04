@@ -10,6 +10,11 @@
 //! bumps the active-cell revision tracked by `ChatWidget`, so the cache key changes whenever the
 //! rendered transcript output can change.
 
+use crate::buddy::model::Buddy;
+use crate::buddy::model::BuddyStats;
+use crate::buddy::model::rarity_stars;
+use crate::buddy::sprites;
+use crate::buddy::style::rarity_color;
 use crate::changelog::ChangelogEntry;
 use crate::changelog::ChangelogKind;
 use crate::changelog::format_changelog_path;
@@ -40,6 +45,7 @@ use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use adam_agent::config::Config;
+use adam_agent::config::types::BuddyRarity;
 use adam_agent::config::types::McpServerTransportConfig;
 use adam_agent::protocol::FileChange;
 use adam_agent::protocol::McpAuthStatus;
@@ -1755,6 +1761,142 @@ pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHist
     PlainHistoryCell { lines }
 }
 
+#[derive(Debug)]
+pub(crate) struct BuddyDetailsCell {
+    buddy: Buddy,
+}
+
+pub(crate) fn new_buddy_details(buddy: Buddy) -> BuddyDetailsCell {
+    BuddyDetailsCell { buddy }
+}
+
+impl HistoryCell for BuddyDetailsCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let color = rarity_color(self.buddy.rarity);
+        let inner_width = width.saturating_sub(4).clamp(1, 72);
+        let mut content = Vec::new();
+
+        content.push(Line::from(vec![
+            "/buddy".bold().cyan(),
+            " ".into(),
+            identity_label(self.buddy.identity_kind).dim(),
+            " buddy".dim(),
+        ]));
+
+        let sprite =
+            sprites::render_sprite(self.buddy.species, self.buddy.eye, self.buddy.hat, false, 0);
+        if inner_width >= 68 {
+            let details = detail_lines(&self.buddy);
+            let rows = sprite.len().max(details.len());
+            for index in 0..rows {
+                let left = sprite.get(index).map_or("", String::as_str);
+                let right = details
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| Line::from(""));
+                let mut spans = vec![Span::from(format!("{left:<14}")).fg(color), "  ".into()];
+                spans.extend(right.spans);
+                content.push(Line::from(spans));
+            }
+        } else {
+            for line in sprite {
+                content.push(Line::from(line).fg(color));
+            }
+            content.push(Line::from(""));
+            content.extend(detail_lines(&self.buddy));
+        }
+
+        content.extend(stat_lines(self.buddy.stats, inner_width));
+        content.push(Line::from(""));
+        content.push(Line::from(vec![
+            "Commands: ".dim(),
+            "/buddy pet".cyan(),
+            " · ".dim(),
+            "/buddy hide".cyan(),
+            " · ".dim(),
+            "/buddy talk on|off".cyan(),
+        ]));
+
+        with_border_with_inner_width(content, usize::from(inner_width))
+    }
+}
+
+fn detail_lines(buddy: &Buddy) -> Vec<Line<'static>> {
+    vec![
+        Line::from(vec![
+            buddy.name.clone().bold().fg(rarity_color(buddy.rarity)),
+            " the ".dim(),
+            buddy.species.to_string().into(),
+        ]),
+        Line::from(vec![
+            "Rarity: ".dim(),
+            rarity_stars(buddy.rarity).fg(rarity_color(buddy.rarity)),
+            " ".into(),
+            buddy.rarity.to_string().into(),
+            shiny_suffix(buddy.rarity, buddy.shiny),
+        ]),
+        Line::from(vec![
+            "Eye: ".dim(),
+            buddy.eye.to_string().into(),
+            "   Hat: ".dim(),
+            buddy.hat.to_string().into(),
+        ]),
+        Line::from(vec![
+            "Personality: ".dim(),
+            buddy.personality.clone().italic(),
+        ]),
+    ]
+}
+
+fn shiny_suffix(rarity: BuddyRarity, shiny: bool) -> Span<'static> {
+    if shiny {
+        Span::from(" shiny").fg(rarity_color(rarity)).bold()
+    } else {
+        Span::from("")
+    }
+}
+
+fn stat_lines(stats: BuddyStats, width: u16) -> Vec<Line<'static>> {
+    [
+        ("DEBUGGING", stats.debugging),
+        ("PATIENCE", stats.patience),
+        ("CHAOS", stats.chaos),
+        ("WISDOM", stats.wisdom),
+        ("SNARK", stats.snark),
+    ]
+    .into_iter()
+    .map(|(name, value)| stat_line(name, value, width))
+    .collect()
+}
+
+fn stat_line(name: &'static str, value: u8, width: u16) -> Line<'static> {
+    if width >= 46 {
+        let filled = usize::from(value / 10);
+        let bar = format!("{}{}", "█".repeat(filled), "░".repeat(10 - filled));
+        Line::from(vec![
+            format!("{name:<9}").dim(),
+            " ".into(),
+            bar.cyan(),
+            " ".into(),
+            format!("{value:>3}").into(),
+        ])
+    } else {
+        Line::from(vec![
+            format!("{name:<9}").dim(),
+            " ".into(),
+            format!("{value:>3}").into(),
+        ])
+    }
+}
+
+fn identity_label(identity_kind: adam_protocol::config_types::IdentityKind) -> &'static str {
+    match identity_kind {
+        adam_protocol::config_types::IdentityKind::Nobody => "nobody",
+        adam_protocol::config_types::IdentityKind::Planner => "planner",
+        adam_protocol::config_types::IdentityKind::Programmer => "programmer",
+    }
+}
+
 pub(crate) fn new_changelog_output(
     entries: Vec<ChangelogEntry>,
     cwd: &Path,
@@ -3389,5 +3531,74 @@ mod tests {
                 "Use flag `bar` instead.".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn buddy_details_cell_contains_generated_details() {
+        let buddy = Buddy {
+            name: "Patch".to_string(),
+            species: adam_agent::config::types::BuddySpecies::Duck,
+            eye: adam_agent::config::types::BuddyEye::Dot,
+            hat: adam_agent::config::types::BuddyHat::None,
+            rarity: BuddyRarity::Rare,
+            shiny: false,
+            personality: "quiet optimizer".to_string(),
+            stats: BuddyStats {
+                debugging: 72,
+                patience: 31,
+                chaos: 48,
+                wisdom: 66,
+                snark: 14,
+            },
+            identity_kind: adam_protocol::config_types::IdentityKind::Planner,
+        };
+
+        let lines = new_buddy_details(buddy).display_lines(80);
+        let rendered = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(rendered.contains("/buddy"));
+        assert!(rendered.contains("planner buddy"));
+        assert!(rendered.contains("Patch"));
+        assert!(rendered.contains("quiet optimizer"));
+        assert!(rendered.contains("DEBUGGING"));
+    }
+
+    #[test]
+    fn buddy_details_cell_uses_compact_width_on_wide_terminal() {
+        let buddy = Buddy {
+            name: "Patch".to_string(),
+            species: adam_agent::config::types::BuddySpecies::Duck,
+            eye: adam_agent::config::types::BuddyEye::Dot,
+            hat: adam_agent::config::types::BuddyHat::None,
+            rarity: BuddyRarity::Rare,
+            shiny: false,
+            personality: "quiet optimizer".to_string(),
+            stats: BuddyStats {
+                debugging: 72,
+                patience: 31,
+                chaos: 48,
+                wisdom: 66,
+                snark: 14,
+            },
+            identity_kind: adam_protocol::config_types::IdentityKind::Planner,
+        };
+
+        let lines = new_buddy_details(buddy).display_lines(120);
+        let max_width = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                    .sum::<usize>()
+            })
+            .max()
+            .expect("details lines");
+
+        assert!(max_width < 90, "details card should stay compact");
     }
 }

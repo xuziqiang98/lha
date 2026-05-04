@@ -23,7 +23,6 @@ use crate::changelog::ChangelogOutput;
 use crate::history_cell::HistoryCell;
 use crate::provider_config::CustomProviderConfig;
 
-use adam_agent::config::types::BuddySpecies;
 use adam_agent::features::Feature;
 use adam_agent::protocol::AskForApproval;
 use adam_agent::protocol::ReviewRequest;
@@ -33,11 +32,9 @@ use adam_protocol::config_types::Personality;
 
 #[derive(Debug, Clone)]
 pub(crate) enum BuddyConfigEdit {
-    Hatch { name: String, species: BuddySpecies },
-    SetEnabled(bool),
-    SetMuted(bool),
-    Rename(String),
-    SetObserverEnabled(bool),
+    Enabled(bool),
+    Muted(bool),
+    ObserverEnabled(bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,0 +1,42 @@
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::widgets::Borders;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
+use ratatui::widgets::block::Block;
+use ratatui::widgets::block::BorderType;
+
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_lines;
+
+pub(crate) fn render_bubble(area: Rect, buf: &mut Buffer, text: &str, fading: bool) {
+    if area.width < 8 || area.height < 3 {
+        return;
+    }
+    let wrapped = word_wrap_lines(
+        [Line::from(text.to_string())],
+        RtOptions::new(area.width.saturating_sub(2) as usize).break_words(false),
+    );
+    let wrapped = wrapped
+        .into_iter()
+        .take(area.height.saturating_sub(1) as usize)
+        .map(|line| if fading { line.dim() } else { line.italic() })
+        .collect::<Vec<_>>();
+    let block = if fading {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(ratatui::style::Style::default().dim())
+    } else {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+    };
+    Paragraph::new(wrapped).block(block).render(area, buf);
+    let tail_x = area.x.saturating_add(area.width.saturating_sub(1));
+    let tail_y = area.y.saturating_add(area.height / 2);
+    let tail = if fading { "─".dim() } else { "─".into() };
+    buf.set_line(tail_x, tail_y, &Line::from(vec![tail]), 1);
+}

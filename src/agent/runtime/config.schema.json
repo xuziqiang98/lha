@@ -127,6 +127,32 @@
         }
       ]
     },
+    "BuddyEye": {
+      "description": "Supported buddy eye variants for richer sprite rendering.",
+      "enum": [
+        "dot",
+        "sparkle",
+        "cross",
+        "circle",
+        "at",
+        "degree"
+      ],
+      "type": "string"
+    },
+    "BuddyHat": {
+      "description": "Supported buddy hat/accessory variants.",
+      "enum": [
+        "none",
+        "crown",
+        "top-hat",
+        "propeller",
+        "halo",
+        "wizard",
+        "beanie",
+        "tiny-duck"
+      ],
+      "type": "string"
+    },
     "BuddyObserverConfig": {
       "additionalProperties": false,
       "description": "Model-powered buddy reaction settings.",
@@ -158,6 +184,17 @@
       },
       "type": "object"
     },
+    "BuddyRarity": {
+      "description": "Rarity used for buddy accent styling.",
+      "enum": [
+        "common",
+        "uncommon",
+        "rare",
+        "epic",
+        "legendary"
+      ],
+      "type": "string"
+    },
     "BuddySpecies": {
       "description": "Supported TUI buddy species.",
       "enum": [
@@ -165,7 +202,20 @@
         "cat",
         "blob",
         "robot",
-        "turtle"
+        "turtle",
+        "goose",
+        "dragon",
+        "octopus",
+        "owl",
+        "penguin",
+        "snail",
+        "ghost",
+        "axolotl",
+        "capybara",
+        "cactus",
+        "rabbit",
+        "mushroom",
+        "chonk"
       ],
       "type": "string"
     },
@@ -964,7 +1014,9 @@
             }
           ],
           "default": {
-            "enabled": false,
+            "enabled": true,
+            "eye": null,
+            "hat": null,
             "muted": false,
             "name": null,
             "observer": {
@@ -973,6 +1025,8 @@
               "max_reaction_chars": 80,
               "model": null
             },
+            "rarity": null,
+            "shiny": null,
             "species": null
           },
           "description": "Tiny companion rendered next to the TUI composer."
@@ -1017,9 +1071,27 @@
       "description": "TUI buddy companion settings.",
       "properties": {
         "enabled": {
-          "default": false,
-          "description": "Show the buddy next to the composer when a buddy has been hatched.",
+          "default": true,
+          "description": "Show the generated buddy next to the composer.",
           "type": "boolean"
+        },
+        "eye": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/BuddyEye"
+            }
+          ],
+          "default": null,
+          "description": "Optional eye variant used in richer sprite rendering."
+        },
+        "hat": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/BuddyHat"
+            }
+          ],
+          "default": null,
+          "description": "Optional hat/accessory for richer sprite rendering."
         },
         "muted": {
           "default": false,
@@ -1044,6 +1116,20 @@
             "model": null
           },
           "description": "Optional model-powered reaction settings."
+        },
+        "rarity": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/BuddyRarity"
+            }
+          ],
+          "default": null,
+          "description": "Optional rarity used for styling accents."
+        },
+        "shiny": {
+          "default": null,
+          "description": "Whether the buddy should render with shiny accents.",
+          "type": "boolean"
         },
         "species": {
           "allOf": [

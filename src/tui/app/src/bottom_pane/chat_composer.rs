@@ -133,6 +133,7 @@ use crate::bottom_pane::prompt_args::prompt_argument_names;
 use crate::bottom_pane::prompt_args::prompt_command_with_arg_placeholders;
 use crate::bottom_pane::prompt_args::prompt_has_numeric_placeholders;
 use crate::buddy;
+use crate::buddy::layout::BuddyLayoutMode;
 use crate::buddy::state::BuddyState;
 use crate::render::Insets;
 use crate::render::RectExt;
@@ -143,6 +144,7 @@ use crate::tui::FrameRequester;
 use adam_agent::config::types::TuiBuddy;
 use adam_agent::terminal::Multiplexer;
 use adam_common::fuzzy_match::fuzzy_match;
+use adam_protocol::config_types::IdentityKind;
 use adam_protocol::custom_prompts::CustomPrompt;
 use adam_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use adam_protocol::models::local_image_label_text;
@@ -213,6 +215,17 @@ enum PromptSelectionAction {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ComposerBuddyLayout {
+    composer_rect: Rect,
+    textarea_rect: Rect,
+    input_rect: Rect,
+    input_panel_rect: Rect,
+    popup_rect: Rect,
+    buddy_rect: Option<Rect>,
+    buddy_mode: BuddyLayoutMode,
+}
+
 /// Feature flags for reusing the chat composer in other bottom-pane surfaces.
 ///
 /// The default keeps today's behavior intact. Other call sites can opt out of
@@ -225,6 +238,8 @@ pub(crate) struct ChatComposerConfig {
     pub(crate) slash_commands_enabled: bool,
     /// Whether pasting a file path can attach local images.
     pub(crate) image_paste_enabled: bool,
+    /// Whether the generated TUI buddy can render beside this composer.
+    pub(crate) buddy_enabled: bool,
 }
 
 impl Default for ChatComposerConfig {
@@ -233,6 +248,7 @@ impl Default for ChatComposerConfig {
             popups_enabled: true,
             slash_commands_enabled: true,
             image_paste_enabled: true,
+            buddy_enabled: true,
         }
     }
 }
@@ -247,6 +263,7 @@ impl ChatComposerConfig {
             popups_enabled: false,
             slash_commands_enabled: false,
             image_paste_enabled: false,
+            buddy_enabled: false,
         }
     }
 }
@@ -403,6 +420,9 @@ impl ChatComposer {
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
+        if this.config.buddy_enabled {
+            this.buddy_state.ensure_active_buddy();
+        }
         this
     }
 
@@ -454,6 +474,9 @@ impl ChatComposer {
 
     pub(crate) fn set_buddy_config(&mut self, config: TuiBuddy) {
         self.buddy_state.set_config(config);
+        if self.config.buddy_enabled {
+            self.buddy_state.ensure_active_buddy();
+        }
     }
 
     pub(crate) fn buddy_config(&self) -> &TuiBuddy {
@@ -464,14 +487,26 @@ impl ChatComposer {
         self.buddy_state.is_hatched()
     }
 
+    pub(crate) fn buddy(&self) -> Option<&crate::buddy::model::Buddy> {
+        self.buddy_state.buddy()
+    }
+
+    pub(crate) fn set_buddy_identity_kind(&mut self, identity_kind: IdentityKind) {
+        if self.config.buddy_enabled {
+            self.buddy_state.set_identity_kind(identity_kind);
+        }
+    }
+
     pub(crate) fn pet_buddy(&mut self) {
-        if self.buddy_state.is_visible() {
+        if self.config.buddy_enabled && self.buddy_state.is_visible() {
             self.buddy_state.pet();
         }
     }
 
     pub(crate) fn set_buddy_reaction(&mut self, text: String) {
-        self.buddy_state.set_reaction(text);
+        if self.config.buddy_enabled {
+            self.buddy_state.set_reaction(text);
+        }
     }
 
     /// Centralized feature gating keeps config checks out of call sites.
@@ -511,6 +546,65 @@ impl ChatComposer {
             Layout::vertical([Constraint::Min(3), popup_constraint]).areas(area);
         let textarea_rect = composer_rect.inset(Insets::tlbr(1, LIVE_PREFIX_COLS, 1, 1));
         [composer_rect, textarea_rect, popup_rect]
+    }
+
+    fn composer_buddy_layout(&self, area: Rect) -> ComposerBuddyLayout {
+        let [composer_rect, mut textarea_rect, popup_rect] = self.layout_areas(area);
+        let buddy_mode = if self.config.buddy_enabled {
+            buddy::layout::layout_mode(&self.buddy_state, area.width)
+        } else {
+            BuddyLayoutMode::Hidden
+        };
+        let mut input_rect = composer_rect;
+        let buddy_rect = match buddy_mode {
+            BuddyLayoutMode::FullSidebar => {
+                let buddy_width = buddy::render::reserved_width(&self.buddy_state, area.width);
+                if buddy_width > 0 && composer_rect.width > buddy_width + 2 {
+                    let buddy_x = composer_rect
+                        .x
+                        .saturating_add(composer_rect.width.saturating_sub(buddy_width));
+                    let available = buddy_x.saturating_sub(textarea_rect.x).saturating_sub(1);
+                    textarea_rect.width = textarea_rect.width.min(available);
+                    input_rect.width = buddy_x.saturating_sub(composer_rect.x).saturating_sub(1);
+                    Some(Rect::new(
+                        buddy_x,
+                        composer_rect.y,
+                        buddy_width,
+                        composer_rect.height,
+                    ))
+                } else {
+                    None
+                }
+            }
+            BuddyLayoutMode::Hidden => None,
+        };
+        let input_panel_rect = if buddy_rect.is_some() {
+            let input_panel_height = (self.textarea.desired_height(textarea_rect.width) + 2)
+                .min(composer_rect.height)
+                .max(1);
+            let input_panel_rect = Rect::new(
+                input_rect.x,
+                input_rect
+                    .y
+                    .saturating_add(input_rect.height.saturating_sub(input_panel_height)),
+                input_rect.width,
+                input_panel_height,
+            );
+            textarea_rect = input_panel_rect.inset(Insets::tlbr(1, LIVE_PREFIX_COLS, 1, 1));
+            input_panel_rect
+        } else {
+            input_rect
+        };
+
+        ComposerBuddyLayout {
+            composer_rect,
+            textarea_rect,
+            input_rect,
+            input_panel_rect,
+            popup_rect,
+            buddy_rect,
+            buddy_mode,
+        }
     }
 
     fn footer_spacing(footer_hint_height: u16) -> u16 {
@@ -2892,9 +2986,10 @@ impl Renderable for ChatComposer {
             return None;
         }
 
-        let [_, textarea_rect, _] = self.layout_areas(area);
+        let layout = self.composer_buddy_layout(area);
         let state = *self.textarea_state.borrow();
-        self.textarea.cursor_pos_with_state(textarea_rect, state)
+        self.textarea
+            .cursor_pos_with_state(layout.textarea_rect, state)
     }
 
     fn desired_height(&self, width: u16) -> u16 {
@@ -2904,10 +2999,21 @@ impl Renderable for ChatComposer {
             .unwrap_or_else(|| footer_height(&footer_props));
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
-        const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + 1;
-        self.textarea
-            .desired_height(width.saturating_sub(COLS_WITH_MARGIN))
-            + 2
+        let buddy_width = if self.config.buddy_enabled {
+            buddy::render::reserved_width(&self.buddy_state, width)
+        } else {
+            0
+        };
+        let input_width = width.saturating_sub(buddy_width.saturating_add(LIVE_PREFIX_COLS + 2));
+        let input_height = self.textarea.desired_height(input_width) + 2;
+        let buddy_height = if self.config.buddy_enabled
+            && buddy::layout::layout_mode(&self.buddy_state, width) == BuddyLayoutMode::FullSidebar
+        {
+            buddy::layout::full_required_height(&self.buddy_state)
+        } else {
+            0
+        };
+        input_height.max(buddy_height)
             + match &self.active_popup {
                 ActivePopup::None => footer_total_height,
                 ActivePopup::Command(c) => c.calculate_required_height(width),
@@ -2923,23 +3029,12 @@ impl Renderable for ChatComposer {
 
 impl ChatComposer {
     pub(crate) fn render_with_mask(&self, area: Rect, buf: &mut Buffer, mask_char: Option<char>) {
-        let [composer_rect, mut textarea_rect, popup_rect] = self.layout_areas(area);
-        let buddy_width = buddy::render::reserved_width(&self.buddy_state, area.width);
-        let buddy_rect = if buddy_width > 0 && composer_rect.width > buddy_width + 2 {
-            let buddy_x = composer_rect
-                .x
-                .saturating_add(composer_rect.width.saturating_sub(buddy_width));
-            let available = buddy_x.saturating_sub(textarea_rect.x).saturating_sub(1);
-            textarea_rect.width = textarea_rect.width.min(available);
-            Some(Rect::new(
-                buddy_x,
-                composer_rect.y,
-                buddy_width,
-                composer_rect.height,
-            ))
-        } else {
-            None
-        };
+        let layout = self.composer_buddy_layout(area);
+        let textarea_rect = layout.textarea_rect;
+        let popup_rect = layout.popup_rect;
+        let input_panel_rect = layout.input_panel_rect;
+        let buddy_rect = layout.buddy_rect;
+        let buddy_mode = layout.buddy_mode;
         match &self.active_popup {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
@@ -3030,7 +3125,9 @@ impl ChatComposer {
         }
         let style = user_message_style();
         let textarea_style = style.fg(Color::Reset);
-        Block::default().style(style).render_ref(composer_rect, buf);
+        Block::default()
+            .style(style)
+            .render_ref(input_panel_rect, buf);
         if self.is_zellij && !textarea_rect.is_empty() {
             buf.set_style(textarea_rect, textarea_style);
         }
@@ -3101,19 +3198,25 @@ impl ChatComposer {
             }
         }
 
-        if let Some(buddy_rect) = buddy_rect {
-            buddy::render::render_buddy(
-                buddy_rect,
-                buf,
-                &self.buddy_state,
-                self.animations_enabled,
-            );
-            if self.animations_enabled
-                && self.buddy_state.is_visible()
-                && let Some(frame_requester) = &self.frame_requester
-            {
-                frame_requester.schedule_frame_in(Duration::from_millis(500));
+        match buddy_mode {
+            BuddyLayoutMode::FullSidebar => {
+                if let Some(buddy_rect) = buddy_rect {
+                    buddy::render::render_buddy(
+                        buddy_rect,
+                        buf,
+                        &self.buddy_state,
+                        self.animations_enabled,
+                    );
+                }
             }
+            BuddyLayoutMode::Hidden => {}
+        }
+
+        if self.animations_enabled
+            && self.buddy_state.is_visible()
+            && let Some(frame_requester) = &self.frame_requester
+        {
+            frame_requester.schedule_frame_in(Duration::from_millis(500));
         }
     }
 }
@@ -3247,6 +3350,110 @@ mod tests {
             "",
             "expected blank spacing row above hints but saw: {spacing_row:?}",
         );
+    }
+
+    #[test]
+    fn wide_buddy_layout_keeps_cursor_out_of_buddy_rect() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Adam to do anything".to_string(),
+            false,
+        );
+        composer.textarea.insert_str(&"s".repeat(220));
+        composer.textarea.set_cursor(composer.textarea.text().len());
+
+        let area = Rect::new(0, 0, 120, 8);
+        let layout = composer.composer_buddy_layout(area);
+        let buddy_rect = layout.buddy_rect.expect("buddy visible on wide layout");
+        let (cursor_x, _) = composer.cursor_pos(area).expect("cursor visible");
+
+        assert!(cursor_x < buddy_rect.x);
+        assert!(cursor_x < layout.textarea_rect.x + layout.textarea_rect.width);
+    }
+
+    #[test]
+    fn wide_buddy_layout_leaves_gap_between_input_and_buddy() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Adam to do anything".to_string(),
+            false,
+        );
+
+        let area = Rect::new(0, 0, 120, 8);
+        let layout = composer.composer_buddy_layout(area);
+        let buddy_rect = layout.buddy_rect.expect("buddy visible on wide layout");
+
+        assert_eq!(layout.buddy_mode, BuddyLayoutMode::FullSidebar);
+        assert!(layout.input_rect.x + layout.input_rect.width < buddy_rect.x);
+    }
+
+    #[test]
+    fn wide_buddy_layout_keeps_input_panel_natural_height() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Adam to do anything".to_string(),
+            false,
+        );
+
+        let area = Rect::new(0, 0, 120, 8);
+        let layout = composer.composer_buddy_layout(area);
+        let buddy_height = buddy::layout::full_required_height(&composer.buddy_state);
+        let expected_input_height =
+            composer.textarea.desired_height(layout.textarea_rect.width) + 2;
+
+        assert!(layout.composer_rect.height >= buddy_height);
+        assert_eq!(layout.input_panel_rect.height, expected_input_height);
+        assert!(layout.input_panel_rect.height < layout.composer_rect.height);
+    }
+
+    #[test]
+    fn wide_buddy_layout_bottom_aligns_input_panel() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Adam to do anything".to_string(),
+            false,
+        );
+
+        let layout = composer.composer_buddy_layout(Rect::new(0, 0, 120, 8));
+
+        assert_eq!(
+            layout.input_panel_rect.y + layout.input_panel_rect.height,
+            layout.composer_rect.y + layout.composer_rect.height
+        );
+    }
+
+    #[test]
+    fn narrow_buddy_layout_hides_buddy() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Adam to do anything".to_string(),
+            false,
+        );
+
+        let layout = composer.composer_buddy_layout(Rect::new(0, 0, 99, 8));
+
+        assert_eq!(layout.buddy_mode, BuddyLayoutMode::Hidden);
+        assert!(layout.buddy_rect.is_none());
     }
 
     #[test]

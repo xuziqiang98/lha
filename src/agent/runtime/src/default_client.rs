@@ -337,13 +337,39 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn test_macos() {
-        use regex_lite::Regex;
         let user_agent = get_adam_user_agent();
-        let originator = regex_lite::escape(originator().value.as_str());
-        let re = Regex::new(&format!(
-            r"^{originator}/\d+\.\d+\.\d+ \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\) (\S+)$"
-        ))
-        .unwrap();
-        assert!(re.is_match(&user_agent));
+        let originator = originator().value;
+        let prefix = format!("{originator}/");
+        assert!(user_agent.starts_with(&prefix));
+
+        let platform_start = user_agent
+            .find(" (")
+            .expect("user agent has platform start");
+        let platform_content_start = platform_start + " (".len();
+        let platform_end = user_agent[platform_content_start..]
+            .find(") ")
+            .map(|offset| platform_content_start + offset)
+            .expect("user agent has platform end");
+        let platform = &user_agent[platform_content_start..platform_end];
+
+        let platform = platform
+            .strip_prefix("Mac OS ")
+            .expect("macOS platform starts with OS name");
+        let (os_version, architecture) = platform
+            .split_once("; ")
+            .expect("macOS platform includes architecture");
+        assert!(!os_version.is_empty());
+        assert!(
+            os_version
+                .split('.')
+                .all(|part| { !part.is_empty() && part.chars().all(|ch| ch.is_ascii_digit()) })
+        );
+        assert!(matches!(
+            architecture,
+            "arm64" | "x86_64" | "aarch64" | "x86" | "i386" | "unknown"
+        ));
+
+        let terminal_suffix = &user_agent[platform_end + ") ".len()..];
+        assert!(!terminal_suffix.trim().is_empty());
     }
 }

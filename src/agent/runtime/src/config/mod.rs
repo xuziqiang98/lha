@@ -4895,6 +4895,10 @@ mod notifications_tests {
                 muted: false,
                 name: Some("Byte".to_string()),
                 species: Some(BuddySpecies::Duck),
+                eye: None,
+                hat: None,
+                rarity: None,
+                shiny: None,
                 observer: BuddyObserverConfig {
                     enabled: true,
                     model: None,

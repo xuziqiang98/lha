@@ -157,9 +157,6 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::bottom_pane::provider_config_view::ProviderConfigView;
-use crate::buddy::model::DEFAULT_BUDDY_NAME;
-use crate::buddy::model::DEFAULT_BUDDY_SPECIES;
-use crate::buddy::model::validate_buddy_name;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::collab;
 use crate::diff_render::display_path_for;
@@ -3026,31 +3023,19 @@ impl ChatWidget {
     fn sync_buddy_config_from_config(&mut self) {
         self.bottom_pane
             .set_buddy_config(self.config.tui_buddy.clone());
+        self.bottom_pane
+            .set_buddy_identity_kind(self.active_identity_kind());
     }
 
     fn show_buddy_status(&mut self) {
         let config = self.bottom_pane.buddy_config();
-        let Some(name) = config
-            .name
-            .as_deref()
-            .filter(|name| !name.trim().is_empty())
-        else {
-            self.add_info_message(
-                "No buddy yet. Run /buddy hatch [name].".to_string(),
-                Some("Commands: /buddy hatch, /buddy pet, /buddy talk on".to_string()),
-            );
+        let Some(buddy) = self.bottom_pane.buddy().cloned() else {
+            self.add_info_message("Buddy is getting ready.".to_string(), None);
             return;
         };
-        let species = config.species.unwrap_or(DEFAULT_BUDDY_SPECIES);
-        let visible = config.enabled && !config.muted;
-        let talk = if config.observer.enabled { "on" } else { "off" };
-        self.add_info_message(
-            format!("Buddy: {name} the {species}"),
-            Some(format!(
-                "Visible: {} · Talk: {talk} · Commands: /buddy pet, /buddy hide, /buddy rename <name>",
-                if visible { "yes" } else { "no" }
-            )),
-        );
+        let _visible = config.enabled && !config.muted;
+        self.add_to_history(history_cell::new_buddy_details(buddy));
+        self.request_redraw();
     }
 
     fn dispatch_buddy_command(&mut self, args: &str) {
@@ -3062,77 +3047,59 @@ impl ChatWidget {
 
         match action {
             "hatch" => {
-                let raw_name = parts.collect::<Vec<_>>().join(" ");
-                let name = if raw_name.trim().is_empty() {
-                    DEFAULT_BUDDY_NAME.to_string()
-                } else {
-                    match validate_buddy_name(&raw_name) {
-                        Ok(name) => name,
-                        Err(message) => {
-                            self.add_error_message(message.to_string());
-                            return;
-                        }
-                    }
-                };
-                self.app_event_tx.send(AppEvent::PersistBuddyConfig {
-                    edit: BuddyConfigEdit::Hatch {
-                        name,
-                        species: DEFAULT_BUDDY_SPECIES,
-                    },
-                });
+                self.add_info_message(
+                    "Buddy is generated automatically for each identity.".to_string(),
+                    Some("Use /buddy to view it.".to_string()),
+                );
             }
             "pet" => {
                 if !self.bottom_pane.buddy_is_hatched() {
                     self.add_info_message(
-                        "No buddy to pet yet.".to_string(),
-                        Some("Run /buddy hatch [name] first.".to_string()),
+                        "Buddy is getting ready.".to_string(),
+                        Some("Try /buddy again in a moment.".to_string()),
                     );
                     return;
                 }
                 self.bottom_pane.pet_buddy();
             }
             "hide" => self.app_event_tx.send(AppEvent::PersistBuddyConfig {
-                edit: BuddyConfigEdit::SetEnabled(false),
+                edit: BuddyConfigEdit::Enabled(false),
             }),
             "show" => {
                 if !self.bottom_pane.buddy_is_hatched() {
                     self.add_info_message(
-                        "No buddy to show yet.".to_string(),
-                        Some("Run /buddy hatch [name] first.".to_string()),
+                        "Buddy is getting ready.".to_string(),
+                        Some("Try /buddy again in a moment.".to_string()),
                     );
                     return;
                 }
                 self.app_event_tx.send(AppEvent::PersistBuddyConfig {
-                    edit: BuddyConfigEdit::SetEnabled(true),
+                    edit: BuddyConfigEdit::Enabled(true),
                 });
             }
             "mute" => self.app_event_tx.send(AppEvent::PersistBuddyConfig {
-                edit: BuddyConfigEdit::SetMuted(true),
+                edit: BuddyConfigEdit::Muted(true),
             }),
             "unmute" => self.app_event_tx.send(AppEvent::PersistBuddyConfig {
-                edit: BuddyConfigEdit::SetMuted(false),
+                edit: BuddyConfigEdit::Muted(false),
             }),
             "rename" => {
-                let raw_name = parts.collect::<Vec<_>>().join(" ");
-                match validate_buddy_name(&raw_name) {
-                    Ok(name) => self.app_event_tx.send(AppEvent::PersistBuddyConfig {
-                        edit: BuddyConfigEdit::Rename(name),
-                    }),
-                    Err(message) => self.add_error_message(message.to_string()),
-                }
+                self.add_info_message(
+                    "Buddy names are generated automatically for this session.".to_string(),
+                    Some("Switch identities to meet a different buddy.".to_string()),
+                );
             }
             "talk" => match parts.next() {
                 Some("on") => self.app_event_tx.send(AppEvent::PersistBuddyConfig {
-                    edit: BuddyConfigEdit::SetObserverEnabled(true),
+                    edit: BuddyConfigEdit::ObserverEnabled(true),
                 }),
                 Some("off") => self.app_event_tx.send(AppEvent::PersistBuddyConfig {
-                    edit: BuddyConfigEdit::SetObserverEnabled(false),
+                    edit: BuddyConfigEdit::ObserverEnabled(false),
                 }),
                 _ => self.add_error_message("Usage: /buddy talk on|off".to_string()),
             },
             _ => self.add_error_message(
-                "Usage: /buddy [hatch [name]|pet|show|hide|mute|unmute|rename <name>|talk on|talk off]"
-                    .to_string(),
+                "Usage: /buddy [pet|show|hide|mute|unmute|talk on|talk off]".to_string(),
             ),
         }
     }
@@ -5549,6 +5516,8 @@ impl ChatWidget {
         }
         let mask = identities::normalize_mask(mask);
         self.active_identity_mask = Some(self.apply_reasoning_effort_override(mask));
+        self.bottom_pane
+            .set_buddy_identity_kind(self.active_identity_kind());
         self.update_identity_indicator();
         self.refresh_model_display();
         self.update_footer_info();

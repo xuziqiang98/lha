@@ -6548,6 +6548,10 @@ mod tests {
             muted: false,
             name: Some("Quack".to_string()),
             species: Some(crate::config::types::BuddySpecies::Duck),
+            eye: None,
+            hat: None,
+            rarity: None,
+            shiny: None,
             observer: crate::config::types::BuddyObserverConfig {
                 enabled: true,
                 model: Some("gpt-4.1-mini".to_string()),

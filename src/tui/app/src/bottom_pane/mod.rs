@@ -30,6 +30,7 @@ use adam_agent::config::types::TuiBuddy;
 use adam_agent::features::Features;
 use adam_agent::skills::model::SkillMetadata;
 use adam_file_search::FileMatch;
+use adam_protocol::config_types::IdentityKind;
 use adam_protocol::request_user_input::RequestUserInputEvent;
 use adam_protocol::user_input::TextElement;
 use bottom_pane_view::BottomPaneView;
@@ -791,6 +792,15 @@ impl BottomPane {
 
     pub(crate) fn buddy_is_hatched(&self) -> bool {
         self.composer.buddy_is_hatched()
+    }
+
+    pub(crate) fn buddy(&self) -> Option<&crate::buddy::model::Buddy> {
+        self.composer.buddy()
+    }
+
+    pub(crate) fn set_buddy_identity_kind(&mut self, identity_kind: IdentityKind) {
+        self.composer.set_buddy_identity_kind(identity_kind);
+        self.request_redraw();
     }
 
     pub(crate) fn pet_buddy(&mut self) {

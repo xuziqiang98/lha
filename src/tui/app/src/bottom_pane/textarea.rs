@@ -1191,8 +1191,9 @@ impl TextArea {
             let r = &lines[idx];
             let y = area.y + row as u16;
             let line_range = r.start..r.end - 1;
+            let line = clip_to_width(&self.text[line_range.clone()], area.width);
             buf.set_style(Rect::new(area.x, y, area.width, 1), base_style);
-            buf.set_string(area.x, y, &self.text[line_range.clone()], base_style);
+            buf.set_string(area.x, y, line, base_style);
 
             // Overlay styled segments for elements that intersect this line.
             for elem in &self.elements {
@@ -1204,6 +1205,10 @@ impl TextArea {
                 }
                 let styled = &self.text[overlap_start..overlap_end];
                 let x_off = self.text[line_range.start..overlap_start].width() as u16;
+                if x_off >= area.width {
+                    continue;
+                }
+                let styled = clip_to_width(styled, area.width.saturating_sub(x_off));
                 let style = base_style.fg(Color::Cyan);
                 buf.set_string(area.x + x_off, y, styled, style);
             }
@@ -1224,13 +1229,25 @@ impl TextArea {
             let y = area.y + row as u16;
             let line_range = r.start..r.end - 1;
             buf.set_style(Rect::new(area.x, y, area.width, 1), base_style);
-            let masked = self.text[line_range.clone()]
-                .chars()
-                .map(|_| mask_char)
-                .collect::<String>();
+            let visible = clip_to_width(&self.text[line_range.clone()], area.width);
+            let masked = visible.chars().map(|_| mask_char).collect::<String>();
             buf.set_string(area.x, y, &masked, base_style);
         }
     }
+}
+
+fn clip_to_width(text: &str, max_width: u16) -> &str {
+    let mut end = 0;
+    let mut width = 0;
+    for (idx, grapheme) in text.grapheme_indices(true) {
+        let next_width = width + grapheme.width() as u16;
+        if next_width > max_width {
+            break;
+        }
+        width = next_width;
+        end = idx + grapheme.len();
+    }
+    &text[..end]
 }
 
 #[cfg(test)]

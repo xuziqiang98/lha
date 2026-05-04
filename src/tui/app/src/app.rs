@@ -933,32 +933,15 @@ impl App {
         let mut edits: Vec<ConfigEdit> = Vec::new();
 
         match edit {
-            BuddyConfigEdit::Hatch { name, species } => {
-                next.enabled = true;
-                next.muted = false;
-                next.name = Some(name.clone());
-                next.species = Some(species);
-                edits.push(set_buddy_path(&["enabled"], toml_edit::value(true)));
-                edits.push(set_buddy_path(&["muted"], toml_edit::value(false)));
-                edits.push(set_buddy_path(&["name"], toml_edit::value(name)));
-                edits.push(set_buddy_path(
-                    &["species"],
-                    toml_edit::value(species.to_string()),
-                ));
-            }
-            BuddyConfigEdit::SetEnabled(enabled) => {
+            BuddyConfigEdit::Enabled(enabled) => {
                 next.enabled = enabled;
                 edits.push(set_buddy_path(&["enabled"], toml_edit::value(enabled)));
             }
-            BuddyConfigEdit::SetMuted(muted) => {
+            BuddyConfigEdit::Muted(muted) => {
                 next.muted = muted;
                 edits.push(set_buddy_path(&["muted"], toml_edit::value(muted)));
             }
-            BuddyConfigEdit::Rename(name) => {
-                next.name = Some(name.clone());
-                edits.push(set_buddy_path(&["name"], toml_edit::value(name)));
-            }
-            BuddyConfigEdit::SetObserverEnabled(enabled) => {
+            BuddyConfigEdit::ObserverEnabled(enabled) => {
                 next.observer.enabled = enabled;
                 edits.push(set_buddy_path(
                     &["observer", "enabled"],

@@ -1,14 +1,14 @@
 ---
-source: src/harness/tui/src/bottom_pane/chat_composer.rs
+source: src/tui/app/src/bottom_pane/chat_composer.rs
 expression: terminal.backend()
 ---
 "                                                                                                    "
+"                                                                                           .----.   "
+"                                                                                          ( @  @ )  "
+"                                                                                          (______)  "
+"                                                                                         /\/\/\/\\  "
+"                                                                                           Echo     "
+"                                                                                                    "
 "› [Pasted Content 1005 chars]                                                                       "
-"                                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
 "                                                                                                    "
 "  loading · 100% left                                                                               "

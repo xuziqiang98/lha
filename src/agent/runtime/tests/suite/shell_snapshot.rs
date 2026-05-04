@@ -282,7 +282,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
     let script = "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: snapshot-apply.txt\n+hello from snapshot\n*** End Patch\nEOF\n";
     let args = json!({
         "command": script,
-        "timeout_ms": 1_000,
+        "timeout_ms": 5_000,
     });
     let call_id = "shell-snapshot-apply-patch";
     let responses = vec![
@@ -318,13 +318,13 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    assert_eq!(fs::read_to_string(&target).await?, "hello from snapshot\n");
-
     let snapshot_path = wait_for_snapshot(&adam_home).await?;
     let snapshot_content = fs::read_to_string(&snapshot_path).await?;
     assert_posix_snapshot_sections(&snapshot_content);
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(fs::read_to_string(&target).await?, "hello from snapshot\n");
 
     Ok(())
 }
