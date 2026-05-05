@@ -3540,6 +3540,7 @@ mod tests {
                     aggregated_output: String::new(),
                     formatted_output: String::new(),
                 }),
+                completed: true,
                 source: ExecCommandSource::UserShell,
                 start_time: None,
                 duration: None,

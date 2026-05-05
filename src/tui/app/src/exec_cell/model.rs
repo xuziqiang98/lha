@@ -19,6 +19,7 @@ pub(crate) struct ExecCall {
     pub(crate) command: Vec<String>,
     pub(crate) parsed: Vec<ParsedCommand>,
     pub(crate) output: Option<CommandOutput>,
+    pub(crate) completed: bool,
     pub(crate) source: ExecCommandSource,
     pub(crate) start_time: Option<Instant>,
     pub(crate) duration: Option<Duration>,
@@ -52,6 +53,7 @@ impl ExecCell {
             command,
             parsed,
             output: None,
+            completed: false,
             source,
             start_time: Some(Instant::now()),
             duration: None,
@@ -75,18 +77,19 @@ impl ExecCell {
     ) {
         if let Some(call) = self.calls.iter_mut().rev().find(|c| c.call_id == call_id) {
             call.output = Some(output);
+            call.completed = true;
             call.duration = Some(duration);
             call.start_time = None;
         }
     }
 
     pub(crate) fn should_flush(&self) -> bool {
-        !self.is_exploring_cell() && self.calls.iter().all(|c| c.output.is_some())
+        !self.is_exploring_cell() && self.calls.iter().all(|c| c.completed)
     }
 
     pub(crate) fn mark_failed(&mut self) {
         for call in self.calls.iter_mut() {
-            if call.output.is_none() {
+            if !call.completed {
                 let elapsed = call
                     .start_time
                     .map(|st| st.elapsed())
@@ -98,6 +101,7 @@ impl ExecCell {
                     formatted_output: String::new(),
                     aggregated_output: String::new(),
                 });
+                call.completed = true;
             }
         }
     }
@@ -107,13 +111,13 @@ impl ExecCell {
     }
 
     pub(crate) fn is_active(&self) -> bool {
-        self.calls.iter().any(|c| c.output.is_none())
+        self.calls.iter().any(|c| !c.completed)
     }
 
     pub(crate) fn active_start_time(&self) -> Option<Instant> {
         self.calls
             .iter()
-            .find(|c| c.output.is_none())
+            .find(|c| !c.completed)
             .and_then(|c| c.start_time)
     }
 

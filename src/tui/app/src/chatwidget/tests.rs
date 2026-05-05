@@ -37,7 +37,9 @@ use adam_agent::protocol::EventMsg;
 use adam_agent::protocol::ExecApprovalRequestEvent;
 use adam_agent::protocol::ExecCommandBeginEvent;
 use adam_agent::protocol::ExecCommandEndEvent;
+use adam_agent::protocol::ExecCommandOutputDeltaEvent;
 use adam_agent::protocol::ExecCommandSource;
+use adam_agent::protocol::ExecOutputStream;
 use adam_agent::protocol::ExecPolicyAmendment;
 use adam_agent::protocol::ExitedReviewModeEvent;
 use adam_agent::protocol::FileChange;
@@ -2463,6 +2465,17 @@ fn end_exec(
             exit_code,
             duration: std::time::Duration::from_millis(5),
             formatted_output: aggregated,
+        }),
+    });
+}
+
+fn output_delta(chat: &mut ChatWidget, call_id: &str, chunk: &str) {
+    chat.handle_codex_event(Event {
+        id: call_id.to_string(),
+        msg: EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+            call_id: call_id.to_string(),
+            stream: ExecOutputStream::Stdout,
+            chunk: chunk.as_bytes().to_vec(),
         }),
     });
 }
@@ -4898,6 +4911,30 @@ async fn exec_history_extends_previous_when_consecutive() {
     let begin_cat_bar = begin_exec(&mut chat, "call-cat-bar", "cat bar.txt");
     end_exec(&mut chat, begin_cat_bar, "hello from bar", "", 0);
     assert_snapshot!("exploring_step6_finish_cat_bar", active_blob(&chat));
+}
+
+#[tokio::test]
+async fn exec_output_delta_keeps_exploring_cell_active() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let begin_ls = begin_exec(&mut chat, "call-ls", "ls -la");
+    output_delta(&mut chat, "call-ls", "file1\n");
+
+    let active = active_blob(&chat);
+    assert!(
+        active.contains("• Exploring"),
+        "expected output delta to keep exploring active: {active:?}"
+    );
+    assert!(
+        !active.contains("• Explored"),
+        "output delta should not mark exploring as completed: {active:?}"
+    );
+
+    end_exec(&mut chat, begin_ls, "file1\n", "", 0);
+    assert!(
+        active_blob(&chat).contains("• Explored"),
+        "exec end should mark exploring completed"
+    );
 }
 
 #[tokio::test]
