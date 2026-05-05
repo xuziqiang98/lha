@@ -1,7 +1,7 @@
 ---
-source: src/harness/tui/src/chatwidget/tests.rs
+source: src/tui/app/src/chatwidget/tests.rs
 expression: active_blob(&chat)
 ---
-• Explored
+• Exploring
   └ List ls -la
     Read foo.txt, bar.txt

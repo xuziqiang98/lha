@@ -1,6 +1,6 @@
 ---
-source: src/harness/tui/src/history_cell.rs
+source: src/tui/app/src/history_cell.rs
 expression: rendered
 ---
-• Explored
+• Exploring
   └ Read auth.rs, shimmer.rs

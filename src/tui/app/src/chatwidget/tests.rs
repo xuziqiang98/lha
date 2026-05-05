@@ -2803,7 +2803,7 @@ async fn exec_history_shows_unified_exec_tool_calls() {
     end_exec(&mut chat, begin, "", "", 0);
 
     let blob = active_blob(&chat);
-    assert_eq!(blob, "• Explored\n  └ List ls\n");
+    assert_eq!(blob, "• Exploring\n  └ List ls\n");
 }
 
 #[tokio::test]
@@ -4932,8 +4932,12 @@ async fn exec_output_delta_keeps_exploring_cell_active() {
 
     end_exec(&mut chat, begin_ls, "file1\n", "", 0);
     assert!(
-        active_blob(&chat).contains("• Explored"),
-        "exec end should mark exploring completed"
+        active_blob(&chat).contains("• Exploring"),
+        "exec end should keep the exploring label"
+    );
+    assert!(
+        !active_blob(&chat).contains("• Explored"),
+        "exploring cells should not render the completed label"
     );
 }
 

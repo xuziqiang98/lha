@@ -262,11 +262,7 @@ impl ExecCell {
                 "•".dim()
             },
             " ".into(),
-            if self.is_active() {
-                "Exploring".bold()
-            } else {
-                "Explored".bold()
-            },
+            "Exploring".bold(),
         ]));
 
         let mut calls = self.calls.clone();

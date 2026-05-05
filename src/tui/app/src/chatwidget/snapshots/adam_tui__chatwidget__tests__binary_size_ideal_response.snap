@@ -14,7 +14,7 @@ expression: "lines[start_idx..].join(\"\\n\")"
 • I’m going to scan the workspace and Cargo manifests to see build profiles and
   dependencies that impact binary size. Then I’ll summarize the main causes.
 
-• Explored
+• Exploring
   └ List ls -la
     Read Cargo.toml
 
@@ -36,7 +36,7 @@ expression: "lines[start_idx..].join(\"\\n\")"
     ] }
     tracing = { version
 
-• Explored
+• Exploring
   └ Read Cargo.toml
 
 • I’m evaluating how binary size is influenced by various factors. There are
