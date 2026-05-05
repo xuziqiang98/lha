@@ -34,6 +34,7 @@ pub struct ModelsJson {
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct ModelsProvider {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default)]
     pub endpoints: BTreeMap<String, ModelsEndpoint>,
@@ -43,18 +44,29 @@ pub struct ModelsProvider {
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct ModelsEndpoint {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_key_instructions: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub experimental_bearer_token: Option<String>,
     #[serde(default)]
     pub dialect: ModelsDialect,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query_params: Option<HashMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_headers: Option<HashMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_http_headers: Option<HashMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_max_retries: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_max_retries: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_idle_timeout_ms: Option<u64>,
     #[serde(default)]
     pub supports_realtime_streaming: bool,
@@ -75,14 +87,23 @@ pub enum ModelsDialect {
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct ModelMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact_token_limit: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_summary: Option<ReasoningSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verbosity: Option<Verbosity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_reasoning_summaries: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_verbosity: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_modalities: Option<Vec<String>>,
 }
 
@@ -255,6 +276,68 @@ mod tests {
                 "openrouter".to_string()
             )]
         );
+    }
+
+    #[test]
+    fn explicit_null_fields_match_missing_fields() {
+        let with_nulls: ModelsJson = serde_json::from_str(
+            r#"{
+              "providers": {
+                "custom": {
+                  "name": null,
+                  "endpoints": {
+                    "chat": {
+                      "name": null,
+                      "base_url": "https://example.com/v1",
+                      "env_key": null,
+                      "env_key_instructions": null,
+                      "experimental_bearer_token": "sk-test",
+                      "query_params": null,
+                      "http_headers": null,
+                      "env_http_headers": null,
+                      "request_max_retries": null,
+                      "stream_max_retries": null,
+                      "stream_idle_timeout_ms": null,
+                      "models": {
+                        "gpt-test": {
+                          "display_name": null,
+                          "context_window": null,
+                          "auto_compact_token_limit": null,
+                          "reasoning_effort": null,
+                          "reasoning_summary": null,
+                          "verbosity": null,
+                          "supports_reasoning_summaries": null,
+                          "supports_verbosity": null,
+                          "input_modalities": null
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+        let without_nulls: ModelsJson = serde_json::from_str(
+            r#"{
+              "providers": {
+                "custom": {
+                  "endpoints": {
+                    "chat": {
+                      "base_url": "https://example.com/v1",
+                      "experimental_bearer_token": "sk-test",
+                      "models": {
+                        "gpt-test": {}
+                      }
+                    }
+                  }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(with_nulls, without_nulls);
     }
 
     #[test]

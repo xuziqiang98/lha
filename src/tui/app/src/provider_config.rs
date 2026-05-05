@@ -928,15 +928,15 @@ include_apply_patch_tool = true
 
         let models_raw = std::fs::read_to_string(adam_home.path().join("models.json")).unwrap();
         let models: serde_json::Value = serde_json::from_str(&models_raw).unwrap();
-        assert!(
+        let metadata =
             models["providers"]["custom_1"]["endpoints"]["responses"]["models"]["gpt-test"]
-                ["context_window"]
-                .is_null()
-        );
+                .as_object()
+                .expect("model metadata should be an object");
+        assert!(!metadata.contains_key("context_window"));
     }
 
     #[test]
-    fn saving_different_model_with_blank_context_window_keeps_existing_metadata() {
+    fn saving_different_model_with_blank_context_window_omits_empty_values() {
         let adam_home = tempdir().expect("temp dir");
 
         persist_custom_provider_files(
@@ -973,11 +973,17 @@ include_apply_patch_tool = true
                 .as_i64(),
             Some(64_000)
         );
-        assert!(
-            models["providers"]["custom_2"]["endpoints"]["chat"]["models"]["gpt-other"]
-                ["context_window"]
-                .is_null()
-        );
+        let endpoint = models["providers"]["custom_2"]["endpoints"]["chat"]
+            .as_object()
+            .expect("endpoint should be an object");
+        assert!(!endpoint.contains_key("env_key"));
+        assert!(!endpoint.contains_key("query_params"));
+        assert!(!endpoint.contains_key("http_headers"));
+
+        let metadata = endpoint["models"]["gpt-other"]
+            .as_object()
+            .expect("model metadata should be an object");
+        assert!(!metadata.contains_key("context_window"));
     }
 
     #[test]
