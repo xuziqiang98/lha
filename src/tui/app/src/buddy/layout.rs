@@ -1,10 +1,11 @@
 use unicode_width::UnicodeWidthStr;
 
 use super::model::Buddy;
+use super::sprites;
 use super::state::BuddyState;
 
 pub(crate) const BUDDY_MIN_FULL_WIDTH: u16 = 100;
-pub(crate) const SPRITE_BODY_WIDTH: u16 = 12;
+pub(crate) const SPRITE_BODY_WIDTH: u16 = sprites::SPRITE_WIDTH as u16;
 pub(crate) const SPRITE_HEIGHT: u16 = 5;
 pub(crate) const NAME_HEIGHT: u16 = 1;
 pub(crate) const PET_EXTRA_HEIGHT: u16 = 1;

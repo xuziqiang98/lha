@@ -1794,7 +1794,10 @@ impl HistoryCell for BuddyDetailsCell {
                     .get(index)
                     .cloned()
                     .unwrap_or_else(|| Line::from(""));
-                let mut spans = vec![Span::from(format!("{left:<14}")).fg(color), "  ".into()];
+                let mut spans = vec![
+                    Span::from(center_text_to_width(left, 14)).fg(color),
+                    "  ".into(),
+                ];
                 spans.extend(right.spans);
                 content.push(Line::from(spans));
             }
@@ -1819,6 +1822,16 @@ impl HistoryCell for BuddyDetailsCell {
 
         with_border_with_inner_width(content, usize::from(inner_width))
     }
+}
+
+fn center_text_to_width(text: &str, width: usize) -> String {
+    let text_width = UnicodeWidthStr::width(text);
+    if text_width >= width {
+        return text.to_string();
+    }
+    let left_pad = (width - text_width) / 2;
+    let right_pad = width - text_width - left_pad;
+    format!("{}{}{}", " ".repeat(left_pad), text, " ".repeat(right_pad))
 }
 
 fn detail_lines(buddy: &Buddy) -> Vec<Line<'static>> {
@@ -3610,5 +3623,39 @@ mod tests {
             .expect("details lines");
 
         assert!(max_width < 90, "details card should stay compact");
+    }
+
+    #[test]
+    fn buddy_details_cell_centers_owl_sprite_in_detail_column() {
+        let buddy = Buddy {
+            name: "Kilo".to_string(),
+            species: adam_agent::config::types::BuddySpecies::Owl,
+            eye: adam_agent::config::types::BuddyEye::Degree,
+            hat: adam_agent::config::types::BuddyHat::None,
+            rarity: BuddyRarity::Rare,
+            shiny: false,
+            personality: "careful watcher".to_string(),
+            stats: BuddyStats {
+                debugging: 72,
+                patience: 31,
+                chaos: 48,
+                wisdom: 66,
+                snark: 14,
+            },
+            identity_kind: adam_protocol::config_types::IdentityKind::Programmer,
+        };
+
+        let rendered = render_lines(&new_buddy_details(buddy).display_lines(120));
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("    /\\  /\\    ")),
+            "expected owl ears centered in the 14-column sprite detail area: {rendered:?}",
+        );
+        assert!(
+            rendered.iter().any(|line| line.contains("   ((°)(°))   ")),
+            "expected owl face centered in the 14-column sprite detail area: {rendered:?}",
+        );
     }
 }

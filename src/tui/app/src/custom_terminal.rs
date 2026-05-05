@@ -214,6 +214,10 @@ where
     /// Requested area will be saved to remain consistent when rendering. This leads to a full clear
     /// of the screen.
     pub fn resize(&mut self, screen_size: Size) -> io::Result<()> {
+        if screen_size != self.last_known_screen_size {
+            self.clear()?;
+            self.invalidate_viewport();
+        }
         self.last_known_screen_size = screen_size;
         Ok(())
     }
@@ -658,6 +662,27 @@ mod tests {
                 .iter()
                 .any(|command| matches!(command, DrawCommand::ClearToEnd { x: 2, y: 0, .. })),
             "expected clear-to-end to start after the remaining wide char; commands: {commands:?}"
+        );
+    }
+
+    #[test]
+    fn resize_invalidates_previous_buffer() {
+        let backend = crate::test_backend::VT100Backend::new(120, 8);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 120, 8));
+        terminal
+            .previous_buffer_mut()
+            .set_string(100, 0, "hat", Style::default());
+
+        terminal.resize(Size::new(99, 8)).expect("resize");
+
+        let previous = terminal.previous_buffer();
+        assert!(
+            previous
+                .content
+                .iter()
+                .all(|cell| cell.symbol().trim().is_empty()),
+            "resize should force the next draw to repaint without stale buddy cells"
         );
     }
 }
