@@ -109,7 +109,7 @@ fn truncate_to_width(text: &str, max_width: usize) -> String {
 fn centered_column(area: Rect, width: u16) -> Rect {
     let width = width.min(area.width);
     Rect::new(
-        area.x.saturating_add(area.width.saturating_sub(width) / 2),
+        area.x.saturating_add(area.width.saturating_sub(width)),
         area.y,
         width,
         area.height,
@@ -117,7 +117,7 @@ fn centered_column(area: Rect, width: u16) -> Rect {
 }
 
 fn centered_sprite_line(text: String, width: u16, style: Style) -> Line<'static> {
-    centered_line(text.trim_end().to_string(), width, style)
+    centered_line(text.trim().to_string(), width, style)
 }
 
 fn centered_line(text: String, width: u16, style: Style) -> Line<'static> {
@@ -131,11 +131,19 @@ fn centered_line(text: String, width: u16, style: Style) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
+    use adam_agent::config::types::BuddyEye;
+    use adam_agent::config::types::BuddyHat;
+    use adam_agent::config::types::BuddyRarity;
+    use adam_agent::config::types::BuddySpecies;
     use adam_agent::config::types::TuiBuddy;
+    use adam_protocol::config_types::IdentityKind;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+    use unicode_width::UnicodeWidthStr;
 
     use super::*;
+    use crate::buddy::model::Buddy;
+    use crate::buddy::model::BuddyStats;
 
     #[test]
     fn reserves_width_only_when_visible_and_wide() {
@@ -210,8 +218,69 @@ mod tests {
             .map(|x| buf[(x, name_row)].symbol().chars().next().unwrap_or(' '))
             .collect::<String>();
         let name_x = row.find(&name).expect("buddy name rendered") as u16;
-        let expected_x = (area.width - UnicodeWidthStr::width(name.as_str()) as u16) / 2;
+        let name_width = UnicodeWidthStr::width(name.as_str()) as u16;
+        let sprite_width = layout::sprite_column_width(name_width);
+        let expected_x = area.width.saturating_sub(sprite_width) + (sprite_width - name_width) / 2;
 
         assert_eq!(name_x, expected_x);
+    }
+
+    #[test]
+    fn render_buddy_centers_pixel_dragon_sprite_on_name_axis() {
+        let mut state = BuddyState::default();
+        state.set_config(TuiBuddy {
+            enabled: true,
+            muted: false,
+            ..TuiBuddy::default()
+        });
+        state.set_buddy_for_test(pixel_dragon_buddy());
+
+        let area = Rect::new(0, 0, 18, 6);
+        let mut buf = Buffer::empty(area);
+
+        render_buddy(area, &mut buf, &state, false);
+
+        let rows = render_rows(&buf, area);
+        let hat_center = substring_center_x2(&rows[0], "-|-");
+        let face_center = substring_center_x2(&rows[2], "<  ×  ×  >");
+        let name_center = substring_center_x2(&rows[5], "Pixel");
+
+        assert_eq!(hat_center, name_center, "rows: {rows:?}");
+        assert!(face_center.abs_diff(name_center) <= 1, "rows: {rows:?}");
+    }
+
+    pub(crate) fn pixel_dragon_buddy() -> Buddy {
+        Buddy {
+            name: "Pixel".to_string(),
+            species: BuddySpecies::Dragon,
+            eye: BuddyEye::Cross,
+            hat: BuddyHat::Propeller,
+            rarity: BuddyRarity::Epic,
+            shiny: false,
+            personality: "terminal philosopher".to_string(),
+            stats: BuddyStats {
+                debugging: 100,
+                patience: 45,
+                chaos: 50,
+                wisdom: 49,
+                snark: 33,
+            },
+            identity_kind: IdentityKind::Nobody,
+        }
+    }
+
+    fn render_rows(buf: &Buffer, area: Rect) -> Vec<String> {
+        (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol().chars().next().unwrap_or(' '))
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn substring_center_x2(row: &str, needle: &str) -> usize {
+        let start = row.find(needle).expect("needle rendered");
+        2 * UnicodeWidthStr::width(&row[..start]) + UnicodeWidthStr::width(needle)
     }
 }

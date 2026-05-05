@@ -3439,6 +3439,55 @@ mod tests {
     }
 
     #[test]
+    fn wide_buddy_layout_centers_pixel_dragon_sprite_on_name_axis() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Adam to do anything".to_string(),
+            false,
+        );
+        composer
+            .buddy_state
+            .set_buddy_for_test(crate::buddy::model::Buddy {
+                name: "Pixel".to_string(),
+                species: adam_agent::config::types::BuddySpecies::Dragon,
+                eye: adam_agent::config::types::BuddyEye::Cross,
+                hat: adam_agent::config::types::BuddyHat::Propeller,
+                rarity: adam_agent::config::types::BuddyRarity::Epic,
+                shiny: false,
+                personality: "terminal philosopher".to_string(),
+                stats: crate::buddy::model::BuddyStats {
+                    debugging: 100,
+                    patience: 45,
+                    chaos: 50,
+                    wisdom: 49,
+                    snark: 33,
+                },
+                identity_kind: adam_protocol::config_types::IdentityKind::Nobody,
+            });
+
+        let area = Rect::new(0, 0, 160, 8);
+        let layout = composer.composer_buddy_layout(area);
+        let buddy_rect = layout.buddy_rect.expect("buddy visible on wide layout");
+        let mut buf = Buffer::empty(area);
+
+        composer.render(area, &mut buf);
+
+        let rows = render_buffer_rows(&buf, area);
+        let hat_center = row_substring_center_x2(&rows[buddy_rect.y as usize], "-|-");
+        let face_center = row_substring_center_x2(&rows[buddy_rect.y as usize + 2], "<  ×  ×  >");
+        let name_center = row_substring_center_x2(&rows[buddy_rect.y as usize + 5], "Pixel");
+
+        assert_eq!(hat_center, name_center, "rows: {rows:?}");
+        assert!(face_center.abs_diff(name_center) <= 1, "rows: {rows:?}");
+        assert!(name_center >= 2 * usize::from(buddy_rect.x));
+        assert!(name_center < 2 * usize::from(buddy_rect.x + buddy_rect.width));
+    }
+
+    #[test]
     fn narrow_buddy_layout_hides_buddy() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
@@ -3454,6 +3503,22 @@ mod tests {
 
         assert_eq!(layout.buddy_mode, BuddyLayoutMode::Hidden);
         assert!(layout.buddy_rect.is_none());
+    }
+
+    fn render_buffer_rows(buf: &Buffer, area: Rect) -> Vec<String> {
+        (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol().chars().next().unwrap_or(' '))
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn row_substring_center_x2(row: &str, needle: &str) -> usize {
+        let start = row.find(needle).expect("needle rendered");
+        2 * unicode_width::UnicodeWidthStr::width(&row[..start])
+            + unicode_width::UnicodeWidthStr::width(needle)
     }
 
     #[test]

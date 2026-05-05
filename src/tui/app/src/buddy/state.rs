@@ -127,6 +127,12 @@ impl BuddyState {
         self.buddies.get(&self.active_identity_kind)
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_buddy_for_test(&mut self, buddy: Buddy) {
+        self.active_identity_kind = buddy.identity_kind;
+        self.buddies.insert(buddy.identity_kind, buddy);
+    }
+
     pub(crate) fn is_hatched(&self) -> bool {
         self.buddy().is_some()
     }
