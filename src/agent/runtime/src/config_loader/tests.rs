@@ -114,7 +114,7 @@ async fn returns_config_error_for_invalid_managed_config_toml() {
 #[tokio::test]
 async fn returns_config_error_for_schema_error_in_user_config() {
     let tmp = tempdir().expect("tempdir");
-    let contents = "model_reasoning_effort = \"not_an_effort\"";
+    let contents = "approval_policy = \"not_a_policy\"";
     let config_path = tmp.path().join(CONFIG_TOML_FILE);
     std::fs::write(&config_path, contents).expect("write config");
 
@@ -157,20 +157,20 @@ async fn merges_managed_config_layer_on_top() {
 
     std::fs::write(
         tmp.path().join(CONFIG_TOML_FILE),
-        r#"foo = 1
+        r#"approval_policy = "on-request"
 
-[nested]
-value = "base"
+[tools]
+web_search = false
 "#,
     )
     .expect("write base");
     std::fs::write(
         &managed_path,
-        r#"foo = 2
+        r#"approval_policy = "never"
 
-[nested]
-value = "managed_config"
-extra = true
+[tools]
+web_search = true
+view_image = true
 "#,
     )
     .expect("write managed config");
@@ -195,16 +195,16 @@ extra = true
     let loaded = state.effective_config();
     let table = loaded.as_table().expect("top-level table expected");
 
-    assert_eq!(table.get("foo"), Some(&TomlValue::Integer(2)));
-    let nested = table
-        .get("nested")
-        .and_then(|v| v.as_table())
-        .expect("nested");
     assert_eq!(
-        nested.get("value"),
-        Some(&TomlValue::String("managed_config".to_string()))
+        table.get("approval_policy"),
+        Some(&TomlValue::String("never".to_string()))
     );
-    assert_eq!(nested.get("extra"), Some(&TomlValue::Boolean(true)));
+    let tools = table
+        .get("tools")
+        .and_then(|v| v.as_table())
+        .expect("tools");
+    assert_eq!(tools.get("web_search"), Some(&TomlValue::Boolean(true)));
+    assert_eq!(tools.get("view_image"), Some(&TomlValue::Boolean(true)));
 }
 
 #[tokio::test]
@@ -288,16 +288,16 @@ async fn managed_preferences_take_highest_precedence() {
 
     std::fs::write(
         tmp.path().join(CONFIG_TOML_FILE),
-        r#"[nested]
-value = "base"
+        r#"[tools]
+web_search = false
 "#,
     )
     .expect("write base");
     std::fs::write(
         &managed_path,
-        r#"[nested]
-value = "managed_config"
-flag = true
+        r#"[tools]
+web_search = true
+view_image = true
 "#,
     )
     .expect("write managed config");
@@ -307,9 +307,9 @@ flag = true
         managed_preferences_base64: Some(
             base64::prelude::BASE64_STANDARD.encode(
                 r#"
-[nested]
-value = "managed"
-flag = false
+[tools]
+web_search = false
+view_image = false
 "#
                 .as_bytes(),
             ),
@@ -328,15 +328,12 @@ flag = false
     .await
     .expect("load config");
     let loaded = state.effective_config();
-    let nested = loaded
-        .get("nested")
+    let tools = loaded
+        .get("tools")
         .and_then(|v| v.as_table())
-        .expect("nested table");
-    assert_eq!(
-        nested.get("value"),
-        Some(&TomlValue::String("managed".to_string()))
-    );
-    assert_eq!(nested.get("flag"), Some(&TomlValue::Boolean(false)));
+        .expect("tools table");
+    assert_eq!(tools.get("web_search"), Some(&TomlValue::Boolean(false)));
+    assert_eq!(tools.get("view_image"), Some(&TomlValue::Boolean(false)));
 }
 
 #[cfg(target_os = "macos")]
@@ -587,12 +584,12 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
 
     tokio::fs::write(
         project_root.join(".codex").join(CONFIG_TOML_FILE),
-        "foo = \"root\"\n",
+        "instructions = \"root\"\n",
     )
     .await?;
     tokio::fs::write(
         nested.join(".codex").join(CONFIG_TOML_FILE),
-        "foo = \"child\"\n",
+        "instructions = \"child\"\n",
     )
     .await?;
 
@@ -625,11 +622,11 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
     );
 
     let config = layers.effective_config();
-    let foo = config
-        .get("foo")
+    let instructions = config
+        .get("instructions")
         .and_then(TomlValue::as_str)
-        .expect("foo entry");
-    assert_eq!(foo, "child");
+        .expect("instructions entry");
+    assert_eq!(instructions, "child");
     Ok(())
 }
 
@@ -767,7 +764,11 @@ async fn adam_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::Re
     let home_dir = tmp.path().join("home");
     let adam_home = home_dir.join(".adam");
     tokio::fs::create_dir_all(&adam_home).await?;
-    tokio::fs::write(adam_home.join(CONFIG_TOML_FILE), "foo = \"user\"\n").await?;
+    tokio::fs::write(
+        adam_home.join(CONFIG_TOML_FILE),
+        "instructions = \"user\"\n",
+    )
+    .await?;
 
     let cwd = AbsolutePathBuf::from_absolute_path(&home_dir)?;
     let layers = load_config_layers_state(
@@ -790,7 +791,7 @@ async fn adam_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::Re
     let expected: Vec<&ConfigLayerEntry> = Vec::new();
     assert_eq!(expected, project_layers);
     assert_eq!(
-        layers.effective_config().get("foo"),
+        layers.effective_config().get("instructions"),
         Some(&TomlValue::String("user".to_string()))
     );
 
@@ -807,7 +808,11 @@ async fn adam_home_within_project_tree_is_not_double_loaded() -> std::io::Result
 
     tokio::fs::create_dir_all(&nested_dot_codex).await?;
     tokio::fs::create_dir_all(project_root.join(".git")).await?;
-    tokio::fs::write(nested_dot_codex.join(CONFIG_TOML_FILE), "foo = \"child\"\n").await?;
+    tokio::fs::write(
+        nested_dot_codex.join(CONFIG_TOML_FILE),
+        "instructions = \"child\"\n",
+    )
+    .await?;
 
     tokio::fs::create_dir_all(&project_dot_codex).await?;
     make_config_for_test(&project_dot_codex, &project_root, TrustLevel::Trusted, None).await?;
@@ -815,7 +820,7 @@ async fn adam_home_within_project_tree_is_not_double_loaded() -> std::io::Result
     let user_config_contents = tokio::fs::read_to_string(&user_config_path).await?;
     tokio::fs::write(
         &user_config_path,
-        format!("foo = \"user\"\n{user_config_contents}"),
+        format!("instructions = \"user\"\n{user_config_contents}"),
     )
     .await?;
 
@@ -838,7 +843,8 @@ async fn adam_home_within_project_tree_is_not_double_loaded() -> std::io::Result
         .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
         .collect();
 
-    let child_config: TomlValue = toml::from_str("foo = \"child\"\n").expect("parse child config");
+    let child_config: TomlValue =
+        toml::from_str("instructions = \"child\"\n").expect("parse child config");
     assert_eq!(
         vec![&ConfigLayerEntry {
             name: super::ConfigLayerSource::Project {
@@ -851,7 +857,7 @@ async fn adam_home_within_project_tree_is_not_double_loaded() -> std::io::Result
         project_layers
     );
     assert_eq!(
-        layers.effective_config().get("foo"),
+        layers.effective_config().get("instructions"),
         Some(&TomlValue::String("child".to_string()))
     );
 
@@ -866,7 +872,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     tokio::fs::create_dir_all(nested.join(".codex")).await?;
     tokio::fs::write(
         nested.join(".codex").join(CONFIG_TOML_FILE),
-        "foo = \"child\"\n",
+        "instructions = \"child\"\n",
     )
     .await?;
 
@@ -885,7 +891,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     let untrusted_config_contents = tokio::fs::read_to_string(&untrusted_config_path).await?;
     tokio::fs::write(
         &untrusted_config_path,
-        format!("foo = \"user\"\n{untrusted_config_contents}"),
+        format!("instructions = \"user\"\n{untrusted_config_contents}"),
     )
     .await?;
 
@@ -911,17 +917,21 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
         "expected untrusted project layer to be disabled"
     );
     assert_eq!(
-        project_layers_untrusted[0].config.get("foo"),
+        project_layers_untrusted[0].config.get("instructions"),
         Some(&TomlValue::String("child".to_string()))
     );
     assert_eq!(
-        layers_untrusted.effective_config().get("foo"),
+        layers_untrusted.effective_config().get("instructions"),
         Some(&TomlValue::String("user".to_string()))
     );
 
     let adam_home_unknown = tmp.path().join("home_unknown");
     tokio::fs::create_dir_all(&adam_home_unknown).await?;
-    tokio::fs::write(adam_home_unknown.join(CONFIG_TOML_FILE), "foo = \"user\"\n").await?;
+    tokio::fs::write(
+        adam_home_unknown.join(CONFIG_TOML_FILE),
+        "instructions = \"user\"\n",
+    )
+    .await?;
 
     let layers_unknown = load_config_layers_state(
         &adam_home_unknown,
@@ -945,11 +955,11 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
         "expected unknown-trust project layer to be disabled"
     );
     assert_eq!(
-        project_layers_unknown[0].config.get("foo"),
+        project_layers_unknown[0].config.get("instructions"),
         Some(&TomlValue::String("child".to_string()))
     );
     assert_eq!(
-        layers_unknown.effective_config().get("foo"),
+        layers_unknown.effective_config().get("instructions"),
         Some(&TomlValue::String("user".to_string()))
     );
 
@@ -963,7 +973,11 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
     let nested = project_root.join("child");
     tokio::fs::create_dir_all(nested.join(".codex")).await?;
     tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
-    tokio::fs::write(nested.join(".codex").join(CONFIG_TOML_FILE), "foo =").await?;
+    tokio::fs::write(
+        nested.join(".codex").join(CONFIG_TOML_FILE),
+        "instructions =",
+    )
+    .await?;
 
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let cases = [
@@ -979,9 +993,13 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
         if let Some(trust_level) = trust_level {
             make_config_for_test(&adam_home, &project_root, trust_level, None).await?;
             let config_contents = tokio::fs::read_to_string(&config_path).await?;
-            tokio::fs::write(&config_path, format!("foo = \"user\"\n{config_contents}")).await?;
+            tokio::fs::write(
+                &config_path,
+                format!("instructions = \"user\"\n{config_contents}"),
+            )
+            .await?;
         } else {
-            tokio::fs::write(&config_path, "foo = \"user\"\n").await?;
+            tokio::fs::write(&config_path, "instructions = \"user\"\n").await?;
         }
 
         let layers = load_config_layers_state(
@@ -1014,7 +1032,7 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
             TomlValue::Table(toml::map::Map::new())
         );
         assert_eq!(
-            layers.effective_config().get("foo"),
+            layers.effective_config().get("instructions"),
             Some(&TomlValue::String("user".to_string()))
         );
     }
@@ -1062,12 +1080,12 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
     tokio::fs::write(project_root.join(".hg"), "hg").await?;
     tokio::fs::write(
         project_root.join(".codex").join(CONFIG_TOML_FILE),
-        "foo = \"root\"\n",
+        "instructions = \"root\"\n",
     )
     .await?;
     tokio::fs::write(
         nested.join(".codex").join(CONFIG_TOML_FILE),
-        "foo = \"child\"\n",
+        "instructions = \"child\"\n",
     )
     .await?;
 
@@ -1107,11 +1125,11 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
     );
 
     let merged = layers.effective_config();
-    let foo = merged
-        .get("foo")
+    let instructions = merged
+        .get("instructions")
         .and_then(TomlValue::as_str)
-        .expect("foo entry");
-    assert_eq!(foo, "child");
+        .expect("instructions entry");
+    assert_eq!(instructions, "child");
 
     Ok(())
 }

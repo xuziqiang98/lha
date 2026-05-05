@@ -16,7 +16,6 @@ use adam_app_server_protocol::SandboxMode;
 use adam_app_server_protocol::ToolsV2;
 use adam_app_server_protocol::WriteStatus;
 use adam_protocol::config_types::TrustLevel;
-use adam_protocol::openai_models::ReasoningEffort;
 use adam_utils_absolute_path::AbsolutePathBuf;
 use anyhow::Result;
 use app_test_support::McpProcess;
@@ -43,7 +42,6 @@ async fn config_read_returns_effective_and_layers() -> Result<()> {
     write_config(
         &adam_home,
         r#"
-model = "gpt-user"
 sandbox_mode = "workspace-write"
 "#,
     )?;
@@ -70,9 +68,9 @@ sandbox_mode = "workspace-write"
         layers,
     } = to_response(resp)?;
 
-    assert_eq!(config.model.as_deref(), Some("gpt-user"));
+    assert_eq!(config.sandbox_mode, Some(SandboxMode::WorkspaceWrite));
     assert_eq!(
-        origins.get("model").expect("origin").name,
+        origins.get("sandbox_mode").expect("origin").name,
         ConfigLayerSource::User {
             file: user_file.clone(),
         }
@@ -89,8 +87,6 @@ async fn config_read_includes_tools() -> Result<()> {
     write_config(
         &adam_home,
         r#"
-model = "gpt-user"
-
 [tools]
 web_search = true
 view_image = false
@@ -149,7 +145,7 @@ view_image = false
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_read_includes_project_layers_for_cwd() -> Result<()> {
     let adam_home = TempDir::new()?;
-    write_config(&adam_home, r#"model = "gpt-user""#)?;
+    write_config(&adam_home, r#"approval_policy = "on-request""#)?;
 
     let workspace = TempDir::new()?;
     let project_config_dir = workspace.path().join(".codex");
@@ -157,7 +153,7 @@ async fn config_read_includes_project_layers_for_cwd() -> Result<()> {
     std::fs::write(
         project_config_dir.join("config.toml"),
         r#"
-model_reasoning_effort = "high"
+sandbox_mode = "read-only"
 "#,
     )?;
     set_project_trust_level(adam_home.path(), workspace.path(), TrustLevel::Trusted)?;
@@ -181,9 +177,9 @@ model_reasoning_effort = "high"
         config, origins, ..
     } = to_response(resp)?;
 
-    assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
+    assert_eq!(config.sandbox_mode, Some(SandboxMode::ReadOnly));
     assert_eq!(
-        origins.get("model_reasoning_effort").expect("origin").name,
+        origins.get("sandbox_mode").expect("origin").name,
         ConfigLayerSource::Project {
             dot_codex_folder: project_config
         }
@@ -201,7 +197,6 @@ async fn config_read_includes_system_layer_and_overrides() -> Result<()> {
         &adam_home,
         &format!(
             r#"
-model = "gpt-user"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 
@@ -221,7 +216,6 @@ network_access = true
         &managed_path,
         format!(
             r#"
-model = "gpt-system"
 approval_policy = "never"
 
 [sandbox_workspace_write]
@@ -259,14 +253,6 @@ writable_roots = [{}]
         origins,
         layers,
     } = to_response(resp)?;
-
-    assert_eq!(config.model.as_deref(), Some("gpt-system"));
-    assert_eq!(
-        origins.get("model").expect("origin").name,
-        ConfigLayerSource::LegacyManagedConfigTomlFromFile {
-            file: managed_file.clone(),
-        }
-    );
 
     assert_eq!(config.approval_policy, Some(AskForApproval::Never));
     assert_eq!(
@@ -323,7 +309,7 @@ async fn config_value_write_replaces_value() -> Result<()> {
     write_config(
         &temp_dir,
         r#"
-model = "gpt-old"
+approval_policy = "on-request"
 "#,
     )?;
 
@@ -342,13 +328,16 @@ model = "gpt-old"
     )
     .await??;
     let read: ConfigReadResponse = to_response(read_resp)?;
-    let expected_version = read.origins.get("model").map(|m| m.version.clone());
+    let expected_version = read
+        .origins
+        .get("approval_policy")
+        .map(|m| m.version.clone());
 
     let write_id = mcp
         .send_config_value_write_request(ConfigValueWriteParams {
             file_path: None,
-            key_path: "model".to_string(),
-            value: json!("gpt-new"),
+            key_path: "approval_policy".to_string(),
+            value: json!("never"),
             merge_strategy: MergeStrategy::Replace,
             expected_version,
         })
@@ -377,7 +366,7 @@ model = "gpt-old"
     )
     .await??;
     let verify: ConfigReadResponse = to_response(verify_resp)?;
-    assert_eq!(verify.config.model.as_deref(), Some("gpt-new"));
+    assert_eq!(verify.config.approval_policy, Some(AskForApproval::Never));
 
     Ok(())
 }
@@ -388,7 +377,7 @@ async fn config_value_write_rejects_version_conflict() -> Result<()> {
     write_config(
         &adam_home,
         r#"
-model = "gpt-old"
+approval_policy = "on-request"
 "#,
     )?;
 
@@ -398,8 +387,8 @@ model = "gpt-old"
     let write_id = mcp
         .send_config_value_write_request(ConfigValueWriteParams {
             file_path: Some(adam_home.path().join("config.toml").display().to_string()),
-            key_path: "model".to_string(),
-            value: json!("gpt-new"),
+            key_path: "approval_policy".to_string(),
+            value: json!("never"),
             merge_strategy: MergeStrategy::Replace,
             expected_version: Some("sha256:stale".to_string()),
         })

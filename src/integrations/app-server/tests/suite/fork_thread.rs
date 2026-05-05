@@ -147,8 +147,7 @@ fn create_config_toml(adam_home: &Path) -> std::io::Result<()> {
 }
 
 fn config_contents() -> &'static str {
-    r#"model = "o3"
-approval_policy = "never"
+    r#"approval_policy = "never"
 sandbox_mode = "read-only"
 
 [features]

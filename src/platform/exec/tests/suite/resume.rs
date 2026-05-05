@@ -425,7 +425,7 @@ fn exec_resume_accepts_global_flags_after_subcommand() -> anyhow::Result<()> {
         .arg("--model")
         .arg("gpt-5.2-codex")
         .arg("--config")
-        .arg("reasoning_level=xhigh")
+        .arg("model_verbosity=high")
         .arg("--dangerously-bypass-approvals-and-sandbox")
         .arg("--skip-git-repo-check")
         .arg("echo resume-with-global-flags-after-subcommand")

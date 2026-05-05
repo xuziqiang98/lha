@@ -758,7 +758,6 @@ X-Doc = "42"
     async fn write_value_preserves_comments_and_order() -> Result<()> {
         let tmp = tempdir().expect("tempdir");
         let original = r#"# Adam user configuration
-model = "gpt-5"
 approval_policy = "on-request"
 
 [notice]
@@ -785,7 +784,6 @@ unified_exec = true
         let updated =
             std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
         let expected = r#"# Adam user configuration
-model = "gpt-5"
 approval_policy = "on-request"
 
 [notice]
@@ -804,7 +802,7 @@ remote_compaction = true
     async fn read_includes_origins_and_layers() {
         let tmp = tempdir().expect("tempdir");
         let user_path = tmp.path().join(CONFIG_TOML_FILE);
-        std::fs::write(&user_path, "model = \"user\"").unwrap();
+        std::fs::write(&user_path, "sandbox_mode = \"read-only\"").unwrap();
         let user_file = AbsolutePathBuf::try_from(user_path.clone()).expect("user file");
 
         let managed_path = tmp.path().join("managed_config.toml");
@@ -946,14 +944,14 @@ remote_compaction = true
     async fn version_conflict_rejected() {
         let tmp = tempdir().expect("tempdir");
         let user_path = tmp.path().join(CONFIG_TOML_FILE);
-        std::fs::write(&user_path, "model = \"user\"").unwrap();
+        std::fs::write(&user_path, "approval_policy = \"on-request\"").unwrap();
 
         let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
         let error = service
             .write_value(ConfigValueWriteParams {
                 file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
-                key_path: "model".to_string(),
-                value: serde_json::json!("gpt-5"),
+                key_path: "approval_policy".to_string(),
+                value: serde_json::json!("never"),
                 merge_strategy: MergeStrategy::Replace,
                 expected_version: Some("sha256:bogus".to_string()),
             })
@@ -975,8 +973,8 @@ remote_compaction = true
         service
             .write_value(ConfigValueWriteParams {
                 file_path: None,
-                key_path: "model".to_string(),
-                value: serde_json::json!("gpt-new"),
+                key_path: "approval_policy".to_string(),
+                value: serde_json::json!("never"),
                 merge_strategy: MergeStrategy::Replace,
                 expected_version: None,
             })
@@ -986,7 +984,7 @@ remote_compaction = true
         let contents =
             std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
         assert!(
-            contents.contains("model = \"gpt-new\""),
+            contents.contains("approval_policy = \"never\""),
             "config.toml should be updated even when file_path is omitted"
         );
     }
@@ -994,7 +992,11 @@ remote_compaction = true
     #[tokio::test]
     async fn invalid_user_value_rejected_even_if_overridden_by_managed() {
         let tmp = tempdir().expect("tempdir");
-        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"user\"").unwrap();
+        std::fs::write(
+            tmp.path().join(CONFIG_TOML_FILE),
+            "approval_policy = \"on-request\"",
+        )
+        .unwrap();
 
         let managed_path = tmp.path().join("managed_config.toml");
         std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
@@ -1029,23 +1031,23 @@ remote_compaction = true
 
         let contents =
             std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
-        assert_eq!(contents.trim(), "model = \"user\"");
+        assert_eq!(contents.trim(), "approval_policy = \"on-request\"");
     }
 
     #[tokio::test]
     async fn read_reports_managed_overrides_user_and_session_flags() {
         let tmp = tempdir().expect("tempdir");
         let user_path = tmp.path().join(CONFIG_TOML_FILE);
-        std::fs::write(&user_path, "model = \"user\"").unwrap();
+        std::fs::write(&user_path, "approval_policy = \"on-request\"").unwrap();
         let user_file = AbsolutePathBuf::try_from(user_path.clone()).expect("user file");
 
         let managed_path = tmp.path().join("managed_config.toml");
-        std::fs::write(&managed_path, "model = \"system\"").unwrap();
+        std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
         let managed_file = AbsolutePathBuf::try_from(managed_path.clone()).expect("managed file");
 
         let cli_overrides = vec![(
-            "model".to_string(),
-            TomlValue::String("session".to_string()),
+            "approval_policy".to_string(),
+            TomlValue::String("on-failure".to_string()),
         )];
 
         let service = ConfigService::new(
@@ -1068,9 +1070,13 @@ remote_compaction = true
             .await
             .expect("response");
 
-        assert_eq!(response.config.model.as_deref(), Some("system"));
+        assert_eq!(response.config.approval_policy, Some(AskForApproval::Never));
         assert_eq!(
-            response.origins.get("model").expect("origin").name,
+            response
+                .origins
+                .get("approval_policy")
+                .expect("origin")
+                .name,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile {
                 file: managed_file.clone()
             },

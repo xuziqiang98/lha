@@ -5,8 +5,6 @@ use crate::config::ConfigToml;
 use crate::config::display_model_provider_ref;
 use crate::config::generated_provider_profile_name;
 use crate::config::model_provider_cache_key;
-use crate::config::model_provider_id_from_ref;
-use crate::config::model_ref::ModelRef;
 use crate::config::models_json::ModelsJson;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
@@ -520,7 +518,7 @@ impl ModelsManager {
 
     fn configured_model_entries(
         &self,
-        config_toml: &ConfigToml,
+        _config_toml: &ConfigToml,
         config: &Config,
     ) -> Vec<(String, Option<String>)> {
         let mut seen_models = HashSet::new();
@@ -536,34 +534,6 @@ impl ModelsManager {
             let key = (model.to_string(), provider_id.clone());
             if seen_models.insert(key) {
                 configured_models.push((model.to_string(), provider_id));
-            }
-        }
-
-        let mut profile_models: Vec<(String, Option<String>)> = config_toml
-            .profiles
-            .values()
-            .filter_map(|profile| {
-                let profile_model = profile.model.as_deref()?.trim();
-                if profile_model.is_empty() {
-                    return None;
-                }
-                if let Ok(model_ref) = ModelRef::parse(profile_model) {
-                    Some((
-                        model_ref.model_id.clone(),
-                        Some(model_provider_id_from_ref(&model_ref)),
-                    ))
-                } else {
-                    Some((profile_model.to_string(), None))
-                }
-            })
-            .collect();
-        profile_models
-            .sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-
-        for (model, provider_id) in profile_models {
-            let key = (model.clone(), provider_id.clone());
-            if seen_models.insert(key) {
-                configured_models.push((model, provider_id));
             }
         }
 
@@ -1136,12 +1106,11 @@ mod tests {
                 let context_window = profile_table
                     .get("model_context_window")
                     .and_then(toml_edit::Item::as_integer);
-                if let Some(model) = model
-                    && let Some(provider) = provider.as_deref()
-                {
-                    profile_table["model"] = toml_edit::value(model_ref_string(provider, &model));
+                if let Some(model) = model {
+                    let provider = provider.as_deref().unwrap_or(OPENAI_PROVIDER_ID);
                     insert_models_entry(&mut models_json, provider, &model, context_window);
                 }
+                profile_table.remove("model");
                 profile_table.remove("model_provider");
                 profile_table.remove("model_context_window");
             }
@@ -1805,7 +1774,7 @@ model = "deepseek-r1"
             .map(|preset| preset.model.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(models, vec!["mock-model", "claude-sonnet", "deepseek-r1"]);
+        assert_eq!(models, vec!["mock-model", "deepseek-r1", "claude-sonnet"]);
         assert_eq!(
             picker_models
                 .iter()

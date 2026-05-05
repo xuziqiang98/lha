@@ -5962,28 +5962,6 @@
             }
           ]
         },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "modelProvider": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "modelReasoningEffort": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReasoningEffort"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "modelReasoningSummary": {
           "anyOf": [
             {
@@ -9024,22 +9002,6 @@
             }
           ]
         },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "modelReasoningEffort": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReasoningEffort"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "modelReasoningSummary": {
           "anyOf": [
             {
@@ -9968,12 +9930,6 @@
               "null"
             ]
           },
-          "model": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "model_auto_compact_token_limit": {
             "format": "int64",
             "type": [
@@ -9986,22 +9942,6 @@
             "type": [
               "integer",
               "null"
-            ]
-          },
-          "model_provider": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "model_reasoning_effort": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ReasoningEffort"
-              },
-              {
-                "type": "null"
-              }
             ]
           },
           "model_reasoning_summary": {
@@ -11478,28 +11418,6 @@
             "anyOf": [
               {
                 "$ref": "#/definitions/v2/AskForApproval"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "model": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "model_provider": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "model_reasoning_effort": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ReasoningEffort"
               },
               {
                 "type": "null"

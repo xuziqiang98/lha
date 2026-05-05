@@ -18,10 +18,10 @@ use adam_agent::ThreadSortKey as CoreThreadSortKey;
 use adam_agent::config::Config;
 use adam_agent::config::ConfigOverrides;
 use adam_agent::config::ConfigService;
-use adam_agent::config::ConfigToml;
 use adam_agent::config::edit::ConfigEdit;
 use adam_agent::config::edit::ConfigEditsBuilder;
 use adam_agent::config::model_ref::ModelRef;
+use adam_agent::config::models_json::ModelsJson;
 use adam_agent::config::state_json::AdamStateStore;
 use adam_agent::config::types::McpServerTransportConfig;
 use adam_agent::config_loader::CloudRequirementsLoader;
@@ -711,19 +711,24 @@ impl CodexMessageProcessor {
         };
 
         let inferred_provider = if model_provider.is_none() {
-            model.as_deref().and_then(|model| {
-                previous_config
-                    .config_layer_stack
-                    .effective_config()
-                    .try_into()
-                    .ok()
-                    .and_then(|config_toml: ConfigToml| {
-                        config_toml
-                            .resolve_model_provider_for_model(model)
-                            .ok()
-                            .flatten()
-                    })
-            })
+            match model.as_deref() {
+                Some(model) => match ModelsJson::load_from_adam_home(&self.config.adam_home) {
+                    Ok(models_json) => match models_json.resolve_model_provider_for_model(model) {
+                        Ok(provider) => provider,
+                        Err(err) => {
+                            let error = JSONRPCErrorError {
+                                code: INVALID_REQUEST_ERROR_CODE,
+                                message: err.to_string(),
+                                data: None,
+                            };
+                            self.outgoing.send_error(request_id, error).await;
+                            return;
+                        }
+                    },
+                    Err(_) => None,
+                },
+                None => None,
+            }
         } else {
             None
         };

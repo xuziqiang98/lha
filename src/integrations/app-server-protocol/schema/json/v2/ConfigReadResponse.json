@@ -67,12 +67,6 @@
             "null"
           ]
         },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "model_auto_compact_token_limit": {
           "format": "int64",
           "type": [
@@ -85,22 +79,6 @@
           "type": [
             "integer",
             "null"
-          ]
-        },
-        "model_provider": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "model_reasoning_effort": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReasoningEffort"
-            },
-            {
-              "type": "null"
-            }
           ]
         },
         "model_reasoning_summary": {
@@ -392,28 +370,6 @@
             }
           ]
         },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "model_provider": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "model_reasoning_effort": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReasoningEffort"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "model_reasoning_summary": {
           "anyOf": [
             {
@@ -446,17 +402,6 @@
         }
       },
       "type": "object"
-    },
-    "ReasoningEffort": {
-      "enum": [
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
-      "type": "string"
     },
     "ReasoningSummary": {
       "enum": [

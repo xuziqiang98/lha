@@ -50,28 +50,6 @@
             }
           ]
         },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "modelProvider": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "modelReasoningEffort": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReasoningEffort"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "modelReasoningSummary": {
           "anyOf": [
             {
@@ -94,17 +72,6 @@
         }
       },
       "type": "object"
-    },
-    "ReasoningEffort": {
-      "enum": [
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
-      "type": "string"
     },
     "ReasoningSummary": {
       "enum": [
@@ -176,22 +143,6 @@
           "anyOf": [
             {
               "$ref": "#/definitions/AskForApproval"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "modelReasoningEffort": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReasoningEffort"
             },
             {
               "type": "null"

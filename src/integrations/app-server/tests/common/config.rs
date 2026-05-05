@@ -55,17 +55,15 @@ pub fn write_mock_responses_config_toml_with_options(
         })
         .collect::<Vec<_>>()
         .join("\n");
-    if model_provider_id != "openai" {
-        write_mock_responses_models_json(
-            adam_home,
-            server_uri,
-            model_provider_id,
-            requires_openai_auth.unwrap_or(false),
-            Some(auto_compact_limit),
-            model,
-        )?;
-        write_state_json(adam_home, &format!("{model_provider_id}.main:{model}"))?;
-    }
+    write_mock_responses_models_json(
+        adam_home,
+        server_uri,
+        model_provider_id,
+        requires_openai_auth.unwrap_or(false),
+        Some(auto_compact_limit),
+        model,
+    )?;
+    write_state_json(adam_home, &format!("{model_provider_id}.main:{model}"))?;
     let config_toml = adam_home.join("config.toml");
     std::fs::write(
         config_toml,

@@ -1,5 +1,8 @@
 use crate::config::ConfigToml;
 use crate::config::edit::ConfigEditsBuilder;
+use crate::config::model_provider_id_from_ref;
+use crate::config::model_ref::ModelRef;
+use crate::config::state_json::load_state;
 use crate::rollout::ARCHIVED_SESSIONS_SUBDIR;
 use crate::rollout::SESSIONS_SUBDIR;
 use crate::rollout::list::ThreadListConfig;
@@ -41,11 +44,14 @@ pub async fn maybe_migrate_personality(
         return Ok(PersonalityMigrationStatus::SkippedExplicitPersonality);
     }
 
-    let model_provider_id = config_profile
-        .model
-        .as_deref()
-        .and_then(|model| crate::config::model_ref::ModelRef::parse(model).ok())
-        .map(|model_ref| crate::config::model_provider_id_from_ref(&model_ref))
+    let model_provider_id = load_state(adam_home)
+        .ok()
+        .and_then(|state| {
+            state
+                .last_selected_model
+                .and_then(|selection| ModelRef::parse(selection.model_ref.as_str()).ok())
+        })
+        .map(|model_ref| model_provider_id_from_ref(&model_ref))
         .unwrap_or_else(|| "openai".to_string());
 
     if !has_recorded_sessions(adam_home, model_provider_id.as_str()).await? {

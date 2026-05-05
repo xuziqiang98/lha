@@ -1,11 +1,9 @@
-use adam_agent::config::set_project_trust_level;
 use adam_app_server_protocol::JSONRPCNotification;
 use adam_app_server_protocol::JSONRPCResponse;
 use adam_app_server_protocol::RequestId;
 use adam_app_server_protocol::ThreadStartParams;
 use adam_app_server_protocol::ThreadStartResponse;
 use adam_app_server_protocol::ThreadStartedNotification;
-use adam_protocol::config_types::TrustLevel;
 use adam_protocol::openai_models::ReasoningEffort;
 use anyhow::Result;
 use app_test_support::McpProcess;
@@ -73,29 +71,33 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_start_respects_project_config_from_cwd() -> Result<()> {
+async fn thread_start_respects_request_reasoning_effort() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
     let adam_home = TempDir::new()?;
     create_config_toml(adam_home.path(), &server.uri())?;
 
-    let workspace = TempDir::new()?;
-    let project_config_dir = workspace.path().join(".codex");
-    std::fs::create_dir_all(&project_config_dir)?;
-    std::fs::write(
-        project_config_dir.join("config.toml"),
-        r#"
-model_reasoning_effort = "high"
-"#,
-    )?;
-    set_project_trust_level(adam_home.path(), workspace.path(), TrustLevel::Trusted)?;
-
     let mut mcp = McpProcess::new(adam_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
     let req_id = mcp
-        .send_thread_start_request(ThreadStartParams {
-            cwd: Some(workspace.path().to_string_lossy().into_owned()),
+        .send_turn_start_request(adam_app_server_protocol::TurnStartParams {
+            thread_id: thread.id,
+            effort: Some(ReasoningEffort::High),
+            input: vec![adam_app_server_protocol::UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            }],
             ..Default::default()
         })
         .await?;
@@ -105,11 +107,13 @@ model_reasoning_effort = "high"
         mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
     )
     .await??;
-    let ThreadStartResponse {
-        reasoning_effort, ..
-    } = to_response::<ThreadStartResponse>(resp)?;
+    let _: adam_app_server_protocol::TurnStartResponse = to_response(resp)?;
 
-    assert_eq!(reasoning_effort, Some(ReasoningEffort::High));
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/started"),
+    )
+    .await??;
     Ok(())
 }
 
@@ -122,7 +126,7 @@ fn create_config_toml(adam_home: &Path, server_uri: &str) -> std::io::Result<()>
         20_000,
         Some(false),
         "mock_provider",
-        "mock-model",
+        "gpt-5.1",
         "",
         "never",
         "read-only",

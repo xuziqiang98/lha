@@ -63,7 +63,6 @@ use serde::Serialize;
 use sha1::Digest;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
@@ -87,6 +86,7 @@ pub mod types;
 pub use constraint::Constrained;
 pub use constraint::ConstraintError;
 pub use constraint::ConstraintResult;
+pub use models_json::ResolveModelProviderError;
 
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
@@ -212,21 +212,6 @@ fn warn_ignored_legacy_config_keys(config_layer_stack: &ConfigLayerStack) {
                     "Ignoring legacy config key `{key}` from `{:?}`; use state.json/models.json instead.",
                     layer.name
                 );
-            }
-        }
-        if let Some(profiles) = table.get("profiles").and_then(TomlValue::as_table) {
-            for (profile_name, profile) in profiles {
-                let Some(profile_table) = profile.as_table() else {
-                    continue;
-                };
-                for key in ["model_provider", "model_context_window"] {
-                    if profile_table.contains_key(key) {
-                        tracing::warn!(
-                            "Ignoring legacy config key `profiles.{profile_name}.{key}` from `{:?}`; use canonical profile model refs and models.json instead.",
-                            layer.name
-                        );
-                    }
-                }
             }
         }
     }
@@ -631,18 +616,13 @@ impl Config {
         for (name, profile) in &self.config_profiles {
             config_toml.profiles.insert(name.clone(), profile.clone());
         }
-        let matching_active_profile =
-            self.active_profile_name_for_model_limits(&config_toml, model_provider_id, model);
-        if self.active_profile.is_some() && matching_active_profile.is_none() {
-            config_toml.profile = None;
-        }
         let config = Self::load_config_with_layer_stack(
             config_toml,
             ConfigOverrides {
                 model: Some(model.to_string()),
                 cwd: Some(self.cwd.clone()),
                 model_provider: Some(model_provider_id.to_string()),
-                config_profile: matching_active_profile,
+                config_profile: self.active_profile.clone(),
                 ..Default::default()
             },
             self.adam_home.clone(),
@@ -653,34 +633,6 @@ impl Config {
             config.model_context_window,
             config.model_auto_compact_token_limit,
         ))
-    }
-
-    fn active_profile_name_for_model_limits(
-        &self,
-        config_toml: &ConfigToml,
-        model_provider_id: &str,
-        model: &str,
-    ) -> Option<String> {
-        let active_profile_name = self.active_profile.as_deref()?;
-        let active_profile = config_toml.profiles.get(active_profile_name)?;
-        let profile_model_ref = active_profile
-            .model
-            .as_deref()
-            .and_then(|profile_model| ModelRef::parse(profile_model).ok());
-        let model_matches = match (active_profile.model.as_deref(), profile_model_ref.as_ref()) {
-            (None, _) => true,
-            (Some(profile_model), _) if profile_model == model => true,
-            (Some(_), Some(profile_model_ref)) => profile_model_ref.model_id == model,
-            (Some(_), None) => false,
-        };
-        let provider_matches = match profile_model_ref {
-            None => true,
-            Some(profile_model_ref) => {
-                model_provider_id_from_ref(&profile_model_ref) == model_provider_id
-            }
-        };
-
-        (model_matches && provider_matches).then(|| active_profile_name.to_string())
     }
 
     /// This is the preferred way to create an instance of [Config].
@@ -974,6 +926,7 @@ pub fn set_project_trust_level(
 
 /// Base config deserialized from ~/.adam/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct ConfigToml {
     /// Legacy review model override.
@@ -1066,7 +1019,6 @@ pub struct ConfigToml {
     /// Defaults to `false`.
     pub show_raw_agent_reasoning: Option<bool>,
 
-    pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
@@ -1162,8 +1114,6 @@ impl From<ConfigToml> for UserSavedConfig {
             approval_policy: config_toml.approval_policy,
             sandbox_mode: config_toml.sandbox_mode,
             sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
-            model: None,
-            model_reasoning_effort: config_toml.model_reasoning_effort,
             model_reasoning_summary: config_toml.model_reasoning_summary,
             model_verbosity: config_toml.model_verbosity,
             tools: config_toml.tools.map(From::from),
@@ -1172,34 +1122,6 @@ impl From<ConfigToml> for UserSavedConfig {
         }
     }
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolveModelProviderError {
-    model: String,
-    provider_ids: Vec<String>,
-}
-
-impl ResolveModelProviderError {
-    fn ambiguous(model: &str, provider_ids: BTreeSet<String>) -> Self {
-        Self {
-            model: model.to_string(),
-            provider_ids: provider_ids.into_iter().collect(),
-        }
-    }
-}
-
-impl std::fmt::Display for ResolveModelProviderError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "model `{}` is configured for multiple providers: {}",
-            self.model,
-            self.provider_ids.join(", ")
-        )
-    }
-}
-
-impl std::error::Error for ResolveModelProviderError {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -1407,35 +1329,6 @@ impl ConfigToml {
             None => Ok(ConfigProfile::default()),
         }
     }
-
-    pub fn resolve_model_provider_for_model(
-        &self,
-        model: &str,
-    ) -> Result<Option<String>, ResolveModelProviderError> {
-        let model = model.trim();
-        if model.is_empty() {
-            return Ok(None);
-        }
-
-        let mut provider_ids = BTreeSet::new();
-
-        for profile in self.profiles.values() {
-            if let Some(model_ref) = profile
-                .model
-                .as_deref()
-                .and_then(|profile_model| ModelRef::parse(profile_model).ok())
-                && model_ref.model_id == model
-            {
-                provider_ids.insert(model_provider_id_from_ref(&model_ref));
-            }
-        }
-
-        match provider_ids.len() {
-            0 => Ok(None),
-            1 => Ok(provider_ids.into_iter().next()),
-            _ => Err(ResolveModelProviderError::ambiguous(model, provider_ids)),
-        }
-    }
 }
 
 /// Optional overrides for user configuration (e.g., from CLI flags).
@@ -1632,23 +1525,49 @@ impl Config {
 
         let provider_config_required = provider_config_required_override
             .unwrap_or_else(|| cfg!(not(test)) && !models_json::has_models_json(&adam_home));
-        let models_json = ModelsJson::load_from_adam_home(&adam_home)?;
+        let models_json = match ModelsJson::load_from_adam_home(&adam_home) {
+            Ok(models_json) => models_json,
+            Err(err) if err.kind() == ErrorKind::NotFound => ModelsJson::default(),
+            Err(err) => return Err(err),
+        };
         let state_json = load_state(&adam_home)?;
         let mut model_providers = built_in_runtime_endpoints();
         model_providers.extend(models_json.to_runtime_endpoints());
 
-        let profile_model_ref = config_profile
-            .model
-            .as_deref()
-            .and_then(|model| ModelRef::parse(model).ok());
         let state_model_ref = state_json
             .last_selected_model
             .as_ref()
             .and_then(|selection| ModelRef::parse(selection.model_ref.as_str()).ok());
+        let override_model_ref = model
+            .as_deref()
+            .and_then(|model| ModelRef::parse(model).ok());
+        let plain_override_model = model.filter(|_| override_model_ref.is_none());
+        let inferred_override_provider_id = if model_provider.is_none() {
+            match plain_override_model.as_deref() {
+                Some(model) => models_json
+                    .resolve_model_provider_for_model(model)
+                    .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?,
+                None => None,
+            }
+        } else {
+            None
+        };
+        let override_provider_id = model_provider.or(inferred_override_provider_id);
+        let selected_model_ref = override_model_ref.or_else(|| {
+            plain_override_model.as_ref().map(|model| {
+                let provider_id = override_provider_id.as_deref().unwrap_or("openai");
+                if provider_id.contains('.') {
+                    ModelRef::parse(&format!("{provider_id}:{model}"))
+                        .unwrap_or_else(|_| ModelRef::new(provider_id, "main", model.as_str()))
+                } else {
+                    ModelRef::new(provider_id, "main", model.as_str())
+                }
+            })
+        });
+        let selected_model_ref = selected_model_ref.or(state_model_ref);
 
-        let model_provider_id = model_provider
-            .or_else(|| profile_model_ref.as_ref().map(model_provider_id_from_ref))
-            .or_else(|| state_model_ref.as_ref().map(model_provider_id_from_ref))
+        let model_provider_id = override_provider_id
+            .or_else(|| selected_model_ref.as_ref().map(model_provider_id_from_ref))
             .unwrap_or_else(|| "openai".to_string());
         let model_provider = model_providers
             .get(&model_provider_id)
@@ -1660,30 +1579,9 @@ impl Config {
             })?
             .clone();
 
-        let model = model
-            .or_else(|| {
-                profile_model_ref
-                    .as_ref()
-                    .map(|model_ref| model_ref.model_id.clone())
-            })
-            .or_else(|| {
-                state_model_ref
-                    .as_ref()
-                    .map(|model_ref| model_ref.model_id.clone())
-            })
-            .or_else(|| {
-                config_profile.model.as_ref().map(|profile_model| {
-                    ModelRef::parse(profile_model)
-                        .map(|model_ref| model_ref.model_id)
-                        .unwrap_or_else(|_| profile_model.clone())
-                })
-            });
-        let selected_model_ref = model.as_ref().map(|model| {
-            profile_model_ref
-                .clone()
-                .or_else(|| state_model_ref.clone())
-                .unwrap_or_else(|| ModelRef::new(model_provider_id.clone(), "main", model.clone()))
-        });
+        let model = selected_model_ref
+            .as_ref()
+            .map(|model_ref| model_ref.model_id.clone());
         let model_metadata = selected_model_ref
             .as_ref()
             .and_then(|model_ref| models_json.model_metadata(model_ref));
@@ -1918,9 +1816,9 @@ impl Config {
                 .show_raw_agent_reasoning
                 .or(show_raw_agent_reasoning)
                 .unwrap_or(false),
-            model_reasoning_effort: config_profile
-                .model_reasoning_effort
-                .or(cfg.model_reasoning_effort),
+            model_reasoning_effort: state_json
+                .last_reasoning_effort
+                .or_else(|| model_metadata.and_then(|metadata| metadata.reasoning_effort)),
             model_reasoning_summary: config_profile
                 .model_reasoning_summary
                 .or(cfg.model_reasoning_summary)
@@ -2104,7 +2002,6 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use crate::config::edit::ConfigEdit;
-    use crate::config::edit::ConfigEditsBuilder;
     use crate::config::edit::apply_blocking;
     use crate::config::types::FeedbackConfigToml;
     use crate::config::types::HistoryPersistence;
@@ -2622,6 +2519,228 @@ trust_level = "trusted"
     }
 
     #[test]
+    fn selected_model_and_reasoning_effort_restore_from_state() -> std::io::Result<()> {
+        let adam_home = TempDir::new()?;
+        std::fs::write(
+            adam_home.path().join("models.json"),
+            r#"{
+              "providers": {
+                "iie": {
+                  "endpoints": {
+                    "main": {
+                      "models": {
+                        "deepseek-v3": {}
+                      }
+                    }
+                  }
+                }
+              }
+            }"#,
+        )?;
+        let model_ref = ModelRef::new("iie", "main", "deepseek-v3");
+        state_json::AdamStateStore::new(adam_home.path()).set_last_selected_model(
+            &model_ref,
+            Some(ReasoningEffort::High),
+            None,
+        )?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            adam_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.model.as_deref(), Some("deepseek-v3"));
+        assert_eq!(config.model_provider_id, "iie");
+        assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
+
+        Ok(())
+    }
+
+    #[test]
+    fn reasoning_effort_falls_back_to_models_json_metadata() -> std::io::Result<()> {
+        let adam_home = TempDir::new()?;
+        std::fs::write(
+            adam_home.path().join("models.json"),
+            r#"{
+              "providers": {
+                "iie": {
+                  "endpoints": {
+                    "main": {
+                      "models": {
+                        "deepseek-v3": {
+                          "reasoning_effort": "medium"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }"#,
+        )?;
+        let model_ref = ModelRef::new("iie", "main", "deepseek-v3");
+        state_json::AdamStateStore::new(adam_home.path())
+            .set_last_selected_model(&model_ref, None, None)?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            adam_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.model.as_deref(), Some("deepseek-v3"));
+        assert_eq!(config.model_provider_id, "iie");
+        assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::Medium));
+
+        Ok(())
+    }
+
+    #[test]
+    fn plain_override_model_rejects_ambiguous_models_json_provider_mapping() -> std::io::Result<()>
+    {
+        let adam_home = TempDir::new()?;
+        std::fs::write(
+            adam_home.path().join("models.json"),
+            r#"{
+              "providers": {
+                "iie": {
+                  "endpoints": {
+                    "main": {
+                      "models": {
+                        "deepseek-v3": {}
+                      }
+                    }
+                  }
+                },
+                "chatanywhere": {
+                  "endpoints": {
+                    "main": {
+                      "models": {
+                        "deepseek-v3": {}
+                      }
+                    }
+                  }
+                }
+              }
+            }"#,
+        )?;
+
+        let err = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides {
+                model: Some("deepseek-v3".to_string()),
+                ..Default::default()
+            },
+            adam_home.path().to_path_buf(),
+        )
+        .expect_err("plain ambiguous model should be rejected");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(
+            err.to_string()
+                .contains("model `deepseek-v3` is configured for multiple providers")
+        );
+        assert!(err.to_string().contains("chatanywhere"));
+        assert!(err.to_string().contains("iie"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn plain_override_model_with_explicit_provider_allows_ambiguous_models_json_mapping()
+    -> std::io::Result<()> {
+        let adam_home = TempDir::new()?;
+        std::fs::write(
+            adam_home.path().join("models.json"),
+            r#"{
+              "providers": {
+                "iie": {
+                  "endpoints": {
+                    "main": {
+                      "models": {
+                        "deepseek-v3": {}
+                      }
+                    }
+                  }
+                },
+                "chatanywhere": {
+                  "endpoints": {
+                    "main": {
+                      "models": {
+                        "deepseek-v3": {}
+                      }
+                    }
+                  }
+                }
+              }
+            }"#,
+        )?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides {
+                model: Some("deepseek-v3".to_string()),
+                model_provider: Some("iie".to_string()),
+                ..Default::default()
+            },
+            adam_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.model.as_deref(), Some("deepseek-v3"));
+        assert_eq!(config.model_provider_id, "iie");
+
+        Ok(())
+    }
+
+    #[test]
+    fn plain_override_model_without_mapping_still_falls_back_to_openai() -> std::io::Result<()> {
+        let adam_home = TempDir::new()?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides {
+                model: Some("unknown-model".to_string()),
+                ..Default::default()
+            },
+            adam_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.model.as_deref(), Some("unknown-model"));
+        assert_eq!(config.model_provider_id, "openai");
+
+        Ok(())
+    }
+
+    #[test]
+    fn config_toml_rejects_legacy_model_reasoning_effort() {
+        let err = toml::from_str::<ConfigToml>(r#"model_reasoning_effort = "high""#)
+            .expect_err("legacy reasoning effort field should be rejected");
+
+        assert!(err.message().contains("unknown field"));
+    }
+
+    #[test]
+    fn config_profile_rejects_legacy_model_fields() {
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+[profiles.dev]
+model = "gpt-5.1"
+"#,
+        )
+        .expect_err("legacy profile model field should be rejected");
+        assert!(err.message().contains("unknown field"));
+
+        let err = toml::from_str::<ConfigToml>(
+            r#"
+[profiles.dev]
+model_reasoning_effort = "high"
+"#,
+        )
+        .expect_err("legacy profile reasoning effort field should be rejected");
+        assert!(err.message().contains("unknown field"));
+    }
+
+    #[test]
     fn config_defaults_to_auto_oauth_store_mode() -> std::io::Result<()> {
         let adam_home = TempDir::new()?;
         let cfg = ConfigToml::default();
@@ -2772,10 +2891,10 @@ trust_level = "trusted"
 profile = "global"
 
 [profiles.global]
-model = "gpt-global"
+approval_policy = "never"
 
 [profiles.project]
-model = "gpt-project"
+approval_policy = "on-request"
 
 [projects."{workspace_key}"]
 trust_level = "trusted"
@@ -2801,7 +2920,8 @@ profile = "project"
             .await?;
 
         assert_eq!(config.active_profile.as_deref(), Some("project"));
-        assert_eq!(config.model.as_deref(), Some("gpt-project"));
+        assert_eq!(config.model, None);
+        assert_eq!(config.approval_policy.value(), AskForApproval::OnRequest);
 
         Ok(())
     }
@@ -3839,219 +3959,10 @@ url = "https://example.com/mcp"
         Ok(())
     }
 
-    #[tokio::test]
-    async fn set_model_updates_defaults() -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
-
-        ConfigEditsBuilder::new(adam_home.path())
-            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High), None)
-            .apply()
-            .await?;
-
-        let serialized = tokio::fs::read_to_string(adam_home.path().join(CONFIG_TOML_FILE)).await?;
-        let parsed: ConfigToml = toml::from_str(&serialized)?;
-
-        assert_eq!(parsed.model_reasoning_effort, Some(ReasoningEffort::High));
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn set_model_overwrites_existing_model() -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
-        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
-
-        tokio::fs::write(
-            &config_path,
-            r#"
-model_reasoning_effort = "medium"
-
-[profiles.dev]
-model = "gpt-4.1"
-"#,
-        )
-        .await?;
-
-        ConfigEditsBuilder::new(adam_home.path())
-            .set_model(Some("o4-mini"), Some(ReasoningEffort::High), None)
-            .apply()
-            .await?;
-
-        let serialized = tokio::fs::read_to_string(config_path).await?;
-        let parsed: ConfigToml = toml::from_str(&serialized)?;
-
-        assert_eq!(parsed.model_reasoning_effort, Some(ReasoningEffort::High));
-        assert_eq!(
-            parsed
-                .profiles
-                .get("dev")
-                .and_then(|profile| profile.model.as_deref()),
-            Some("gpt-4.1"),
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn set_model_updates_profile() -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
-
-        ConfigEditsBuilder::new(adam_home.path())
-            .with_profile(Some("dev"))
-            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::Medium), None)
-            .apply()
-            .await?;
-
-        let serialized = tokio::fs::read_to_string(adam_home.path().join(CONFIG_TOML_FILE)).await?;
-        let parsed: ConfigToml = toml::from_str(&serialized)?;
-        let profile = parsed
-            .profiles
-            .get("dev")
-            .expect("profile should be created");
-
-        assert_eq!(profile.model.as_deref(), Some("gpt-5.1-codex"));
-        assert_eq!(
-            profile.model_reasoning_effort,
-            Some(ReasoningEffort::Medium)
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn set_model_updates_existing_profile() -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
-        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
-
-        tokio::fs::write(
-            &config_path,
-            r#"
-[profiles.dev]
-model = "gpt-4"
-model_reasoning_effort = "medium"
-
-[profiles.prod]
-model = "gpt-5.1-codex"
-"#,
-        )
-        .await?;
-
-        ConfigEditsBuilder::new(adam_home.path())
-            .with_profile(Some("dev"))
-            .set_model(Some("o4-high"), Some(ReasoningEffort::Medium), None)
-            .apply()
-            .await?;
-
-        let serialized = tokio::fs::read_to_string(config_path).await?;
-        let parsed: ConfigToml = toml::from_str(&serialized)?;
-
-        let dev_profile = parsed
-            .profiles
-            .get("dev")
-            .expect("dev profile should survive updates");
-        assert_eq!(dev_profile.model.as_deref(), Some("o4-high"));
-        assert_eq!(
-            dev_profile.model_reasoning_effort,
-            Some(ReasoningEffort::Medium)
-        );
-
-        assert_eq!(
-            parsed
-                .profiles
-                .get("prod")
-                .and_then(|profile| profile.model.as_deref()),
-            Some("gpt-5.1-codex"),
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn resolve_model_provider_for_model_uses_unique_profile_mapping() {
-        let config_toml: ConfigToml = toml::from_str(
-            r#"
-[profiles.deepseek]
-model = "iie.main:deepseek-v3"
-"#,
-        )
-        .expect("parse config");
-
-        assert_eq!(
-            config_toml
-                .resolve_model_provider_for_model("deepseek-v3")
-                .expect("resolve provider"),
-            Some("iie".to_string())
-        );
-    }
-
-    #[test]
-    fn resolve_model_provider_for_model_returns_none_when_unmapped() {
-        let config_toml: ConfigToml = toml::from_str(
-            r#"
-[profiles.deepseek]
-model = "iie.main:deepseek-v3"
-"#,
-        )
-        .expect("parse config");
-
-        assert_eq!(
-            config_toml
-                .resolve_model_provider_for_model("claude-3.7")
-                .expect("resolve provider"),
-            None
-        );
-    }
-
-    #[test]
-    fn resolve_model_provider_for_model_rejects_ambiguous_mapping() {
-        let config_toml: ConfigToml = toml::from_str(
-            r#"
-[profiles.first]
-model = "iie.main:deepseek-v3"
-
-[profiles.second]
-model = "chatanywhere.main:deepseek-v3"
-"#,
-        )
-        .expect("parse config");
-
-        let err = config_toml
-            .resolve_model_provider_for_model("deepseek-v3")
-            .expect_err("expected ambiguous provider mapping");
-        assert_eq!(
-            err.to_string(),
-            "model `deepseek-v3` is configured for multiple providers: chatanywhere, iie"
-        );
-    }
-
-    #[test]
-    fn resolve_model_provider_for_model_rejects_ambiguous_variant_mapping() {
-        let config_toml: ConfigToml = toml::from_str(
-            r#"
-[profiles.messages]
-model = "anthropic.messages:claude-sonnet-4-5"
-
-[profiles.chat]
-model = "anthropic.chat:claude-sonnet-4-5"
-"#,
-        )
-        .expect("parse config");
-
-        let err = config_toml
-            .resolve_model_provider_for_model("claude-sonnet-4-5")
-            .expect_err("expected ambiguous provider mapping");
-        assert_eq!(
-            err.to_string(),
-            "model `claude-sonnet-4-5` is configured for multiple providers: anthropic.chat, anthropic.messages"
-        );
-    }
-
     struct PrecedenceTestFixture {
         cwd: TempDir,
         adam_home: TempDir,
         cfg: ConfigToml,
-        model_provider_map: HashMap<String, RuntimeEndpoint>,
-        openai_provider: RuntimeEndpoint,
     }
 
     impl PrecedenceTestFixture {
@@ -4133,25 +4044,19 @@ profile = "gpt3"
 enabled = true
 
 [profiles.o3]
-model = "openai.main:o3"
 approval_policy = "never"
-model_reasoning_effort = "high"
 model_reasoning_summary = "detailed"
 
 [profiles.gpt3]
-model = "openai.main:gpt-3.5-turbo"
 
 [profiles.zdr]
-model = "openai.main:o3"
 approval_policy = "on-failure"
 
 [profiles.zdr.analytics]
 enabled = false
 
 [profiles.gpt5]
-model = "openai.main:gpt-5.1"
 approval_policy = "on-failure"
-model_reasoning_effort = "high"
 model_reasoning_summary = "detailed"
 model_verbosity = "high"
 "#;
@@ -4168,34 +4073,13 @@ model_verbosity = "high"
 
         let adam_home_temp_dir = TempDir::new().unwrap();
 
-        let model_provider_map = built_in_runtime_endpoints();
-
-        let openai_provider = model_provider_map
-            .get("openai")
-            .expect("openai provider should exist")
-            .clone();
-
         Ok(PrecedenceTestFixture {
             cwd: cwd_temp_dir,
             adam_home: adam_home_temp_dir,
             cfg,
-            model_provider_map,
-            openai_provider,
         })
     }
 
-    /// Users can specify config values at multiple levels that have the
-    /// following precedence:
-    ///
-    /// 1. custom command-line argument, e.g. `--model o3`
-    /// 2. as part of a profile, where the `--profile` is specified via a CLI
-    ///    (or in the config file itself)
-    /// 3. as an entry in `config.toml`, e.g. `model = "o3"`
-    /// 4. the default value for a required field defined in code, e.g.,
-    ///    `crate::flags::OPENAI_DEFAULT_MODEL`
-    ///
-    /// Note that profiles are the recommended way to specify a group of
-    /// configuration options together.
     #[test]
     fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
         let fixture = create_test_fixture()?;
@@ -4210,77 +4094,18 @@ model_verbosity = "high"
             o3_profile_overrides,
             fixture.adam_home(),
         )?;
+        assert_eq!(o3_profile_config.model, None);
+        assert_eq!(o3_profile_config.model_provider_id, "openai");
         assert_eq!(
-            Config {
-                model: Some("o3".to_string()),
-                review_model: None,
-                model_context_window: None,
-                model_auto_compact_token_limit: None,
-                model_provider_id: "openai".to_string(),
-                model_provider: fixture.openai_provider.clone(),
-                provider_config_required: false,
-                approval_policy: Constrained::allow_any(AskForApproval::Never),
-                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-                enforce_residency: Constrained::allow_any(None),
-                did_user_set_custom_approval_policy_or_sandbox_mode: true,
-                forced_auto_mode_downgraded_on_windows: false,
-                shell_environment_policy: ShellEnvironmentPolicy::default(),
-                user_instructions: None,
-                notify: None,
-                cwd: fixture.cwd(),
-                mcp_servers: Constrained::allow_any(HashMap::new()),
-                config_profiles: fixture.cfg.profiles.clone(),
-                mcp_oauth_credentials_store_mode: Default::default(),
-                mcp_oauth_callback_port: None,
-                model_providers: fixture.model_provider_map.clone(),
-                project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
-                project_doc_fallback_filenames: Vec::new(),
-                tool_output_token_limit: None,
-                agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
-                agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
-                agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
-                agent_roles: BTreeMap::new(),
-                adam_home: fixture.adam_home(),
-                config_layer_stack: Default::default(),
-                history: History::default(),
-                ephemeral: false,
-                file_opener: UriBasedFileOpener::VsCode,
-                codex_linux_sandbox_exe: None,
-                hide_agent_reasoning: false,
-                show_raw_agent_reasoning: false,
-                model_reasoning_effort: Some(ReasoningEffort::High),
-                model_reasoning_summary: ReasoningSummary::Detailed,
-                model_supports_reasoning_summaries: None,
-                model_verbosity: None,
-                personality: Some(Personality::Friendly),
-                base_instructions: None,
-                developer_instructions: None,
-                compact_prompt: None,
-                include_apply_patch_tool: false,
-                web_search_mode: None,
-                use_experimental_unified_exec_tool: !cfg!(windows),
-                ghost_snapshot: GhostSnapshotConfig::default(),
-                features: Features::with_defaults(),
-                suppress_unstable_features_warning: false,
-                active_profile: Some("o3".to_string()),
-                active_project: ProjectConfig { trust_level: None },
-                windows_wsl_setup_acknowledged: false,
-                notices: Default::default(),
-                check_for_update_on_startup: true,
-                disable_paste_burst: false,
-                tui_notifications: Default::default(),
-                tui_notification_method: Default::default(),
-                animations: true,
-                show_tooltips: true,
-                default_identity: None,
-                analytics_enabled: Some(true),
-                feedback_enabled: true,
-                tui_alternate_screen: AltScreenMode::Auto,
-                tui_buddy: TuiBuddy::default(),
-                otel: OtelConfig::default(),
-            },
-            o3_profile_config
+            o3_profile_config.approval_policy,
+            Constrained::allow_any(AskForApproval::Never)
         );
+        assert_eq!(
+            o3_profile_config.model_reasoning_summary,
+            ReasoningSummary::Detailed
+        );
+        assert_eq!(o3_profile_config.model_reasoning_effort, None);
+        assert_eq!(o3_profile_config.active_profile.as_deref(), Some("o3"));
         Ok(())
     }
 
@@ -4298,76 +4123,13 @@ model_verbosity = "high"
             gpt3_profile_overrides,
             fixture.adam_home(),
         )?;
-        let expected_gpt3_profile_config = Config {
-            model: Some("gpt-3.5-turbo".to_string()),
-            review_model: None,
-            model_context_window: None,
-            model_auto_compact_token_limit: None,
-            model_provider_id: "openai".to_string(),
-            model_provider: fixture.openai_provider.clone(),
-            provider_config_required: false,
-            approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
-            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-            enforce_residency: Constrained::allow_any(None),
-            did_user_set_custom_approval_policy_or_sandbox_mode: true,
-            forced_auto_mode_downgraded_on_windows: false,
-            shell_environment_policy: ShellEnvironmentPolicy::default(),
-            user_instructions: None,
-            notify: None,
-            cwd: fixture.cwd(),
-            mcp_servers: Constrained::allow_any(HashMap::new()),
-            config_profiles: fixture.cfg.profiles.clone(),
-            mcp_oauth_credentials_store_mode: Default::default(),
-            mcp_oauth_callback_port: None,
-            model_providers: fixture.model_provider_map.clone(),
-            project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
-            project_doc_fallback_filenames: Vec::new(),
-            tool_output_token_limit: None,
-            agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
-            agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
-            agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
-            agent_roles: BTreeMap::new(),
-            adam_home: fixture.adam_home(),
-            config_layer_stack: Default::default(),
-            history: History::default(),
-            ephemeral: false,
-            file_opener: UriBasedFileOpener::VsCode,
-            codex_linux_sandbox_exe: None,
-            hide_agent_reasoning: false,
-            show_raw_agent_reasoning: false,
-            model_reasoning_effort: None,
-            model_reasoning_summary: ReasoningSummary::default(),
-            model_supports_reasoning_summaries: None,
-            model_verbosity: None,
-            personality: Some(Personality::Friendly),
-            base_instructions: None,
-            developer_instructions: None,
-            compact_prompt: None,
-            include_apply_patch_tool: false,
-            web_search_mode: None,
-            use_experimental_unified_exec_tool: !cfg!(windows),
-            ghost_snapshot: GhostSnapshotConfig::default(),
-            features: Features::with_defaults(),
-            suppress_unstable_features_warning: false,
-            active_profile: Some("gpt3".to_string()),
-            active_project: ProjectConfig { trust_level: None },
-            windows_wsl_setup_acknowledged: false,
-            notices: Default::default(),
-            check_for_update_on_startup: true,
-            disable_paste_burst: false,
-            tui_notifications: Default::default(),
-            tui_notification_method: Default::default(),
-            animations: true,
-            show_tooltips: true,
-            default_identity: None,
-            analytics_enabled: Some(true),
-            feedback_enabled: true,
-            tui_alternate_screen: AltScreenMode::Auto,
-            tui_buddy: TuiBuddy::default(),
-            otel: OtelConfig::default(),
-        };
-
-        assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
+        assert_eq!(gpt3_profile_config.model, None);
+        assert_eq!(gpt3_profile_config.model_provider_id, "openai");
+        assert_eq!(
+            gpt3_profile_config.approval_policy,
+            Constrained::allow_any(AskForApproval::UnlessTrusted)
+        );
+        assert_eq!(gpt3_profile_config.active_profile.as_deref(), Some("gpt3"));
 
         // Verify that loading without specifying a profile in ConfigOverrides
         // uses the default profile from the config file (which is "gpt3").
@@ -4382,7 +4144,7 @@ model_verbosity = "high"
             fixture.adam_home(),
         )?;
 
-        assert_eq!(expected_gpt3_profile_config, default_profile_config);
+        assert_eq!(gpt3_profile_config, default_profile_config);
         Ok(())
     }
 
@@ -4400,76 +4162,14 @@ model_verbosity = "high"
             zdr_profile_overrides,
             fixture.adam_home(),
         )?;
-        let expected_zdr_profile_config = Config {
-            model: Some("o3".to_string()),
-            review_model: None,
-            model_context_window: None,
-            model_auto_compact_token_limit: None,
-            model_provider_id: "openai".to_string(),
-            model_provider: fixture.openai_provider.clone(),
-            provider_config_required: false,
-            approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
-            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-            enforce_residency: Constrained::allow_any(None),
-            did_user_set_custom_approval_policy_or_sandbox_mode: true,
-            forced_auto_mode_downgraded_on_windows: false,
-            shell_environment_policy: ShellEnvironmentPolicy::default(),
-            user_instructions: None,
-            notify: None,
-            cwd: fixture.cwd(),
-            mcp_servers: Constrained::allow_any(HashMap::new()),
-            config_profiles: fixture.cfg.profiles.clone(),
-            mcp_oauth_credentials_store_mode: Default::default(),
-            mcp_oauth_callback_port: None,
-            model_providers: fixture.model_provider_map.clone(),
-            project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
-            project_doc_fallback_filenames: Vec::new(),
-            tool_output_token_limit: None,
-            agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
-            agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
-            agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
-            agent_roles: BTreeMap::new(),
-            adam_home: fixture.adam_home(),
-            config_layer_stack: Default::default(),
-            history: History::default(),
-            ephemeral: false,
-            file_opener: UriBasedFileOpener::VsCode,
-            codex_linux_sandbox_exe: None,
-            hide_agent_reasoning: false,
-            show_raw_agent_reasoning: false,
-            model_reasoning_effort: None,
-            model_reasoning_summary: ReasoningSummary::default(),
-            model_supports_reasoning_summaries: None,
-            model_verbosity: None,
-            personality: Some(Personality::Friendly),
-            base_instructions: None,
-            developer_instructions: None,
-            compact_prompt: None,
-            include_apply_patch_tool: false,
-            web_search_mode: None,
-            use_experimental_unified_exec_tool: !cfg!(windows),
-            ghost_snapshot: GhostSnapshotConfig::default(),
-            features: Features::with_defaults(),
-            suppress_unstable_features_warning: false,
-            active_profile: Some("zdr".to_string()),
-            active_project: ProjectConfig { trust_level: None },
-            windows_wsl_setup_acknowledged: false,
-            notices: Default::default(),
-            check_for_update_on_startup: true,
-            disable_paste_burst: false,
-            tui_notifications: Default::default(),
-            tui_notification_method: Default::default(),
-            animations: true,
-            show_tooltips: true,
-            default_identity: None,
-            analytics_enabled: Some(false),
-            feedback_enabled: true,
-            tui_alternate_screen: AltScreenMode::Auto,
-            tui_buddy: TuiBuddy::default(),
-            otel: OtelConfig::default(),
-        };
-
-        assert_eq!(expected_zdr_profile_config, zdr_profile_config);
+        assert_eq!(zdr_profile_config.model, None);
+        assert_eq!(zdr_profile_config.model_provider_id, "openai");
+        assert_eq!(
+            zdr_profile_config.approval_policy,
+            Constrained::allow_any(AskForApproval::OnFailure)
+        );
+        assert_eq!(zdr_profile_config.analytics_enabled, Some(false));
+        assert_eq!(zdr_profile_config.active_profile.as_deref(), Some("zdr"));
 
         Ok(())
     }
@@ -4488,76 +4188,19 @@ model_verbosity = "high"
             gpt5_profile_overrides,
             fixture.adam_home(),
         )?;
-        let expected_gpt5_profile_config = Config {
-            model: Some("gpt-5.1".to_string()),
-            review_model: None,
-            model_context_window: None,
-            model_auto_compact_token_limit: None,
-            model_provider_id: "openai".to_string(),
-            model_provider: fixture.openai_provider.clone(),
-            provider_config_required: false,
-            approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
-            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-            enforce_residency: Constrained::allow_any(None),
-            did_user_set_custom_approval_policy_or_sandbox_mode: true,
-            forced_auto_mode_downgraded_on_windows: false,
-            shell_environment_policy: ShellEnvironmentPolicy::default(),
-            user_instructions: None,
-            notify: None,
-            cwd: fixture.cwd(),
-            mcp_servers: Constrained::allow_any(HashMap::new()),
-            config_profiles: fixture.cfg.profiles.clone(),
-            mcp_oauth_credentials_store_mode: Default::default(),
-            mcp_oauth_callback_port: None,
-            model_providers: fixture.model_provider_map.clone(),
-            project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
-            project_doc_fallback_filenames: Vec::new(),
-            tool_output_token_limit: None,
-            agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
-            agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
-            agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
-            agent_roles: BTreeMap::new(),
-            adam_home: fixture.adam_home(),
-            config_layer_stack: Default::default(),
-            history: History::default(),
-            ephemeral: false,
-            file_opener: UriBasedFileOpener::VsCode,
-            codex_linux_sandbox_exe: None,
-            hide_agent_reasoning: false,
-            show_raw_agent_reasoning: false,
-            model_reasoning_effort: Some(ReasoningEffort::High),
-            model_reasoning_summary: ReasoningSummary::Detailed,
-            model_supports_reasoning_summaries: None,
-            model_verbosity: Some(Verbosity::High),
-            personality: Some(Personality::Friendly),
-            base_instructions: None,
-            developer_instructions: None,
-            compact_prompt: None,
-            include_apply_patch_tool: false,
-            web_search_mode: None,
-            use_experimental_unified_exec_tool: !cfg!(windows),
-            ghost_snapshot: GhostSnapshotConfig::default(),
-            features: Features::with_defaults(),
-            suppress_unstable_features_warning: false,
-            active_profile: Some("gpt5".to_string()),
-            active_project: ProjectConfig { trust_level: None },
-            windows_wsl_setup_acknowledged: false,
-            notices: Default::default(),
-            check_for_update_on_startup: true,
-            disable_paste_burst: false,
-            tui_notifications: Default::default(),
-            tui_notification_method: Default::default(),
-            animations: true,
-            show_tooltips: true,
-            default_identity: None,
-            analytics_enabled: Some(true),
-            feedback_enabled: true,
-            tui_alternate_screen: AltScreenMode::Auto,
-            tui_buddy: TuiBuddy::default(),
-            otel: OtelConfig::default(),
-        };
-
-        assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);
+        assert_eq!(gpt5_profile_config.model, None);
+        assert_eq!(gpt5_profile_config.model_provider_id, "openai");
+        assert_eq!(
+            gpt5_profile_config.approval_policy,
+            Constrained::allow_any(AskForApproval::OnFailure)
+        );
+        assert_eq!(
+            gpt5_profile_config.model_reasoning_summary,
+            ReasoningSummary::Detailed
+        );
+        assert_eq!(gpt5_profile_config.model_verbosity, Some(Verbosity::High));
+        assert_eq!(gpt5_profile_config.model_reasoning_effort, None);
+        assert_eq!(gpt5_profile_config.active_profile.as_deref(), Some("gpt5"));
 
         Ok(())
     }
@@ -4647,7 +4290,7 @@ trust_level = "trusted"
     -> anyhow::Result<()> {
         let initial = r#"toplevel = "baz"
 projects = { "/Users/mbolin/code/codex4" = { trust_level = "trusted", foo = "bar" } , "/Users/mbolin/code/codex3" = { trust_level = "trusted" } }
-model = "foo""#;
+approval_policy = "on-request""#;
         let mut doc = initial.parse::<DocumentMut>()?;
 
         // Approve a new directory
@@ -4659,7 +4302,7 @@ model = "foo""#;
         // Since we created the [projects] table as part of migration, it is kept implicit.
         // Expect explicit per-project tables, preserving prior entries and appending the new one.
         let expected = r#"toplevel = "baz"
-model = "foo"
+approval_policy = "on-request"
 
 [projects."/Users/mbolin/code/codex4"]
 trust_level = "trusted"
@@ -4747,7 +4390,6 @@ oss_provider = "lmstudio"
     fn config_loads_mcp_oauth_callback_port_from_toml() -> std::io::Result<()> {
         let adam_home = TempDir::new()?;
         let toml = r#"
-model = "gpt-5.1"
 mcp_oauth_callback_port = 5678
 "#;
         let cfg: ConfigToml =

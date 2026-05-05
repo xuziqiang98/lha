@@ -65,9 +65,7 @@ impl AdamStateStore {
             model_ref: model_ref.to_string(),
             selected_at: OffsetDateTime::now_utc().format(&Rfc3339).ok(),
         });
-        if let Some(effort) = effort {
-            state.last_reasoning_effort = Some(effort);
-        }
+        state.last_reasoning_effort = effort;
         if let Some(verbosity) = verbosity {
             state.last_model_verbosity = Some(verbosity);
         }

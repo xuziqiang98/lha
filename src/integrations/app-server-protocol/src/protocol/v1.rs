@@ -292,8 +292,6 @@ pub struct UserSavedConfig {
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,
     pub sandbox_settings: Option<SandboxSettings>,
-    pub model: Option<String>,
-    pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub tools: Option<Tools>,
@@ -304,10 +302,7 @@ pub struct UserSavedConfig {
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
-    pub model: Option<String>,
-    pub model_provider: Option<String>,
     pub approval_policy: Option<AskForApproval>,
-    pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
 }

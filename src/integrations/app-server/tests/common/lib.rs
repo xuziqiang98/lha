@@ -8,6 +8,8 @@ mod rollout;
 use adam_app_server_protocol::JSONRPCResponse;
 pub use config::write_mock_responses_config_toml;
 pub use config::write_mock_responses_config_toml_with_options;
+pub use config::write_mock_responses_models_json;
+pub use config::write_state_json;
 pub use core_test_support::format_with_current_shell;
 pub use core_test_support::format_with_current_shell_display;
 pub use core_test_support::format_with_current_shell_display_non_login;

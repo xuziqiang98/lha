@@ -7,6 +7,8 @@ use adam_app_server_protocol::ThreadStartResponse;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
+use app_test_support::write_mock_responses_models_json;
+use app_test_support::write_state_json;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -52,12 +54,20 @@ async fn thread_background_terminals_clean_returns_success_for_loaded_thread() -
 
 fn create_config_toml(adam_home: &Path) -> std::io::Result<()> {
     let config_toml = adam_home.join("config.toml");
-    std::fs::write(config_toml, config_contents())
+    std::fs::write(config_toml, config_contents())?;
+    write_mock_responses_models_json(
+        adam_home,
+        "https://example.com",
+        "mock_provider",
+        false,
+        None,
+        "mock-model",
+    )?;
+    write_state_json(adam_home, "mock_provider.main:mock-model")
 }
 
 fn config_contents() -> &'static str {
-    r#"model = "mock-model"
-approval_policy = "never"
+    r#"approval_policy = "never"
 sandbox_mode = "read-only"
 
 [features]

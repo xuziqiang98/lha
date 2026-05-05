@@ -36,6 +36,7 @@ use crate::multi_agents::sort_agent_picker_threads;
 use crate::pager_overlay::Overlay;
 use crate::provider_config::CustomProviderConfig;
 use crate::provider_config::custom_provider_ref;
+use crate::provider_config::persist_custom_provider_files;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
@@ -47,11 +48,11 @@ use adam_agent::ThreadManager;
 use adam_agent::config::Config;
 use adam_agent::config::ConfigBuilder;
 use adam_agent::config::ConfigOverrides;
-use adam_agent::config::ConfigToml;
 use adam_agent::config::display_model_provider_ref;
 use adam_agent::config::edit::ConfigEdit;
 use adam_agent::config::edit::ConfigEditsBuilder;
 use adam_agent::config::model_ref::ModelRef;
+use adam_agent::config::models_json::ModelsJson;
 use adam_agent::config::state_json::AdamStateStore;
 use adam_agent::config::types::TuiBuddy;
 use adam_agent::config_loader::ConfigLayerStackOrdering;
@@ -1036,14 +1037,8 @@ impl App {
     }
 
     fn resolve_model_provider_for_model(&self, model: &str) -> std::result::Result<String, String> {
-        let config_toml: ConfigToml = self
-            .config
-            .config_layer_stack
-            .effective_config()
-            .try_into()
-            .map_err(|err| format!("Failed to load config for model selection: {err}"))?;
-
-        config_toml
+        ModelsJson::load_from_adam_home(&self.config.adam_home)
+            .map_err(|err| format!("Failed to load models.json for model selection: {err}"))?
             .resolve_model_provider_for_model(model)
             .map(|provider_id| provider_id.unwrap_or_else(|| self.config.model_provider_id.clone()))
             .map_err(|err| err.to_string())
@@ -1147,7 +1142,6 @@ impl App {
         provider_id: Option<String>,
         effort: Option<ReasoningEffortConfig>,
     ) -> std::result::Result<String, String> {
-        let profile = self.active_profile.clone();
         let provider_id = match provider_id {
             Some(provider_id) => {
                 self.runtime_provider_for_id(&provider_id)?;
@@ -1166,47 +1160,12 @@ impl App {
         } else {
             ModelRef::new(provider_id.as_str(), "main", model.as_str())
         };
-        let save_result = match profile.as_deref() {
-            Some(profile) => {
-                let effort_path = vec![
-                    "profiles".to_string(),
-                    profile.to_string(),
-                    "model_reasoning_effort".to_string(),
-                ];
-                let mut edits = vec![ConfigEdit::SetPath {
-                    segments: vec![
-                        "profiles".to_string(),
-                        profile.to_string(),
-                        "model".to_string(),
-                    ],
-                    value: toml_edit::value(model_ref.to_string()),
-                }];
-                if let Some(effort) = effort {
-                    edits.push(ConfigEdit::SetPath {
-                        segments: effort_path,
-                        value: toml_edit::value(effort.to_string()),
-                    });
-                } else {
-                    edits.push(ConfigEdit::ClearPath {
-                        segments: effort_path,
-                    });
-                }
-                ConfigEditsBuilder::new(&self.config.adam_home)
-                    .with_edits(edits)
-                    .apply()
-                    .await
-            }
-            None => AdamStateStore::new(&self.config.adam_home)
-                .set_last_selected_model(&model_ref, effort, None)
-                .map_err(anyhow::Error::from),
-        };
+        let save_result = AdamStateStore::new(&self.config.adam_home)
+            .set_last_selected_model(&model_ref, effort, None)
+            .map_err(anyhow::Error::from);
         if let Err(err) = save_result {
-            let prefix = match profile.as_deref() {
-                Some(profile) => format!("Failed to save model for profile `{profile}`: {err}"),
-                None => format!("Failed to save default model: {err}"),
-            };
             return Err(format!(
-                "{prefix}. Switched the current session to model `{model}` using provider `{provider_id}`."
+                "Failed to save default model: {err}. Switched the current session to model `{model}` using provider `{provider_id}`."
             ));
         }
 
@@ -1229,11 +1188,18 @@ impl App {
 
         self.chat_widget.dismiss_active_view();
 
-        match self
-            .reload_runtime_provider_config(&provider_id, &model)
-            .await
-        {
+        match persist_custom_provider_files(&self.config.adam_home, &config) {
             Ok(()) => {
+                if let Err(err) = self
+                    .reload_runtime_provider_config(&provider_id, &model)
+                    .await
+                {
+                    self.chat_widget.add_error_message(format!(
+                        "Saved provider `{provider_label}` with model `{model}`, but failed to activate it in this session: {err}. Restart Adam to use the updated settings."
+                    ));
+                    return;
+                }
+
                 if self.chat_widget.thread_id().is_none() {
                     match self.server.start_thread(self.config.clone()).await {
                         Ok(new_thread) => {
@@ -1262,7 +1228,7 @@ impl App {
             }
             Err(err) => {
                 self.chat_widget.add_error_message(format!(
-                    "Saved provider `{provider_label}` with model `{model}`, but failed to activate it in this session: {err}. Restart Adam to use the updated settings."
+                    "Failed to save provider `{provider_label}` with model `{model}`: {err}."
                 ));
             }
         }
@@ -2671,7 +2637,6 @@ impl App {
                 effort,
             } => {
                 let previous_provider_id = self.config.model_provider_id.clone();
-                let profile = self.active_profile.clone();
                 match self
                     .persist_model_selection(model.clone(), provider_id, effort)
                     .await
@@ -2686,11 +2651,6 @@ impl App {
                             message.push_str(" using provider `");
                             message.push_str(&provider_id);
                             message.push('`');
-                        }
-                        if let Some(profile) = profile {
-                            message.push_str(" for ");
-                            message.push_str(&profile);
-                            message.push_str(" profile");
                         }
                         self.chat_widget.add_info_message(message, None);
                     }
@@ -3359,7 +3319,6 @@ mod tests {
     use adam_agent::ThreadManager;
     use adam_agent::config::ConfigBuilder;
     use adam_agent::config::ConfigOverrides;
-    use adam_agent::config::ConfigToml;
     use adam_agent::config::models_json::ModelsDialect;
     use adam_agent::config::models_json::ModelsEndpoint;
     use adam_agent::config::models_json::ModelsJson;
@@ -4178,13 +4137,22 @@ mod tests {
     }
 
     fn persist_selected_model_fixture(adam_home: &Path, provider_id: &str, model: &str) {
+        persist_selected_model_with_effort_fixture(adam_home, provider_id, model, None);
+    }
+
+    fn persist_selected_model_with_effort_fixture(
+        adam_home: &Path,
+        provider_id: &str,
+        model: &str,
+        effort: Option<ReasoningEffortConfig>,
+    ) {
         let model_ref = if provider_id.contains('.') {
             ModelRef::parse(&format!("{provider_id}:{model}")).expect("model ref")
         } else {
             ModelRef::new(provider_id, "main", model)
         };
         AdamStateStore::new(adam_home)
-            .set_last_selected_model(&model_ref, None, None)
+            .set_last_selected_model(&model_ref, effort, None)
             .expect("persist state fixture");
     }
 
@@ -4855,13 +4823,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn persist_model_selection_switches_runtime_provider_from_saved_profile_mapping() {
+    async fn persist_model_selection_switches_runtime_provider_from_models_json() {
         let mut app = make_test_app().await;
         persist_provider_mapping_fixture(&app.config.adam_home);
         write_profile_config(
             &app.config.adam_home,
-            r#"[profiles.saved]
-model = "provider_b.main:model-b"
+            r#"profile = "saved"
+
+[profiles.saved]
 "#,
         );
 
@@ -4907,32 +4876,31 @@ model = "provider_b.main:model-b"
             Some(60_800)
         );
 
-        let config_toml: ConfigToml = app
-            .config
-            .config_layer_stack
-            .effective_config()
-            .try_into()
-            .expect("config toml");
+        let state = AdamStateStore::new(&app.config.adam_home)
+            .load()
+            .expect("state");
         assert_eq!(
-            config_toml
-                .profiles
-                .get("saved")
-                .and_then(|profile| profile.model.as_deref()),
+            state
+                .last_selected_model
+                .as_ref()
+                .map(|model| model.model_ref.as_str()),
             Some("provider_b.main:model-b")
+        );
+        assert_eq!(
+            state.last_reasoning_effort,
+            Some(ReasoningEffortConfig::High)
         );
     }
 
     #[tokio::test]
-    async fn persist_model_selection_reloads_profile_context_limits_after_save() {
+    async fn persist_model_selection_reloads_context_limits_after_state_save() {
         let mut app = make_test_app().await;
         persist_provider_mapping_fixture(&app.config.adam_home);
         write_profile_config(
             &app.config.adam_home,
-            r#"[profiles.saved]
-model = "provider_a.main:model-a"
+            r#"profile = "saved"
 
-[profiles.target]
-model = "provider_b.main:model-b"
+[profiles.saved]
 "#,
         );
 
@@ -4978,18 +4946,19 @@ model = "provider_b.main:model-b"
             Some(60_800)
         );
 
-        let config_toml: ConfigToml = app
-            .config
-            .config_layer_stack
-            .effective_config()
-            .try_into()
-            .expect("config toml");
+        let state = AdamStateStore::new(&app.config.adam_home)
+            .load()
+            .expect("state");
         assert_eq!(
-            config_toml
-                .profiles
-                .get("saved")
-                .and_then(|profile| profile.model.as_deref()),
+            state
+                .last_selected_model
+                .as_ref()
+                .map(|model| model.model_ref.as_str()),
             Some("provider_b.main:model-b")
+        );
+        assert_eq!(
+            state.last_reasoning_effort,
+            Some(ReasoningEffortConfig::High)
         );
     }
 
@@ -4997,14 +4966,17 @@ model = "provider_b.main:model-b"
     async fn persist_model_selection_clears_reasoning_effort_when_none_passed() {
         let mut app = make_test_app().await;
         persist_provider_mapping_fixture(&app.config.adam_home);
+        persist_selected_model_with_effort_fixture(
+            &app.config.adam_home,
+            "provider_a",
+            "model-a",
+            Some(ReasoningEffortConfig::High),
+        );
         write_profile_config(
             &app.config.adam_home,
-            r#"[profiles.saved]
-model = "provider_a.main:model-a"
-model_reasoning_effort = "high"
+            r#"profile = "saved"
 
-[profiles.target]
-model = "provider_b.main:model-b"
+[profiles.saved]
 "#,
         );
 
@@ -5032,26 +5004,17 @@ model = "provider_b.main:model-b"
         assert_eq!(app.chat_widget.current_model(), "model-b");
         assert_eq!(app.chat_widget.current_reasoning_effort(), None);
 
-        let config_toml: ConfigToml = app
-            .config
-            .config_layer_stack
-            .effective_config()
-            .try_into()
-            .expect("config toml");
+        let state = AdamStateStore::new(&app.config.adam_home)
+            .load()
+            .expect("state");
         assert_eq!(
-            config_toml
-                .profiles
-                .get("saved")
-                .and_then(|profile| profile.model.as_deref()),
+            state
+                .last_selected_model
+                .as_ref()
+                .map(|model| model.model_ref.as_str()),
             Some("provider_b.main:model-b")
         );
-        assert_eq!(
-            config_toml
-                .profiles
-                .get("saved")
-                .and_then(|profile| profile.model_reasoning_effort),
-            None
-        );
+        assert_eq!(state.last_reasoning_effort, None);
     }
 
     #[tokio::test]
@@ -5060,15 +5023,6 @@ model = "provider_b.main:model-b"
         persist_main_provider_fixture(&app.config.adam_home, "provider_a", "shared-model", None);
         persist_main_provider_fixture(&app.config.adam_home, "provider_b", "shared-model", None);
         persist_selected_model_fixture(&app.config.adam_home, "provider_a", "model-a");
-        write_profile_config(
-            &app.config.adam_home,
-            r#"[profiles.first]
-model = "provider_a.main:shared-model"
-
-[profiles.second]
-model = "provider_b.main:shared-model"
-"#,
-        );
 
         app.config = ConfigBuilder::default()
             .adam_home(app.config.adam_home.clone())
@@ -5098,15 +5052,6 @@ model = "provider_b.main:shared-model"
         persist_main_provider_fixture(&app.config.adam_home, "provider_a", "shared-model", None);
         persist_main_provider_fixture(&app.config.adam_home, "provider_b", "shared-model", None);
         persist_selected_model_fixture(&app.config.adam_home, "provider_a", "model-a");
-        write_profile_config(
-            &app.config.adam_home,
-            r#"[profiles.first]
-model = "provider_a.main:shared-model"
-
-[profiles.second]
-model = "provider_b.main:shared-model"
-"#,
-        );
 
         app.config = ConfigBuilder::default()
             .adam_home(app.config.adam_home.clone())
@@ -5163,8 +5108,9 @@ model = "provider_b.main:shared-model"
         persist_provider_mapping_fixture(&app.config.adam_home);
         write_profile_config(
             &app.config.adam_home,
-            r#"[profiles.saved]
-model = "provider_b.main:model-b"
+            r#"profile = "saved"
+
+[profiles.saved]
 "#,
         );
 
@@ -5177,12 +5123,13 @@ model = "provider_b.main:model-b"
         app.config.active_profile = Some("saved".to_string());
         app.chat_widget.sync_provider_config(&app.config, true);
         app.chat_widget.set_model("model-a");
+        let provider_id = "provider_b".to_string();
         app.config.adam_home = config_path;
 
         let err = app
             .persist_model_selection(
                 "model-b".to_string(),
-                None,
+                Some(provider_id),
                 Some(ReasoningEffortConfig::High),
             )
             .await

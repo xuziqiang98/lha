@@ -9,17 +9,15 @@ use adam_protocol::config_types::ReasoningSummary;
 use adam_protocol::config_types::SandboxMode;
 use adam_protocol::config_types::Verbosity;
 use adam_protocol::config_types::WebSearchMode;
-use adam_protocol::openai_models::ReasoningEffort;
 
 /// Collection of common configuration options that a user can define as a unit
 /// in `config.toml`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct ConfigProfile {
-    pub model: Option<String>,
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,
-    pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub personality: Option<Personality>,
@@ -49,16 +47,8 @@ pub struct ConfigProfile {
 
 impl From<ConfigProfile> for adam_app_server_protocol::Profile {
     fn from(config_profile: ConfigProfile) -> Self {
-        let model_provider = config_profile
-            .model
-            .as_deref()
-            .and_then(|model| crate::config::model_ref::ModelRef::parse(model).ok())
-            .map(|model_ref| crate::config::model_provider_id_from_ref(&model_ref));
         Self {
-            model: config_profile.model,
-            model_provider,
             approval_policy: config_profile.approval_policy,
-            model_reasoning_effort: config_profile.model_reasoning_effort,
             model_reasoning_summary: config_profile.model_reasoning_summary,
             model_verbosity: config_profile.model_verbosity,
         }

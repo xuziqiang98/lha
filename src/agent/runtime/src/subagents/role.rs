@@ -2,8 +2,7 @@
 //!
 //! Roles are selected at spawn time and are loaded with the same config machinery as
 //! `config.toml`. This module resolves built-in and user-defined role files, inserts the role as a
-//! high-precedence layer, and preserves the caller's current profile/provider unless the role
-//! explicitly takes ownership of model selection.
+//! high-precedence layer, and preserves the caller's current profile/provider/model selection.
 
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
@@ -62,23 +61,8 @@ pub(crate) async fn apply_role_to_config(
         .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
     let role_layer_toml = resolve_relative_paths_in_config_toml(role_config_toml, role_config_base)
         .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
-    let role_selects_provider = role_layer_toml.get("model_provider").is_some();
     let role_selects_profile = role_layer_toml.get("profile").is_some();
-    let role_updates_active_profile_provider = config
-        .active_profile
-        .as_ref()
-        .and_then(|active_profile| {
-            role_layer_toml
-                .get("profiles")
-                .and_then(TomlValue::as_table)
-                .and_then(|profiles| profiles.get(active_profile))
-                .and_then(TomlValue::as_table)
-                .map(|profile| profile.contains_key("model_provider"))
-        })
-        .unwrap_or(false);
-    let preserve_current_profile = !role_selects_provider && !role_selects_profile;
-    let preserve_current_provider =
-        preserve_current_profile && !role_updates_active_profile_provider;
+    let preserve_current_profile = !role_selects_profile;
 
     let mut layers: Vec<ConfigLayerEntry> = config
         .config_layer_stack
@@ -105,7 +89,8 @@ pub(crate) async fn apply_role_to_config(
         merged_config,
         ConfigOverrides {
             cwd: Some(config.cwd.clone()),
-            model_provider: preserve_current_provider.then(|| config.model_provider_id.clone()),
+            model: config.model.clone(),
+            model_provider: Some(config.model_provider_id.clone()),
             config_profile: preserve_current_profile
                 .then(|| config.active_profile.clone())
                 .flatten(),

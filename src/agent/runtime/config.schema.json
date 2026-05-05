@@ -363,9 +363,6 @@
         "include_apply_patch_tool": {
           "type": "boolean"
         },
-        "model": {
-          "type": "string"
-        },
         "model_instructions_file": {
           "allOf": [
             {
@@ -373,9 +370,6 @@
             }
           ],
           "description": "Optional path to a file containing model instructions."
-        },
-        "model_reasoning_effort": {
-          "$ref": "#/definitions/ReasoningEffort"
         },
         "model_reasoning_summary": {
           "$ref": "#/definitions/ReasoningSummary"
@@ -823,17 +817,6 @@
         }
       },
       "type": "object"
-    },
-    "ReasoningEffort": {
-      "enum": [
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
-      "type": "string"
     },
     "ReasoningSummary": {
       "enum": [
@@ -1426,9 +1409,6 @@
         }
       ],
       "description": "Optional path to a file containing model instructions that will override the built-in instructions for the selected model. Users are STRONGLY DISCOURAGED from using this field, as deviating from the instructions sanctioned by Adam will likely degrade model performance."
-    },
-    "model_reasoning_effort": {
-      "$ref": "#/definitions/ReasoningEffort"
     },
     "model_reasoning_summary": {
       "$ref": "#/definitions/ReasoningSummary"

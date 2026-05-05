@@ -5,7 +5,6 @@ use crate::path_utils::resolve_symlink_write_paths;
 use crate::path_utils::write_atomically;
 use adam_protocol::config_types::Personality;
 use adam_protocol::config_types::TrustLevel;
-use adam_protocol::openai_models::ReasoningEffort;
 use anyhow::Context;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -20,12 +19,6 @@ use toml_edit::value;
 /// Discrete config mutations supported by the persistence engine.
 #[derive(Clone, Debug)]
 pub enum ConfigEdit {
-    /// Update the active (or default) model selection and optional reasoning effort.
-    SetModel {
-        model: Option<String>,
-        effort: Option<ReasoningEffort>,
-        model_provider: Option<String>,
-    },
     /// Update the active (or default) model personality.
     SetModelPersonality { personality: Option<Personality> },
     /// Toggle the acknowledgement flag under `[notice]`.
@@ -264,32 +257,6 @@ impl ConfigDocument {
 
     fn apply(&mut self, edit: &ConfigEdit) -> anyhow::Result<bool> {
         match edit {
-            ConfigEdit::SetModel {
-                model,
-                effort,
-                model_provider,
-            } => Ok({
-                let mut mutated = false;
-                if self.profile.is_some() {
-                    let model = match (model.as_deref(), model_provider.as_deref()) {
-                        (Some(model), Some(_)) if model.contains(':') => Some(model.to_string()),
-                        (Some(model), Some(model_provider)) if model_provider.contains('.') => {
-                            Some(format!("{model_provider}:{model}"))
-                        }
-                        (Some(model), Some(model_provider)) => {
-                            Some(format!("{model_provider}.main:{model}"))
-                        }
-                        (Some(model), None) => Some(model.to_string()),
-                        (None, _) => None,
-                    };
-                    mutated |= self.write_profile_value(&["model"], model.map(value));
-                }
-                mutated |= self.write_profile_value(
-                    &["model_reasoning_effort"],
-                    effort.map(|effort| value(effort.to_string())),
-                );
-                mutated
-            }),
             ConfigEdit::SetModelPersonality { personality } => Ok(self.write_profile_value(
                 &["personality"],
                 personality.map(|personality| value(personality.to_string())),
@@ -724,20 +691,6 @@ impl ConfigEditsBuilder {
         self
     }
 
-    pub fn set_model(
-        mut self,
-        model: Option<&str>,
-        effort: Option<ReasoningEffort>,
-        model_provider: Option<&str>,
-    ) -> Self {
-        self.edits.push(ConfigEdit::SetModel {
-            model: model.map(ToOwned::to_owned),
-            effort,
-            model_provider: model_provider.map(ToOwned::to_owned),
-        });
-        self
-    }
-
     pub fn set_personality(mut self, personality: Option<Personality>) -> Self {
         self.edits
             .push(ConfigEdit::SetModelPersonality { personality });
@@ -833,54 +786,9 @@ impl ConfigEditsBuilder {
 mod tests {
     use super::*;
     use crate::config::types::McpServerTransportConfig;
-    use adam_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
-    #[cfg(unix)]
-    use std::os::unix::fs::symlink;
     use tempfile::tempdir;
     use toml::Value as TomlValue;
-
-    #[test]
-    fn blocking_set_model_top_level_only_writes_effort() {
-        let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
-
-        apply_blocking(
-            adam_home,
-            None,
-            &[ConfigEdit::SetModel {
-                model: Some("gpt-5.1-codex".to_string()),
-                effort: Some(ReasoningEffort::High),
-                model_provider: None,
-            }],
-        )
-        .expect("persist");
-
-        let contents =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
-        let expected = r#"model_reasoning_effort = "high"
-"#;
-        assert_eq!(contents, expected);
-    }
-
-    #[test]
-    fn blocking_set_model_top_level_ignores_model_provider() {
-        let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
-
-        apply_blocking(
-            adam_home,
-            None,
-            &[ConfigEdit::SetModel {
-                model: Some("deepseek-v3".to_string()),
-                effort: None,
-                model_provider: Some("iie".to_string()),
-            }],
-        )
-        .expect("persist");
-
-        assert!(!adam_home.join(CONFIG_TOML_FILE).exists());
-    }
 
     #[test]
     fn builder_with_edits_applies_custom_paths() {
@@ -949,120 +857,6 @@ enabled = false
     }
 
     #[test]
-    fn blocking_set_model_preserves_inline_table_contents() {
-        let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
-
-        // Seed with inline tables for profiles to simulate common user config.
-        std::fs::write(
-            adam_home.join(CONFIG_TOML_FILE),
-            r#"profile = "fast"
-
-profiles = { fast = { model = "gpt-4o", sandbox_mode = "strict" } }
-"#,
-        )
-        .expect("seed");
-
-        apply_blocking(
-            adam_home,
-            None,
-            &[ConfigEdit::SetModel {
-                model: Some("o4-mini".to_string()),
-                effort: None,
-                model_provider: None,
-            }],
-        )
-        .expect("persist");
-
-        let raw = std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
-        let value: TomlValue = toml::from_str(&raw).expect("parse config");
-
-        // Ensure sandbox_mode is preserved under profiles.fast and model updated.
-        let profiles_tbl = value
-            .get("profiles")
-            .and_then(|v| v.as_table())
-            .expect("profiles table");
-        let fast_tbl = profiles_tbl
-            .get("fast")
-            .and_then(|v| v.as_table())
-            .expect("fast table");
-        assert_eq!(
-            fast_tbl.get("sandbox_mode").and_then(|v| v.as_str()),
-            Some("strict")
-        );
-        assert_eq!(
-            fast_tbl.get("model").and_then(|v| v.as_str()),
-            Some("o4-mini")
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn blocking_set_model_writes_through_symlink_chain() {
-        let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
-        let target_dir = tempdir().expect("target dir");
-        let target_path = target_dir.path().join(CONFIG_TOML_FILE);
-        let link_path = adam_home.join("config-link.toml");
-        let config_path = adam_home.join(CONFIG_TOML_FILE);
-
-        symlink(&target_path, &link_path).expect("symlink link");
-        symlink("config-link.toml", &config_path).expect("symlink config");
-
-        apply_blocking(
-            adam_home,
-            None,
-            &[ConfigEdit::SetModel {
-                model: Some("gpt-5.1-codex".to_string()),
-                effort: Some(ReasoningEffort::High),
-                model_provider: None,
-            }],
-        )
-        .expect("persist");
-
-        let meta = std::fs::symlink_metadata(&config_path).expect("config metadata");
-        assert!(meta.file_type().is_symlink());
-
-        let contents = std::fs::read_to_string(&target_path).expect("read target");
-        let expected = r#"model_reasoning_effort = "high"
-"#;
-        assert_eq!(contents, expected);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn blocking_set_model_replaces_symlink_on_cycle() {
-        let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
-        let link_a = adam_home.join("a.toml");
-        let link_b = adam_home.join("b.toml");
-        let config_path = adam_home.join(CONFIG_TOML_FILE);
-
-        symlink("b.toml", &link_a).expect("symlink a");
-        symlink("a.toml", &link_b).expect("symlink b");
-        symlink("a.toml", &config_path).expect("symlink config");
-
-        apply_blocking(
-            adam_home,
-            None,
-            &[ConfigEdit::SetModel {
-                model: Some("gpt-5.1-codex".to_string()),
-                effort: Some(ReasoningEffort::High),
-                model_provider: None,
-            }],
-        )
-        .expect("persist");
-
-        let meta = std::fs::symlink_metadata(&config_path).expect("config metadata");
-        assert!(!meta.file_type().is_symlink());
-
-        let contents = std::fs::read_to_string(&config_path).expect("read config");
-        let expected = r#"model_reasoning_effort = "high"
-"#;
-        assert_eq!(contents, expected);
-    }
-
-    #[test]
     fn batch_write_table_upsert_preserves_inline_comments() {
         let tmp = tempdir().expect("tmpdir");
         let adam_home = tmp.path();
@@ -1122,133 +916,6 @@ foo = "bar"
 network_access = true
 "#;
         assert_eq!(updated, expected);
-    }
-
-    #[test]
-    fn blocking_clear_model_removes_inline_table_entry() {
-        let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
-
-        std::fs::write(
-            adam_home.join(CONFIG_TOML_FILE),
-            r#"profile = "fast"
-
-profiles = { fast = { model = "gpt-4o", sandbox_mode = "strict" } }
-"#,
-        )
-        .expect("seed");
-
-        apply_blocking(
-            adam_home,
-            None,
-            &[ConfigEdit::SetModel {
-                model: None,
-                effort: Some(ReasoningEffort::High),
-                model_provider: None,
-            }],
-        )
-        .expect("persist");
-
-        let contents =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
-        let expected = r#"profile = "fast"
-
-[profiles.fast]
-sandbox_mode = "strict"
-model_reasoning_effort = "high"
-"#;
-        assert_eq!(contents, expected);
-    }
-
-    #[test]
-    fn blocking_set_model_scopes_to_active_profile() {
-        let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
-        std::fs::write(
-            adam_home.join(CONFIG_TOML_FILE),
-            r#"profile = "team"
-
-[profiles.team]
-model_reasoning_effort = "low"
-"#,
-        )
-        .expect("seed");
-
-        apply_blocking(
-            adam_home,
-            None,
-            &[ConfigEdit::SetModel {
-                model: Some("o5-preview".to_string()),
-                effort: Some(ReasoningEffort::Minimal),
-                model_provider: None,
-            }],
-        )
-        .expect("persist");
-
-        let contents =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
-        let expected = r#"profile = "team"
-
-[profiles.team]
-model_reasoning_effort = "minimal"
-model = "o5-preview"
-"#;
-        assert_eq!(contents, expected);
-    }
-
-    #[test]
-    fn blocking_set_model_with_explicit_profile() {
-        let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
-        std::fs::write(
-            adam_home.join(CONFIG_TOML_FILE),
-            r#"[profiles."team a"]
-model = "gpt-5.1-codex"
-"#,
-        )
-        .expect("seed");
-
-        apply_blocking(
-            adam_home,
-            Some("team a"),
-            &[ConfigEdit::SetModel {
-                model: Some("o4-mini".to_string()),
-                effort: None,
-                model_provider: None,
-            }],
-        )
-        .expect("persist");
-
-        let contents =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
-        let expected = r#"[profiles."team a"]
-model = "o4-mini"
-"#;
-        assert_eq!(contents, expected);
-    }
-
-    #[test]
-    fn blocking_set_model_with_profile_writes_canonical_model_ref() {
-        let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
-
-        apply_blocking(
-            adam_home,
-            Some("team a"),
-            &[ConfigEdit::SetModel {
-                model: Some("deepseek-v3".to_string()),
-                effort: None,
-                model_provider: Some("iie".to_string()),
-            }],
-        )
-        .expect("persist");
-
-        let contents =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
-        let expected = r#"[profiles."team a"]
-model = "iie.main:deepseek-v3"
-"#;
-        assert_eq!(contents, expected);
     }
 
     #[test]
@@ -1689,56 +1356,6 @@ foo = { command = "cmd" , enabled = false }
             .and_then(|tbl| tbl.get("notifications"))
             .and_then(toml::Value::as_bool);
         assert_eq!(notifications, Some(false));
-    }
-
-    #[tokio::test]
-    async fn async_builder_set_model_persists() {
-        let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path().to_path_buf();
-
-        ConfigEditsBuilder::new(&adam_home)
-            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High), None)
-            .apply()
-            .await
-            .expect("persist");
-
-        let contents =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
-        let expected = r#"model_reasoning_effort = "high"
-"#;
-        assert_eq!(contents, expected);
-    }
-
-    #[test]
-    fn blocking_builder_set_model_round_trips_back_and_forth() {
-        let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
-
-        let initial_expected = r#"model_reasoning_effort = "low"
-"#;
-        ConfigEditsBuilder::new(adam_home)
-            .set_model(Some("o4-mini"), Some(ReasoningEffort::Low), None)
-            .apply_blocking()
-            .expect("persist initial");
-        let mut contents =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
-        assert_eq!(contents, initial_expected);
-
-        let updated_expected = r#"model_reasoning_effort = "high"
-"#;
-        ConfigEditsBuilder::new(adam_home)
-            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High), None)
-            .apply_blocking()
-            .expect("persist update");
-        contents = std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
-        assert_eq!(contents, updated_expected);
-
-        ConfigEditsBuilder::new(adam_home)
-            .set_model(Some("o4-mini"), Some(ReasoningEffort::Low), None)
-            .apply_blocking()
-            .expect("persist revert");
-        contents = std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
-        assert_eq!(contents, initial_expected);
     }
 
     #[tokio::test]

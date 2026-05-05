@@ -202,6 +202,10 @@ async fn resumed_initial_messages_render_history() {
 #[tokio::test]
 async fn session_configured_updates_footer_reasoning_effort_immediately() {
     let adam_home = tempdir().expect("tempdir");
+    let model_ref = ModelRef::new("openai", "main", "gpt-5");
+    AdamStateStore::new(adam_home.path())
+        .set_last_selected_model(&model_ref, Some(ReasoningEffortConfig::High), None)
+        .expect("persist model effort");
     let cfg = ConfigBuilder::default()
         .adam_home(adam_home.path().to_path_buf())
         .provider_config_required(false)
@@ -254,10 +258,13 @@ async fn session_configured_updates_footer_reasoning_effort_immediately() {
         .last()
         .unwrap_or_default()
         .to_string();
-    let initial_footer_lower = initial_footer.to_ascii_lowercase();
     assert!(
-        !initial_footer_lower.contains(" high "),
-        "initial footer should not show high effort before session configuration: {initial_footer:?}"
+        initial_footer.contains("Identity nobody"),
+        "expected initial identity footer: {initial_footer:?}"
+    );
+    assert!(
+        initial_footer.contains("High"),
+        "expected startup footer to restore reasoning effort from state: {initial_footer:?}"
     );
 
     let rollout_file = NamedTempFile::new().expect("rollout file");
@@ -271,7 +278,7 @@ async fn session_configured_updates_footer_reasoning_effort_immediately() {
         approval_policy: AskForApproval::Never,
         sandbox_policy: SandboxPolicy::ReadOnly,
         cwd: PathBuf::from("/home/user/project"),
-        reasoning_effort: Some(ReasoningEffortConfig::High),
+        reasoning_effort: Some(ReasoningEffortConfig::Medium),
         history_log_id: 0,
         history_entry_count: 0,
         initial_messages: None,
@@ -306,7 +313,7 @@ async fn session_configured_updates_footer_reasoning_effort_immediately() {
         "expected identity footer: {footer:?}"
     );
     assert!(
-        footer_lower.contains(" high "),
+        footer_lower.contains(" medium "),
         "expected footer to show reasoning effort immediately after session configuration: {footer:?}"
     );
 }
@@ -3273,6 +3280,10 @@ async fn default_identity_plan_applies_on_startup() {
 #[tokio::test]
 async fn default_identity_plan_preserves_configured_effort_on_startup() {
     let adam_home = tempdir().expect("tempdir");
+    let model_ref = ModelRef::new("openai", "main", "gpt-5");
+    AdamStateStore::new(adam_home.path())
+        .set_last_selected_model(&model_ref, Some(ReasoningEffortConfig::High), None)
+        .expect("persist model effort");
     let cfg = ConfigBuilder::default()
         .adam_home(adam_home.path().to_path_buf())
         .provider_config_required(false)
@@ -3281,10 +3292,6 @@ async fn default_identity_plan_preserves_configured_effort_on_startup() {
             (
                 "tui.default_identity".to_string(),
                 TomlValue::String("planner".to_string()),
-            ),
-            (
-                "model_reasoning_effort".to_string(),
-                TomlValue::String("high".to_string()),
             ),
         ])
         .build()

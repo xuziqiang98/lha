@@ -8,6 +8,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
@@ -29,6 +30,34 @@ pub struct ModelsJson {
     #[serde(default)]
     pub providers: BTreeMap<String, ModelsProvider>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolveModelProviderError {
+    model: String,
+    provider_ids: Vec<String>,
+}
+
+impl ResolveModelProviderError {
+    fn ambiguous(model: &str, provider_ids: BTreeSet<String>) -> Self {
+        Self {
+            model: model.to_string(),
+            provider_ids: provider_ids.into_iter().collect(),
+        }
+    }
+}
+
+impl std::fmt::Display for ResolveModelProviderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "model `{}` is configured for multiple providers: {}",
+            self.model,
+            self.provider_ids.join(", ")
+        )
+    }
+}
+
+impl std::error::Error for ResolveModelProviderError {}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -206,6 +235,30 @@ impl ModelsJson {
         entries
     }
 
+    pub fn resolve_model_provider_for_model(
+        &self,
+        model: &str,
+    ) -> Result<Option<String>, ResolveModelProviderError> {
+        let model = model.trim();
+        if model.is_empty() {
+            return Ok(None);
+        }
+
+        let provider_ids: BTreeSet<String> = self
+            .model_entries()
+            .into_iter()
+            .filter_map(|(configured_model, provider_id)| {
+                (configured_model == model).then_some(provider_id)
+            })
+            .collect();
+
+        match provider_ids.len() {
+            0 => Ok(None),
+            1 => Ok(provider_ids.into_iter().next()),
+            _ => Err(ResolveModelProviderError::ambiguous(model, provider_ids)),
+        }
+    }
+
     pub fn model_metadata(&self, model_ref: &ModelRef) -> Option<&ModelMetadata> {
         self.providers
             .get(&model_ref.provider_id)?
@@ -275,6 +328,130 @@ mod tests {
                 "anthropic/claude-sonnet-4".to_string(),
                 "openrouter".to_string()
             )]
+        );
+    }
+
+    #[test]
+    fn resolve_model_provider_for_model_uses_unique_model_entry() {
+        let config: ModelsJson = serde_json::from_str(
+            r#"{
+              "providers": {
+                "iie": {
+                  "endpoints": {
+                    "main": {
+                      "models": {
+                        "deepseek-v3": {}
+                      }
+                    }
+                  }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config
+                .resolve_model_provider_for_model("deepseek-v3")
+                .expect("resolve provider"),
+            Some("iie".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_model_provider_for_model_returns_none_when_unmapped() {
+        let config: ModelsJson = serde_json::from_str(
+            r#"{
+              "providers": {
+                "iie": {
+                  "endpoints": {
+                    "main": {
+                      "models": {
+                        "deepseek-v3": {}
+                      }
+                    }
+                  }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config
+                .resolve_model_provider_for_model("claude-3.7")
+                .expect("resolve provider"),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_model_provider_for_model_rejects_ambiguous_mapping() {
+        let config: ModelsJson = serde_json::from_str(
+            r#"{
+              "providers": {
+                "iie": {
+                  "endpoints": {
+                    "main": {
+                      "models": {
+                        "deepseek-v3": {}
+                      }
+                    }
+                  }
+                },
+                "chatanywhere": {
+                  "endpoints": {
+                    "main": {
+                      "models": {
+                        "deepseek-v3": {}
+                      }
+                    }
+                  }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let err = config
+            .resolve_model_provider_for_model("deepseek-v3")
+            .expect_err("expected ambiguous provider mapping");
+        assert_eq!(
+            err.to_string(),
+            "model `deepseek-v3` is configured for multiple providers: chatanywhere, iie"
+        );
+    }
+
+    #[test]
+    fn resolve_model_provider_for_model_rejects_ambiguous_variant_mapping() {
+        let config: ModelsJson = serde_json::from_str(
+            r#"{
+              "providers": {
+                "anthropic": {
+                  "endpoints": {
+                    "messages": {
+                      "models": {
+                        "claude-sonnet-4-5": {}
+                      }
+                    },
+                    "chat": {
+                      "models": {
+                        "claude-sonnet-4-5": {}
+                      }
+                    }
+                  }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let err = config
+            .resolve_model_provider_for_model("claude-sonnet-4-5")
+            .expect_err("expected ambiguous provider mapping");
+        assert_eq!(
+            err.to_string(),
+            "model `claude-sonnet-4-5` is configured for multiple providers: anthropic.chat, anthropic.messages"
         );
     }
 

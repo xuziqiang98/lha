@@ -8,6 +8,7 @@ use adam_app_server_protocol::ThreadStartResponse;
 use adam_app_server_protocol::TurnStartParams;
 use adam_app_server_protocol::TurnStartResponse;
 use adam_app_server_protocol::UserInput as V2UserInput;
+use adam_protocol::openai_models::ReasoningEffort;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
@@ -24,6 +25,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn set_default_model_persists_overrides() -> Result<()> {
@@ -52,6 +54,42 @@ async fn set_default_model_persists_overrides() -> Result<()> {
     assert_eq!(
         state_model_ref(codex_home.path()).await?,
         "openai.main:gpt-4.1"
+    );
+    assert_eq!(state_reasoning_effort(codex_home.path()).await?, None);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_default_model_persists_reasoning_effort() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_set_default_model_request(SetDefaultModelParams {
+            model: Some("gpt-4.1".to_string()),
+            model_provider: None,
+            reasoning_effort: Some(ReasoningEffort::High),
+        })
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    let _: SetDefaultModelResponse = to_response(resp)?;
+
+    assert_eq!(
+        state_model_ref(codex_home.path()).await?,
+        "openai.main:gpt-4.1"
+    );
+    assert_eq!(
+        state_reasoning_effort(codex_home.path()).await?,
+        Some(ReasoningEffort::High)
     );
     Ok(())
 }
@@ -88,9 +126,9 @@ async fn set_default_model_persists_explicit_provider() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn set_default_model_infers_provider_from_saved_profiles() -> Result<()> {
+async fn set_default_model_infers_provider_from_models_json() -> Result<()> {
     let codex_home = TempDir::new()?;
-    create_profile_mapped_config_toml(codex_home.path())?;
+    create_models_json_mapped_config_toml(codex_home.path())?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -115,6 +153,43 @@ async fn set_default_model_infers_provider_from_saved_profiles() -> Result<()> {
         state_model_ref(codex_home.path()).await?,
         "provider_b.main:deepseek-v3"
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_default_model_rejects_ambiguous_provider_mapping() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_ambiguous_models_json_config_toml(codex_home.path())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_set_default_model_request(SetDefaultModelParams {
+            model: Some("deepseek-v3".to_string()),
+            model_provider: None,
+            reasoning_effort: None,
+        })
+        .await?;
+
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert!(
+        error
+            .error
+            .message
+            .contains("model `deepseek-v3` is configured for multiple providers"),
+        "unexpected error: {error:?}"
+    );
+    assert!(error.error.message.contains("chatanywhere"));
+    assert!(error.error.message.contains("iie"));
+    assert!(!tokio::fs::try_exists(codex_home.path().join("state.json")).await?);
+
     Ok(())
 }
 
@@ -396,18 +471,25 @@ async fn state_model_ref(codex_home: &Path) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("state should include model ref"))
 }
 
+async fn state_reasoning_effort(codex_home: &Path) -> Result<Option<ReasoningEffort>> {
+    let state_path = codex_home.join("state.json");
+    let state: serde_json::Value =
+        serde_json::from_str(&tokio::fs::read_to_string(state_path).await?)?;
+    Ok(serde_json::from_value(
+        state
+            .get("last_reasoning_effort")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    )?)
+}
+
 // Helper to create a config.toml; mirrors create_conversation.rs
 fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        r#"
-model_reasoning_effort = "medium"
-"#,
-    )
+    std::fs::write(config_toml, "")
 }
 
-fn create_profile_mapped_config_toml(codex_home: &Path) -> std::io::Result<()> {
+fn create_models_json_mapped_config_toml(codex_home: &Path) -> std::io::Result<()> {
     std::fs::write(
         codex_home.join("models.json"),
         r#"{
@@ -418,13 +500,7 @@ fn create_profile_mapped_config_toml(codex_home: &Path) -> std::io::Result<()> {
 }
 "#,
     )?;
-    std::fs::write(
-        codex_home.join("config.toml"),
-        r#"
-[profiles.deepseek]
-model = "provider_b.main:deepseek-v3"
-"#,
-    )
+    std::fs::write(codex_home.join("config.toml"), "")
 }
 
 fn create_config_toml_with_custom_provider(codex_home: &Path) -> std::io::Result<()> {
@@ -437,12 +513,21 @@ fn create_config_toml_with_custom_provider(codex_home: &Path) -> std::io::Result
 }
 "#,
     )?;
+    std::fs::write(codex_home.join("config.toml"), "")
+}
+
+fn create_ambiguous_models_json_config_toml(codex_home: &Path) -> std::io::Result<()> {
     std::fs::write(
-        codex_home.join("config.toml"),
-        r#"
-model_reasoning_effort = "medium"
+        codex_home.join("models.json"),
+        r#"{
+  "providers": {
+    "iie": { "endpoints": { "main": { "base_url": "https://example.com/iie", "dialect": "responses", "experimental_bearer_token": "sk-iie", "models": { "deepseek-v3": {} } } } },
+    "chatanywhere": { "endpoints": { "main": { "base_url": "https://example.com/chatanywhere", "dialect": "responses", "experimental_bearer_token": "sk-chatanywhere", "models": { "deepseek-v3": {} } } } }
+  }
+}
 "#,
-    )
+    )?;
+    std::fs::write(codex_home.join("config.toml"), "")
 }
 
 fn create_variant_switching_config_toml(
@@ -510,9 +595,6 @@ fn create_variant_switching_config_toml(
         r#"
 approval_policy = "never"
 sandbox_mode = "read-only"
-
-[profiles."_provider.i9vc.messages.glm-5.1"]
-model = "i9vc.messages:glm-5.1"
 "#,
     )
 }
@@ -559,9 +641,6 @@ fn create_implicit_default_variant_switching_config_toml(
         r#"
 approval_policy = "never"
 sandbox_mode = "read-only"
-
-[profiles."_provider.i9vc.messages.glm-5.1"]
-model = "i9vc.messages:glm-5.1"
 "#,
     )
 }

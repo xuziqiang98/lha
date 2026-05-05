@@ -6641,14 +6641,6 @@ mod tests {
     #[tokio::test]
     async fn switch_provider_and_model_uses_target_model_context_limits() {
         let adam_home = tempfile::tempdir().expect("create temp dir");
-        let config_path = adam_home.path().join("config.toml");
-        std::fs::write(
-            &config_path,
-            r#"[profiles."_provider.openai.custom-model"]
-model = "openai.main:custom-model"
-"#,
-        )
-        .expect("write config");
         std::fs::write(
             adam_home.path().join("models.json"),
             r#"{

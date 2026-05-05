@@ -126,7 +126,7 @@ fn create_config_toml(adam_home: &Path, server_uri: &str) -> std::io::Result<()>
         20_000,
         Some(false),
         "mock_provider",
-        "mock-model",
+        "o3",
         "",
         "never",
         "danger-full-access",
