@@ -385,6 +385,33 @@ where
         Ok(())
     }
 
+    /// Clear a visible terminal area and force a full redraw on the next draw call.
+    pub(crate) fn clear_area(&mut self, area: Rect) -> io::Result<()> {
+        if area.is_empty() {
+            return Ok(());
+        }
+
+        let size = self.size()?;
+        if area.x >= size.width || area.y >= size.height {
+            return Ok(());
+        }
+
+        let bottom = area.bottom().min(size.height);
+        for y in area.y..bottom {
+            queue!(
+                self.backend,
+                MoveTo(area.x, y),
+                SetAttribute(crossterm::style::Attribute::Reset),
+                SetForegroundColor(crossterm::style::Color::Reset),
+                SetBackgroundColor(crossterm::style::Color::Reset),
+                Clear(crossterm::terminal::ClearType::UntilNewLine)
+            )?;
+        }
+
+        self.previous_buffer_mut().reset();
+        Ok(())
+    }
+
     /// Force the next draw pass to repaint the whole viewport.
     pub fn invalidate_viewport(&mut self) {
         self.previous_buffer_mut().reset();
@@ -683,6 +710,58 @@ mod tests {
                 .iter()
                 .all(|cell| cell.symbol().trim().is_empty()),
             "resize should force the next draw to repaint without stale buddy cells"
+        );
+    }
+
+    #[test]
+    fn clear_area_removes_old_viewport_live_rows() {
+        let backend = crate::test_backend::VT100Backend::new(120, 8);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        let old_area = Rect::new(0, 0, 120, 8);
+        terminal.set_viewport_area(old_area);
+
+        terminal
+            .draw(|frame| {
+                frame.buffer.set_string(108, 2, ".-----.", Style::default());
+                frame.buffer.set_string(
+                    0,
+                    4,
+                    "• Working (35s • esc to interrupt)",
+                    Style::default(),
+                );
+            })
+            .expect("draw old live viewport");
+        assert!(
+            terminal
+                .backend()
+                .vt100()
+                .screen()
+                .contents()
+                .contains(".-----.")
+        );
+        assert!(
+            terminal
+                .backend()
+                .vt100()
+                .screen()
+                .contents()
+                .contains("Working")
+        );
+
+        let new_area = Rect::new(0, 4, 99, 4);
+        terminal.clear_area(old_area).expect("clear old viewport");
+        terminal.set_viewport_area(new_area);
+        terminal.clear_area(new_area).expect("clear new viewport");
+        terminal.draw(|_| {}).expect("draw new viewport");
+
+        let contents = terminal.backend().vt100().screen().contents();
+        assert!(
+            !contents.contains(".-----."),
+            "old buddy row should be cleared after viewport moves: {contents:?}"
+        );
+        assert!(
+            !contents.contains("Working"),
+            "old status row should be cleared after viewport moves: {contents:?}"
         );
     }
 }

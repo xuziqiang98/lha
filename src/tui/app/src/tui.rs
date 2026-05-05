@@ -483,9 +483,11 @@ impl Tui {
             }
             area.y = size.height - area.height;
         }
-        if area != terminal.viewport_area {
-            terminal.clear()?;
+        let old_area = terminal.viewport_area;
+        if area != old_area {
+            terminal.clear_area(old_area)?;
             terminal.set_viewport_area(area);
+            terminal.clear_area(area)?;
         }
 
         Ok(needs_full_repaint)
@@ -548,8 +550,10 @@ impl Tui {
 
             let terminal = &mut self.terminal;
             if let Some(new_area) = pending_viewport_area.take() {
+                let old_area = terminal.viewport_area;
+                terminal.clear_area(old_area)?;
                 terminal.set_viewport_area(new_area);
-                terminal.clear()?;
+                terminal.clear_area(new_area)?;
             }
 
             let mut needs_full_repaint =
