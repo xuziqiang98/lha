@@ -121,6 +121,8 @@ where
     /// Last known position of the cursor. Used to find the new area when the viewport is inlined
     /// and the terminal resized.
     pub last_known_cursor_pos: Position,
+    /// Whether the next flush should clear cells to the right of a narrowed viewport.
+    clear_tail_after_viewport: bool,
 }
 
 impl<B> Drop for Terminal<B>
@@ -156,6 +158,7 @@ where
             viewport_area: Rect::new(0, cursor_pos.y, 0, 0),
             last_known_screen_size: screen_size,
             last_known_cursor_pos: cursor_pos,
+            clear_tail_after_viewport: false,
         })
     }
 
@@ -201,7 +204,27 @@ where
     /// Obtains a difference between the previous and the current buffer and passes it to the
     /// current backend for drawing.
     pub fn flush(&mut self) -> io::Result<()> {
-        let updates = diff_buffers(self.previous_buffer(), self.current_buffer());
+        let clear_tail_after_viewport = self.clear_tail_after_viewport;
+        let screen_size = if clear_tail_after_viewport {
+            Some(self.size()?)
+        } else {
+            None
+        };
+        let mut updates = diff_buffers(self.previous_buffer(), self.current_buffer());
+        if let Some(screen_size) = screen_size {
+            let tail_x = self.viewport_area.right();
+            if tail_x < screen_size.width {
+                let bottom = self.viewport_area.bottom().min(screen_size.height);
+                for y in self.viewport_area.y..bottom {
+                    updates.push(DrawCommand::ClearToEnd {
+                        x: tail_x,
+                        y,
+                        bg: Color::Reset,
+                    });
+                }
+            }
+            self.clear_tail_after_viewport = false;
+        }
         let last_put_command = updates.iter().rfind(|command| command.is_put());
         if let Some(&DrawCommand::Put { x, y, .. }) = last_put_command {
             self.last_known_cursor_pos = Position { x, y };
@@ -224,6 +247,9 @@ where
 
     /// Sets the viewport area.
     pub fn set_viewport_area(&mut self, area: Rect) {
+        if area.right() < self.viewport_area.right() {
+            self.clear_tail_after_viewport = true;
+        }
         self.current_buffer_mut().resize(area);
         self.previous_buffer_mut().resize(area);
         self.viewport_area = area;
@@ -762,6 +788,40 @@ mod tests {
         assert!(
             !contents.contains("Working"),
             "old status row should be cleared after viewport moves: {contents:?}"
+        );
+    }
+
+    #[test]
+    fn narrowing_viewport_clears_trailing_cells() {
+        let backend = crate::test_backend::VT100Backend::new(120, 8);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 120, 8));
+
+        terminal
+            .draw(|frame| {
+                frame.buffer.set_string(112, 4, "buddy", Style::default());
+            })
+            .expect("draw wide viewport");
+        assert!(
+            terminal
+                .backend()
+                .vt100()
+                .screen()
+                .contents()
+                .contains("buddy")
+        );
+
+        terminal.set_viewport_area(Rect::new(0, 0, 99, 8));
+        terminal.draw(|_| {}).expect("draw narrowed viewport");
+
+        assert!(
+            !terminal
+                .backend()
+                .vt100()
+                .screen()
+                .contents()
+                .contains("buddy"),
+            "trailing buddy cells should not survive a narrower viewport"
         );
     }
 }
