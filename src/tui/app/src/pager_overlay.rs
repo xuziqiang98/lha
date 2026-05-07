@@ -509,6 +509,16 @@ impl TranscriptOverlay {
         self.view.is_scrolled_to_bottom()
     }
 
+    pub(crate) fn advance_drag_autoscroll(&mut self, area: Rect) -> bool {
+        let top_h = area.height.saturating_sub(3);
+        let top = Rect::new(area.x, area.y, area.width, top_h);
+        self.view.advance_drag_autoscroll(overlay_content_area(top))
+    }
+
+    pub(crate) fn drag_autoscroll_active(&self) -> bool {
+        self.view.drag_autoscroll_active()
+    }
+
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
         let line1 = Rect::new(area.x, area.y, area.width, 1);
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);

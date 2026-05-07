@@ -27,6 +27,7 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 
 use crate::version::CODEX_CLI_VERSION;
@@ -132,6 +133,7 @@ const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in planner identity";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
+pub(crate) const DRAG_AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(50);
 
 use crate::app_event::AppEvent;
 use crate::app_event::BuddyConfigEdit;
@@ -6390,9 +6392,15 @@ impl Renderable for ChatWidget {
             transcript_area.height.saturating_sub(top_inset),
         );
 
-        self.transcript
-            .borrow_mut()
-            .render_inline(transcript_area, buf);
+        {
+            let mut transcript = self.transcript.borrow_mut();
+            transcript.advance_drag_autoscroll(transcript_area);
+            if transcript.drag_autoscroll_active() {
+                self.frame_requester
+                    .schedule_frame_in(DRAG_AUTOSCROLL_INTERVAL);
+            }
+            transcript.render_inline(transcript_area, buf);
+        }
         self.bottom_pane.render(bottom_area, buf);
         if sidebar_width.is_some() {
             let snapshot = self.sidebar_snapshot();

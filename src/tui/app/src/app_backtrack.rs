@@ -345,14 +345,25 @@ impl App {
         {
             let active_key = self.chat_widget.active_cell_transcript_key();
             let chat_widget = &self.chat_widget;
+            let mut schedule_drag_frame = false;
             tui.draw(u16::MAX, |frame| {
                 let width = frame.area().width.max(1);
                 t.sync_live_tail(width, active_key, |w| {
                     chat_widget.active_cell_transcript_lines(w)
                 });
+                if t.advance_drag_autoscroll(frame.area()) {
+                    schedule_drag_frame = true;
+                }
+                if t.drag_autoscroll_active() {
+                    schedule_drag_frame = true;
+                }
                 t.render(frame.area(), frame.buffer);
             })?;
             let close_overlay = t.is_done();
+            if schedule_drag_frame && !close_overlay {
+                tui.frame_requester()
+                    .schedule_frame_in(crate::chatwidget::DRAG_AUTOSCROLL_INTERVAL);
+            }
             if !close_overlay
                 && active_key.is_some_and(|key| key.animation_tick.is_some())
                 && t.is_scrolled_to_bottom()

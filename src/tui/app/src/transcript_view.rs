@@ -28,6 +28,9 @@ use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
+const DRAG_AUTOSCROLL_LINES_PER_TICK: isize = 1;
+const DRAG_AUTOSCROLL_EDGE_ROWS: u16 = 1;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LiveTailKey {
     width: u16,
@@ -40,6 +43,13 @@ struct LiveTailKey {
 struct ScrollAnchor {
     chunk_index: usize,
     intra_chunk_row: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DragAutoScroll {
+    column: u16,
+    direction: ScrollDirection,
+    lines_per_tick: isize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,12 +84,14 @@ pub(crate) struct TranscriptView {
     pending_scroll_chunk: Option<usize>,
     highlight_cell: Option<usize>,
     live_tail_key: Option<LiveTailKey>,
+    live_tail_lines: Vec<Line<'static>>,
     last_width: Option<u16>,
     last_area: Option<Rect>,
     last_top_line: usize,
     last_total_lines: usize,
     last_padding_top: usize,
     selection: TranscriptSelection,
+    drag_autoscroll: Option<DragAutoScroll>,
 }
 
 impl TranscriptView {
@@ -95,12 +107,14 @@ impl TranscriptView {
             pending_scroll_chunk: None,
             highlight_cell: None,
             live_tail_key: None,
+            live_tail_lines: Vec::new(),
             last_width: None,
             last_area: None,
             last_top_line: 0,
             last_total_lines: 0,
             last_padding_top: 0,
             selection: TranscriptSelection::default(),
+            drag_autoscroll: None,
         }
     }
 
@@ -157,15 +171,17 @@ impl TranscriptView {
         let follow_bottom = self.is_scrolled_to_bottom();
         self.take_live_tail_renderable();
         self.live_tail_key = next_key;
+        self.live_tail_lines.clear();
 
         if let Some(key) = next_key {
             let lines = compute_lines(width).unwrap_or_default();
             if !lines.is_empty() {
                 self.renderables.push(Self::live_tail_renderable(
-                    lines,
+                    lines.clone(),
                     !self.cells.is_empty(),
                     key.is_stream_continuation,
                 ));
+                self.live_tail_lines = lines;
             }
         }
 
@@ -225,19 +241,26 @@ impl TranscriptView {
                     self.selection.anchor = Some(point);
                     self.selection.head = Some(point);
                     self.selection.dragging = true;
+                    self.drag_autoscroll = None;
                     TranscriptMouseOutcome::SelectionChanged
                 } else if self.selection.is_active() {
                     self.selection.clear();
+                    self.drag_autoscroll = None;
                     TranscriptMouseOutcome::SelectionChanged
                 } else {
                     TranscriptMouseOutcome::Ignored
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                if self.selection.dragging
-                    && let Some(point) = self.selection_point_from_position(mouse.column, mouse.row)
+                if !self.selection.dragging {
+                    return TranscriptMouseOutcome::Ignored;
+                }
+
+                if let Some((point, autoscroll)) =
+                    self.drag_selection_point_from_position(mouse.column, mouse.row)
                 {
                     self.selection.head = Some(point);
+                    self.drag_autoscroll = autoscroll;
                     TranscriptMouseOutcome::SelectionChanged
                 } else {
                     TranscriptMouseOutcome::Ignored
@@ -245,10 +268,43 @@ impl TranscriptView {
             }
             MouseEventKind::Up(MouseButton::Left) if self.selection.dragging => {
                 self.selection.dragging = false;
+                self.drag_autoscroll = None;
                 TranscriptMouseOutcome::SelectionCompleted(self.selection_to_text())
             }
             _ => TranscriptMouseOutcome::Ignored,
         }
+    }
+
+    pub(crate) fn advance_drag_autoscroll(&mut self, area: Rect) -> bool {
+        let Some(autoscroll) = self.drag_autoscroll else {
+            return false;
+        };
+        if !self.selection.dragging || area.is_empty() {
+            self.drag_autoscroll = None;
+            return false;
+        }
+
+        let delta = match autoscroll.direction {
+            ScrollDirection::Up => -autoscroll.lines_per_tick,
+            ScrollDirection::Down => autoscroll.lines_per_tick,
+        };
+        let changed_scroll = self.apply_scroll_delta(delta);
+        let Some(point) = self.edge_selection_point_for_top(
+            area,
+            autoscroll.direction,
+            autoscroll.column,
+            self.scroll_offset,
+        ) else {
+            self.drag_autoscroll = None;
+            return changed_scroll;
+        };
+        let changed_selection = self.selection.head != Some(point);
+        self.selection.head = Some(point);
+        changed_scroll || changed_selection
+    }
+
+    pub(crate) fn drag_autoscroll_active(&self) -> bool {
+        self.drag_autoscroll.is_some() && self.selection.dragging
     }
 
     pub(crate) fn apply_scroll(&mut self, command: TranscriptScroll) -> bool {
@@ -586,10 +642,108 @@ impl TranscriptView {
         Some(TranscriptSelectionPoint { line_index, column })
     }
 
+    fn drag_selection_point_from_position(
+        &self,
+        column: u16,
+        row: u16,
+    ) -> Option<(TranscriptSelectionPoint, Option<DragAutoScroll>)> {
+        let area = self.last_area?;
+        if area.is_empty() || self.last_total_lines == 0 {
+            return None;
+        }
+
+        let clamped_column = clamp_to_area_column(area, column);
+        if row < area.y {
+            let point = self.edge_selection_point(area, ScrollDirection::Up, clamped_column)?;
+            return Some((
+                point,
+                Some(DragAutoScroll {
+                    column: clamped_column,
+                    direction: ScrollDirection::Up,
+                    lines_per_tick: DRAG_AUTOSCROLL_LINES_PER_TICK,
+                }),
+            ));
+        }
+        if row >= area.bottom() {
+            let point = self.edge_selection_point(area, ScrollDirection::Down, clamped_column)?;
+            return Some((
+                point,
+                Some(DragAutoScroll {
+                    column: clamped_column,
+                    direction: ScrollDirection::Down,
+                    lines_per_tick: DRAG_AUTOSCROLL_LINES_PER_TICK,
+                }),
+            ));
+        }
+
+        let row_offset = row.saturating_sub(area.y);
+        if (row_offset as usize) < self.last_padding_top {
+            return None;
+        }
+
+        let point = self.selection_point_from_position(clamped_column, row)?;
+        let autoscroll = if row_offset < DRAG_AUTOSCROLL_EDGE_ROWS {
+            Some(DragAutoScroll {
+                column: clamped_column,
+                direction: ScrollDirection::Up,
+                lines_per_tick: DRAG_AUTOSCROLL_LINES_PER_TICK,
+            })
+        } else if area.height.saturating_sub(row_offset).saturating_sub(1)
+            < DRAG_AUTOSCROLL_EDGE_ROWS
+        {
+            Some(DragAutoScroll {
+                column: clamped_column,
+                direction: ScrollDirection::Down,
+                lines_per_tick: DRAG_AUTOSCROLL_LINES_PER_TICK,
+            })
+        } else {
+            None
+        };
+        Some((point, autoscroll))
+    }
+
+    fn edge_selection_point(
+        &self,
+        area: Rect,
+        direction: ScrollDirection,
+        column: u16,
+    ) -> Option<TranscriptSelectionPoint> {
+        self.edge_selection_point_for_top(area, direction, column, self.last_top_line)
+    }
+
+    fn edge_selection_point_for_top(
+        &self,
+        area: Rect,
+        direction: ScrollDirection,
+        column: u16,
+        top_line: usize,
+    ) -> Option<TranscriptSelectionPoint> {
+        if area.is_empty() || self.last_total_lines == 0 {
+            return None;
+        }
+
+        let visible_rows = area.height as usize;
+        if visible_rows <= self.last_padding_top {
+            return None;
+        }
+        let content_rows = visible_rows.saturating_sub(self.last_padding_top);
+        let row = match direction {
+            ScrollDirection::Up => self.last_padding_top,
+            ScrollDirection::Down => self
+                .last_padding_top
+                .saturating_add(content_rows.saturating_sub(1)),
+        };
+        let line_index = top_line
+            .saturating_add(row.saturating_sub(self.last_padding_top))
+            .min(self.last_total_lines.saturating_sub(1));
+        let column = clamp_to_area_column(area, column).saturating_sub(area.x) as usize;
+        Some(TranscriptSelectionPoint { line_index, column })
+    }
+
     fn selection_to_text(&self) -> Option<String> {
         let (start, end) = self.selection.ordered_endpoints()?;
         let width = self.last_area?.width.max(1);
-        let lines = self.plain_lines_for_width(width);
+        let lines = self.semantic_plain_lines_for_width(width);
         if lines.is_empty() {
             return None;
         }
@@ -618,24 +772,23 @@ impl TranscriptView {
         Some(selected_lines.join("\n"))
     }
 
-    fn plain_lines_for_width(&self, width: u16) -> Vec<String> {
+    fn semantic_plain_lines_for_width(&self, width: u16) -> Vec<String> {
         let width = width.max(1);
         let mut lines = Vec::new();
-        for renderable in &self.renderables {
-            let height = renderable.desired_height(width);
-            if height == 0 {
-                continue;
+        for (idx, cell) in self.cells.iter().enumerate() {
+            if idx > 0 && !cell.is_stream_continuation() {
+                lines.push(String::new());
             }
-            let area = Rect::new(0, 0, width, height);
-            let mut buf = Buffer::empty(area);
-            renderable.render(area, &mut buf);
-            for y in 0..height {
-                let mut line = String::new();
-                for x in 0..width {
-                    line.push_str(buf[(x, y)].symbol());
-                }
-                lines.push(line.trim_end().to_string());
+            push_plain_lines(&mut lines, cell.transcript_lines(width));
+        }
+
+        if let Some(key) = self.live_tail_key
+            && !self.live_tail_lines.is_empty()
+        {
+            if !self.cells.is_empty() && !key.is_stream_continuation {
+                lines.push(String::new());
             }
+            push_plain_lines(&mut lines, self.live_tail_lines.clone());
         }
         lines
     }
@@ -858,6 +1011,27 @@ fn render_offset_content(
     copy_height
 }
 
+fn clamp_to_area_column(area: Rect, column: u16) -> u16 {
+    if area.width == 0 {
+        return area.x;
+    }
+    column.clamp(area.x, area.right().saturating_sub(1))
+}
+
+fn push_plain_lines<I>(out: &mut Vec<String>, lines: I)
+where
+    I: IntoIterator<Item = Line<'static>>,
+{
+    out.extend(lines.into_iter().map(|line| line_to_plain_text(&line)));
+}
+
+fn line_to_plain_text(line: &Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
 fn slice_display_columns(text: &str, col_start: usize, col_end: usize) -> String {
     if col_start >= col_end {
         return String::new();
@@ -866,7 +1040,7 @@ fn slice_display_columns(text: &str, col_start: usize, col_end: usize) -> String
     let mut out = String::new();
     let mut col = 0usize;
     for ch in text.chars() {
-        let width = UnicodeWidthChar::width(ch).unwrap_or(0).max(1);
+        let width = UnicodeWidthChar::width(ch).unwrap_or(0);
         let next_col = col.saturating_add(width);
         if next_col > col_start && col < col_end {
             out.push(ch);
@@ -898,6 +1072,9 @@ mod tests {
     #[derive(Debug)]
     struct FixedHeightCell(usize);
 
+    #[derive(Debug)]
+    struct MultiLineTestCell(Vec<&'static str>);
+
     impl HistoryCell for TestCell {
         fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
             textwrap::wrap(self.0, usize::from(width.max(1)))
@@ -919,6 +1096,12 @@ mod tests {
     impl HistoryCell for FixedHeightCell {
         fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
             (0..self.0).map(|_| "x".into()).collect()
+        }
+    }
+
+    impl HistoryCell for MultiLineTestCell {
+        fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+            self.0.iter().map(|line| (*line).into()).collect()
         }
     }
 
@@ -946,6 +1129,24 @@ mod tests {
             row,
             modifiers: KeyModifiers::NONE,
         }
+    }
+
+    fn select_columns(
+        view: &mut TranscriptView,
+        start_line: usize,
+        start_column: usize,
+        end_line: usize,
+        end_column: usize,
+    ) -> Option<String> {
+        view.selection.anchor = Some(TranscriptSelectionPoint {
+            line_index: start_line,
+            column: start_column,
+        });
+        view.selection.head = Some(TranscriptSelectionPoint {
+            line_index: end_line,
+            column: end_column,
+        });
+        view.selection_to_text()
     }
 
     #[test]
@@ -1031,6 +1232,206 @@ mod tests {
             outcome,
             TranscriptMouseOutcome::SelectionCompleted(Some("alpha".to_string()))
         );
+    }
+
+    #[test]
+    fn selection_copy_preserves_cjk_without_inserted_cell_spaces() {
+        let text = "已修复 review 指出的节奏问题";
+        let mut view = TranscriptView::new(vec![Arc::new(TestCell(text))]);
+        let _ = render_test_view(&mut view, 40, 3);
+
+        assert_eq!(
+            select_columns(&mut view, 0, 0, 0, UnicodeWidthStr::width(text)),
+            Some(text.to_string())
+        );
+    }
+
+    #[test]
+    fn selection_copy_slices_cjk_by_display_columns() {
+        let mut view =
+            TranscriptView::new(vec![Arc::new(TestCell("已修复 review 指出的节奏问题"))]);
+        let _ = render_test_view(&mut view, 40, 3);
+
+        assert_eq!(
+            select_columns(&mut view, 0, 0, 0, UnicodeWidthStr::width("已修复")),
+            Some("已修复".to_string())
+        );
+    }
+
+    #[test]
+    fn selection_copy_cross_line_cjk_ascii_starts_at_selected_column() {
+        let mut view = TranscriptView::new(vec![Arc::new(MultiLineTestCell(vec![
+            "rollback 后 额外 schedule_frame()，",
+            "只会在",
+            "autoscroll",
+        ]))]);
+        let _ = render_test_view(&mut view, 30, 4);
+
+        assert_eq!(
+            select_columns(&mut view, 1, 0, 2, UnicodeWidthStr::width("autoscroll"),),
+            Some("只会在\nautoscroll".to_string())
+        );
+    }
+
+    #[test]
+    fn selection_copy_does_not_wrap_width_agnostic_long_lines() {
+        let mut view = TranscriptView::new(vec![Arc::new(MultiLineTestCell(vec![
+            "alpha beta gamma delta epsilon",
+        ]))]);
+        let _ = render_test_view(&mut view, 10, 3);
+
+        assert_eq!(
+            select_columns(&mut view, 0, 0, 1, UnicodeWidthStr::width("alpha")),
+            Some("alpha".to_string())
+        );
+    }
+
+    #[test]
+    fn selection_copy_preserves_blank_line_between_cells() {
+        let mut view = TranscriptView::new(vec![
+            Arc::new(TestCell("first")) as Arc<dyn HistoryCell>,
+            Arc::new(TestCell("second")) as Arc<dyn HistoryCell>,
+        ]);
+        let _ = render_test_view(&mut view, 20, 4);
+
+        assert_eq!(
+            select_columns(&mut view, 0, 0, 2, UnicodeWidthStr::width("second")),
+            Some("first\n\nsecond".to_string())
+        );
+    }
+
+    #[test]
+    fn drag_below_view_starts_autoscroll() {
+        let mut view = TranscriptView::new(vec![Arc::new(FixedHeightCell(20))]);
+        let _ = render_test_view(&mut view, 10, 5);
+        view.apply_scroll(TranscriptScroll::Home);
+        let _ = render_test_view(&mut view, 10, 5);
+        let mut scroll = MouseScrollState::default();
+
+        assert_eq!(
+            view.handle_mouse_event(
+                mouse(
+                    MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                    1,
+                    1
+                ),
+                &mut scroll,
+            ),
+            TranscriptMouseOutcome::SelectionChanged
+        );
+        assert_eq!(
+            view.handle_mouse_event(
+                mouse(
+                    MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+                    1,
+                    6
+                ),
+                &mut scroll,
+            ),
+            TranscriptMouseOutcome::SelectionChanged
+        );
+
+        assert!(view.drag_autoscroll_active());
+    }
+
+    #[test]
+    fn advance_drag_autoscroll_scrolls_and_extends_selection() {
+        let area = Rect::new(0, 0, 10, 5);
+        let mut view = TranscriptView::new(vec![Arc::new(FixedHeightCell(20))]);
+        view.render_inline(area, &mut Buffer::empty(area));
+        view.apply_scroll(TranscriptScroll::Home);
+        view.render_inline(area, &mut Buffer::empty(area));
+        let mut scroll = MouseScrollState::default();
+
+        let _ = view.handle_mouse_event(
+            mouse(
+                MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                1,
+                1,
+            ),
+            &mut scroll,
+        );
+        let _ = view.handle_mouse_event(
+            mouse(
+                MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+                1,
+                6,
+            ),
+            &mut scroll,
+        );
+        let before_offset = view.scroll_offset();
+        let before_head = view.selection.head;
+
+        assert!(view.advance_drag_autoscroll(area));
+        view.render_inline(area, &mut Buffer::empty(area));
+        assert!(view.scroll_offset() > before_offset);
+        assert!(view.selection.head.unwrap().line_index > before_head.unwrap().line_index);
+    }
+
+    #[test]
+    fn mouse_up_stops_drag_autoscroll() {
+        let mut view = TranscriptView::new(vec![Arc::new(FixedHeightCell(20))]);
+        let _ = render_test_view(&mut view, 10, 5);
+        view.apply_scroll(TranscriptScroll::Home);
+        let _ = render_test_view(&mut view, 10, 5);
+        let mut scroll = MouseScrollState::default();
+
+        let _ = view.handle_mouse_event(
+            mouse(
+                MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                1,
+                1,
+            ),
+            &mut scroll,
+        );
+        let _ = view.handle_mouse_event(
+            mouse(
+                MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+                1,
+                6,
+            ),
+            &mut scroll,
+        );
+        assert!(view.drag_autoscroll_active());
+
+        let _ = view.handle_mouse_event(
+            mouse(
+                MouseEventKind::Up(crossterm::event::MouseButton::Left),
+                1,
+                6,
+            ),
+            &mut scroll,
+        );
+
+        assert!(!view.drag_autoscroll_active());
+    }
+
+    #[test]
+    fn drag_horizontal_outside_clamps_column() {
+        let mut view = TranscriptView::new(vec![Arc::new(TestCell("alpha beta gamma"))]);
+        let _ = render_test_view(&mut view, 10, 3);
+        let mut scroll = MouseScrollState::default();
+
+        let _ = view.handle_mouse_event(
+            mouse(
+                MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                1,
+                2,
+            ),
+            &mut scroll,
+        );
+        assert_eq!(
+            view.handle_mouse_event(
+                mouse(
+                    MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+                    99,
+                    2
+                ),
+                &mut scroll,
+            ),
+            TranscriptMouseOutcome::SelectionChanged
+        );
+        assert_eq!(view.selection.head.map(|point| point.column), Some(9));
     }
 
     #[test]
