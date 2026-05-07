@@ -89,6 +89,8 @@ use assert_matches::assert_matches;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
 use dirs::home_dir;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
@@ -370,6 +372,17 @@ impl HistoryCell for MaxHeightTranscriptCell {
 
     fn desired_transcript_height(&self, _width: u16) -> u16 {
         u16::MAX
+    }
+}
+
+#[derive(Debug)]
+struct TallTranscriptCell(usize);
+
+impl HistoryCell for TallTranscriptCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        (0..self.0)
+            .map(|idx| Line::from(format!("transcript line {idx}")))
+            .collect()
     }
 }
 
@@ -2085,6 +2098,78 @@ async fn submit_user_message_with_mode_sets_coding_identity() {
             panic!("expected Op::UserTurn with programmer identity, got {other:?}")
         }
     }
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_allows_transcript_page_scroll() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let at_tail = chat.transcript_scroll_offset();
+
+    chat.open_plan_implementation_prompt();
+    chat.handle_key_event(KeyEvent::from(KeyCode::PageUp));
+
+    assert!(chat.transcript_scroll_offset() < at_tail);
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_keeps_arrow_keys_for_selection() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let at_tail = chat.transcript_scroll_offset();
+
+    chat.open_plan_implementation_prompt();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+
+    assert_eq!(chat.transcript_scroll_offset(), at_tail);
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(popup.contains("› 2. No, stay in planner identity"));
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_allows_transcript_mouse_scroll_in_transcript_area() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+
+    chat.open_plan_implementation_prompt();
+    chat.render(area, &mut buf);
+    let at_tail = chat.transcript_scroll_offset();
+    chat.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 1,
+        row: 1,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert!(chat.transcript_scroll_offset() < at_tail);
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_ignores_mouse_scroll_over_prompt() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+
+    chat.open_plan_implementation_prompt();
+    chat.render(area, &mut buf);
+    let at_tail = chat.transcript_scroll_offset();
+    chat.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 1,
+        row: area.height.saturating_sub(1),
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert_eq!(chat.transcript_scroll_offset(), at_tail);
 }
 
 #[tokio::test]

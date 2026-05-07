@@ -695,6 +695,13 @@ impl BottomPane {
         self.can_launch_external_editor()
     }
 
+    pub(crate) fn allow_background_transcript_interaction(&self) -> bool {
+        self.view_stack
+            .last()
+            .is_some_and(|view| view.allow_background_transcript_interaction())
+            && !self.composer.popup_active()
+    }
+
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.push_view(view);
     }

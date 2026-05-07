@@ -55,6 +55,7 @@ pub(crate) struct SelectionViewParams {
     pub search_placeholder: Option<String>,
     pub header: Box<dyn Renderable>,
     pub initial_selected_idx: Option<usize>,
+    pub allow_background_transcript_interaction: bool,
 }
 
 impl Default for SelectionViewParams {
@@ -69,6 +70,7 @@ impl Default for SelectionViewParams {
             search_placeholder: None,
             header: Box::new(()),
             initial_selected_idx: None,
+            allow_background_transcript_interaction: false,
         }
     }
 }
@@ -87,6 +89,7 @@ pub(crate) struct ListSelectionView {
     last_selected_actual_idx: Option<usize>,
     header: Box<dyn Renderable>,
     initial_selected_idx: Option<usize>,
+    allow_background_transcript_interaction: bool,
 }
 
 impl ListSelectionView {
@@ -119,6 +122,7 @@ impl ListSelectionView {
             last_selected_actual_idx: None,
             header,
             initial_selected_idx: params.initial_selected_idx,
+            allow_background_transcript_interaction: params.allow_background_transcript_interaction,
         };
         s.apply_filter();
         s
@@ -315,6 +319,10 @@ impl ListSelectionView {
 }
 
 impl BottomPaneView for ListSelectionView {
+    fn allow_background_transcript_interaction(&self) -> bool {
+        self.allow_background_transcript_interaction
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             // Some terminals (or configurations) send Control key chords as

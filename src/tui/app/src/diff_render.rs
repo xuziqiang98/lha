@@ -11,6 +11,7 @@ use ratatui::widgets::Paragraph;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use unicode_width::UnicodeWidthStr;
 
 use crate::color::is_light;
 use crate::exec_command::relativize_to_home;
@@ -497,31 +498,46 @@ fn push_wrapped_diff_line_with_style_context(
         if first {
             // Build gutter (right-aligned line number plus spacer) as a dimmed span
             let gutter = format!("{ln_str:>gutter_width$} ");
-            lines.push(
-                RtLine::from(vec![
-                    RtSpan::styled(gutter, gutter_style),
-                    RtSpan::styled(sign_char.to_string(), sign_style),
-                    RtSpan::styled(chunk.to_string(), content_style),
-                ])
-                .style(line_bg),
-            );
+            let line = RtLine::from(vec![
+                RtSpan::styled(gutter, gutter_style),
+                RtSpan::styled(sign_char.to_string(), sign_style),
+                RtSpan::styled(chunk.to_string(), content_style),
+            ])
+            .style(line_bg);
+            lines.push(pad_line_to_width(line, width, line_bg));
             first = false;
         } else {
             // Continuation lines keep a space for the sign column so content aligns
             let gutter = format!("{:gutter_width$}  ", "");
-            lines.push(
-                RtLine::from(vec![
-                    RtSpan::styled(gutter, gutter_style),
-                    RtSpan::styled(chunk.to_string(), content_style),
-                ])
-                .style(line_bg),
-            );
+            let line = RtLine::from(vec![
+                RtSpan::styled(gutter, gutter_style),
+                RtSpan::styled(chunk.to_string(), content_style),
+            ])
+            .style(line_bg);
+            lines.push(pad_line_to_width(line, width, line_bg));
         }
         if remaining_text.is_empty() {
             break;
         }
     }
     lines
+}
+
+fn pad_line_to_width(mut line: RtLine<'static>, width: usize, style: Style) -> RtLine<'static> {
+    if style.bg.is_none() || width == 0 {
+        return line;
+    }
+
+    let current_width: usize = line
+        .spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum();
+    let padding = width.saturating_sub(current_width);
+    if padding > 0 {
+        line.spans.push(RtSpan::styled(" ".repeat(padding), style));
+    }
+    line
 }
 
 fn line_number_width(max_line_number: usize) -> usize {
@@ -949,6 +965,115 @@ mod tests {
                 .fg(Color::Green)
                 .bg(rgb_color(DARK_TC_ADD_LINE_BG_RGB))
         );
+    }
+
+    #[test]
+    fn truecolor_dark_insert_background_fills_rendered_row() {
+        let bg = rgb_color(DARK_TC_ADD_LINE_BG_RGB);
+        let style_context = DiffRenderStyleContext {
+            theme: DiffTheme::Dark,
+            color_level: DiffColorLevel::TrueColor,
+            diff_backgrounds: fallback_diff_backgrounds(DiffTheme::Dark, DiffColorLevel::TrueColor),
+        };
+        let lines = push_wrapped_diff_line_with_style_context(
+            1,
+            DiffLineType::Insert,
+            "abc",
+            12,
+            line_number_width(1),
+            style_context,
+        );
+        let mut buf = Buffer::empty(Rect::new(0, 0, 12, 1));
+
+        Paragraph::new(Text::from(lines)).render(buf.area, &mut buf);
+
+        for x in 0..12 {
+            assert_eq!(buf[(x, 0)].style().bg, Some(bg));
+        }
+    }
+
+    #[test]
+    fn truecolor_dark_delete_background_fills_rendered_row() {
+        let bg = rgb_color(DARK_TC_DEL_LINE_BG_RGB);
+        let style_context = DiffRenderStyleContext {
+            theme: DiffTheme::Dark,
+            color_level: DiffColorLevel::TrueColor,
+            diff_backgrounds: fallback_diff_backgrounds(DiffTheme::Dark, DiffColorLevel::TrueColor),
+        };
+        let lines = push_wrapped_diff_line_with_style_context(
+            1,
+            DiffLineType::Delete,
+            "abc",
+            12,
+            line_number_width(1),
+            style_context,
+        );
+        let mut buf = Buffer::empty(Rect::new(0, 0, 12, 1));
+
+        Paragraph::new(Text::from(lines)).render(buf.area, &mut buf);
+
+        for x in 0..12 {
+            assert_eq!(buf[(x, 0)].style().bg, Some(bg));
+        }
+    }
+
+    #[test]
+    fn context_background_does_not_fill_rendered_row() {
+        let style_context = DiffRenderStyleContext {
+            theme: DiffTheme::Dark,
+            color_level: DiffColorLevel::TrueColor,
+            diff_backgrounds: fallback_diff_backgrounds(DiffTheme::Dark, DiffColorLevel::TrueColor),
+        };
+        let lines = push_wrapped_diff_line_with_style_context(
+            1,
+            DiffLineType::Context,
+            "abc",
+            12,
+            line_number_width(1),
+            style_context,
+        );
+        let mut buf = Buffer::empty(Rect::new(0, 0, 12, 1));
+
+        Paragraph::new(Text::from(lines)).render(buf.area, &mut buf);
+
+        for x in 0..12 {
+            assert_ne!(
+                buf[(x, 0)].style().bg,
+                Some(rgb_color(DARK_TC_ADD_LINE_BG_RGB))
+            );
+            assert_ne!(
+                buf[(x, 0)].style().bg,
+                Some(rgb_color(DARK_TC_DEL_LINE_BG_RGB))
+            );
+        }
+    }
+
+    #[test]
+    fn wrapped_insert_background_fills_every_rendered_row() {
+        let bg = rgb_color(DARK_TC_ADD_LINE_BG_RGB);
+        let style_context = DiffRenderStyleContext {
+            theme: DiffTheme::Dark,
+            color_level: DiffColorLevel::TrueColor,
+            diff_backgrounds: fallback_diff_backgrounds(DiffTheme::Dark, DiffColorLevel::TrueColor),
+        };
+        let lines = push_wrapped_diff_line_with_style_context(
+            12,
+            DiffLineType::Insert,
+            "abcdefghij",
+            8,
+            line_number_width(12),
+            style_context,
+        );
+        assert!(lines.len() > 1);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 8, lines.len() as u16));
+
+        Paragraph::new(Text::from(lines)).render(buf.area, &mut buf);
+
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                assert_eq!(buf[(x, y)].style().bg, Some(bg));
+            }
+        }
     }
 
     #[test]

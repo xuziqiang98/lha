@@ -1167,6 +1167,7 @@ impl ChatWidget {
             subtitle: None,
             footer_hint: Some(standard_popup_hint_line()),
             items,
+            allow_background_transcript_interaction: true,
             ..Default::default()
         });
     }
@@ -2728,7 +2729,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
-        if !self.bottom_pane.no_modal_or_popup_active() {
+        if !self.bottom_pane.no_modal_or_popup_active()
+            && !self.bottom_pane.allow_background_transcript_interaction()
+        {
             return;
         }
 
@@ -6251,6 +6254,11 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[cfg(test)]
+    pub(crate) fn transcript_scroll_offset(&self) -> usize {
+        self.transcript.borrow().scroll_offset()
+    }
+
     fn sync_transcript_live_tail_for_width(&self, width: u16) {
         self.transcript.borrow_mut().sync_live_tail(
             width.max(1),
@@ -6260,7 +6268,9 @@ impl ChatWidget {
     }
 
     fn handle_transcript_scroll_key(&mut self, key_event: KeyEvent) -> bool {
-        if !self.bottom_pane.no_modal_or_popup_active() {
+        if !self.bottom_pane.no_modal_or_popup_active()
+            && !self.bottom_pane.allow_background_transcript_interaction()
+        {
             return false;
         }
 

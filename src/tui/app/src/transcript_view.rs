@@ -22,9 +22,11 @@ use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Text;
+use ratatui::widgets::Block;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+use ratatui::widgets::Wrap;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
@@ -974,8 +976,15 @@ struct CellRenderable {
 
 impl Renderable for CellRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        let style = self
+            .cell
+            .block_style()
+            .unwrap_or_default()
+            .patch(self.style);
+        Block::default().style(style).render(area, buf);
         Paragraph::new(Text::from(self.cell.transcript_lines(area.width)))
-            .style(self.style)
+            .style(style)
+            .wrap(Wrap { trim: false })
             .render(area, buf);
     }
 
@@ -1062,6 +1071,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+    use ratatui::style::Color;
 
     #[derive(Debug)]
     struct TestCell(&'static str);
@@ -1074,6 +1084,9 @@ mod tests {
 
     #[derive(Debug)]
     struct MultiLineTestCell(Vec<&'static str>);
+
+    #[derive(Debug)]
+    struct StyledBlockCell;
 
     impl HistoryCell for TestCell {
         fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
@@ -1102,6 +1115,16 @@ mod tests {
     impl HistoryCell for MultiLineTestCell {
         fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
             self.0.iter().map(|line| (*line).into()).collect()
+        }
+    }
+
+    impl HistoryCell for StyledBlockCell {
+        fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+            vec!["styled".into()]
+        }
+
+        fn block_style(&self) -> Option<Style> {
+            Some(Style::default().bg(Color::Blue))
         }
     }
 
@@ -1176,6 +1199,26 @@ mod tests {
 
         assert_eq!(outcome, TranscriptMouseOutcome::Scrolled);
         assert!(view.scroll_offset() < at_tail);
+    }
+
+    #[test]
+    fn block_style_fills_transcript_cell_width() {
+        let mut view = TranscriptView::new(vec![Arc::new(StyledBlockCell)]);
+        let buf = render_test_view(&mut view, 12, 3);
+
+        for x in 0..12 {
+            assert_eq!(buf[(x, 2)].style().bg, Some(Color::Blue));
+        }
+    }
+
+    #[test]
+    fn default_cells_do_not_gain_block_background() {
+        let mut view = TranscriptView::new(vec![Arc::new(TestCell("plain"))]);
+        let buf = render_test_view(&mut view, 12, 3);
+
+        for x in 0..12 {
+            assert_ne!(buf[(x, 2)].style().bg, Some(Color::Blue));
+        }
     }
 
     #[test]

@@ -27,6 +27,12 @@ pub(crate) trait BottomPaneView: Renderable {
         false
     }
 
+    /// Return true if transcript scrolling/selection should remain available
+    /// while this view is active.
+    fn allow_background_transcript_interaction(&self) -> bool {
+        false
+    }
+
     /// Optional paste handler. Return true if the view modified its state and
     /// needs a redraw.
     fn handle_paste(&mut self, _pasted: String) -> bool {

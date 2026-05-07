@@ -18,14 +18,14 @@ In this repo, the Rust code lives under `src/`:
 
 Run `just fmt` from the repository root automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
 
-1. Run the test for the specific project that was changed. For example, if changes were made in `src/harness/tui`, run `cargo test -p adam-tui`.
+1. Run the test for the specific project that was changed. For example, if changes were made in `src/tui/app`, run `cargo test -p adam-tui`.
 2. Once those pass, if any changes were made in common, core, or protocol, run the complete test suite with `cargo test --all-features`. project-specific or individual tests can be run without asking the user, but do ask the user before running the complete test suite.
 
 Before finalizing a large change to the Rust workspace, run `just fix -p <project>` to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace-wide Clippy builds; only run `just fix` without `-p` if you changed shared crates.
 
 ## TUI style conventions
 
-See `src/harness/tui/styles.md`.
+See `src/tui/app/styles.md`.
 
 ## TUI code conventions
 
@@ -51,7 +51,7 @@ See `src/harness/tui/styles.md`.
 ### Text wrapping
 
 - Always use textwrap::wrap to wrap plain strings.
-- If you have a ratatui Line and you want to wrap it, use the helpers in tui/src/wrapping.rs, e.g. word_wrap_lines / word_wrap_line.
+- If you have a ratatui Line and you want to wrap it, use the helpers in `src/tui/app/src/wrapping.rs`, e.g. word_wrap_lines / word_wrap_line.
 - If you need to indent wrapped lines, use the initial_indent / subsequent_indent options from RtOptions if you can, rather than writing custom logic.
 - If you have a list of lines and you need to prefix them all with some prefix (optionally different on the first vs subsequent lines), use the `prefix_lines` helper from line_utils.
 
@@ -59,7 +59,7 @@ See `src/harness/tui/styles.md`.
 
 ### Snapshot tests
 
-This repo uses snapshot tests (via `insta`), especially in `src/harness/tui`, to validate rendered output. When UI or text output changes intentionally, update the snapshots as follows:
+This repo uses snapshot tests (via `insta`), especially in `src/tui/app`, to validate rendered output. When UI or text output changes intentionally, update the snapshots as follows:
 
 - Run tests to generate any updated snapshots:
   - `cargo test -p adam-tui`
