@@ -138,23 +138,23 @@ pub(crate) async fn run_model_migration_prompt(
     tui: &mut Tui,
     copy: ModelMigrationCopy,
 ) -> ModelMigrationOutcome {
-    let alt = AltScreenGuard::enter(tui);
-    let mut screen = ModelMigrationScreen::new(alt.tui.frame_requester(), copy);
+    let mut screen = ModelMigrationScreen::new(tui.frame_requester(), copy);
 
-    let _ = alt.tui.draw(u16::MAX, |frame| {
+    let _ = tui.draw(u16::MAX, |frame| {
         frame.render_widget_ref(&screen, frame.area());
     });
 
-    let events = alt.tui.event_stream();
+    let events = tui.event_stream();
     tokio::pin!(events);
 
     while !screen.is_done() {
         if let Some(event) = events.next().await {
             match event {
                 TuiEvent::Key(key_event) => screen.handle_key(key_event),
+                TuiEvent::Mouse(_) => {}
                 TuiEvent::Paste(_) => {}
                 TuiEvent::Draw => {
-                    let _ = alt.tui.draw(u16::MAX, |frame| {
+                    let _ = tui.draw(u16::MAX, |frame| {
                         frame.render_widget_ref(&screen, frame.area());
                     });
                 }
@@ -359,27 +359,6 @@ impl ModelMigrationScreen {
         );
     }
 }
-
-// Render the prompt on the terminal's alternate screen so exiting or cancelling
-// does not leave a large blank region in the normal scrollback. This does not
-// change the prompt's appearance – only where it is drawn.
-struct AltScreenGuard<'a> {
-    tui: &'a mut Tui,
-}
-
-impl<'a> AltScreenGuard<'a> {
-    fn enter(tui: &'a mut Tui) -> Self {
-        let _ = tui.enter_alt_screen();
-        Self { tui }
-    }
-}
-
-impl Drop for AltScreenGuard<'_> {
-    fn drop(&mut self) {
-        let _ = self.tui.leave_alt_screen();
-    }
-}
-
 fn is_ctrl_exit_combo(key_event: KeyEvent) -> bool {
     key_event.modifiers.contains(KeyModifiers::CONTROL)
         && matches!(key_event.code, KeyCode::Char('c') | KeyCode::Char('d'))

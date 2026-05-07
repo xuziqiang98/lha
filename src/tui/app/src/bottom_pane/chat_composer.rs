@@ -165,6 +165,7 @@ use adam_agent::connectors;
 use adam_agent::connectors::AppInfo;
 use adam_agent::skills::model::SkillMetadata;
 use adam_file_search::FileMatch;
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -316,6 +317,7 @@ pub(crate) struct ChatComposer {
     windows_degraded_sandbox_active: bool,
     is_zellij: bool,
     buddy_state: BuddyState,
+    buddy_external: Cell<bool>,
     frame_requester: Option<FrameRequester>,
     animations_enabled: bool,
 }
@@ -415,6 +417,7 @@ impl ChatComposer {
                 Some(Multiplexer::Zellij { .. })
             ),
             buddy_state: BuddyState::default(),
+            buddy_external: Cell::new(false),
             frame_requester: None,
             animations_enabled: true,
         };
@@ -491,6 +494,14 @@ impl ChatComposer {
         self.buddy_state.buddy()
     }
 
+    pub(crate) fn buddy_state(&self) -> &BuddyState {
+        &self.buddy_state
+    }
+
+    pub(crate) fn set_buddy_external(&self, external: bool) {
+        self.buddy_external.set(external);
+    }
+
     pub(crate) fn set_buddy_identity_kind(&mut self, identity_kind: IdentityKind) {
         if self.config.buddy_enabled {
             self.buddy_state.set_identity_kind(identity_kind);
@@ -550,7 +561,7 @@ impl ChatComposer {
 
     fn composer_buddy_layout(&self, area: Rect) -> ComposerBuddyLayout {
         let [composer_rect, mut textarea_rect, popup_rect] = self.layout_areas(area);
-        let buddy_mode = if self.config.buddy_enabled {
+        let buddy_mode = if self.config.buddy_enabled && !self.buddy_external.get() {
             buddy::layout::layout_mode(&self.buddy_state, area.width)
         } else {
             BuddyLayoutMode::Hidden
@@ -2999,7 +3010,7 @@ impl Renderable for ChatComposer {
             .unwrap_or_else(|| footer_height(&footer_props));
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
-        let buddy_width = if self.config.buddy_enabled {
+        let buddy_width = if self.config.buddy_enabled && !self.buddy_external.get() {
             buddy::render::reserved_width(&self.buddy_state, width)
         } else {
             0
@@ -3007,6 +3018,7 @@ impl Renderable for ChatComposer {
         let input_width = width.saturating_sub(buddy_width.saturating_add(LIVE_PREFIX_COLS + 2));
         let input_height = self.textarea.desired_height(input_width) + 2;
         let buddy_height = if self.config.buddy_enabled
+            && !self.buddy_external.get()
             && buddy::layout::layout_mode(&self.buddy_state, width) == BuddyLayoutMode::FullSidebar
         {
             buddy::layout::full_required_height(&self.buddy_state)

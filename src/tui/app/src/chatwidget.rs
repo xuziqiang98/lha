@@ -121,6 +121,7 @@ use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
@@ -158,6 +159,7 @@ use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::bottom_pane::provider_config_view::ProviderConfigView;
 use crate::clipboard_paste::paste_image_to_temp_png;
+use crate::clipboard_text::write_text_to_clipboard;
 use crate::collab;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -175,21 +177,25 @@ use crate::identities;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::markdown::append_markdown;
-use crate::render::Insets;
+use crate::mouse::MouseScrollState;
 use crate::render::renderable::ColumnRenderable;
-use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
-use crate::render::renderable::RenderableExt;
-use crate::render::renderable::RenderableItem;
+use crate::sidebar::ContextPanelSnapshot;
+use crate::sidebar::McpPanelSnapshot;
+use crate::sidebar::SidebarSnapshot;
+use crate::sidebar::SidebarWidget;
+use crate::sidebar::TaskPanelSnapshot;
 use crate::slash_command::SlashCommand;
 use crate::status::format_directory_display;
 use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::capitalize_first;
 use crate::text_formatting::truncate_text;
+use crate::transcript_view::TranscriptMouseOutcome;
 use crate::transcript_view::TranscriptScroll;
 use crate::transcript_view::TranscriptView;
 use crate::tui::FrameRequester;
+use crossterm::event::MouseEvent;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
@@ -371,12 +377,6 @@ impl StatusIndicatorState {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TranscriptHostMode {
-    TerminalScrollback,
-    TuiManaged,
-}
-
 /// Maintains the per-session UI state and interaction state machines for the chat screen.
 ///
 /// `ChatWidget` owns the state derived from the protocol event stream (history cells, streaming
@@ -394,7 +394,7 @@ pub(crate) struct ChatWidget {
     codex_op_tx: UnboundedSender<Op>,
     bottom_pane: BottomPane,
     transcript: RefCell<TranscriptView>,
-    transcript_host_mode: TranscriptHostMode,
+    mouse_scroll: MouseScrollState,
     active_cell: Option<Box<dyn HistoryCell>>,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
     ///
@@ -437,6 +437,7 @@ pub(crate) struct ChatWidget {
     turn_sleep_inhibitor: SleepInhibitor,
     task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
+    changed_files: VecDeque<String>,
     /// Tracks whether adam-agent currently considers an agent turn to be in progress.
     ///
     /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
@@ -684,15 +685,27 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
     }
 }
 
-impl ChatWidget {
-    fn transcript_host_mode_from_config(config: &Config) -> TranscriptHostMode {
-        if config.features.enabled(Feature::TuiManagedScrollback) {
-            TranscriptHostMode::TuiManaged
-        } else {
-            TranscriptHostMode::TerminalScrollback
+fn paths_from_unified_diff(diff: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for line in diff.lines() {
+        let Some(raw) = line
+            .strip_prefix("+++ b/")
+            .or_else(|| line.strip_prefix("--- a/"))
+        else {
+            continue;
+        };
+        if raw == "/dev/null" || raw.is_empty() {
+            continue;
+        }
+        let path = raw.split('\t').next().unwrap_or(raw).to_string();
+        if !paths.iter().any(|existing| existing == &path) {
+            paths.push(path);
         }
     }
+    paths
+}
 
+impl ChatWidget {
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
@@ -1720,6 +1733,16 @@ impl ChatWidget {
 
     fn on_turn_diff(&mut self, unified_diff: String) {
         debug!("TurnDiffEvent: {unified_diff}");
+        for path in paths_from_unified_diff(&unified_diff) {
+            if self.changed_files.iter().any(|existing| existing == &path) {
+                continue;
+            }
+            self.changed_files.push_front(path);
+            while self.changed_files.len() > 12 {
+                self.changed_files.pop_back();
+            }
+        }
+        self.request_redraw();
     }
 
     fn on_deprecation_notice(&mut self, event: DeprecationNoticeEvent) {
@@ -2179,7 +2202,6 @@ impl ChatWidget {
             Self::initial_custom_mode(header_model.clone(), config.model_reasoning_effort);
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
-        let transcript_host_mode = Self::transcript_host_mode_from_config(&config);
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
 
         let mut widget = Self {
@@ -2197,7 +2219,7 @@ impl ChatWidget {
                 skills: None,
             }),
             transcript: RefCell::new(TranscriptView::new(Vec::new())),
-            transcript_host_mode,
+            mouse_scroll: MouseScrollState::default(),
             active_cell,
             active_cell_revision: 0,
             config,
@@ -2222,6 +2244,7 @@ impl ChatWidget {
             turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
+            changed_files: VecDeque::new(),
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
@@ -2329,7 +2352,6 @@ impl ChatWidget {
             Self::initial_custom_mode(header_model.clone(), config.model_reasoning_effort);
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
-        let transcript_host_mode = Self::transcript_host_mode_from_config(&config);
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
 
         let mut widget = Self {
@@ -2347,7 +2369,7 @@ impl ChatWidget {
                 skills: None,
             }),
             transcript: RefCell::new(TranscriptView::new(Vec::new())),
-            transcript_host_mode,
+            mouse_scroll: MouseScrollState::default(),
             active_cell,
             active_cell_revision: 0,
             config,
@@ -2372,6 +2394,7 @@ impl ChatWidget {
             turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
+            changed_files: VecDeque::new(),
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
@@ -2466,7 +2489,6 @@ impl ChatWidget {
 
         let current_identity =
             Self::initial_custom_mode(header_model.clone(), initial_reasoning_effort);
-        let transcript_host_mode = Self::transcript_host_mode_from_config(&config);
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
 
         let mut widget = Self {
@@ -2484,7 +2506,7 @@ impl ChatWidget {
                 skills: None,
             }),
             transcript: RefCell::new(TranscriptView::new(Vec::new())),
-            transcript_host_mode,
+            mouse_scroll: MouseScrollState::default(),
             active_cell: None,
             active_cell_revision: 0,
             config,
@@ -2509,6 +2531,7 @@ impl ChatWidget {
             turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
+            changed_files: VecDeque::new(),
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
@@ -2699,6 +2722,32 @@ impl ChatWidget {
                 }
                 InputResult::None => {}
             },
+        }
+    }
+
+    pub(crate) fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
+        if !self.bottom_pane.no_modal_or_popup_active() {
+            return;
+        }
+
+        let outcome = self
+            .transcript
+            .borrow_mut()
+            .handle_mouse_event(mouse_event, &mut self.mouse_scroll);
+        match outcome {
+            TranscriptMouseOutcome::Ignored => {}
+            TranscriptMouseOutcome::Scrolled | TranscriptMouseOutcome::SelectionChanged => {
+                self.request_redraw();
+            }
+            TranscriptMouseOutcome::SelectionCompleted(text) => {
+                if let Some(text) = text.filter(|text| !text.is_empty()) {
+                    match write_text_to_clipboard(&text) {
+                        Ok(()) => self.set_status_header("Selection copied".to_string()),
+                        Err(err) => self.set_status_header(format!("Copy failed: {err}")),
+                    }
+                }
+                self.request_redraw();
+            }
         }
     }
 
@@ -6191,24 +6240,6 @@ impl ChatWidget {
         self.token_info = None;
     }
 
-    pub(crate) fn transcript_host_mode(&self) -> TranscriptHostMode {
-        self.transcript_host_mode
-    }
-
-    fn as_classic_renderable(&self) -> RenderableItem<'_> {
-        let active_cell_renderable = match &self.active_cell {
-            Some(cell) => RenderableItem::Borrowed(cell).inset(Insets::tlbr(1, 0, 0, 0)),
-            None => RenderableItem::Owned(Box::new(())),
-        };
-        let mut flex = FlexRenderable::new();
-        flex.push(1, active_cell_renderable);
-        flex.push(
-            0,
-            RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(1, 0, 0, 0)),
-        );
-        RenderableItem::Owned(Box::new(flex))
-    }
-
     pub(crate) fn insert_transcript_cell(&mut self, cell: Arc<dyn HistoryCell>) {
         self.transcript.borrow_mut().insert_cell(cell);
     }
@@ -6227,9 +6258,6 @@ impl ChatWidget {
     }
 
     fn handle_transcript_scroll_key(&mut self, key_event: KeyEvent) -> bool {
-        if self.transcript_host_mode != TranscriptHostMode::TuiManaged {
-            return false;
-        }
         if !self.bottom_pane.no_modal_or_popup_active() {
             return false;
         }
@@ -6264,23 +6292,89 @@ impl ChatWidget {
         self.request_redraw();
         true
     }
+
+    fn sidebar_snapshot(&self) -> SidebarSnapshot {
+        let task = (self.agent_turn_running
+            || self.mcp_startup_status.is_some()
+            || !self.queued_user_messages.is_empty()
+            || !self.unified_exec_processes.is_empty())
+        .then(|| TaskPanelSnapshot {
+            status: if self.agent_turn_running || self.mcp_startup_status.is_some() {
+                self.current_status.header.clone()
+            } else {
+                "Idle".to_string()
+            },
+            detail: self.current_status.details.clone(),
+            queued_messages: self.queued_user_messages.len(),
+            active_commands: self
+                .unified_exec_processes
+                .iter()
+                .map(|process| process.command_display.clone())
+                .collect(),
+        });
+
+        let mcp = self.mcp_startup_status.as_ref().map(|statuses| {
+            let mut snapshot = McpPanelSnapshot {
+                starting: 0,
+                ready: 0,
+                failed: Vec::new(),
+                cancelled: 0,
+            };
+            for (server, status) in statuses {
+                match status {
+                    McpStartupStatus::Starting => snapshot.starting += 1,
+                    McpStartupStatus::Ready => snapshot.ready += 1,
+                    McpStartupStatus::Failed { .. } => snapshot.failed.push(server.clone()),
+                    McpStartupStatus::Cancelled => snapshot.cancelled += 1,
+                }
+            }
+            snapshot.failed.sort();
+            snapshot
+        });
+
+        let context = Some(ContextPanelSnapshot {
+            model: self.current_model().to_string(),
+            identity: format!("{:?}", self.active_identity_kind()),
+            used_tokens: self
+                .token_info
+                .as_ref()
+                .map(|info| info.total_token_usage.tokens_in_context_window())
+                .unwrap_or_default(),
+            context_window: self
+                .token_info
+                .as_ref()
+                .and_then(|info| info.model_context_window),
+        });
+
+        SidebarSnapshot {
+            task,
+            files: self.changed_files.iter().cloned().collect(),
+            mcp,
+            context,
+        }
+    }
 }
 
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        if self.transcript_host_mode == TranscriptHostMode::TerminalScrollback {
-            self.as_classic_renderable().render(area, buf);
-            self.last_rendered_width.set(Some(area.width as usize));
-            return;
-        }
+        let sidebar_width = crate::sidebar::sidebar_width(area.width);
+        self.bottom_pane.set_buddy_external(sidebar_width.is_some());
+        let [main_area, sidebar_area] = if let Some(sidebar_width) = sidebar_width {
+            Layout::horizontal([Constraint::Min(1), Constraint::Length(sidebar_width)]).areas(area)
+        } else {
+            [area, Rect::ZERO]
+        };
 
-        self.sync_transcript_live_tail_for_width(area.width);
-        let bottom_height = self.bottom_pane.desired_height(area.width);
-        let transcript_height = self.transcript.borrow().desired_height(area.width.max(1));
+        self.sync_transcript_live_tail_for_width(main_area.width);
+        let bottom_height = self.bottom_pane.desired_height(main_area.width);
+        let transcript_height = self
+            .transcript
+            .borrow()
+            .desired_height(main_area.width.max(1));
         let has_transcript = transcript_height > 0 || self.active_cell.is_some();
         let top_inset = u16::from(has_transcript);
         let separator_height = u16::from(has_transcript && bottom_height > 0);
-        let top_height = area
+        let top_height = main_area
             .height
             .saturating_sub(bottom_height.saturating_add(separator_height));
         let [transcript_area, _separator_area, bottom_area] = Layout::vertical([
@@ -6288,7 +6382,7 @@ impl Renderable for ChatWidget {
             Constraint::Length(separator_height),
             Constraint::Length(bottom_height),
         ])
-        .areas(area);
+        .areas(main_area);
         let transcript_area = Rect::new(
             transcript_area.x,
             transcript_area.y.saturating_add(top_inset),
@@ -6300,35 +6394,50 @@ impl Renderable for ChatWidget {
             .borrow_mut()
             .render_inline(transcript_area, buf);
         self.bottom_pane.render(bottom_area, buf);
-        self.last_rendered_width.set(Some(area.width as usize));
+        if sidebar_width.is_some() {
+            let snapshot = self.sidebar_snapshot();
+            SidebarWidget {
+                snapshot: &snapshot,
+                buddy_state: Some(self.bottom_pane.buddy_state()),
+                animations_enabled: self.config.animations,
+            }
+            .render(sidebar_area, buf);
+        }
+        self.last_rendered_width.set(Some(main_area.width as usize));
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        if self.transcript_host_mode == TranscriptHostMode::TerminalScrollback {
-            return self.as_classic_renderable().desired_height(width);
-        }
-
-        self.sync_transcript_live_tail_for_width(width);
-        let transcript_height = self.transcript.borrow().desired_height(width.max(1));
+        let sidebar_width = crate::sidebar::sidebar_width(width);
+        let sidebar_visible = sidebar_width.is_some();
+        let main_width =
+            sidebar_width.map_or(width, |sidebar_width| width.saturating_sub(sidebar_width));
+        self.bottom_pane.set_buddy_external(sidebar_visible);
+        self.sync_transcript_live_tail_for_width(main_width);
+        let transcript_height = self.transcript.borrow().desired_height(main_width.max(1));
         let top_inset = u16::from(transcript_height > 0 || self.active_cell.is_some());
-        let bottom_height = self.bottom_pane.desired_height(width);
+        let bottom_height = self.bottom_pane.desired_height(main_width);
         let separator_height =
             u16::from((transcript_height > 0 || self.active_cell.is_some()) && bottom_height > 0);
-        transcript_height
+        let main_height = transcript_height
             .saturating_add(top_inset)
             .saturating_add(separator_height)
-            .saturating_add(bottom_height)
+            .saturating_add(bottom_height);
+        if sidebar_visible {
+            main_height.max(crate::sidebar::external_buddy_desired_height(Some(
+                self.bottom_pane.buddy_state(),
+            )))
+        } else {
+            main_height
+        }
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        if self.transcript_host_mode == TranscriptHostMode::TerminalScrollback {
-            return self.as_classic_renderable().cursor_pos(area);
-        }
-
-        let bottom_height = self.bottom_pane.desired_height(area.width);
+        let main_width = crate::sidebar::sidebar_width(area.width)
+            .map_or(area.width, |width| area.width.saturating_sub(width));
+        let bottom_height = self.bottom_pane.desired_height(main_width);
         let bottom_y = area.bottom().saturating_sub(bottom_height);
         self.bottom_pane
-            .cursor_pos(Rect::new(area.x, bottom_y, area.width, bottom_height))
+            .cursor_pos(Rect::new(area.x, bottom_y, main_width, bottom_height))
     }
 }
 

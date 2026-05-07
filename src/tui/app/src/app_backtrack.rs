@@ -43,7 +43,6 @@ use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use ratatui::text::Line;
 
 /// Aggregates all backtrack-related state used by the App.
 #[derive(Default)]
@@ -218,44 +217,25 @@ impl App {
         }
     }
 
-    /// Open transcript overlay (enters alternate screen and shows full transcript).
+    /// Open transcript overlay and show the full transcript inside the main fullscreen TUI.
     pub(crate) fn open_transcript_overlay(&mut self, tui: &mut tui::Tui) {
-        let _ = tui.enter_alt_screen();
         self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
         tui.frame_requester().schedule_frame();
     }
 
     /// Close transcript overlay and restore normal UI.
     pub(crate) fn close_transcript_overlay(&mut self, tui: &mut tui::Tui) {
-        self.close_transcript_overlay_inner(tui, true);
+        self.close_transcript_overlay_inner(tui);
     }
 
-    fn close_transcript_overlay_inner(&mut self, tui: &mut tui::Tui, flush_deferred_history: bool) {
-        let _ = tui.leave_alt_screen();
+    fn close_transcript_overlay_inner(&mut self, _tui: &mut tui::Tui) {
         let was_backtrack = self.backtrack.overlay_preview_active;
-        let lines =
-            take_deferred_history_lines(&mut self.deferred_history_lines, flush_deferred_history);
-        if !lines.is_empty() {
-            tui.insert_history_lines(lines);
-        }
         self.overlay = None;
         self.backtrack.overlay_preview_active = false;
         if was_backtrack {
             // Ensure backtrack state is fully reset when overlay closes (e.g. via 'q').
             self.reset_backtrack_state();
         }
-    }
-
-    /// Re-render the full transcript into terminal-managed scrollback in one pass.
-    ///
-    /// In classic terminal scrollback mode this is a best-effort refresh after rollback trims the
-    /// local transcript. We only replace Adam's queued history lines here; already committed
-    /// terminal scrollback remains under the user's terminal control.
-    pub(crate) fn render_transcript_once(&mut self, tui: &mut tui::Tui) {
-        self.has_emitted_history_lines = false;
-        let width = self.current_terminal_scrollback_width(tui);
-        let lines = self.collect_terminal_scrollback_display_lines(width);
-        tui.replace_pending_history_lines(lines);
     }
 
     /// Initialize backtrack state and show composer hint.
@@ -402,7 +382,7 @@ impl App {
         let nth_user_message = self.backtrack.nth_user_message;
         let selection = self.backtrack_selection(nth_user_message);
         if let Some(selection) = selection {
-            self.close_transcript_overlay_inner(tui, false);
+            self.close_transcript_overlay_inner(tui);
             self.apply_backtrack_rollback(selection);
             tui.frame_requester().schedule_frame();
         } else {
@@ -487,7 +467,6 @@ impl App {
             return;
         }
         self.trim_transcript_for_backtrack(pending.selection.nth_user_message);
-        self.deferred_history_lines.clear();
         self.chat_widget
             .replace_transcript_cells(self.transcript_cells.clone());
         self.backtrack_render_pending = true;
@@ -571,18 +550,6 @@ fn user_positions_iter(
         .filter_map(move |(idx, cell)| (type_of(cell) == user_type).then_some(idx))
 }
 
-fn take_deferred_history_lines(
-    deferred_history_lines: &mut Vec<Line<'static>>,
-    flush_deferred_history: bool,
-) -> Vec<Line<'static>> {
-    if flush_deferred_history {
-        std::mem::take(deferred_history_lines)
-    } else {
-        deferred_history_lines.clear();
-        Vec::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -591,26 +558,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
     use std::sync::Arc;
-
-    #[test]
-    fn take_deferred_history_lines_flushes_when_requested() {
-        let mut deferred_history_lines = vec![Line::from("stale")];
-
-        let lines = take_deferred_history_lines(&mut deferred_history_lines, true);
-
-        assert_eq!(lines, vec![Line::from("stale")]);
-        assert!(deferred_history_lines.is_empty());
-    }
-
-    #[test]
-    fn take_deferred_history_lines_discards_when_not_flushing() {
-        let mut deferred_history_lines = vec![Line::from("stale")];
-
-        let lines = take_deferred_history_lines(&mut deferred_history_lines, false);
-
-        assert!(lines.is_empty());
-        assert!(deferred_history_lines.is_empty());
-    }
 
     #[test]
     fn trim_transcript_for_first_user_drops_user_and_newer_cells() {

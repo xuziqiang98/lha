@@ -20,16 +20,22 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::chatwidget::ActiveCellTranscriptKey;
+use crate::clipboard_text::write_text_to_clipboard;
 use crate::history_cell::HistoryCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
+use crate::mouse::MouseScrollState;
+use crate::mouse::ScrollDirection;
 use crate::render::renderable::Renderable;
+use crate::transcript_view::TranscriptMouseOutcome;
 use crate::transcript_view::TranscriptScroll;
 use crate::transcript_view::TranscriptView;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
 use ratatui::layout::Rect;
@@ -138,6 +144,8 @@ struct PagerView {
     last_rendered_height: Option<usize>,
     /// If set, on next render ensure this chunk is visible.
     pending_scroll_chunk: Option<usize>,
+    last_content_area: Option<Rect>,
+    mouse_scroll: MouseScrollState,
 }
 
 impl PagerView {
@@ -149,6 +157,8 @@ impl PagerView {
             last_content_height: None,
             last_rendered_height: None,
             pending_scroll_chunk: None,
+            last_content_area: None,
+            mouse_scroll: MouseScrollState::default(),
         }
     }
 
@@ -163,6 +173,7 @@ impl PagerView {
         Clear.render(area, buf);
         self.render_header(area, buf);
         let content_area = self.content_area(area);
+        self.last_content_area = Some(content_area);
         self.update_last_content_height(content_area.height);
         let content_height = self.content_height(content_area.width);
         self.last_rendered_height = Some(content_height);
@@ -300,6 +311,39 @@ impl PagerView {
         Ok(())
     }
 
+    fn handle_mouse_event(&mut self, tui: &mut tui::Tui, mouse_event: MouseEvent) -> Result<()> {
+        let Some(area) = self.last_content_area else {
+            return Ok(());
+        };
+        if mouse_event.column < area.x
+            || mouse_event.column >= area.right()
+            || mouse_event.row < area.y
+            || mouse_event.row >= area.bottom()
+        {
+            return Ok(());
+        }
+
+        let delta = match mouse_event.kind {
+            MouseEventKind::ScrollUp => {
+                self.mouse_scroll.on_scroll(ScrollDirection::Up).delta_lines
+            }
+            MouseEventKind::ScrollDown => {
+                self.mouse_scroll
+                    .on_scroll(ScrollDirection::Down)
+                    .delta_lines
+            }
+            _ => return Ok(()),
+        };
+        if delta < 0 {
+            self.scroll_offset = self.scroll_offset.saturating_sub(delta.unsigned_abs());
+        } else {
+            self.scroll_offset = self.scroll_offset.saturating_add(delta as usize);
+        }
+        tui.frame_requester()
+            .schedule_frame_in(Duration::from_millis(16));
+        Ok(())
+    }
+
     /// Returns the height of one page in content rows.
     ///
     /// Prefers the last rendered content height (excluding header/footer chrome);
@@ -398,6 +442,7 @@ impl Renderable for CachedRenderable {
 
 pub(crate) struct TranscriptOverlay {
     view: TranscriptView,
+    mouse_scroll: MouseScrollState,
     highlight_cell: Option<usize>,
     is_done: bool,
 }
@@ -410,6 +455,7 @@ impl TranscriptOverlay {
     pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>) -> Self {
         Self {
             view: TranscriptView::new(transcript_cells),
+            mouse_scroll: MouseScrollState::default(),
             highlight_cell: None,
             is_done: false,
         }
@@ -508,6 +554,27 @@ impl TranscriptOverlay {
                     Ok(())
                 }
             },
+            TuiEvent::Mouse(mouse_event) => {
+                match self
+                    .view
+                    .handle_mouse_event(mouse_event, &mut self.mouse_scroll)
+                {
+                    TranscriptMouseOutcome::Ignored => {}
+                    TranscriptMouseOutcome::Scrolled | TranscriptMouseOutcome::SelectionChanged => {
+                        tui.frame_requester()
+                            .schedule_frame_in(Duration::from_millis(16));
+                    }
+                    TranscriptMouseOutcome::SelectionCompleted(text) => {
+                        if let Some(text) = text.filter(|text| !text.is_empty())
+                            && let Err(err) = write_text_to_clipboard(&text)
+                        {
+                            tracing::warn!("failed to copy transcript overlay selection: {err}");
+                        }
+                        tui.frame_requester().schedule_frame();
+                    }
+                }
+                Ok(())
+            }
             TuiEvent::Draw => {
                 tui.draw(u16::MAX, |frame| {
                     self.render(frame.area(), frame.buffer);
@@ -626,6 +693,7 @@ impl StaticOverlay {
                 }
                 other => self.view.handle_key_event(tui, other),
             },
+            TuiEvent::Mouse(mouse_event) => self.view.handle_mouse_event(tui, mouse_event),
             TuiEvent::Draw => {
                 tui.draw(u16::MAX, |frame| {
                     self.render(frame.area(), frame.buffer);
@@ -922,7 +990,16 @@ mod tests {
             lines: vec!["tail".into()],
         }));
 
-        assert_eq!(overlay.view.scroll_offset(), usize::MAX);
+        term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+        assert!(
+            overlay.view.is_scrolled_to_bottom(),
+            "expected inserted tail to keep view pinned at bottom"
+        );
+        assert!(
+            format!("{:?}", term.backend()).contains("tail"),
+            "expected inserted tail to be visible while pinned at bottom"
+        );
     }
 
     #[test]

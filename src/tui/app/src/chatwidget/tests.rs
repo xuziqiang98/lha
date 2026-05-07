@@ -23,6 +23,7 @@ use adam_agent::config::Constrained;
 use adam_agent::config::ConstraintError;
 use adam_agent::config::model_ref::ModelRef;
 use adam_agent::config::state_json::AdamStateStore;
+use adam_agent::config::types::TuiBuddy;
 use adam_agent::config_loader::RequirementSource;
 use adam_agent::features::Feature;
 use adam_agent::models_manager::manager::ModelsManager;
@@ -399,34 +400,41 @@ async fn desired_height_saturates_after_adding_bottom_pane_rows() {
 }
 
 #[tokio::test]
-async fn classic_scrollback_mode_does_not_include_transcript_height() {
-    let (mut chat, _rx, _op_rx) =
-        make_chatwidget_manual_with_scrollback_mode(None, TranscriptHostMode::TerminalScrollback)
-            .await;
+async fn desired_height_with_sidebar_reserves_external_buddy() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    chat.transcript = RefCell::new(TranscriptView::new(vec![Arc::new(MaxHeightTranscriptCell)]));
+    chat.set_buddy_config(TuiBuddy {
+        enabled: true,
+        muted: false,
+        ..TuiBuddy::default()
+    });
 
-    let width = 80;
-    let bottom_height = chat.bottom_pane.desired_height(width);
+    let width = crate::sidebar::SIDEBAR_MIN_TERMINAL_WIDTH;
+    let height = chat.desired_height(width);
+    let buddy_height =
+        crate::sidebar::external_buddy_desired_height(Some(chat.bottom_pane.buddy_state()));
 
-    assert_eq!(chat.desired_height(width), bottom_height + 1);
+    assert!(buddy_height > 0, "expected visible external buddy");
+    assert!(height >= buddy_height);
 }
 
 #[tokio::test]
-async fn classic_scrollback_mode_does_not_consume_transcript_scroll_keys() {
-    let (mut chat, _rx, _op_rx) =
-        make_chatwidget_manual_with_scrollback_mode(None, TranscriptHostMode::TerminalScrollback)
-            .await;
+async fn render_with_sidebar_records_main_width() {
+    let (chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    chat.transcript = RefCell::new(TranscriptView::new(vec![Arc::new(PlainHistoryCell::new(
-        vec!["transcript".into()],
-    ))]));
+    let width = crate::sidebar::SIDEBAR_MIN_TERMINAL_WIDTH;
+    let sidebar_width = crate::sidebar::sidebar_width(width).expect("sidebar visible");
+    let expected_main_width = width.saturating_sub(sidebar_width);
+    let height = chat.desired_height(width);
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
 
-    let handled =
-        chat.handle_transcript_scroll_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+    chat.render(area, &mut buf);
 
-    assert!(!handled);
-    assert_eq!(chat.transcript.borrow().scroll_offset(), usize::MAX);
+    assert_eq!(
+        chat.last_rendered_width.get(),
+        Some(usize::from(expected_main_width))
+    );
 }
 
 #[tokio::test]
@@ -1650,13 +1658,11 @@ async fn make_chatwidget_manual(
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     tokio::sync::mpsc::UnboundedReceiver<Op>,
 ) {
-    make_chatwidget_manual_with_scrollback_mode(model_override, TranscriptHostMode::TuiManaged)
-        .await
+    make_chatwidget_manual_inner(model_override).await
 }
 
-async fn make_chatwidget_manual_with_scrollback_mode(
+async fn make_chatwidget_manual_inner(
     model_override: Option<&str>,
-    transcript_host_mode: TranscriptHostMode,
 ) -> (
     ChatWidget,
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
@@ -1667,14 +1673,6 @@ async fn make_chatwidget_manual_with_scrollback_mode(
     let (op_tx, op_rx) = unbounded_channel::<Op>();
     let mut cfg = test_config().await;
     cfg.provider_config_required = false;
-    match transcript_host_mode {
-        TranscriptHostMode::TerminalScrollback => {
-            cfg.features.disable(Feature::TuiManagedScrollback);
-        }
-        TranscriptHostMode::TuiManaged => {
-            cfg.features.enable(Feature::TuiManagedScrollback);
-        }
-    }
     let resolved_model = model_override
         .map(str::to_owned)
         .unwrap_or_else(|| ModelsManager::get_model_offline(cfg.model.as_deref()));
@@ -1719,7 +1717,7 @@ async fn make_chatwidget_manual_with_scrollback_mode(
         codex_op_tx: op_tx,
         bottom_pane: bottom,
         transcript: std::cell::RefCell::new(TranscriptView::new(Vec::new())),
-        transcript_host_mode,
+        mouse_scroll: crate::mouse::MouseScrollState::default(),
         active_cell: None,
         active_cell_revision: 0,
         config: cfg,
@@ -1744,6 +1742,7 @@ async fn make_chatwidget_manual_with_scrollback_mode(
         turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
+        changed_files: VecDeque::new(),
         agent_turn_running: false,
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),
@@ -1796,7 +1795,6 @@ async fn make_chatwidget_manual_with_frame_requester(
     let app_event_tx = AppEventSender::new(tx_raw);
     let (op_tx, op_rx) = unbounded_channel::<Op>();
     let mut cfg = test_config().await;
-    cfg.features.enable(Feature::TuiManagedScrollback);
     let resolved_model = model_override
         .map(str::to_owned)
         .unwrap_or_else(|| ModelsManager::get_model_offline(cfg.model.as_deref()));
@@ -1839,7 +1837,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         codex_op_tx: op_tx,
         bottom_pane: bottom,
         transcript: std::cell::RefCell::new(TranscriptView::new(Vec::new())),
-        transcript_host_mode: TranscriptHostMode::TuiManaged,
+        mouse_scroll: crate::mouse::MouseScrollState::default(),
         active_cell: None,
         active_cell_revision: 0,
         config: cfg,
@@ -1864,6 +1862,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
+        changed_files: VecDeque::new(),
         agent_turn_running: false,
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),
@@ -4103,9 +4102,9 @@ async fn experimental_features_exit_without_changes_emits_no_updates() {
 
     let view = ExperimentalFeaturesView::new(
         vec![ExperimentalFeatureItem {
-            feature: Feature::TuiManagedScrollback,
-            name: "TUI-managed scrollback".to_string(),
-            description: "Render committed transcript inside Adam.".to_string(),
+            feature: Feature::GhostCommit,
+            name: "Ghost snapshots".to_string(),
+            description: "Capture undo snapshots each turn.".to_string(),
             enabled: false,
         }],
         chat.app_event_tx.clone(),
@@ -4126,9 +4125,9 @@ async fn experimental_features_reverting_changes_emits_no_updates() {
 
     let view = ExperimentalFeaturesView::new(
         vec![ExperimentalFeatureItem {
-            feature: Feature::TuiManagedScrollback,
-            name: "TUI-managed scrollback".to_string(),
-            description: "Render committed transcript inside Adam.".to_string(),
+            feature: Feature::GhostCommit,
+            name: "Ghost snapshots".to_string(),
+            description: "Capture undo snapshots each turn.".to_string(),
             enabled: false,
         }],
         chat.app_event_tx.clone(),

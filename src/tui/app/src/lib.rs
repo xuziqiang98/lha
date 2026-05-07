@@ -21,9 +21,7 @@ use adam_agent::find_thread_path_by_name_str;
 use adam_agent::path_utils;
 use adam_agent::protocol::AskForApproval;
 use adam_agent::read_effective_thread_cwd;
-use adam_agent::terminal::Multiplexer;
 use adam_agent::windows_sandbox::WindowsSandboxLevelExt;
-use adam_protocol::config_types::AltScreenMode;
 use adam_protocol::config_types::SandboxMode;
 use adam_protocol::config_types::WindowsSandboxLevel;
 use adam_state::log_db;
@@ -54,6 +52,7 @@ mod changelog;
 mod chatwidget;
 mod cli;
 mod clipboard_paste;
+mod clipboard_text;
 mod collab;
 mod color;
 pub mod custom_terminal;
@@ -74,6 +73,7 @@ mod markdown;
 mod markdown_render;
 mod markdown_stream;
 mod model_migration;
+mod mouse;
 mod multi_agents;
 mod notifications;
 pub mod onboarding;
@@ -85,6 +85,7 @@ mod resume_picker;
 mod selection_list;
 mod session_log;
 mod shimmer;
+mod sidebar;
 mod skills_helpers;
 mod slash_command;
 mod status;
@@ -94,6 +95,7 @@ mod style;
 mod terminal_palette;
 mod text_formatting;
 mod tooltips;
+mod transcript_selection;
 mod transcript_view;
 mod tui;
 mod ui_consts;
@@ -357,6 +359,7 @@ async fn run_ratatui_app(
     terminal.clear()?;
 
     let mut tui = Tui::new(terminal);
+    tui.enter_alt_screen()?;
     let mut terminal_restore_guard = TerminalRestoreGuard::new();
 
     #[cfg(not(debug_assertions))]
@@ -594,15 +597,7 @@ async fn run_ratatui_app(
     let active_profile = config.active_profile.clone();
     let should_show_trust_screen = should_show_trust_screen(&config);
 
-    let Cli {
-        prompt,
-        images,
-        no_alt_screen,
-        ..
-    } = cli;
-
-    let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
-    tui.set_alt_screen_enabled(use_alt_screen);
+    let Cli { prompt, images, .. } = cli;
 
     let app_result = App::run(
         &mut tui,
@@ -713,38 +708,6 @@ impl TerminalRestoreGuard {
 impl Drop for TerminalRestoreGuard {
     fn drop(&mut self) {
         self.restore_silently();
-    }
-}
-
-/// Determine whether to use the terminal's alternate screen buffer.
-///
-/// The alternate screen buffer provides a cleaner fullscreen experience while keeping the outer
-/// terminal scrollback uncluttered. However, it conflicts with terminal multiplexers like
-/// Zellij that strictly follow the xterm spec, which disallows scrollback in alternate screen
-/// buffers. Zellij intentionally disables scrollback in alternate screen mode (see
-/// https://github.com/zellij-org/zellij/pull/1032) and offers no configuration option to
-/// change this behavior.
-///
-/// This function implements a pragmatic workaround:
-/// - If `--no-alt-screen` is explicitly passed, always disable alternate screen
-/// - Otherwise, respect the `tui.alternate_screen` config setting:
-///   - `always`: Use alternate screen everywhere (original behavior)
-///   - `never`: Inline mode only, preserving the outer terminal scrollback while Adam history is
-///     browsed in-app
-///   - `auto` (default): Auto-detect the terminal multiplexer and disable alternate screen
-///     only in Zellij, enabling it everywhere else
-fn determine_alt_screen_mode(no_alt_screen: bool, tui_alternate_screen: AltScreenMode) -> bool {
-    if no_alt_screen {
-        false
-    } else {
-        match tui_alternate_screen {
-            AltScreenMode::Always => true,
-            AltScreenMode::Never => false,
-            AltScreenMode::Auto => {
-                let terminal_info = adam_agent::terminal::terminal_info();
-                !matches!(terminal_info.multiplexer, Some(Multiplexer::Zellij { .. }))
-            }
-        }
     }
 }
 

@@ -93,6 +93,7 @@ use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::MouseEvent;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -542,8 +543,6 @@ pub(crate) struct App {
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
-    pub(crate) deferred_history_lines: Vec<Line<'static>>,
-    pub(crate) has_emitted_history_lines: bool,
 
     pub(crate) enhanced_keys_supported: bool,
 
@@ -552,10 +551,7 @@ pub(crate) struct App {
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
-    /// When set, the next draw re-renders the transcript into terminal scrollback once.
-    ///
-    /// This is used after a confirmed thread rollback to ensure scrollback reflects the trimmed
-    /// transcript cells.
+    /// When set, the next draw re-renders the transcript after a rollback.
     pub(crate) backtrack_render_pending: bool,
     pub(crate) feedback: adam_feedback::CodexFeedback,
     /// Set when the user confirms an update; propagated on exit.
@@ -701,46 +697,6 @@ fn buddy_success_message(config: &TuiBuddy) -> String {
 }
 
 impl App {
-    fn uses_terminal_scrollback(&self) -> bool {
-        self.chat_widget.transcript_host_mode()
-            == crate::chatwidget::TranscriptHostMode::TerminalScrollback
-    }
-
-    pub(crate) fn terminal_scrollback_lines_for_cell(
-        &mut self,
-        cell: &Arc<dyn HistoryCell>,
-        width: u16,
-    ) -> Option<Vec<Line<'static>>> {
-        let mut display = cell.display_lines(width);
-        if display.is_empty() {
-            return None;
-        }
-
-        if !cell.is_stream_continuation() {
-            if self.has_emitted_history_lines {
-                display.insert(0, "".into());
-            } else {
-                self.has_emitted_history_lines = true;
-            }
-        }
-
-        Some(display)
-    }
-
-    pub(crate) fn collect_terminal_scrollback_display_lines(
-        &mut self,
-        width: u16,
-    ) -> Vec<Line<'static>> {
-        let cells = self.transcript_cells.clone();
-        let mut lines = Vec::new();
-        for cell in cells {
-            if let Some(cell_lines) = self.terminal_scrollback_lines_for_cell(&cell, width) {
-                lines.extend(cell_lines);
-            }
-        }
-        lines
-    }
-
     async fn ensure_non_git_changelog_baseline(&mut self, cwd: PathBuf) -> Result<(), String> {
         if self.non_git_changelog_baselines.contains_key(&cwd) {
             return Ok(());
@@ -832,7 +788,6 @@ impl App {
     ) {
         let cell: Arc<dyn HistoryCell> = cell.into();
         if self.insert_history_cell_arc_for_thread(thread_id, cell.clone()) {
-            self.emit_history_to_terminal_scrollback(&cell, tui);
             tui.frame_requester().schedule_frame();
         }
     }
@@ -852,7 +807,6 @@ impl App {
 
     fn insert_history_cell_arc(&mut self, cell: Arc<dyn HistoryCell>, tui: &mut tui::Tui) {
         self.insert_history_cell_state(cell.clone());
-        self.emit_history_to_terminal_scrollback(&cell, tui);
         tui.frame_requester().schedule_frame();
     }
 
@@ -862,34 +816,6 @@ impl App {
         }
         self.transcript_cells.push(cell.clone());
         self.chat_widget.insert_transcript_cell(cell);
-    }
-
-    fn emit_history_to_terminal_scrollback(
-        &mut self,
-        cell: &Arc<dyn HistoryCell>,
-        tui: &mut tui::Tui,
-    ) {
-        if !self.uses_terminal_scrollback() {
-            return;
-        }
-
-        let width = self.current_terminal_scrollback_width(tui);
-        let Some(display) = self.terminal_scrollback_lines_for_cell(cell, width) else {
-            return;
-        };
-
-        if self.overlay.is_some() {
-            self.deferred_history_lines.extend(display);
-        } else {
-            tui.insert_history_lines(display);
-        }
-    }
-
-    pub(crate) fn current_terminal_scrollback_width(&self, tui: &tui::Tui) -> u16 {
-        resolve_terminal_scrollback_width(
-            tui.terminal.size().map(|size| size.width),
-            tui.terminal.last_known_screen_size.width,
-        )
     }
 
     pub fn chatwidget_init_for_forked_or_resumed_thread(
@@ -1611,8 +1537,6 @@ impl App {
     fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
         self.overlay = None;
         self.transcript_cells.clear();
-        self.deferred_history_lines.clear();
-        self.has_emitted_history_lines = false;
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;
         tui.terminal.clear_scrollback()?;
@@ -1847,8 +1771,6 @@ impl App {
             enhanced_keys_supported,
             transcript_cells: Vec::new(),
             overlay: None,
-            deferred_history_lines: Vec::new(),
-            has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
@@ -2004,6 +1926,9 @@ impl App {
                 TuiEvent::Key(key_event) => {
                     self.handle_key_event(tui, key_event).await;
                 }
+                TuiEvent::Mouse(mouse_event) => {
+                    self.handle_mouse_event(tui, mouse_event).await;
+                }
                 TuiEvent::Paste(pasted) => {
                     // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
                     // but tui-textarea expects \n. Normalize CR to LF.
@@ -2015,9 +1940,8 @@ impl App {
                 TuiEvent::Draw => {
                     if self.backtrack_render_pending {
                         self.backtrack_render_pending = false;
-                        if self.uses_terminal_scrollback() {
-                            self.render_transcript_once(tui);
-                        }
+                        self.chat_widget
+                            .replace_transcript_cells(self.transcript_cells.clone());
                     }
                     self.chat_widget.maybe_post_pending_notification(tui);
                     if self
@@ -2026,15 +1950,13 @@ impl App {
                     {
                         return Ok(AppRunControl::Continue);
                     }
-                    tui.draw(
-                        self.chat_widget.desired_height(tui.terminal.size()?.width),
-                        |frame| {
-                            self.chat_widget.render(frame.area(), frame.buffer);
-                            if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
-                                frame.set_cursor_position((x, y));
-                            }
-                        },
-                    )?;
+                    let size = tui.terminal.size()?;
+                    tui.draw(size.height, |frame| {
+                        self.chat_widget.render(frame.area(), frame.buffer);
+                        if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                            frame.set_cursor_position((x, y));
+                        }
+                    })?;
                     if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
                         self.chat_widget
                             .set_external_editor_state(ExternalEditorState::Active);
@@ -2044,6 +1966,11 @@ impl App {
             }
         }
         Ok(AppRunControl::Continue)
+    }
+
+    async fn handle_mouse_event(&mut self, tui: &mut tui::Tui, mouse_event: MouseEvent) {
+        self.chat_widget.handle_mouse_event(mouse_event);
+        tui.frame_requester().schedule_frame();
     }
 
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
@@ -2193,7 +2120,8 @@ impl App {
                     | SessionSelection::Fork(_) => {}
                 }
 
-                // Leaving alt-screen may blank the inline viewport; force a redraw either way.
+                // Re-entering the fullscreen TUI after a restored terminal may blank the viewport;
+                // force a redraw either way.
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::ForkCurrentSession => {
@@ -2300,8 +2228,6 @@ impl App {
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
                 self.chat_widget.on_diff_complete();
-                // Enter alternate screen using TUI helper and build pager lines
-                let _ = tui.enter_alt_screen();
                 let pager_lines: Vec<ratatui::text::Line<'static>> = if text.trim().is_empty() {
                     vec!["No changes detected.".italic().into()]
                 } else {
@@ -2772,9 +2698,6 @@ impl App {
                 if updates.is_empty() {
                     return Ok(AppRunControl::Continue);
                 }
-                let scrollback_update = updates.iter().find_map(|(feature, enabled)| {
-                    (*feature == Feature::TuiManagedScrollback).then_some(*enabled)
-                });
                 let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
                     matches!(
                         feature,
@@ -2829,16 +2752,6 @@ impl App {
                     self.chat_widget.add_error_message(format!(
                         "Failed to update experimental features: {err}"
                     ));
-                } else if let Some(enabled) = scrollback_update {
-                    let message = if enabled {
-                        "TUI-managed scrollback will apply to the next new or resumed session."
-                    } else {
-                        "Classic terminal-managed scrollback will apply to the next new or resumed session."
-                    };
-                    self.insert_history_cell(
-                        Box::new(history_cell::new_info_event(message.to_string(), None)),
-                        tui,
-                    );
                 }
             }
             AppEvent::SkipNextWorldWritableScan => {
@@ -2956,7 +2869,6 @@ impl App {
             }
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
-                    let _ = tui.enter_alt_screen();
                     let diff_summary = DiffSummary::new(changes, cwd);
                     self.overlay = Some(Overlay::new_static_with_renderables(
                         vec![diff_summary.into()],
@@ -2964,7 +2876,6 @@ impl App {
                     ));
                 }
                 ApprovalRequest::Exec { command, .. } => {
-                    let _ = tui.enter_alt_screen();
                     let full_cmd = strip_bash_lc_and_escape(&command);
                     let full_cmd_lines = highlight_bash_to_lines(&full_cmd);
                     self.overlay = Some(Overlay::new_static_with_lines(
@@ -2977,7 +2888,6 @@ impl App {
                     message,
                     ..
                 } => {
-                    let _ = tui.enter_alt_screen();
                     let paragraph = Paragraph::new(vec![
                         Line::from(vec!["Server: ".into(), server_name.bold()]),
                         Line::from(""),
@@ -3189,8 +3099,6 @@ impl App {
                 kind: KeyEventKind::Press,
                 ..
             } => {
-                // Enter alternate screen and set viewport to full size.
-                let _ = tui.enter_alt_screen();
                 self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
                 tui.frame_requester().schedule_frame();
             }
@@ -3286,13 +3194,6 @@ impl App {
     }
 }
 
-fn resolve_terminal_scrollback_width(
-    current_width: std::io::Result<u16>,
-    fallback_width: u16,
-) -> u16 {
-    current_width.unwrap_or(fallback_width)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3301,14 +3202,10 @@ mod tests {
     use crate::app_backtrack::PendingBacktrackRollback;
     use crate::app_backtrack::user_count;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
-    use crate::exec_cell::CommandOutput;
-    use crate::exec_cell::ExecCall;
-    use crate::exec_cell::ExecCell;
     use crate::file_search::FileSearchManager;
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
     use crate::history_cell::PlainHistoryCell;
-    use crate::history_cell::ReasoningSummaryCell;
     use crate::history_cell::UserHistoryCell;
     use crate::history_cell::new_session_info;
     use crate::provider_config::ApiProviderDialect;
@@ -3328,7 +3225,6 @@ mod tests {
     use adam_agent::protocol::AskForApproval;
     use adam_agent::protocol::Event;
     use adam_agent::protocol::EventMsg;
-    use adam_agent::protocol::ExecCommandSource;
     use adam_agent::protocol::ReviewRequest;
     use adam_agent::protocol::ReviewTarget;
     use adam_agent::protocol::SandboxPolicy;
@@ -3345,34 +3241,12 @@ mod tests {
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
-    use std::io;
     use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use tempfile::tempdir;
     use tokio::time;
-
-    #[derive(Debug)]
-    struct TestTranscriptCell {
-        display: Vec<Line<'static>>,
-        transcript: Vec<Line<'static>>,
-        is_stream_continuation: bool,
-    }
-
-    impl HistoryCell for TestTranscriptCell {
-        fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-            self.display.clone()
-        }
-
-        fn transcript_lines(&self, _width: u16) -> Vec<Line<'static>> {
-            self.transcript.clone()
-        }
-
-        fn is_stream_continuation(&self) -> bool {
-            self.is_stream_continuation
-        }
-    }
 
     #[test]
     fn normalize_harness_overrides_resolves_relative_add_dirs() -> Result<()> {
@@ -3435,103 +3309,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn classic_scrollback_skips_transcript_only_cells() {
-        let mut app = make_test_app().await;
-        let cell = Arc::new(ReasoningSummaryCell::new(
-            "Summary".to_string(),
-            "reasoning kept in transcript".to_string(),
-            true,
-        )) as Arc<dyn HistoryCell>;
-
-        assert!(cell.display_lines(80).is_empty());
-
-        let lines = app.terminal_scrollback_lines_for_cell(&cell, 80);
-
-        assert_eq!(lines, None);
-        assert!(!app.has_emitted_history_lines);
-    }
-
-    #[tokio::test]
-    async fn classic_scrollback_collects_display_lines_with_spacing() {
-        let mut app = make_test_app().await;
-        app.transcript_cells = vec![
-            Arc::new(TestTranscriptCell {
-                display: vec!["display first".into()],
-                transcript: vec!["first transcript".into()],
-                is_stream_continuation: false,
-            }),
-            Arc::new(TestTranscriptCell {
-                display: vec!["display second".into()],
-                transcript: vec!["second transcript".into()],
-                is_stream_continuation: false,
-            }),
-            Arc::new(TestTranscriptCell {
-                display: vec!["display continuation".into()],
-                transcript: vec!["continued transcript".into()],
-                is_stream_continuation: true,
-            }),
-        ];
-
-        let lines = app.collect_terminal_scrollback_display_lines(80);
-
-        assert_eq!(
-            lines,
-            vec![
-                Line::from("display first"),
-                Line::from(""),
-                Line::from("display second"),
-                Line::from("display continuation"),
-            ]
-        );
-        assert!(app.has_emitted_history_lines);
-    }
-
-    #[tokio::test]
-    async fn classic_scrollback_uses_exec_display_lines_for_user_shell_commands() {
-        let mut app = make_test_app().await;
-        let cell = Arc::new(ExecCell::new(
-            ExecCall {
-                call_id: "call-1".to_string(),
-                command: vec!["ls".to_string()],
-                parsed: Vec::new(),
-                output: Some(CommandOutput {
-                    exit_code: 0,
-                    aggregated_output: String::new(),
-                    formatted_output: String::new(),
-                }),
-                completed: true,
-                source: ExecCommandSource::UserShell,
-                start_time: None,
-                duration: None,
-                interaction_input: None,
-            },
-            false,
-        )) as Arc<dyn HistoryCell>;
-
-        let lines = app
-            .terminal_scrollback_lines_for_cell(&cell, 80)
-            .expect("display lines");
-
-        assert_eq!(lines, cell.display_lines(80));
-        assert_ne!(lines, cell.transcript_lines(80));
-    }
-
-    #[test]
-    fn terminal_scrollback_width_prefers_current_width() {
-        let width = resolve_terminal_scrollback_width(Ok(120), 80);
-
-        assert_eq!(width, 120);
-    }
-
-    #[test]
-    fn terminal_scrollback_width_falls_back_to_last_known_width() {
-        let width = resolve_terminal_scrollback_width(Err(io::Error::other("boom")), 80);
-
-        assert_eq!(width, 80);
-    }
-
-    #[tokio::test]
-    async fn rollback_confirmation_clears_deferred_history_before_replay() {
+    async fn rollback_confirmation_requests_transcript_replay() {
         let mut app = make_test_app().await;
         let thread_id = ThreadId::new();
         app.chat_widget.handle_codex_event(Event {
@@ -3561,7 +3339,6 @@ mod tests {
             }),
             Arc::new(PlainHistoryCell::new(vec!["answer".into()])),
         ];
-        app.deferred_history_lines = vec!["stale history".into()];
         app.backtrack.pending_rollback = Some(PendingBacktrackRollback {
             selection: BacktrackSelection {
                 nth_user_message: 0,
@@ -3576,7 +3353,6 @@ mod tests {
             num_turns: 1,
         }));
 
-        assert!(app.deferred_history_lines.is_empty());
         assert!(app.backtrack_render_pending);
         assert!(app.transcript_cells.is_empty());
     }
@@ -4052,8 +3828,6 @@ mod tests {
             file_search,
             transcript_cells: Vec::new(),
             overlay: None,
-            deferred_history_lines: Vec::new(),
-            has_emitted_history_lines: false,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
@@ -4107,8 +3881,6 @@ mod tests {
                 file_search,
                 transcript_cells: Vec::new(),
                 overlay: None,
-                deferred_history_lines: Vec::new(),
-                has_emitted_history_lines: false,
                 enhanced_keys_supported: false,
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
                 backtrack: BacktrackState::default(),

@@ -197,7 +197,7 @@ pub(crate) fn spinner(start_time: Option<Instant>, animations_enabled: bool) -> 
 impl HistoryCell for ExecCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         if self.is_exploring_cell() {
-            self.exploring_display_lines(width)
+            self.exploring_summary_lines(width)
         } else {
             self.command_display_lines(width)
         }
@@ -208,6 +208,10 @@ impl HistoryCell for ExecCell {
     }
 
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if self.is_exploring_cell() {
+            return self.exploring_summary_lines(width);
+        }
+
         let mut lines: Vec<Line<'static>> = vec![];
         for (i, call) in self.iter_calls().enumerate() {
             if i > 0 {
@@ -253,7 +257,7 @@ impl HistoryCell for ExecCell {
 }
 
 impl ExecCell {
-    fn exploring_display_lines(&self, width: u16) -> Vec<Line<'static>> {
+    fn exploring_summary_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut out: Vec<Line<'static>> = Vec::new();
         out.push(Line::from(vec![
             if self.is_active() {

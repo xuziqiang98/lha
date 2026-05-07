@@ -44,7 +44,6 @@ use adam_app_server_protocol::Tools;
 use adam_app_server_protocol::UserSavedConfig;
 use adam_llm::RuntimeEndpoint;
 use adam_llm::built_in_runtime_endpoints;
-use adam_protocol::config_types::AltScreenMode;
 use adam_protocol::config_types::IdentityKind;
 use adam_protocol::config_types::Personality;
 use adam_protocol::config_types::ReasoningSummary;
@@ -338,14 +337,6 @@ pub struct Config {
 
     /// Start the TUI in the specified identity (nobody/planner/programmer.).
     pub default_identity: Option<IdentityKind>,
-
-    /// Controls whether the TUI uses the terminal's alternate screen buffer.
-    ///
-    /// This is the same `tui.alternate_screen` value from `config.toml` (see [`Tui`]).
-    /// - `auto` (default): Disable alternate screen in Zellij, enable elsewhere.
-    /// - `always`: Always use alternate screen (original behavior).
-    /// - `never`: Never use alternate screen (inline mode, preserves scrollback).
-    pub tui_alternate_screen: AltScreenMode,
 
     /// Tiny companion rendered next to the TUI composer.
     pub tui_buddy: TuiBuddy,
@@ -1862,11 +1853,6 @@ impl Config {
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
             default_identity: cfg.tui.as_ref().and_then(|t| t.default_identity),
-            tui_alternate_screen: cfg
-                .tui
-                .as_ref()
-                .map(|t| t.alternate_screen)
-                .unwrap_or_default(),
             tui_buddy: cfg
                 .tui
                 .as_ref()
@@ -2181,7 +2167,6 @@ job_max_runtime_seconds = 0
                 animations: true,
                 show_tooltips: true,
                 default_identity: None,
-                alternate_screen: AltScreenMode::Auto,
                 buddy: TuiBuddy::default(),
             }
         );

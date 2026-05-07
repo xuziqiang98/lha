@@ -143,7 +143,6 @@ async fn run_session_picker(
     show_all: bool,
     action: SessionPickerAction,
 ) -> Result<SessionSelection> {
-    let alt = AltScreenGuard::enter(tui);
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
     let default_provider = default_provider.to_string();
@@ -174,7 +173,7 @@ async fn run_session_picker(
 
     let mut state = PickerState::new(
         adam_home.to_path_buf(),
-        alt.tui.frame_requester(),
+        tui.frame_requester(),
         page_loader,
         default_provider.clone(),
         show_all,
@@ -184,7 +183,7 @@ async fn run_session_picker(
     state.start_initial_load();
     state.request_frame();
 
-    let mut tui_events = alt.tui.event_stream().fuse();
+    let mut tui_events = tui.event_stream().fuse();
     let mut background_events = UnboundedReceiverStream::new(bg_rx).fuse();
 
     loop {
@@ -200,12 +199,12 @@ async fn run_session_picker(
                         }
                     }
                     TuiEvent::Draw => {
-                        if let Ok(size) = alt.tui.terminal.size() {
+                        if let Ok(size) = tui.terminal.size() {
                             let list_height = size.height.saturating_sub(4) as usize;
                             state.update_view_rows(list_height);
                             state.ensure_minimum_rows_for_view(list_height);
                         }
-                        draw_picker(alt.tui, &state)?;
+                        draw_picker(tui, &state)?;
                     }
                     _ => {}
                 }
@@ -219,24 +218,6 @@ async fn run_session_picker(
 
     // Fallback – treat as cancel/new
     Ok(SessionSelection::StartFresh)
-}
-
-/// RAII guard that ensures we leave the alt-screen on scope exit.
-struct AltScreenGuard<'a> {
-    tui: &'a mut Tui,
-}
-
-impl<'a> AltScreenGuard<'a> {
-    fn enter(tui: &'a mut Tui) -> Self {
-        let _ = tui.enter_alt_screen();
-        Self { tui }
-    }
-}
-
-impl Drop for AltScreenGuard<'_> {
-    fn drop(&mut self) {
-        let _ = self.tui.leave_alt_screen();
-    }
 }
 
 struct PickerState {

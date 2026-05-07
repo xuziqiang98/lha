@@ -798,6 +798,14 @@ impl BottomPane {
         self.composer.buddy()
     }
 
+    pub(crate) fn buddy_state(&self) -> &crate::buddy::state::BuddyState {
+        self.composer.buddy_state()
+    }
+
+    pub(crate) fn set_buddy_external(&self, external: bool) {
+        self.composer.set_buddy_external(external);
+    }
+
     pub(crate) fn set_buddy_identity_kind(&mut self, identity_kind: IdentityKind) {
         self.composer.set_buddy_identity_kind(identity_kind);
         self.request_redraw();

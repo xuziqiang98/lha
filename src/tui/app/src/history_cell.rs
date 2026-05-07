@@ -73,6 +73,8 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Styled;
 use ratatui::style::Stylize;
+use ratatui::widgets::Block;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::any::Any;
@@ -91,6 +93,10 @@ use unicode_width::UnicodeWidthStr;
 /// scrollable list.
 pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
+
+    fn block_style(&self) -> Option<Style> {
+        None
+    }
 
     fn desired_height(&self, width: u16) -> u16 {
         Paragraph::new(Text::from(self.display_lines(width)))
@@ -145,15 +151,20 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
 impl Renderable for Box<dyn HistoryCell> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let lines = self.display_lines(area.width);
+        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
         let y = if area.height == 0 {
             0
         } else {
-            let overflow = lines.len().saturating_sub(usize::from(area.height));
+            let overflow = paragraph
+                .line_count(area.width)
+                .saturating_sub(usize::from(area.height));
             u16::try_from(overflow).unwrap_or(u16::MAX)
         };
-        Paragraph::new(Text::from(lines))
-            .scroll((y, 0))
-            .render(area, buf);
+        Clear.render(area, buf);
+        if let Some(style) = self.block_style() {
+            Block::default().style(style).render(area, buf);
+        }
+        paragraph.scroll((y, 0)).render(area, buf);
     }
     fn desired_height(&self, width: u16) -> u16 {
         HistoryCell::desired_height(self.as_ref(), width)
@@ -282,6 +293,10 @@ impl HistoryCell for UserHistoryCell {
         lines.extend(prefix_lines(wrapped, "› ".bold().dim(), "  ".into()));
         lines.push(Line::from("").style(style));
         lines
+    }
+
+    fn block_style(&self) -> Option<Style> {
+        Some(user_message_style())
     }
 }
 
@@ -689,6 +704,10 @@ impl HistoryCell for UnifiedExecProcessesCell {
         out
     }
 
+    fn block_style(&self) -> Option<Style> {
+        Some(Style::default())
+    }
+
     fn desired_height(&self, width: u16) -> u16 {
         self.display_lines(width).len() as u16
     }
@@ -812,6 +831,10 @@ pub(crate) struct PatchHistoryCell {
 impl HistoryCell for PatchHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         create_diff_summary(&self.changes, &self.cwd, width as usize)
+    }
+
+    fn block_style(&self) -> Option<Style> {
+        Some(Style::default())
     }
 }
 
@@ -2005,6 +2028,10 @@ impl HistoryCell for ProposedPlanCell {
         lines.extend(plan_lines.into_iter().map(|line| line.style(plan_style)));
         lines
     }
+
+    fn block_style(&self) -> Option<Style> {
+        Some(proposed_plan_style())
+    }
 }
 
 impl HistoryCell for ProposedPlanStreamCell {
@@ -2074,6 +2101,10 @@ impl HistoryCell for PlanUpdateCell {
         lines.extend(prefix_lines(indented_lines, "  └ ".dim(), "    ".into()));
 
         lines
+    }
+
+    fn block_style(&self) -> Option<Style> {
+        Some(proposed_plan_style())
     }
 }
 
@@ -3077,6 +3108,8 @@ mod tests {
         let lines = cell.display_lines(80);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
+        let transcript = render_transcript(&cell).join("\n");
+        assert_eq!(transcript, rendered);
     }
 
     #[test]
@@ -3135,6 +3168,8 @@ mod tests {
         let lines = cell.display_lines(80);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
+        let transcript = render_transcript(&cell).join("\n");
+        assert_eq!(transcript, rendered);
     }
 
     #[test]
@@ -3173,6 +3208,8 @@ mod tests {
         let lines = cell.display_lines(80);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
+        let transcript = render_transcript(&cell).join("\n");
+        assert_eq!(transcript, rendered);
     }
 
     #[test]

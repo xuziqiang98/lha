@@ -29,17 +29,8 @@ use ratatui::text::Span;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InsertHistoryMode {
     Standard,
+    #[allow(dead_code)]
     Zellij,
-}
-
-impl InsertHistoryMode {
-    pub(crate) fn new(is_zellij: bool) -> Self {
-        if is_zellij {
-            Self::Zellij
-        } else {
-            Self::Standard
-        }
-    }
 }
 
 /// Insert `lines` above the viewport using the terminal's backend writer

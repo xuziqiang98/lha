@@ -15,10 +15,13 @@ use crossterm::Command;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
+use crossterm::event::DisableMouseCapture;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
+use crossterm::event::EnableMouseCapture;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyboardEnhancementFlags;
+use crossterm::event::MouseEvent;
 use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
 use crossterm::terminal::EnterAlternateScreen;
@@ -29,10 +32,6 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::disable_raw_mode;
 use ratatui::crossterm::terminal::enable_raw_mode;
-use ratatui::layout::Offset;
-use ratatui::layout::Rect;
-use ratatui::layout::Size;
-use ratatui::text::Line;
 use tokio::sync::broadcast;
 use tokio_stream::Stream;
 
@@ -46,7 +45,6 @@ use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
 use adam_agent::config::types::NotificationMethod;
-use adam_agent::terminal::Multiplexer;
 
 mod event_stream;
 mod frame_rate_limiter;
@@ -77,28 +75,8 @@ pub fn set_modes() -> Result<()> {
     );
 
     let _ = execute!(stdout(), EnableFocusChange);
+    let _ = execute!(stdout(), EnableMouseCapture);
     Ok(())
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct EnableAlternateScroll;
-
-impl Command for EnableAlternateScroll {
-    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
-        write!(f, "\x1b[?1007h")
-    }
-
-    #[cfg(windows)]
-    fn execute_winapi(&self) -> Result<()> {
-        Err(std::io::Error::other(
-            "tried to execute EnableAlternateScroll using WinAPI; use ANSI instead",
-        ))
-    }
-
-    #[cfg(windows)]
-    fn is_ansi_code_supported(&self) -> bool {
-        true
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +101,9 @@ impl Command for DisableAlternateScroll {
 }
 
 fn restore_common(should_disable_raw_mode: bool) -> Result<()> {
+    let _ = execute!(stdout(), DisableMouseCapture);
+    let _ = execute!(stdout(), DisableAlternateScroll);
+    let _ = execute!(stdout(), LeaveAlternateScreen);
     // Pop may fail on platforms that didn't support the push; ignore errors.
     let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
     execute!(stdout(), DisableBracketedPaste)?;
@@ -202,7 +183,7 @@ fn flush_terminal_input_buffer() {
 #[cfg(not(any(unix, windows)))]
 pub(crate) fn flush_terminal_input_buffer() {}
 
-/// Initialize the terminal (inline viewport; history stays in normal scrollback)
+/// Initialize the terminal for the fullscreen TUI.
 pub fn init() -> Result<Terminal> {
     if !stdin().is_terminal() {
         return Err(std::io::Error::other("stdin is not a terminal"));
@@ -230,6 +211,7 @@ fn set_panic_hook() {
 #[derive(Clone, Debug)]
 pub enum TuiEvent {
     Key(KeyEvent),
+    Mouse(MouseEvent),
     Paste(String),
     Draw,
 }
@@ -239,27 +221,15 @@ pub struct Tui {
     draw_tx: broadcast::Sender<()>,
     event_broker: Arc<EventBroker>,
     pub(crate) terminal: Terminal,
-    pending_history_lines: Vec<Line<'static>>,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
     suspend_context: SuspendContext,
-    // True when overlay alt-screen UI is active
+    // True when the fullscreen alternate screen is active.
     alt_screen_active: Arc<AtomicBool>,
     // True when terminal/tab is focused; updated internally from crossterm events
     terminal_focused: Arc<AtomicBool>,
     enhanced_keys_supported: bool,
     notification_backend: Option<DesktopNotificationBackend>,
-    is_zellij: bool,
-    // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
-    alt_screen_enabled: bool,
-}
-
-fn replace_pending_history_lines(
-    pending_history_lines: &mut Vec<Line<'static>>,
-    lines: Vec<Line<'static>>,
-) {
-    pending_history_lines.clear();
-    pending_history_lines.extend(lines);
 }
 
 impl Tui {
@@ -273,17 +243,11 @@ impl Tui {
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
         let _ = crate::terminal_palette::default_colors();
-        let is_zellij = matches!(
-            adam_agent::terminal::terminal_info().multiplexer,
-            Some(Multiplexer::Zellij { .. })
-        );
-
         Self {
             frame_requester,
             draw_tx,
             event_broker: Arc::new(EventBroker::new()),
             terminal,
-            pending_history_lines: vec![],
             alt_saved_viewport: None,
             #[cfg(unix)]
             suspend_context: SuspendContext::new(),
@@ -291,14 +255,7 @@ impl Tui {
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
-            is_zellij,
-            alt_screen_enabled: true,
         }
-    }
-
-    /// Set whether alternate screen is enabled. When false, enter_alt_screen() becomes a no-op.
-    pub fn set_alt_screen_enabled(&mut self, enabled: bool) {
-        self.alt_screen_enabled = enabled;
     }
 
     pub fn set_notification_method(&mut self, method: NotificationMethod) {
@@ -413,14 +370,11 @@ impl Tui {
     }
 
     /// Enter alternate screen and expand the viewport to full terminal size, saving the current
-    /// inline viewport for restoration when leaving.
+    /// viewport for restoration when leaving.
     pub fn enter_alt_screen(&mut self) -> Result<()> {
-        if !self.alt_screen_enabled {
-            return Ok(());
-        }
         let _ = execute!(self.terminal.backend_mut(), EnterAlternateScreen);
-        // Enable "alternate scroll" so terminals may translate wheel to arrows
-        let _ = execute!(self.terminal.backend_mut(), EnableAlternateScroll);
+        let _ = execute!(self.terminal.backend_mut(), EnableMouseCapture);
+        let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
         if let Ok(size) = self.terminal.size() {
             self.alt_saved_viewport = Some(self.terminal.viewport_area);
             self.terminal.set_viewport_area(ratatui::layout::Rect::new(
@@ -435,12 +389,9 @@ impl Tui {
         Ok(())
     }
 
-    /// Leave alternate screen and restore the previously saved inline viewport, if any.
+    /// Leave alternate screen and restore the previously saved viewport, if any.
     pub fn leave_alt_screen(&mut self) -> Result<()> {
-        if !self.alt_screen_enabled {
-            return Ok(());
-        }
-        // Disable alternate scroll when leaving alt-screen
+        let _ = execute!(self.terminal.backend_mut(), DisableMouseCapture);
         let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
         let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
         if let Some(saved) = self.alt_saved_viewport.take() {
@@ -450,37 +401,17 @@ impl Tui {
         Ok(())
     }
 
-    pub fn insert_history_lines(&mut self, lines: Vec<Line<'static>>) {
-        self.pending_history_lines.extend(lines);
-        self.frame_requester().schedule_frame();
-    }
-
-    pub(crate) fn replace_pending_history_lines(&mut self, lines: Vec<Line<'static>>) {
-        replace_pending_history_lines(&mut self.pending_history_lines, lines);
-        self.frame_requester().schedule_frame();
-    }
-
-    fn update_inline_viewport(
-        terminal: &mut Terminal,
-        height: u16,
-        is_zellij: bool,
-    ) -> Result<bool> {
+    fn update_viewport(terminal: &mut Terminal, height: u16) -> Result<bool> {
         let size = terminal.size()?;
-        let mut needs_full_repaint = false;
 
         let mut area = terminal.viewport_area;
         area.height = height.min(size.height);
         area.width = size.width;
         if area.bottom() > size.height {
             let scroll_by = area.bottom() - size.height;
-            if is_zellij {
-                Self::scroll_zellij_expanded_viewport(terminal, size, scroll_by)?;
-                needs_full_repaint = true;
-            } else {
-                terminal
-                    .backend_mut()
-                    .scroll_region_up(0..area.top(), scroll_by)?;
-            }
+            terminal
+                .backend_mut()
+                .scroll_region_up(0..area.top(), scroll_by)?;
             area.y = size.height - area.height;
         }
         let old_area = terminal.viewport_area;
@@ -490,40 +421,7 @@ impl Tui {
             terminal.clear_area(area)?;
         }
 
-        Ok(needs_full_repaint)
-    }
-
-    fn scroll_zellij_expanded_viewport(
-        terminal: &mut Terminal,
-        size: Size,
-        scroll_by: u16,
-    ) -> Result<()> {
-        crossterm::queue!(
-            terminal.backend_mut(),
-            crossterm::cursor::MoveTo(0, size.height.saturating_sub(1))
-        )?;
-        for _ in 0..scroll_by {
-            crossterm::queue!(terminal.backend_mut(), crossterm::style::Print("\n"))?;
-        }
-        Ok(())
-    }
-
-    fn flush_pending_history_lines(
-        terminal: &mut Terminal,
-        pending_history_lines: &mut Vec<Line<'static>>,
-        is_zellij: bool,
-    ) -> Result<bool> {
-        if pending_history_lines.is_empty() {
-            return Ok(false);
-        }
-
-        crate::insert_history::insert_history_lines_with_mode(
-            terminal,
-            pending_history_lines.clone(),
-            crate::insert_history::InsertHistoryMode::new(is_zellij),
-        )?;
-        pending_history_lines.clear();
-        Ok(is_zellij)
+        Ok(false)
     }
 
     pub fn draw(
@@ -538,10 +436,6 @@ impl Tui {
             .suspend_context
             .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
 
-        // Precompute any viewport updates that need a cursor-position query before entering
-        // the synchronized update, to avoid racing with the event reader.
-        let mut pending_viewport_area = self.pending_viewport_area()?;
-
         stdout().sync_update(|_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
@@ -549,88 +443,20 @@ impl Tui {
             }
 
             let terminal = &mut self.terminal;
-            if let Some(new_area) = pending_viewport_area.take() {
-                let old_area = terminal.viewport_area;
-                terminal.clear_area(old_area)?;
-                terminal.set_viewport_area(new_area);
-                terminal.clear_area(new_area)?;
-            }
-
-            let mut needs_full_repaint =
-                Self::update_inline_viewport(terminal, height, self.is_zellij)?;
-            needs_full_repaint |= Self::flush_pending_history_lines(
-                terminal,
-                &mut self.pending_history_lines,
-                self.is_zellij,
-            )?;
+            let needs_full_repaint = Self::update_viewport(terminal, height)?;
             if needs_full_repaint {
                 terminal.invalidate_viewport();
             }
             let area = terminal.viewport_area;
 
-            // Update the y position for suspending so Ctrl-Z can place the cursor correctly.
+            // Update the cursor row so Ctrl-Z can place the cursor correctly before suspending.
             #[cfg(unix)]
-            {
-                let inline_area_bottom = if self.alt_screen_active.load(Ordering::Relaxed) {
-                    self.alt_saved_viewport
-                        .map(|r| r.bottom().saturating_sub(1))
-                        .unwrap_or_else(|| area.bottom().saturating_sub(1))
-                } else {
-                    area.bottom().saturating_sub(1)
-                };
-                self.suspend_context.set_cursor_y(inline_area_bottom);
-            }
+            self.suspend_context
+                .set_cursor_y(area.bottom().saturating_sub(1));
 
             terminal.draw(|frame| {
                 draw_fn(frame);
             })
         })?
-    }
-
-    fn pending_viewport_area(&mut self) -> Result<Option<Rect>> {
-        let terminal = &mut self.terminal;
-        let screen_size = terminal.size()?;
-        let last_known_screen_size = terminal.last_known_screen_size;
-        if screen_size != last_known_screen_size
-            && let Ok(cursor_pos) = terminal.get_cursor_position()
-        {
-            let last_known_cursor_pos = terminal.last_known_cursor_pos;
-            // If we resized AND the cursor moved, we adjust the viewport area to keep the
-            // cursor in the same position. This is a heuristic that seems to work well
-            // at least in iTerm2.
-            if cursor_pos.y != last_known_cursor_pos.y {
-                let offset = Offset {
-                    x: 0,
-                    y: cursor_pos.y as i32 - last_known_cursor_pos.y as i32,
-                };
-                return Ok(Some(terminal.viewport_area.offset(offset)));
-            }
-        }
-        Ok(None)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::replace_pending_history_lines;
-    use pretty_assertions::assert_eq;
-    use ratatui::text::Line;
-
-    #[test]
-    fn replace_pending_history_lines_clears_stale_queue() {
-        let mut pending_history_lines = vec!["stale".into()];
-
-        replace_pending_history_lines(&mut pending_history_lines, vec![Line::from("fresh")]);
-
-        assert_eq!(pending_history_lines, vec![Line::from("fresh")]);
-    }
-
-    #[test]
-    fn replace_pending_history_lines_allows_empty_replay() {
-        let mut pending_history_lines = vec!["stale".into()];
-
-        replace_pending_history_lines(&mut pending_history_lines, Vec::new());
-
-        assert!(pending_history_lines.is_empty());
     }
 }

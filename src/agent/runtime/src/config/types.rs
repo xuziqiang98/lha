@@ -4,7 +4,6 @@
 // definitions that do not contain business logic.
 
 use crate::config_loader::RequirementSource;
-pub use adam_protocol::config_types::AltScreenMode;
 pub use adam_protocol::config_types::IdentityKind;
 pub use adam_protocol::config_types::Personality;
 pub use adam_protocol::config_types::WebSearchMode;
@@ -475,17 +474,6 @@ pub struct Tui {
     /// Defaults to unset.
     #[serde(default)]
     pub default_identity: Option<IdentityKind>,
-
-    /// Controls whether the TUI uses the terminal's alternate screen buffer.
-    ///
-    /// - `auto` (default): Disable alternate screen in Zellij, enable elsewhere.
-    /// - `always`: Always use alternate screen (original behavior).
-    /// - `never`: Never use alternate screen (inline mode only, preserves scrollback).
-    ///
-    /// Using alternate screen provides a cleaner fullscreen experience but prevents
-    /// scrollback in terminal multiplexers like Zellij that follow the xterm spec.
-    #[serde(default)]
-    pub alternate_screen: AltScreenMode,
 
     /// Tiny companion rendered next to the TUI composer.
     #[serde(default)]

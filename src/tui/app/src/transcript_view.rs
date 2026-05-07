@@ -3,10 +3,18 @@ use std::sync::Arc;
 use crate::chatwidget::ActiveCellTranscriptKey;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
+use crate::mouse::MouseScrollState;
+use crate::mouse::ScrollDirection;
 use crate::render::Insets;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
+use crate::style::transcript_selection_style;
 use crate::style::user_message_style;
+use crate::transcript_selection::TranscriptSelection;
+use crate::transcript_selection::TranscriptSelectionPoint;
+use crossterm::event::MouseButton;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
 use ratatui::layout::Rect;
@@ -17,6 +25,8 @@ use ratatui::text::Text;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LiveTailKey {
@@ -44,17 +54,32 @@ pub(crate) enum TranscriptScroll {
     End,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TranscriptMouseOutcome {
+    Ignored,
+    Scrolled,
+    SelectionChanged,
+    SelectionCompleted(Option<String>),
+}
+
 #[derive(Default)]
 pub(crate) struct TranscriptView {
     cells: Vec<Arc<dyn HistoryCell>>,
     renderables: Vec<Box<dyn Renderable>>,
     scroll_offset: usize,
+    stick_to_bottom: bool,
+    user_scrolled_during_stream: bool,
     last_content_height: Option<usize>,
     last_rendered_height: Option<usize>,
     pending_scroll_chunk: Option<usize>,
     highlight_cell: Option<usize>,
     live_tail_key: Option<LiveTailKey>,
     last_width: Option<u16>,
+    last_area: Option<Rect>,
+    last_top_line: usize,
+    last_total_lines: usize,
+    last_padding_top: usize,
+    selection: TranscriptSelection,
 }
 
 impl TranscriptView {
@@ -62,13 +87,20 @@ impl TranscriptView {
         Self {
             renderables: Self::render_cells(&cells, None),
             cells,
-            scroll_offset: usize::MAX,
+            scroll_offset: 0,
+            stick_to_bottom: true,
+            user_scrolled_during_stream: false,
             last_content_height: None,
             last_rendered_height: None,
             pending_scroll_chunk: None,
             highlight_cell: None,
             live_tail_key: None,
             last_width: None,
+            last_area: None,
+            last_top_line: 0,
+            last_total_lines: 0,
+            last_padding_top: 0,
+            selection: TranscriptSelection::default(),
         }
     }
 
@@ -92,7 +124,8 @@ impl TranscriptView {
             self.renderables.push(tail);
         }
         if follow_bottom {
-            self.scroll_offset = usize::MAX;
+            self.stick_to_bottom = true;
+            self.user_scrolled_during_stream = false;
         }
     }
 
@@ -137,7 +170,8 @@ impl TranscriptView {
         }
 
         if follow_bottom {
-            self.scroll_offset = usize::MAX;
+            self.stick_to_bottom = true;
+            self.user_scrolled_during_stream = false;
         }
     }
 
@@ -158,44 +192,168 @@ impl TranscriptView {
         self.render_area(area, buf, true, false);
     }
 
+    pub(crate) fn handle_mouse_event(
+        &mut self,
+        mouse: MouseEvent,
+        scroll_state: &mut MouseScrollState,
+    ) -> TranscriptMouseOutcome {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                if !self.last_area_contains(mouse.column, mouse.row) {
+                    return TranscriptMouseOutcome::Ignored;
+                }
+                let update = scroll_state.on_scroll(ScrollDirection::Up);
+                if self.apply_scroll_delta(update.delta_lines) {
+                    TranscriptMouseOutcome::Scrolled
+                } else {
+                    TranscriptMouseOutcome::Ignored
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                if !self.last_area_contains(mouse.column, mouse.row) {
+                    return TranscriptMouseOutcome::Ignored;
+                }
+                let update = scroll_state.on_scroll(ScrollDirection::Down);
+                if self.apply_scroll_delta(update.delta_lines) {
+                    TranscriptMouseOutcome::Scrolled
+                } else {
+                    TranscriptMouseOutcome::Ignored
+                }
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(point) = self.selection_point_from_position(mouse.column, mouse.row) {
+                    self.selection.anchor = Some(point);
+                    self.selection.head = Some(point);
+                    self.selection.dragging = true;
+                    TranscriptMouseOutcome::SelectionChanged
+                } else if self.selection.is_active() {
+                    self.selection.clear();
+                    TranscriptMouseOutcome::SelectionChanged
+                } else {
+                    TranscriptMouseOutcome::Ignored
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if self.selection.dragging
+                    && let Some(point) = self.selection_point_from_position(mouse.column, mouse.row)
+                {
+                    self.selection.head = Some(point);
+                    TranscriptMouseOutcome::SelectionChanged
+                } else {
+                    TranscriptMouseOutcome::Ignored
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.selection.dragging => {
+                self.selection.dragging = false;
+                TranscriptMouseOutcome::SelectionCompleted(self.selection_to_text())
+            }
+            _ => TranscriptMouseOutcome::Ignored,
+        }
+    }
+
     pub(crate) fn apply_scroll(&mut self, command: TranscriptScroll) -> bool {
         let old = self.scroll_offset;
+        let old_stick_to_bottom = self.stick_to_bottom;
+        let old_user_scrolled_during_stream = self.user_scrolled_during_stream;
+        let was_at_bottom = self.is_scrolled_to_bottom();
         match command {
             TranscriptScroll::Up => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                self.update_after_upward_scroll(old, was_at_bottom);
             }
             TranscriptScroll::Down => {
+                self.stick_to_bottom = false;
+                self.user_scrolled_during_stream = false;
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
             }
             TranscriptScroll::PageUp => {
                 let page = self.page_height();
                 self.scroll_offset = self.scroll_offset.saturating_sub(page);
+                self.update_after_upward_scroll(old, was_at_bottom);
             }
             TranscriptScroll::PageDown => {
+                self.stick_to_bottom = false;
+                self.user_scrolled_during_stream = false;
                 let page = self.page_height();
                 self.scroll_offset = self.scroll_offset.saturating_add(page);
             }
             TranscriptScroll::HalfPageUp => {
                 let half_page = self.page_height().saturating_add(1) / 2;
                 self.scroll_offset = self.scroll_offset.saturating_sub(half_page);
+                self.update_after_upward_scroll(old, was_at_bottom);
             }
             TranscriptScroll::HalfPageDown => {
+                self.stick_to_bottom = false;
+                self.user_scrolled_during_stream = false;
                 let half_page = self.page_height().saturating_add(1) / 2;
                 self.scroll_offset = self.scroll_offset.saturating_add(half_page);
             }
             TranscriptScroll::Home => {
                 self.scroll_offset = 0;
+                self.update_after_upward_scroll(old, was_at_bottom);
             }
             TranscriptScroll::End => {
-                self.scroll_offset = usize::MAX;
+                self.stick_to_bottom = true;
+                self.user_scrolled_during_stream = false;
             }
         }
         self.scroll_offset != old
+            || self.stick_to_bottom != old_stick_to_bottom
+            || self.user_scrolled_during_stream != old_user_scrolled_during_stream
+    }
+
+    pub(crate) fn apply_scroll_delta(&mut self, delta_lines: isize) -> bool {
+        if delta_lines == 0 {
+            return false;
+        }
+        let old = self.scroll_offset;
+        let old_stick_to_bottom = self.stick_to_bottom;
+        let old_user_scrolled_during_stream = self.user_scrolled_during_stream;
+        let was_at_bottom = self.is_scrolled_to_bottom();
+        let page_height = self.page_height();
+        let max_scroll = self
+            .last_rendered_height
+            .unwrap_or_else(|| self.content_height(self.last_width.unwrap_or(1).max(1)))
+            .saturating_sub(page_height);
+
+        let current = if self.stick_to_bottom {
+            max_scroll
+        } else {
+            self.scroll_offset.min(max_scroll)
+        };
+
+        if delta_lines < 0 {
+            let before = self.scroll_offset;
+            self.scroll_offset = current.saturating_sub(delta_lines.unsigned_abs());
+            if self.scroll_offset != before {
+                self.stick_to_bottom = false;
+                self.user_scrolled_during_stream = true;
+            } else if was_at_bottom {
+                self.stick_to_bottom = true;
+                self.user_scrolled_during_stream = false;
+            }
+        } else {
+            self.scroll_offset = current.saturating_add(delta_lines as usize).min(max_scroll);
+            if self.scroll_offset >= max_scroll {
+                self.stick_to_bottom = true;
+                self.user_scrolled_during_stream = false;
+            } else {
+                self.stick_to_bottom = false;
+                self.user_scrolled_during_stream = true;
+            }
+        }
+
+        self.scroll_offset != old
+            || self.stick_to_bottom != old_stick_to_bottom
+            || self.user_scrolled_during_stream != old_user_scrolled_during_stream
     }
 
     pub(crate) fn is_scrolled_to_bottom(&self) -> bool {
-        if self.scroll_offset == usize::MAX {
+        if self.stick_to_bottom {
             return true;
+        }
+        if self.user_scrolled_during_stream {
+            return false;
         }
         let Some(height) = self.last_content_height else {
             return false;
@@ -240,6 +398,8 @@ impl TranscriptView {
     #[cfg(test)]
     pub(crate) fn set_scroll_offset(&mut self, scroll_offset: usize) {
         self.scroll_offset = scroll_offset;
+        self.stick_to_bottom = scroll_offset == usize::MAX;
+        self.user_scrolled_during_stream = scroll_offset != usize::MAX;
     }
 
     #[cfg(test)]
@@ -266,7 +426,7 @@ impl TranscriptView {
         let width = area.width.max(1);
         let follow_bottom = self.is_scrolled_to_bottom();
         if follow_bottom {
-            self.scroll_offset = usize::MAX;
+            self.stick_to_bottom = true;
         } else if self.last_width != Some(width)
             && let Some(last_width) = self.last_width
             && let Some(anchor) = self.anchor_for_offset(last_width)
@@ -279,12 +439,27 @@ impl TranscriptView {
 
         let content_height = self.content_height(width);
         self.last_rendered_height = Some(content_height);
-        if let Some(idx) = self.pending_scroll_chunk.take() {
-            self.ensure_chunk_visible(idx, area, width);
+        if self.stick_to_bottom {
+            self.scroll_offset = content_height.saturating_sub(area.height as usize);
         }
-        self.scroll_offset = self
-            .scroll_offset
-            .min(content_height.saturating_sub(area.height as usize));
+        let mut moved_for_highlight = false;
+        if let Some(idx) = self.pending_scroll_chunk.take() {
+            let before = self.scroll_offset;
+            self.ensure_chunk_visible(idx, area, width);
+            moved_for_highlight = self.scroll_offset != before;
+        }
+        let max_scroll = content_height.saturating_sub(area.height as usize);
+        self.scroll_offset = self.scroll_offset.min(max_scroll);
+        if moved_for_highlight && self.scroll_offset < max_scroll {
+            self.stick_to_bottom = false;
+            self.user_scrolled_during_stream = true;
+        } else if max_scroll > 0
+            && self.scroll_offset >= max_scroll
+            && !self.user_scrolled_during_stream
+        {
+            self.stick_to_bottom = true;
+            self.user_scrolled_during_stream = false;
+        }
 
         Clear.render(area, buf);
 
@@ -326,6 +501,152 @@ impl TranscriptView {
                     buf[(x, y)] = Cell::from(' ');
                 }
             }
+        }
+
+        self.last_area = Some(area);
+        self.last_top_line = self.scroll_offset;
+        self.last_total_lines = content_height;
+        self.last_padding_top = if bottom_align_if_short && content_height < area.height as usize {
+            area.height.saturating_sub(content_height as u16) as usize
+        } else {
+            0
+        };
+        self.apply_selection_highlight(area, buf);
+    }
+
+    fn apply_selection_highlight(&self, area: Rect, buf: &mut Buffer) {
+        let Some((start, end)) = self.selection.ordered_endpoints() else {
+            return;
+        };
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        let selection_style = transcript_selection_style();
+        for y in area.y..area.bottom() {
+            let visible_row = y.saturating_sub(area.y) as usize;
+            if visible_row < self.last_padding_top {
+                continue;
+            }
+            let line_index = self
+                .last_top_line
+                .saturating_add(visible_row.saturating_sub(self.last_padding_top));
+            if line_index < start.line_index || line_index > end.line_index {
+                continue;
+            }
+            let (col_start, col_end) = if start.line_index == end.line_index {
+                (start.column.min(end.column), end.column.max(start.column))
+            } else if line_index == start.line_index {
+                (start.column, area.width as usize)
+            } else if line_index == end.line_index {
+                (0, end.column)
+            } else {
+                (0, area.width as usize)
+            };
+            if col_start == col_end {
+                continue;
+            }
+            let x_start = area.x.saturating_add((col_start as u16).min(area.width));
+            let x_end = area.x.saturating_add((col_end as u16).min(area.width));
+            for x in x_start..x_end {
+                let style = buf[(x, y)].style().patch(selection_style);
+                buf[(x, y)].set_style(style);
+            }
+        }
+    }
+
+    fn last_area_contains(&self, column: u16, row: u16) -> bool {
+        self.last_area.is_some_and(|area| {
+            column >= area.x && column < area.right() && row >= area.y && row < area.bottom()
+        })
+    }
+
+    fn selection_point_from_position(
+        &self,
+        column: u16,
+        row: u16,
+    ) -> Option<TranscriptSelectionPoint> {
+        let area = self.last_area?;
+        if column < area.x || column >= area.right() || row < area.y || row >= area.bottom() {
+            return None;
+        }
+        if self.last_total_lines == 0 {
+            return None;
+        }
+
+        let row = row.saturating_sub(area.y) as usize;
+        if row < self.last_padding_top {
+            return None;
+        }
+        let line_index = self
+            .last_top_line
+            .saturating_add(row.saturating_sub(self.last_padding_top))
+            .min(self.last_total_lines.saturating_sub(1));
+        let column = column.saturating_sub(area.x) as usize;
+        Some(TranscriptSelectionPoint { line_index, column })
+    }
+
+    fn selection_to_text(&self) -> Option<String> {
+        let (start, end) = self.selection.ordered_endpoints()?;
+        let width = self.last_area?.width.max(1);
+        let lines = self.plain_lines_for_width(width);
+        if lines.is_empty() {
+            return None;
+        }
+
+        let end_index = end.line_index.min(lines.len().saturating_sub(1));
+        let start_index = start.line_index.min(end_index);
+        let mut selected_lines = Vec::new();
+        for (line_index, line_text) in lines
+            .iter()
+            .enumerate()
+            .take(end_index + 1)
+            .skip(start_index)
+        {
+            let line_width = UnicodeWidthStr::width(line_text.as_str());
+            let (col_start, col_end) = if start_index == end_index {
+                (start.column.min(end.column), end.column.max(start.column))
+            } else if line_index == start_index {
+                (start.column, line_width)
+            } else if line_index == end_index {
+                (0, end.column)
+            } else {
+                (0, line_width)
+            };
+            selected_lines.push(slice_display_columns(line_text, col_start, col_end));
+        }
+        Some(selected_lines.join("\n"))
+    }
+
+    fn plain_lines_for_width(&self, width: u16) -> Vec<String> {
+        let width = width.max(1);
+        let mut lines = Vec::new();
+        for renderable in &self.renderables {
+            let height = renderable.desired_height(width);
+            if height == 0 {
+                continue;
+            }
+            let area = Rect::new(0, 0, width, height);
+            let mut buf = Buffer::empty(area);
+            renderable.render(area, &mut buf);
+            for y in 0..height {
+                let mut line = String::new();
+                for x in 0..width {
+                    line.push_str(buf[(x, y)].symbol());
+                }
+                lines.push(line.trim_end().to_string());
+            }
+        }
+        lines
+    }
+
+    fn update_after_upward_scroll(&mut self, old_offset: usize, was_at_bottom: bool) {
+        if self.scroll_offset != old_offset {
+            self.stick_to_bottom = false;
+            self.user_scrolled_during_stream = true;
+        } else if was_at_bottom {
+            self.stick_to_bottom = true;
+            self.user_scrolled_during_stream = false;
         }
     }
 
@@ -537,9 +858,33 @@ fn render_offset_content(
     copy_height
 }
 
+fn slice_display_columns(text: &str, col_start: usize, col_end: usize) -> String {
+    if col_start >= col_end {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    let mut col = 0usize;
+    for ch in text.chars() {
+        let width = UnicodeWidthChar::width(ch).unwrap_or(0).max(1);
+        let next_col = col.saturating_add(width);
+        if next_col > col_start && col < col_end {
+            out.push(ch);
+        }
+        col = next_col;
+        if col >= col_end {
+            break;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::KeyModifiers;
+    use crossterm::event::MouseEvent;
+    use crossterm::event::MouseEventKind;
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
@@ -548,11 +893,23 @@ mod tests {
     struct TestCell(&'static str);
 
     #[derive(Debug)]
+    struct OwnedTestCell(String);
+
+    #[derive(Debug)]
     struct FixedHeightCell(usize);
 
     impl HistoryCell for TestCell {
         fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
             textwrap::wrap(self.0, usize::from(width.max(1)))
+                .into_iter()
+                .map(|line| line.to_string().into())
+                .collect()
+        }
+    }
+
+    impl HistoryCell for OwnedTestCell {
+        fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+            textwrap::wrap(&self.0, usize::from(width.max(1)))
                 .into_iter()
                 .map(|line| line.to_string().into())
                 .collect()
@@ -575,6 +932,22 @@ mod tests {
             .collect()
     }
 
+    fn render_test_view(view: &mut TranscriptView, width: u16, height: u16) -> Buffer {
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        view.render_inline(area, &mut buf);
+        buf
+    }
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
     #[test]
     fn resize_keeps_anchor_when_scrolled_up() {
         let mut view = TranscriptView::new(vec![Arc::new(TestCell(
@@ -589,6 +962,75 @@ mod tests {
         view.render_inline(Rect::new(0, 0, 14, 3), &mut wide);
 
         assert_eq!(view.scroll_offset, 0);
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_transcript_in_area() {
+        let mut view = TranscriptView::new(vec![Arc::new(FixedHeightCell(20))]);
+        let _ = render_test_view(&mut view, 10, 5);
+        let at_tail = view.scroll_offset();
+
+        let mut scroll = MouseScrollState::default();
+        let outcome = view.handle_mouse_event(mouse(MouseEventKind::ScrollUp, 1, 1), &mut scroll);
+
+        assert_eq!(outcome, TranscriptMouseOutcome::Scrolled);
+        assert!(view.scroll_offset() < at_tail);
+    }
+
+    #[test]
+    fn mouse_wheel_ignores_sidebar_area() {
+        let mut view = TranscriptView::new(vec![Arc::new(FixedHeightCell(20))]);
+        let _ = render_test_view(&mut view, 10, 5);
+        let before = view.scroll_offset();
+
+        let mut scroll = MouseScrollState::default();
+        let outcome = view.handle_mouse_event(mouse(MouseEventKind::ScrollUp, 12, 1), &mut scroll);
+
+        assert_eq!(outcome, TranscriptMouseOutcome::Ignored);
+        assert_eq!(view.scroll_offset(), before);
+    }
+
+    #[test]
+    fn mouse_drag_selection_copies_transcript_only_text() {
+        let mut view = TranscriptView::new(vec![Arc::new(TestCell("alpha beta gamma"))]);
+        let _ = render_test_view(&mut view, 20, 3);
+        let mut scroll = MouseScrollState::default();
+
+        assert_eq!(
+            view.handle_mouse_event(
+                mouse(
+                    MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                    0,
+                    2
+                ),
+                &mut scroll,
+            ),
+            TranscriptMouseOutcome::SelectionChanged
+        );
+        assert_eq!(
+            view.handle_mouse_event(
+                mouse(
+                    MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+                    5,
+                    2
+                ),
+                &mut scroll,
+            ),
+            TranscriptMouseOutcome::SelectionChanged
+        );
+        let outcome = view.handle_mouse_event(
+            mouse(
+                MouseEventKind::Up(crossterm::event::MouseButton::Left),
+                5,
+                2,
+            ),
+            &mut scroll,
+        );
+
+        assert_eq!(
+            outcome,
+            TranscriptMouseOutcome::SelectionCompleted(Some("alpha".to_string()))
+        );
     }
 
     #[test]
@@ -638,6 +1080,104 @@ mod tests {
         assert_eq!(
             area_lines(&buf, area),
             vec!["two  ".to_string(), "three".to_string()]
+        );
+    }
+
+    fn ineffective_upward_scroll_keeps_follow_bottom(command: TranscriptScroll) {
+        let mut view = TranscriptView::new(vec![Arc::new(TestCell("short"))]);
+        let area = Rect::new(0, 0, 12, 4);
+        let mut buf = Buffer::empty(area);
+
+        view.render_inline(area, &mut buf);
+        assert!(view.is_scrolled_to_bottom());
+
+        view.apply_scroll(command);
+        assert!(view.is_scrolled_to_bottom());
+
+        for i in 0..8 {
+            view.insert_cell(Arc::new(OwnedTestCell(format!("tail-{i}"))));
+        }
+        let mut buf = Buffer::empty(area);
+        view.render_inline(area, &mut buf);
+
+        assert!(view.is_scrolled_to_bottom());
+        assert!(
+            area_lines(&buf, area)
+                .iter()
+                .any(|line| line.contains("tail-7")),
+            "expected newest tail to remain visible after ineffective upward scroll"
+        );
+    }
+
+    #[test]
+    fn page_up_on_short_transcript_keeps_follow_bottom() {
+        ineffective_upward_scroll_keeps_follow_bottom(TranscriptScroll::PageUp);
+    }
+
+    #[test]
+    fn home_on_short_transcript_keeps_follow_bottom() {
+        ineffective_upward_scroll_keeps_follow_bottom(TranscriptScroll::Home);
+    }
+
+    #[test]
+    fn mouse_wheel_up_on_short_transcript_keeps_follow_bottom() {
+        let mut view = TranscriptView::new(vec![Arc::new(TestCell("short"))]);
+        let area = Rect::new(0, 0, 12, 4);
+        let mut buf = Buffer::empty(area);
+
+        view.render_inline(area, &mut buf);
+        assert!(view.is_scrolled_to_bottom());
+
+        let mut scroll = MouseScrollState::default();
+        view.handle_mouse_event(mouse(MouseEventKind::ScrollUp, 1, 1), &mut scroll);
+        assert!(view.is_scrolled_to_bottom());
+
+        for i in 0..8 {
+            view.insert_cell(Arc::new(OwnedTestCell(format!("tail-{i}"))));
+        }
+        let mut buf = Buffer::empty(area);
+        view.render_inline(area, &mut buf);
+
+        assert!(view.is_scrolled_to_bottom());
+        assert!(
+            area_lines(&buf, area)
+                .iter()
+                .any(|line| line.contains("tail-7")),
+            "expected newest tail to remain visible after ineffective mouse wheel scroll"
+        );
+    }
+
+    #[test]
+    fn highlight_older_chunk_clears_bottom_stickiness() {
+        let cells = (0..12)
+            .map(|i| Arc::new(OwnedTestCell(format!("line-{i:02}"))) as Arc<dyn HistoryCell>)
+            .collect();
+        let mut view = TranscriptView::new(cells);
+        let area = Rect::new(0, 0, 12, 4);
+        let mut buf = Buffer::empty(area);
+
+        view.render_inline(area, &mut buf);
+        assert!(view.is_scrolled_to_bottom());
+
+        view.set_highlight_cell(Some(0));
+        let mut buf = Buffer::empty(area);
+        view.render_inline(area, &mut buf);
+        assert!(!view.is_scrolled_to_bottom());
+        assert!(
+            area_lines(&buf, area)
+                .iter()
+                .any(|line| line.contains("line-00")),
+            "expected highlighted older chunk to be visible"
+        );
+
+        let mut buf = Buffer::empty(area);
+        view.render_inline(area, &mut buf);
+        assert!(!view.is_scrolled_to_bottom());
+        assert!(
+            area_lines(&buf, area)
+                .iter()
+                .any(|line| line.contains("line-00")),
+            "expected highlighted older chunk to remain visible after another frame"
         );
     }
 }
