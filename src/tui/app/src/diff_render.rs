@@ -32,16 +32,12 @@ const DARK_TC_ADD_LINE_BG_RGB: (u8, u8, u8) = (33, 58, 43); // #213A2B
 const DARK_TC_DEL_LINE_BG_RGB: (u8, u8, u8) = (74, 34, 29); // #4A221D
 const LIGHT_TC_ADD_LINE_BG_RGB: (u8, u8, u8) = (218, 251, 225); // #dafbe1
 const LIGHT_TC_DEL_LINE_BG_RGB: (u8, u8, u8) = (255, 235, 233); // #ffebe9
-const LIGHT_TC_ADD_NUM_BG_RGB: (u8, u8, u8) = (172, 238, 187); // #aceebb
-const LIGHT_TC_DEL_NUM_BG_RGB: (u8, u8, u8) = (255, 206, 203); // #ffcecb
 const LIGHT_TC_GUTTER_FG_RGB: (u8, u8, u8) = (31, 35, 40); // #1f2328
 
 const DARK_256_ADD_LINE_BG_IDX: u8 = 22;
 const DARK_256_DEL_LINE_BG_IDX: u8 = 52;
 const LIGHT_256_ADD_LINE_BG_IDX: u8 = 194;
 const LIGHT_256_DEL_LINE_BG_IDX: u8 = 224;
-const LIGHT_256_ADD_NUM_BG_IDX: u8 = 157;
-const LIGHT_256_DEL_NUM_BG_IDX: u8 = 217;
 const LIGHT_256_GUTTER_FG_IDX: u8 = 236;
 
 // Internal representation for diff line rendering
@@ -650,20 +646,6 @@ fn light_gutter_fg(color_level: DiffColorLevel) -> Color {
     }
 }
 
-fn light_add_num_bg(color_level: RichDiffColorLevel) -> Color {
-    match color_level {
-        RichDiffColorLevel::TrueColor => rgb_color(LIGHT_TC_ADD_NUM_BG_RGB),
-        RichDiffColorLevel::Ansi256 => indexed_color(LIGHT_256_ADD_NUM_BG_IDX),
-    }
-}
-
-fn light_del_num_bg(color_level: RichDiffColorLevel) -> Color {
-    match color_level {
-        RichDiffColorLevel::TrueColor => rgb_color(LIGHT_TC_DEL_NUM_BG_RGB),
-        RichDiffColorLevel::Ansi256 => indexed_color(LIGHT_256_DEL_NUM_BG_IDX),
-    }
-}
-
 fn style_gutter_for(kind: DiffLineType, theme: DiffTheme, color_level: DiffColorLevel) -> Style {
     match (
         theme,
@@ -678,10 +660,10 @@ fn style_gutter_for(kind: DiffLineType, theme: DiffTheme, color_level: DiffColor
         }
         (DiffTheme::Light, DiffLineType::Insert, Some(level)) => Style::default()
             .fg(light_gutter_fg(color_level))
-            .bg(light_add_num_bg(level)),
+            .bg(add_line_bg(DiffTheme::Light, level)),
         (DiffTheme::Light, DiffLineType::Delete, Some(level)) => Style::default()
             .fg(light_gutter_fg(color_level))
-            .bg(light_del_num_bg(level)),
+            .bg(del_line_bg(DiffTheme::Light, level)),
         _ => style_gutter_dim(),
     }
 }
@@ -906,7 +888,7 @@ mod tests {
             ),
             Style::default()
                 .fg(rgb_color(LIGHT_TC_GUTTER_FG_RGB))
-                .bg(rgb_color(LIGHT_TC_ADD_NUM_BG_RGB))
+                .bg(rgb_color(LIGHT_TC_ADD_LINE_BG_RGB))
         );
         assert_eq!(
             style_gutter_for(
@@ -916,7 +898,7 @@ mod tests {
             ),
             Style::default()
                 .fg(rgb_color(LIGHT_TC_GUTTER_FG_RGB))
-                .bg(rgb_color(LIGHT_TC_DEL_NUM_BG_RGB))
+                .bg(rgb_color(LIGHT_TC_DEL_LINE_BG_RGB))
         );
     }
 
