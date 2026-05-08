@@ -3640,6 +3640,13 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let selected_identity_kind = params.identity.as_ref().map(|identity| identity.kind);
+        if let Some(kind) = selected_identity_kind
+            && let Err(err) =
+                AdamStateStore::new(&self.config.adam_home).set_last_selected_identity(kind)
+        {
+            warn!("failed to persist selected identity to state.json: {err}");
+        }
 
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params

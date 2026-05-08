@@ -90,7 +90,8 @@ pub fn write_state_json(adam_home: &Path, model_ref: &str) -> std::io::Result<()
     "selected_at": null
   }},
   "last_reasoning_effort": null,
-  "last_model_verbosity": null
+  "last_model_verbosity": null,
+  "last_selected_identity": null
 }}
 "#
         ),

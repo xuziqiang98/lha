@@ -438,15 +438,6 @@
         }
       ]
     },
-    "IdentityKind": {
-      "description": "Initial identity to use when the TUI starts.",
-      "enum": [
-        "nobody",
-        "planner",
-        "programmer"
-      ],
-      "type": "string"
-    },
     "Notice": {
       "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Adam IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
       "properties": {
@@ -975,15 +966,6 @@
             "species": null
           },
           "description": "Tiny companion rendered next to the TUI composer."
-        },
-        "default_identity": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/IdentityKind"
-            }
-          ],
-          "default": null,
-          "description": "Start the TUI in the specified identity (nobody/planner/programmer.). Defaults to unset."
         },
         "notification_method": {
           "allOf": [

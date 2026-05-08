@@ -586,7 +586,8 @@ fn create_variant_switching_config_toml(
         r#"{
   "last_selected_model": { "model_ref": "i9vc.responses:gpt-5.4", "selected_at": null },
   "last_reasoning_effort": null,
-  "last_model_verbosity": null
+  "last_model_verbosity": null,
+  "last_selected_identity": null
 }
 "#,
     )?;

@@ -49,7 +49,7 @@ pub enum TrustLevel {
     Untrusted,
 }
 
-/// Initial identity to use when the TUI starts.
+/// Built-in Adam identity kind.
 #[derive(
     Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, TS, Default,
 )]

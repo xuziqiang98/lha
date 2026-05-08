@@ -1,3 +1,4 @@
+use adam_agent::config::state_json::AdamStateStore;
 use adam_agent::features::Feature;
 use adam_agent::protocol_config_types::ReasoningSummary;
 use adam_app_server_protocol::ByteRange;
@@ -403,6 +404,8 @@ async fn turn_start_accepts_identity_override_v2() -> Result<()> {
     let request = response_mock.single_request();
     let payload = request.body_json();
     assert_eq!(payload["model"].as_str(), Some("mock-model-collab"));
+    let state = AdamStateStore::new(adam_home.path()).load()?;
+    assert_eq!(state.last_selected_identity, Some(IdentityKind::Nobody));
 
     Ok(())
 }

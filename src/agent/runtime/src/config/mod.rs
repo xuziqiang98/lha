@@ -335,8 +335,8 @@ pub struct Config {
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
 
-    /// Start the TUI in the specified identity (nobody/planner/programmer.).
-    pub default_identity: Option<IdentityKind>,
+    /// Last identity selected by the user in the TUI or app-server.
+    pub last_selected_identity: Option<IdentityKind>,
 
     /// Tiny companion rendered next to the TUI composer.
     pub tui_buddy: TuiBuddy,
@@ -1852,7 +1852,7 @@ impl Config {
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
-            default_identity: cfg.tui.as_ref().and_then(|t| t.default_identity),
+            last_selected_identity: state_json.last_selected_identity,
             tui_buddy: cfg
                 .tui
                 .as_ref()
@@ -2166,9 +2166,23 @@ job_max_runtime_seconds = 0
                 notification_method: NotificationMethod::Auto,
                 animations: true,
                 show_tooltips: true,
-                default_identity: None,
                 buddy: TuiBuddy::default(),
             }
+        );
+    }
+
+    #[test]
+    fn tui_default_identity_config_is_rejected() {
+        let cfg = r#"
+[tui]
+default_identity = "planner"
+"#;
+
+        let err = toml::from_str::<ConfigToml>(cfg).expect_err("default_identity is unsupported");
+
+        assert!(
+            err.to_string().contains("unknown field `default_identity`"),
+            "unexpected error: {err}"
         );
     }
 
@@ -2538,6 +2552,23 @@ trust_level = "trusted"
         assert_eq!(config.model.as_deref(), Some("deepseek-v3"));
         assert_eq!(config.model_provider_id, "iie");
         assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
+
+        Ok(())
+    }
+
+    #[test]
+    fn selected_identity_restores_from_state() -> std::io::Result<()> {
+        let adam_home = TempDir::new()?;
+        state_json::AdamStateStore::new(adam_home.path())
+            .set_last_selected_identity(IdentityKind::Planner)?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            adam_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.last_selected_identity, Some(IdentityKind::Planner));
 
         Ok(())
     }

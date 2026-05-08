@@ -5249,7 +5249,7 @@
       "type": "object"
     },
     "IdentityKind": {
-      "description": "Initial identity to use when the TUI starts.",
+      "description": "Built-in Adam identity kind.",
       "enum": [
         "nobody",
         "planner",
@@ -10814,7 +10814,7 @@
         "type": "object"
       },
       "IdentityKind": {
-        "description": "Initial identity to use when the TUI starts.",
+        "description": "Built-in Adam identity kind.",
         "enum": [
           "nobody",
           "planner",

@@ -5431,8 +5431,9 @@ impl ChatWidget {
         if !config.features.enabled(Feature::Identities) {
             return None;
         }
-        let mut mask = match config.default_identity {
-            Some(kind) => identities::mask_for_kind(thread_manager, kind)?,
+        let mut mask = match config.last_selected_identity {
+            Some(kind) => identities::mask_for_kind(thread_manager, kind)
+                .or_else(|| identities::default_mask(thread_manager))?,
             None => identities::default_mask(thread_manager)?,
         };
         if let Some(model_override) = model_override {

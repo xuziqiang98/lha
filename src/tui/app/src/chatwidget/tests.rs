@@ -3436,18 +3436,18 @@ async fn identities_default_to_nobody_on_startup() {
 }
 
 #[tokio::test]
-async fn default_identity_plan_applies_on_startup() {
+async fn last_selected_identity_plan_applies_on_startup() {
     let adam_home = tempdir().expect("tempdir");
+    AdamStateStore::new(adam_home.path())
+        .set_last_selected_identity(IdentityKind::Planner)
+        .expect("persist identity");
     let cfg = ConfigBuilder::default()
         .adam_home(adam_home.path().to_path_buf())
         .provider_config_required(false)
-        .cli_overrides(vec![
-            ("features.identities".to_string(), TomlValue::Boolean(true)),
-            (
-                "tui.default_identity".to_string(),
-                TomlValue::String("planner".to_string()),
-            ),
-        ])
+        .cli_overrides(vec![(
+            "features.identities".to_string(),
+            TomlValue::Boolean(true),
+        )])
         .build()
         .await
         .expect("config");
@@ -3480,22 +3480,22 @@ async fn default_identity_plan_applies_on_startup() {
 }
 
 #[tokio::test]
-async fn default_identity_plan_preserves_configured_effort_on_startup() {
+async fn last_selected_identity_plan_preserves_configured_effort_on_startup() {
     let adam_home = tempdir().expect("tempdir");
     let model_ref = ModelRef::new("openai", "main", "gpt-5");
     AdamStateStore::new(adam_home.path())
         .set_last_selected_model(&model_ref, Some(ReasoningEffortConfig::High), None)
         .expect("persist model effort");
+    AdamStateStore::new(adam_home.path())
+        .set_last_selected_identity(IdentityKind::Planner)
+        .expect("persist identity");
     let cfg = ConfigBuilder::default()
         .adam_home(adam_home.path().to_path_buf())
         .provider_config_required(false)
-        .cli_overrides(vec![
-            ("features.identities".to_string(), TomlValue::Boolean(true)),
-            (
-                "tui.default_identity".to_string(),
-                TomlValue::String("planner".to_string()),
-            ),
-        ])
+        .cli_overrides(vec![(
+            "features.identities".to_string(),
+            TomlValue::Boolean(true),
+        )])
         .build()
         .await
         .expect("config");

@@ -1205,6 +1205,7 @@ mod tests {
                 },
                 "last_reasoning_effort": null,
                 "last_model_verbosity": null,
+                "last_selected_identity": null,
             }))
             .expect("serialize state fixture"),
         )

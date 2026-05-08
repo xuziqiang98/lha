@@ -1,5 +1,6 @@
 use crate::config::model_ref::ModelRef;
 use crate::path_utils::write_atomically;
+use adam_protocol::config_types::IdentityKind;
 use adam_protocol::config_types::Verbosity;
 use adam_protocol::openai_models::ReasoningEffort;
 use schemars::JsonSchema;
@@ -20,6 +21,7 @@ pub struct AdamStateJson {
     pub last_selected_model: Option<LastSelectedModel>,
     pub last_reasoning_effort: Option<ReasoningEffort>,
     pub last_model_verbosity: Option<Verbosity>,
+    pub last_selected_identity: Option<IdentityKind>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -73,6 +75,14 @@ impl AdamStateStore {
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
         write_atomically(&self.path, &format!("{contents}\n"))
     }
+
+    pub fn set_last_selected_identity(&self, identity: IdentityKind) -> io::Result<()> {
+        let mut state = self.load()?;
+        state.last_selected_identity = Some(identity);
+        let contents = serde_json::to_string_pretty(&state)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+        write_atomically(&self.path, &format!("{contents}\n"))
+    }
 }
 
 pub fn load_state(adam_home: &Path) -> io::Result<AdamStateJson> {
@@ -81,9 +91,13 @@ pub fn load_state(adam_home: &Path) -> io::Result<AdamStateJson> {
 
 #[cfg(test)]
 mod tests {
+    use super::AdamStateJson;
     use super::AdamStateStore;
+    use super::LastSelectedModel;
     use super::STATE_JSON_FILE;
     use crate::config::model_ref::ModelRef;
+    use adam_protocol::config_types::IdentityKind;
+    use adam_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
     use std::io::ErrorKind;
     use tempfile::TempDir;
@@ -92,7 +106,7 @@ mod tests {
     fn missing_state_loads_empty() {
         let temp = TempDir::new().unwrap();
         let state = AdamStateStore::new(temp.path()).load().unwrap();
-        assert_eq!(state.last_selected_model, None);
+        assert_eq!(state, AdamStateJson::default());
     }
 
     #[test]
@@ -107,6 +121,80 @@ mod tests {
         assert_eq!(
             state.last_selected_model.unwrap().model_ref,
             model_ref.to_string()
+        );
+    }
+
+    #[test]
+    fn writes_last_selected_identity() {
+        let temp = TempDir::new().unwrap();
+        let store = AdamStateStore::new(temp.path());
+
+        store
+            .set_last_selected_identity(IdentityKind::Planner)
+            .unwrap();
+
+        let state = store.load().unwrap();
+        assert_eq!(
+            state,
+            AdamStateJson {
+                last_selected_identity: Some(IdentityKind::Planner),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn identity_write_preserves_model_selection() {
+        let temp = TempDir::new().unwrap();
+        let store = AdamStateStore::new(temp.path());
+        let model_ref = ModelRef::parse("openrouter.main:anthropic/claude-sonnet-4").unwrap();
+        store
+            .set_last_selected_model(&model_ref, Some(ReasoningEffort::High), None)
+            .unwrap();
+
+        store
+            .set_last_selected_identity(IdentityKind::Programmer)
+            .unwrap();
+
+        let state = store.load().unwrap();
+        assert_eq!(
+            state,
+            AdamStateJson {
+                last_selected_model: Some(LastSelectedModel {
+                    model_ref: model_ref.to_string(),
+                    selected_at: state
+                        .last_selected_model
+                        .as_ref()
+                        .and_then(|selection| selection.selected_at.clone()),
+                }),
+                last_reasoning_effort: Some(ReasoningEffort::High),
+                last_model_verbosity: None,
+                last_selected_identity: Some(IdentityKind::Programmer),
+            }
+        );
+    }
+
+    #[test]
+    fn model_write_preserves_identity() {
+        let temp = TempDir::new().unwrap();
+        let store = AdamStateStore::new(temp.path());
+        let model_ref = ModelRef::parse("openrouter.main:anthropic/claude-sonnet-4").unwrap();
+        store
+            .set_last_selected_identity(IdentityKind::Planner)
+            .unwrap();
+
+        store
+            .set_last_selected_model(&model_ref, None, None)
+            .unwrap();
+
+        let state = store.load().unwrap();
+        assert_eq!(state.last_selected_identity, Some(IdentityKind::Planner));
+        assert_eq!(
+            state
+                .last_selected_model
+                .as_ref()
+                .map(|selection| selection.model_ref.as_str()),
+            Some(model_ref.to_string().as_str())
         );
     }
 

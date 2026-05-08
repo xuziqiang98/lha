@@ -448,6 +448,7 @@ impl fmt::Display for NotificationMethod {
 
 /// Collection of settings that are specific to the TUI.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct Tui {
     /// Enable desktop notifications from the TUI when the terminal is unfocused.
@@ -469,11 +470,6 @@ pub struct Tui {
     /// Defaults to `true`.
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
-
-    /// Start the TUI in the specified identity (nobody/planner/programmer.).
-    /// Defaults to unset.
-    #[serde(default)]
-    pub default_identity: Option<IdentityKind>,
 
     /// Tiny companion rendered next to the TUI composer.
     #[serde(default)]

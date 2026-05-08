@@ -2,6 +2,15 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
+    "IdentityKind": {
+      "description": "Built-in Adam identity kind.",
+      "enum": [
+        "nobody",
+        "planner",
+        "programmer"
+      ],
+      "type": "string"
+    },
     "LastSelectedModel": {
       "additionalProperties": false,
       "properties": {
@@ -43,6 +52,9 @@
     },
     "last_reasoning_effort": {
       "$ref": "#/definitions/ReasoningEffort"
+    },
+    "last_selected_identity": {
+      "$ref": "#/definitions/IdentityKind"
     },
     "last_selected_model": {
       "$ref": "#/definitions/LastSelectedModel"

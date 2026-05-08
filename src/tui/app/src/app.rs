@@ -2295,7 +2295,23 @@ impl App {
                 self.chat_widget.on_connectors_loaded(result);
             }
             AppEvent::UpdateIdentity(mask) => {
+                let selected_kind = mask.kind;
+                let selected_name = mask.name.clone();
                 self.chat_widget.set_identity_mask(mask);
+                if let Some(kind) = selected_kind {
+                    match AdamStateStore::new(&self.config.adam_home)
+                        .set_last_selected_identity(kind)
+                    {
+                        Ok(()) => {
+                            self.config.last_selected_identity = Some(kind);
+                        }
+                        Err(err) => {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save default identity: {err}. Switched the current session to identity `{selected_name}`."
+                            ));
+                        }
+                    }
+                }
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
