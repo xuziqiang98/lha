@@ -194,6 +194,7 @@ use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::capitalize_first;
 use crate::text_formatting::truncate_text;
 use crate::transcript_view::TranscriptMouseOutcome;
+use crate::transcript_view::TranscriptRenderMode;
 use crate::transcript_view::TranscriptScroll;
 use crate::transcript_view::TranscriptView;
 use crate::tui::FrameRequester;
@@ -2221,7 +2222,10 @@ impl ChatWidget {
                 animations_enabled: config.animations,
                 skills: None,
             }),
-            transcript: RefCell::new(TranscriptView::new(Vec::new())),
+            transcript: RefCell::new(TranscriptView::new(
+                Vec::new(),
+                TranscriptRenderMode::Display,
+            )),
             mouse_scroll: MouseScrollState::default(),
             active_cell,
             active_cell_revision: 0,
@@ -2371,7 +2375,10 @@ impl ChatWidget {
                 animations_enabled: config.animations,
                 skills: None,
             }),
-            transcript: RefCell::new(TranscriptView::new(Vec::new())),
+            transcript: RefCell::new(TranscriptView::new(
+                Vec::new(),
+                TranscriptRenderMode::Display,
+            )),
             mouse_scroll: MouseScrollState::default(),
             active_cell,
             active_cell_revision: 0,
@@ -2508,7 +2515,10 @@ impl ChatWidget {
                 animations_enabled: config.animations,
                 skills: None,
             }),
-            transcript: RefCell::new(TranscriptView::new(Vec::new())),
+            transcript: RefCell::new(TranscriptView::new(
+                Vec::new(),
+                TranscriptRenderMode::Display,
+            )),
             mouse_scroll: MouseScrollState::default(),
             active_cell: None,
             active_cell_revision: 0,
@@ -6235,6 +6245,12 @@ impl ChatWidget {
         (!lines.is_empty()).then_some(lines)
     }
 
+    pub(crate) fn active_cell_display_lines(&self, width: u16) -> Option<Vec<Line<'static>>> {
+        let cell = self.active_cell.as_ref()?;
+        let lines = cell.display_lines(width);
+        (!lines.is_empty()).then_some(lines)
+    }
+
     /// Return a reference to the widget's current config (includes any
     /// runtime overrides applied via TUI, e.g., model or approval policy).
     pub(crate) fn config_ref(&self) -> &Config {
@@ -6250,7 +6266,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn replace_transcript_cells(&mut self, cells: Vec<Arc<dyn HistoryCell>>) {
-        self.transcript = RefCell::new(TranscriptView::new(cells));
+        self.transcript = RefCell::new(TranscriptView::new(cells, TranscriptRenderMode::Display));
         self.request_redraw();
     }
 
@@ -6263,7 +6279,7 @@ impl ChatWidget {
         self.transcript.borrow_mut().sync_live_tail(
             width.max(1),
             self.active_cell_transcript_key(),
-            |tail_width| self.active_cell_transcript_lines(tail_width),
+            |tail_width| self.active_cell_display_lines(tail_width),
         );
     }
 

@@ -66,6 +66,13 @@ pub(crate) enum TranscriptScroll {
     End,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum TranscriptRenderMode {
+    #[default]
+    Display,
+    Transcript,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TranscriptMouseOutcome {
     Ignored,
@@ -76,6 +83,7 @@ pub(crate) enum TranscriptMouseOutcome {
 
 #[derive(Default)]
 pub(crate) struct TranscriptView {
+    mode: TranscriptRenderMode,
     cells: Vec<Arc<dyn HistoryCell>>,
     renderables: Vec<Box<dyn Renderable>>,
     scroll_offset: usize,
@@ -97,9 +105,10 @@ pub(crate) struct TranscriptView {
 }
 
 impl TranscriptView {
-    pub(crate) fn new(cells: Vec<Arc<dyn HistoryCell>>) -> Self {
+    pub(crate) fn new(cells: Vec<Arc<dyn HistoryCell>>, mode: TranscriptRenderMode) -> Self {
         Self {
-            renderables: Self::render_cells(&cells, None),
+            mode,
+            renderables: Self::render_cells(&cells, None, mode),
             cells,
             scroll_offset: 0,
             stick_to_bottom: true,
@@ -120,14 +129,22 @@ impl TranscriptView {
         }
     }
 
+    #[cfg(test)]
+    fn new_transcript(cells: Vec<Arc<dyn HistoryCell>>) -> Self {
+        Self::new(cells, TranscriptRenderMode::Transcript)
+    }
+
     pub(crate) fn insert_cell(&mut self, cell: Arc<dyn HistoryCell>) {
         let follow_bottom = self.is_scrolled_to_bottom();
-        let had_prior_cells = !self.cells.is_empty();
+        let spacing_width = self.last_width.unwrap_or(u16::MAX).max(1);
+        let had_prior_cells = self.has_visible_committed_cells(spacing_width);
+        let inserted_cell_visible = self.mode.is_visible(cell.as_ref(), spacing_width);
         let tail_renderable = self.take_live_tail_renderable();
         self.cells.push(cell);
-        self.renderables = Self::render_cells(&self.cells, self.highlight_cell);
+        self.renderables = Self::render_cells(&self.cells, self.highlight_cell, self.mode);
         if let Some(tail) = tail_renderable {
             let tail = if !had_prior_cells
+                && inserted_cell_visible
                 && self
                     .live_tail_key
                     .is_some_and(|key| !key.is_stream_continuation)
@@ -180,7 +197,7 @@ impl TranscriptView {
             if !lines.is_empty() {
                 self.renderables.push(Self::live_tail_renderable(
                     lines.clone(),
-                    !self.cells.is_empty(),
+                    self.has_visible_committed_cells(width),
                     key.is_stream_continuation,
                 ));
                 self.live_tail_lines = lines;
@@ -777,17 +794,23 @@ impl TranscriptView {
     fn semantic_plain_lines_for_width(&self, width: u16) -> Vec<String> {
         let width = width.max(1);
         let mut lines = Vec::new();
-        for (idx, cell) in self.cells.iter().enumerate() {
-            if idx > 0 && !cell.is_stream_continuation() {
+        let mut has_visible_prior_cell = false;
+        for cell in &self.cells {
+            let cell_lines = self.mode.lines(cell.as_ref(), width);
+            if cell_lines.is_empty() {
+                continue;
+            }
+            if has_visible_prior_cell && !cell.is_stream_continuation() {
                 lines.push(String::new());
             }
-            push_plain_lines(&mut lines, cell.transcript_lines(width));
+            push_plain_lines(&mut lines, cell_lines);
+            has_visible_prior_cell = true;
         }
 
         if let Some(key) = self.live_tail_key
             && !self.live_tail_lines.is_empty()
         {
-            if !self.cells.is_empty() && !key.is_stream_continuation {
+            if has_visible_prior_cell && !key.is_stream_continuation {
                 lines.push(String::new());
             }
             push_plain_lines(&mut lines, self.live_tail_lines.clone());
@@ -808,14 +831,24 @@ impl TranscriptView {
     fn render_cells(
         cells: &[Arc<dyn HistoryCell>],
         highlight_cell: Option<usize>,
+        mode: TranscriptRenderMode,
     ) -> Vec<Box<dyn Renderable>> {
+        let mut has_visible_prior_cell = false;
         cells
             .iter()
             .enumerate()
             .map(|(idx, cell)| {
-                let mut renderable: Box<dyn Renderable> = if cell.as_any().is::<UserHistoryCell>() {
+                let is_visible = mode.is_visible(cell.as_ref(), u16::MAX);
+                let top_gap =
+                    is_visible && has_visible_prior_cell && !cell.is_stream_continuation();
+                if is_visible {
+                    has_visible_prior_cell = true;
+                }
+                let renderable: Box<dyn Renderable> = if cell.as_any().is::<UserHistoryCell>() {
                     Box::new(CachedRenderable::new(CellRenderable {
                         cell: cell.clone(),
+                        mode,
+                        top_gap,
                         style: if highlight_cell == Some(idx) {
                             user_message_style().reversed()
                         } else {
@@ -825,13 +858,11 @@ impl TranscriptView {
                 } else {
                     Box::new(CachedRenderable::new(CellRenderable {
                         cell: cell.clone(),
+                        mode,
+                        top_gap,
                         style: Style::default(),
                     }))
                 };
-                if !cell.is_stream_continuation() && idx > 0 {
-                    renderable =
-                        Box::new(InsetRenderable::new(renderable, Insets::tlbr(1, 0, 0, 0)));
-                }
                 renderable
             })
             .collect()
@@ -839,7 +870,7 @@ impl TranscriptView {
 
     fn rebuild_renderables(&mut self) {
         let tail_renderable = self.take_live_tail_renderable();
-        self.renderables = Self::render_cells(&self.cells, self.highlight_cell);
+        self.renderables = Self::render_cells(&self.cells, self.highlight_cell, self.mode);
         if let Some(tail) = tail_renderable {
             self.renderables.push(tail);
         }
@@ -860,6 +891,12 @@ impl TranscriptView {
             renderable = Box::new(InsetRenderable::new(renderable, Insets::tlbr(1, 0, 0, 0)));
         }
         renderable
+    }
+
+    fn has_visible_committed_cells(&self, width: u16) -> bool {
+        self.cells
+            .iter()
+            .any(|cell| self.mode.is_visible(cell.as_ref(), width))
     }
 
     fn content_height(&self, width: u16) -> usize {
@@ -971,25 +1008,65 @@ impl Renderable for CachedRenderable {
 #[derive(Debug)]
 struct CellRenderable {
     cell: Arc<dyn HistoryCell>,
+    mode: TranscriptRenderMode,
+    top_gap: bool,
     style: Style,
 }
 
 impl Renderable for CellRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        if self.mode.desired_height(self.cell.as_ref(), area.width) == 0 {
+            return;
+        }
+        let area = if self.top_gap {
+            Rect::new(
+                area.x,
+                area.y.saturating_add(1),
+                area.width,
+                area.height.saturating_sub(1),
+            )
+        } else {
+            area
+        };
         let style = self
             .cell
             .block_style()
             .unwrap_or_default()
             .patch(self.style);
         Block::default().style(style).render(area, buf);
-        Paragraph::new(Text::from(self.cell.transcript_lines(area.width)))
+        Paragraph::new(Text::from(self.mode.lines(self.cell.as_ref(), area.width)))
             .style(style)
             .wrap(Wrap { trim: false })
             .render(area, buf);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        self.cell.desired_transcript_height(width)
+        let height = self.mode.desired_height(self.cell.as_ref(), width);
+        if height == 0 {
+            0
+        } else {
+            height.saturating_add(u16::from(self.top_gap))
+        }
+    }
+}
+
+impl TranscriptRenderMode {
+    fn lines(self, cell: &dyn HistoryCell, width: u16) -> Vec<Line<'static>> {
+        match self {
+            TranscriptRenderMode::Display => cell.display_lines(width),
+            TranscriptRenderMode::Transcript => cell.transcript_lines(width),
+        }
+    }
+
+    fn desired_height(self, cell: &dyn HistoryCell, width: u16) -> u16 {
+        match self {
+            TranscriptRenderMode::Display => cell.desired_height(width),
+            TranscriptRenderMode::Transcript => cell.desired_transcript_height(width),
+        }
+    }
+
+    fn is_visible(self, cell: &dyn HistoryCell, width: u16) -> bool {
+        self.desired_height(cell, width) > 0
     }
 }
 
@@ -1088,6 +1165,12 @@ mod tests {
     #[derive(Debug)]
     struct StyledBlockCell;
 
+    #[derive(Debug)]
+    struct SplitRenderCell;
+
+    #[derive(Debug)]
+    struct HiddenDisplayCell;
+
     impl HistoryCell for TestCell {
         fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
             textwrap::wrap(self.0, usize::from(width.max(1)))
@@ -1125,6 +1208,30 @@ mod tests {
 
         fn block_style(&self) -> Option<Style> {
             Some(Style::default().bg(Color::Blue))
+        }
+    }
+
+    impl HistoryCell for SplitRenderCell {
+        fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+            vec!["display".into()]
+        }
+
+        fn transcript_lines(&self, _width: u16) -> Vec<Line<'static>> {
+            vec!["transcript".into()]
+        }
+    }
+
+    impl HistoryCell for HiddenDisplayCell {
+        fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+            Vec::new()
+        }
+
+        fn desired_height(&self, _width: u16) -> u16 {
+            0
+        }
+
+        fn transcript_lines(&self, _width: u16) -> Vec<Line<'static>> {
+            vec!["hidden transcript".into()]
         }
     }
 
@@ -1173,8 +1280,135 @@ mod tests {
     }
 
     #[test]
+    fn display_mode_renders_display_lines() {
+        let mut view = TranscriptView::new(
+            vec![Arc::new(SplitRenderCell)],
+            TranscriptRenderMode::Display,
+        );
+        let buf = render_test_view(&mut view, 20, 3);
+
+        let rendered = area_lines(&buf, Rect::new(0, 0, 20, 3)).join("\n");
+        assert!(rendered.contains("display"));
+        assert!(!rendered.contains("transcript"));
+    }
+
+    #[test]
+    fn transcript_mode_renders_transcript_lines() {
+        let mut view = TranscriptView::new(
+            vec![Arc::new(SplitRenderCell)],
+            TranscriptRenderMode::Transcript,
+        );
+        let buf = render_test_view(&mut view, 20, 3);
+
+        let rendered = area_lines(&buf, Rect::new(0, 0, 20, 3)).join("\n");
+        assert!(rendered.contains("transcript"));
+        assert!(!rendered.contains("display"));
+    }
+
+    #[test]
+    fn display_mode_skips_display_empty_cells_without_extra_gap() {
+        let mut view = TranscriptView::new(
+            vec![
+                Arc::new(TestCell("first")) as Arc<dyn HistoryCell>,
+                Arc::new(HiddenDisplayCell) as Arc<dyn HistoryCell>,
+                Arc::new(TestCell("second")) as Arc<dyn HistoryCell>,
+            ],
+            TranscriptRenderMode::Display,
+        );
+        let buf = render_test_view(&mut view, 20, 5);
+
+        assert_eq!(view.desired_height(20), 3);
+        assert_eq!(
+            area_lines(&buf, Rect::new(0, 2, 20, 3)),
+            vec![
+                "first               ".to_string(),
+                "                    ".to_string(),
+                "second              ".to_string(),
+            ]
+        );
+        assert_eq!(
+            view.semantic_plain_lines_for_width(20),
+            vec!["first".to_string(), String::new(), "second".to_string(),]
+        );
+    }
+
+    #[test]
+    fn display_mode_live_tail_does_not_add_gap_after_only_hidden_cells() {
+        let mut view = TranscriptView::new(
+            vec![Arc::new(HiddenDisplayCell) as Arc<dyn HistoryCell>],
+            TranscriptRenderMode::Display,
+        );
+        view.sync_live_tail(
+            20,
+            Some(ActiveCellTranscriptKey {
+                revision: 1,
+                is_stream_continuation: false,
+                animation_tick: None,
+            }),
+            |_| Some(vec!["tail".into()]),
+        );
+        let buf = render_test_view(&mut view, 20, 2);
+
+        assert_eq!(view.desired_height(20), 1);
+        assert_eq!(
+            area_lines(&buf, Rect::new(0, 1, 20, 1)),
+            vec!["tail                ".to_string()]
+        );
+    }
+
+    #[test]
+    fn display_mode_insert_hidden_cell_before_live_tail_does_not_add_gap() {
+        let mut view = TranscriptView::new(Vec::new(), TranscriptRenderMode::Display);
+        view.sync_live_tail(
+            20,
+            Some(ActiveCellTranscriptKey {
+                revision: 1,
+                is_stream_continuation: false,
+                animation_tick: None,
+            }),
+            |_| Some(vec!["tail".into()]),
+        );
+
+        view.insert_cell(Arc::new(HiddenDisplayCell));
+        let buf = render_test_view(&mut view, 20, 1);
+
+        assert_eq!(view.desired_height(20), 1);
+        assert_eq!(
+            area_lines(&buf, Rect::new(0, 0, 20, 1)),
+            vec!["tail                ".to_string()]
+        );
+    }
+
+    #[test]
+    fn display_mode_insert_first_visible_cell_before_live_tail_adds_gap() {
+        let mut view = TranscriptView::new(Vec::new(), TranscriptRenderMode::Display);
+        view.sync_live_tail(
+            20,
+            Some(ActiveCellTranscriptKey {
+                revision: 1,
+                is_stream_continuation: false,
+                animation_tick: None,
+            }),
+            |_| Some(vec!["tail".into()]),
+        );
+
+        view.insert_cell(Arc::new(TestCell("first")));
+        let buf = render_test_view(&mut view, 20, 3);
+
+        assert_eq!(view.desired_height(20), 3);
+        assert_eq!(
+            area_lines(&buf, Rect::new(0, 0, 20, 3)),
+            vec![
+                "first               ".to_string(),
+                "                    ".to_string(),
+                "tail                ".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn resize_keeps_anchor_when_scrolled_up() {
-        let mut view = TranscriptView::new(vec![Arc::new(TestCell(
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(TestCell(
             "alpha beta gamma delta epsilon zeta",
         ))]);
         let mut buf = Buffer::empty(Rect::new(0, 0, 8, 3));
@@ -1190,7 +1424,7 @@ mod tests {
 
     #[test]
     fn mouse_wheel_scrolls_transcript_in_area() {
-        let mut view = TranscriptView::new(vec![Arc::new(FixedHeightCell(20))]);
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(FixedHeightCell(20))]);
         let _ = render_test_view(&mut view, 10, 5);
         let at_tail = view.scroll_offset();
 
@@ -1203,7 +1437,7 @@ mod tests {
 
     #[test]
     fn block_style_fills_transcript_cell_width() {
-        let mut view = TranscriptView::new(vec![Arc::new(StyledBlockCell)]);
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(StyledBlockCell)]);
         let buf = render_test_view(&mut view, 12, 3);
 
         for x in 0..12 {
@@ -1213,7 +1447,7 @@ mod tests {
 
     #[test]
     fn default_cells_do_not_gain_block_background() {
-        let mut view = TranscriptView::new(vec![Arc::new(TestCell("plain"))]);
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(TestCell("plain"))]);
         let buf = render_test_view(&mut view, 12, 3);
 
         for x in 0..12 {
@@ -1223,7 +1457,7 @@ mod tests {
 
     #[test]
     fn mouse_wheel_ignores_sidebar_area() {
-        let mut view = TranscriptView::new(vec![Arc::new(FixedHeightCell(20))]);
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(FixedHeightCell(20))]);
         let _ = render_test_view(&mut view, 10, 5);
         let before = view.scroll_offset();
 
@@ -1236,7 +1470,7 @@ mod tests {
 
     #[test]
     fn mouse_drag_selection_copies_transcript_only_text() {
-        let mut view = TranscriptView::new(vec![Arc::new(TestCell("alpha beta gamma"))]);
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(TestCell("alpha beta gamma"))]);
         let _ = render_test_view(&mut view, 20, 3);
         let mut scroll = MouseScrollState::default();
 
@@ -1280,7 +1514,7 @@ mod tests {
     #[test]
     fn selection_copy_preserves_cjk_without_inserted_cell_spaces() {
         let text = "已修复 review 指出的节奏问题";
-        let mut view = TranscriptView::new(vec![Arc::new(TestCell(text))]);
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(TestCell(text))]);
         let _ = render_test_view(&mut view, 40, 3);
 
         assert_eq!(
@@ -1291,8 +1525,9 @@ mod tests {
 
     #[test]
     fn selection_copy_slices_cjk_by_display_columns() {
-        let mut view =
-            TranscriptView::new(vec![Arc::new(TestCell("已修复 review 指出的节奏问题"))]);
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(TestCell(
+            "已修复 review 指出的节奏问题",
+        ))]);
         let _ = render_test_view(&mut view, 40, 3);
 
         assert_eq!(
@@ -1303,7 +1538,7 @@ mod tests {
 
     #[test]
     fn selection_copy_cross_line_cjk_ascii_starts_at_selected_column() {
-        let mut view = TranscriptView::new(vec![Arc::new(MultiLineTestCell(vec![
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(MultiLineTestCell(vec![
             "rollback 后 额外 schedule_frame()，",
             "只会在",
             "autoscroll",
@@ -1318,7 +1553,7 @@ mod tests {
 
     #[test]
     fn selection_copy_does_not_wrap_width_agnostic_long_lines() {
-        let mut view = TranscriptView::new(vec![Arc::new(MultiLineTestCell(vec![
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(MultiLineTestCell(vec![
             "alpha beta gamma delta epsilon",
         ]))]);
         let _ = render_test_view(&mut view, 10, 3);
@@ -1331,7 +1566,7 @@ mod tests {
 
     #[test]
     fn selection_copy_preserves_blank_line_between_cells() {
-        let mut view = TranscriptView::new(vec![
+        let mut view = TranscriptView::new_transcript(vec![
             Arc::new(TestCell("first")) as Arc<dyn HistoryCell>,
             Arc::new(TestCell("second")) as Arc<dyn HistoryCell>,
         ]);
@@ -1345,7 +1580,7 @@ mod tests {
 
     #[test]
     fn drag_below_view_starts_autoscroll() {
-        let mut view = TranscriptView::new(vec![Arc::new(FixedHeightCell(20))]);
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(FixedHeightCell(20))]);
         let _ = render_test_view(&mut view, 10, 5);
         view.apply_scroll(TranscriptScroll::Home);
         let _ = render_test_view(&mut view, 10, 5);
@@ -1380,7 +1615,7 @@ mod tests {
     #[test]
     fn advance_drag_autoscroll_scrolls_and_extends_selection() {
         let area = Rect::new(0, 0, 10, 5);
-        let mut view = TranscriptView::new(vec![Arc::new(FixedHeightCell(20))]);
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(FixedHeightCell(20))]);
         view.render_inline(area, &mut Buffer::empty(area));
         view.apply_scroll(TranscriptScroll::Home);
         view.render_inline(area, &mut Buffer::empty(area));
@@ -1413,7 +1648,7 @@ mod tests {
 
     #[test]
     fn mouse_up_stops_drag_autoscroll() {
-        let mut view = TranscriptView::new(vec![Arc::new(FixedHeightCell(20))]);
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(FixedHeightCell(20))]);
         let _ = render_test_view(&mut view, 10, 5);
         view.apply_scroll(TranscriptScroll::Home);
         let _ = render_test_view(&mut view, 10, 5);
@@ -1451,7 +1686,7 @@ mod tests {
 
     #[test]
     fn drag_horizontal_outside_clamps_column() {
-        let mut view = TranscriptView::new(vec![Arc::new(TestCell("alpha beta gamma"))]);
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(TestCell("alpha beta gamma"))]);
         let _ = render_test_view(&mut view, 10, 3);
         let mut scroll = MouseScrollState::default();
 
@@ -1482,21 +1717,21 @@ mod tests {
         let cells: Vec<Arc<dyn HistoryCell>> = (0..(usize::from(u16::MAX) + 10))
             .map(|_| Arc::new(TestCell("x")) as Arc<dyn HistoryCell>)
             .collect();
-        let view = TranscriptView::new(cells);
+        let view = TranscriptView::new_transcript(cells);
 
         assert_eq!(view.desired_height(10), u16::MAX);
     }
 
     #[test]
     fn desired_height_returns_exact_sum_below_u16_max() {
-        let view = TranscriptView::new(vec![Arc::new(FixedHeightCell(100))]);
+        let view = TranscriptView::new_transcript(vec![Arc::new(FixedHeightCell(100))]);
 
         assert_eq!(view.desired_height(10), 100);
     }
 
     #[test]
     fn render_inline_bottom_aligns_in_nonzero_area_y() {
-        let mut view = TranscriptView::new(vec![Arc::new(TestCell("tail"))]);
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(TestCell("tail"))]);
         let area = Rect::new(0, 4, 8, 3);
         let mut buf = Buffer::empty(Rect::new(0, 0, 8, 8));
 
@@ -1514,7 +1749,8 @@ mod tests {
 
     #[test]
     fn render_inline_scrolled_rows_remain_visible_in_nonzero_area_y() {
-        let mut view = TranscriptView::new(vec![Arc::new(TestCell("one two three four"))]);
+        let mut view =
+            TranscriptView::new_transcript(vec![Arc::new(TestCell("one two three four"))]);
         let area = Rect::new(0, 4, 5, 2);
         let mut buf = Buffer::empty(Rect::new(0, 0, 5, 8));
 
@@ -1528,7 +1764,7 @@ mod tests {
     }
 
     fn ineffective_upward_scroll_keeps_follow_bottom(command: TranscriptScroll) {
-        let mut view = TranscriptView::new(vec![Arc::new(TestCell("short"))]);
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(TestCell("short"))]);
         let area = Rect::new(0, 0, 12, 4);
         let mut buf = Buffer::empty(area);
 
@@ -1565,7 +1801,7 @@ mod tests {
 
     #[test]
     fn mouse_wheel_up_on_short_transcript_keeps_follow_bottom() {
-        let mut view = TranscriptView::new(vec![Arc::new(TestCell("short"))]);
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(TestCell("short"))]);
         let area = Rect::new(0, 0, 12, 4);
         let mut buf = Buffer::empty(area);
 
@@ -1596,7 +1832,7 @@ mod tests {
         let cells = (0..12)
             .map(|i| Arc::new(OwnedTestCell(format!("line-{i:02}"))) as Arc<dyn HistoryCell>)
             .collect();
-        let mut view = TranscriptView::new(cells);
+        let mut view = TranscriptView::new_transcript(cells);
         let area = Rect::new(0, 0, 12, 4);
         let mut buf = Buffer::empty(area);
 

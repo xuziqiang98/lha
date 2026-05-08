@@ -28,6 +28,7 @@ use crate::mouse::MouseScrollState;
 use crate::mouse::ScrollDirection;
 use crate::render::renderable::Renderable;
 use crate::transcript_view::TranscriptMouseOutcome;
+use crate::transcript_view::TranscriptRenderMode;
 use crate::transcript_view::TranscriptScroll;
 use crate::transcript_view::TranscriptView;
 use crate::tui;
@@ -454,7 +455,7 @@ impl TranscriptOverlay {
     /// `sync_live_tail` during draws to reflect in-flight activity.
     pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>) -> Self {
         Self {
-            view: TranscriptView::new(transcript_cells),
+            view: TranscriptView::new(transcript_cells, TranscriptRenderMode::Transcript),
             mouse_scroll: MouseScrollState::default(),
             highlight_cell: None,
             is_done: false,

@@ -21,12 +21,15 @@ use itertools::Itertools;
 use ratatui::prelude::*;
 use ratatui::style::Modifier;
 use ratatui::style::Stylize;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Wrap;
 use textwrap::WordSplitter;
 use unicode_width::UnicodeWidthStr;
 
 pub(crate) const TOOL_CALL_MAX_LINES: usize = 5;
 const USER_SHELL_TOOL_CALL_MAX_LINES: usize = 50;
 const MAX_INTERACTION_PREVIEW_CHARS: usize = 80;
+const TRANSCRIPT_HINT: &str = "ctrl + t to view transcript";
 
 pub(crate) struct OutputLinesParams {
     pub(crate) line_limit: usize,
@@ -254,6 +257,14 @@ impl HistoryCell for ExecCell {
         }
         lines
     }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        if !self.animations_enabled() || !self.is_active() {
+            return None;
+        }
+        let start = self.active_start_time()?;
+        Some((start.elapsed().as_millis() / 50) as u64)
+    }
 }
 
 impl ExecCell {
@@ -476,15 +487,23 @@ impl ExecCell {
                     );
                 }
 
-                let trimmed_output =
-                    Self::truncate_lines_middle(&wrapped_output, display_limit, raw_output.omitted);
+                let prefixed_output = prefix_lines(
+                    wrapped_output,
+                    Span::from(layout.output_block.initial_prefix).dim(),
+                    Span::from(layout.output_block.subsequent_prefix),
+                );
+                let trimmed_output = Self::truncate_output_lines_middle(
+                    &prefixed_output,
+                    display_limit,
+                    width,
+                    raw_output.omitted,
+                    Some(Line::from(
+                        Span::from(layout.output_block.subsequent_prefix).dim(),
+                    )),
+                );
 
                 if !trimmed_output.is_empty() {
-                    lines.extend(prefix_lines(
-                        trimmed_output,
-                        Span::from(layout.output_block.initial_prefix).dim(),
-                        Span::from(layout.output_block.subsequent_prefix),
-                    ));
+                    lines.extend(trimmed_output);
                 }
             }
         }
@@ -507,53 +526,151 @@ impl ExecCell {
 
     fn truncate_lines_middle(
         lines: &[Line<'static>],
-        max: usize,
+        max_rows: usize,
+        width: u16,
         omitted_hint: Option<usize>,
+        ellipsis_prefix: Option<Line<'static>>,
     ) -> Vec<Line<'static>> {
-        if max == 0 {
+        let width = width.max(1);
+        if max_rows == 0 {
             return Vec::new();
         }
-        if lines.len() <= max {
+        let line_rows: Vec<usize> = lines
+            .iter()
+            .map(|line| Self::line_row_count(line, width))
+            .collect();
+        let total_rows: usize = line_rows.iter().sum();
+        if total_rows <= max_rows {
             return lines.to_vec();
         }
-        if max == 1 {
-            // Carry forward any previously omitted count and add any
-            // additionally hidden content lines from this truncation.
-            let base = omitted_hint.unwrap_or(0);
-            // When an existing ellipsis is present, `lines` already includes
-            // that single representation line; exclude it from the count of
-            // additionally omitted content lines.
-            let extra = lines
+
+        let estimated_omitted = omitted_hint.unwrap_or(0)
+            + lines
                 .len()
                 .saturating_sub(usize::from(omitted_hint.is_some()));
-            let omitted = base + extra;
-            return vec![Self::ellipsis_line(omitted)];
+        let ellipsis_line = Self::output_ellipsis_line_with_prefix(
+            estimated_omitted,
+            width,
+            max_rows,
+            ellipsis_prefix.as_ref(),
+        );
+        let ellipsis_rows = Self::line_row_count(&ellipsis_line, width);
+        if ellipsis_rows >= max_rows {
+            return vec![ellipsis_line];
         }
 
-        let head = (max - 1) / 2;
-        let tail = max - head - 1;
-        let mut out: Vec<Line<'static>> = Vec::new();
-
-        if head > 0 {
-            out.extend(lines[..head].iter().cloned());
+        let available_rows = max_rows - ellipsis_rows;
+        let head_budget = available_rows / 2;
+        let tail_budget = available_rows - head_budget;
+        let mut head_lines: Vec<Line<'static>> = Vec::new();
+        let mut head_rows = 0usize;
+        let mut head_end = 0usize;
+        while head_end < lines.len() {
+            let rows = line_rows[head_end];
+            if head_rows + rows > head_budget {
+                break;
+            }
+            head_rows += rows;
+            head_lines.push(lines[head_end].clone());
+            head_end += 1;
         }
 
+        let mut tail_lines_reversed: Vec<Line<'static>> = Vec::new();
+        let mut tail_rows = 0usize;
+        let mut tail_start = lines.len();
+        while tail_start > head_end {
+            let idx = tail_start - 1;
+            let rows = line_rows[idx];
+            if tail_rows + rows > tail_budget {
+                break;
+            }
+            tail_rows += rows;
+            tail_lines_reversed.push(lines[idx].clone());
+            tail_start -= 1;
+        }
+
+        let mut out = head_lines;
         let base = omitted_hint.unwrap_or(0);
         let additional = lines
             .len()
-            .saturating_sub(head + tail)
+            .saturating_sub(out.len() + tail_lines_reversed.len())
             .saturating_sub(usize::from(omitted_hint.is_some()));
-        out.push(Self::ellipsis_line(base + additional));
-
-        if tail > 0 {
-            out.extend(lines[lines.len() - tail..].iter().cloned());
-        }
+        out.push(Self::output_ellipsis_line_with_prefix(
+            base + additional,
+            width,
+            max_rows,
+            ellipsis_prefix.as_ref(),
+        ));
+        out.extend(tail_lines_reversed.into_iter().rev());
 
         out
     }
 
     fn ellipsis_line(omitted: usize) -> Line<'static> {
         Line::from(vec![format!("… +{omitted} lines").dim()])
+    }
+
+    fn truncate_output_lines_middle(
+        lines: &[Line<'static>],
+        max_rows: usize,
+        width: u16,
+        omitted_hint: Option<usize>,
+        ellipsis_prefix: Option<Line<'static>>,
+    ) -> Vec<Line<'static>> {
+        Self::truncate_lines_middle(lines, max_rows, width, omitted_hint, ellipsis_prefix)
+    }
+
+    fn line_row_count(line: &Line<'static>, width: u16) -> usize {
+        let width = width.max(1);
+        let is_whitespace_only = line
+            .spans
+            .iter()
+            .all(|span| span.content.chars().all(char::is_whitespace));
+        if is_whitespace_only {
+            line.width().div_ceil(usize::from(width)).max(1)
+        } else {
+            Paragraph::new(Text::from(vec![line.clone()]))
+                .wrap(Wrap { trim: false })
+                .line_count(width)
+                .max(1)
+        }
+    }
+
+    fn output_ellipsis_line_with_prefix(
+        omitted: usize,
+        width: u16,
+        max_rows: usize,
+        prefix: Option<&Line<'static>>,
+    ) -> Line<'static> {
+        [
+            Self::output_ellipsis_text_full(omitted),
+            Self::output_ellipsis_text_short(omitted),
+            Self::output_ellipsis_text_bare(omitted),
+        ]
+        .into_iter()
+        .map(|text| {
+            let mut line = prefix.cloned().unwrap_or_default();
+            line.push_span(text.dim());
+            line
+        })
+        .find(|line| Self::line_row_count(line, width) <= max_rows)
+        .unwrap_or_else(|| {
+            let mut line = prefix.cloned().unwrap_or_default();
+            line.push_span(Self::output_ellipsis_text_bare(omitted).dim());
+            line
+        })
+    }
+
+    fn output_ellipsis_text_full(omitted: usize) -> String {
+        format!("… +{omitted} lines ({TRANSCRIPT_HINT})")
+    }
+
+    fn output_ellipsis_text_short(omitted: usize) -> String {
+        format!("… +{omitted} lines (ctrl+t transcript)")
+    }
+
+    fn output_ellipsis_text_bare(omitted: usize) -> String {
+        format!("… +{omitted} lines")
     }
 }
 
@@ -613,6 +730,13 @@ const EXEC_DISPLAY_LAYOUT: ExecDisplayLayout = ExecDisplayLayout::new(
 mod tests {
     use super::*;
     use adam_agent::protocol::ExecCommandSource;
+    use std::time::Duration;
+
+    fn output_rows(lines: &[Line<'static>], width: u16) -> usize {
+        Paragraph::new(Text::from(lines.to_vec()))
+            .wrap(Wrap { trim: false })
+            .line_count(width)
+    }
 
     #[test]
     fn user_shell_output_is_limited_by_screen_lines() {
@@ -702,6 +826,79 @@ mod tests {
         assert!(
             output_screen_lines <= USER_SHELL_TOOL_CALL_MAX_LINES,
             "expected at most {USER_SHELL_TOOL_CALL_MAX_LINES} screen lines of user shell output, got {output_screen_lines}",
+        );
+    }
+
+    #[test]
+    fn active_exec_cell_animation_tick_changes_while_running() {
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec!["bash".into(), "-lc".into(), "sleep 1".into()],
+            parsed: Vec::new(),
+            output: None,
+            completed: false,
+            source: ExecCommandSource::Agent,
+            start_time: Some(Instant::now() - Duration::from_millis(60)),
+            duration: None,
+            interaction_input: None,
+        };
+        let cell = ExecCell::new(call, true);
+
+        let first = cell.transcript_animation_tick();
+        std::thread::sleep(Duration::from_millis(60));
+        let second = cell.transcript_animation_tick();
+
+        assert!(second.unwrap() > first.unwrap());
+    }
+
+    #[test]
+    fn completed_exec_cell_has_no_animation_tick() {
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec!["bash".into(), "-lc".into(), "true".into()],
+            parsed: Vec::new(),
+            output: Some(CommandOutput {
+                exit_code: 0,
+                aggregated_output: String::new(),
+                formatted_output: String::new(),
+            }),
+            completed: true,
+            source: ExecCommandSource::Agent,
+            start_time: None,
+            duration: Some(Duration::from_millis(1)),
+            interaction_input: None,
+        };
+        let cell = ExecCell::new(call, true);
+
+        assert_eq!(cell.transcript_animation_tick(), None);
+    }
+
+    #[test]
+    fn output_truncation_hint_respects_row_budget_on_narrow_width() {
+        let output = CommandOutput {
+            exit_code: 0,
+            aggregated_output: (1..=20).map(|n| format!("line-{n}")).join("\n"),
+            formatted_output: String::new(),
+        };
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec!["bash".into(), "-lc".into(), "seq 1 20".into()],
+            parsed: Vec::new(),
+            output: Some(output),
+            completed: true,
+            source: ExecCommandSource::Agent,
+            start_time: None,
+            duration: None,
+            interaction_input: None,
+        };
+        let cell = ExecCell::new(call, false);
+        let width = 20;
+        let lines = cell.command_display_lines(width);
+        let output_lines: Vec<Line<'static>> = lines.into_iter().skip(1).collect();
+
+        assert!(
+            output_rows(&output_lines, width) <= EXEC_DISPLAY_LAYOUT.output_max_lines,
+            "expected output rows to fit display limit"
         );
     }
 }

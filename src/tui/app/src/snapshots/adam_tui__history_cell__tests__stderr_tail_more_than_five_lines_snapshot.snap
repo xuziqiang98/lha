@@ -1,10 +1,11 @@
 ---
-source: src/harness/tui/src/history_cell.rs
+source: src/tui/app/src/history_cell.rs
+assertion_line: 3385
 expression: rendered
 ---
 • Ran seq 1 10 1>&2 && false
   └ 1
     2
-    … +6 lines
+    … +6 lines (ctrl + t to view transcript)
     9
     10

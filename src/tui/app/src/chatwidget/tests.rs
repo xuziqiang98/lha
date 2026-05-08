@@ -12,6 +12,7 @@ use crate::bottom_pane::LocalImageAttachment;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
+use crate::transcript_view::TranscriptRenderMode;
 use crate::transcript_view::TranscriptView;
 use crate::tui::FrameRequester;
 use adam_agent::AuthManager;
@@ -328,7 +329,10 @@ async fn desired_height_includes_live_tail_before_render() {
     chat.active_cell = Some(Box::new(PlainHistoryCell::new(vec![
         "this live tail should wrap across several lines before render".into(),
     ])));
-    chat.transcript = RefCell::new(TranscriptView::new(Vec::new()));
+    chat.transcript = RefCell::new(TranscriptView::new(
+        Vec::new(),
+        TranscriptRenderMode::Display,
+    ));
 
     let width = 12;
     let bottom_height = chat.bottom_pane.desired_height(width);
@@ -341,11 +345,7 @@ async fn desired_height_includes_live_tail_before_render() {
 struct WidthSensitiveTranscriptCell;
 
 impl HistoryCell for WidthSensitiveTranscriptCell {
-    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        vec!["live tail".into()]
-    }
-
-    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         if width < 20 {
             vec![
                 "narrow one".into(),
@@ -356,6 +356,35 @@ impl HistoryCell for WidthSensitiveTranscriptCell {
             vec!["wide".into()]
         }
     }
+
+    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if width < 20 {
+            vec!["transcript narrow".into()]
+        } else {
+            vec!["transcript wide".into()]
+        }
+    }
+}
+
+#[derive(Debug)]
+struct SplitActiveCell;
+
+impl HistoryCell for SplitActiveCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if width < 20 {
+            vec![
+                "narrow one".into(),
+                "narrow two".into(),
+                "narrow three".into(),
+            ]
+        } else {
+            vec!["wide".into()]
+        }
+    }
+
+    fn transcript_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        vec!["transcript".into()]
+    }
 }
 
 #[derive(Debug)]
@@ -364,6 +393,10 @@ struct MaxHeightTranscriptCell;
 impl HistoryCell for MaxHeightTranscriptCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         vec!["transcript".into()]
+    }
+
+    fn desired_height(&self, _width: u16) -> u16 {
+        u16::MAX
     }
 
     fn transcript_lines(&self, _width: u16) -> Vec<Line<'static>> {
@@ -391,7 +424,10 @@ async fn desired_height_rewraps_live_tail_on_width_change_before_render() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.active_cell = Some(Box::new(WidthSensitiveTranscriptCell));
-    chat.transcript = RefCell::new(TranscriptView::new(Vec::new()));
+    chat.transcript = RefCell::new(TranscriptView::new(
+        Vec::new(),
+        TranscriptRenderMode::Display,
+    ));
 
     let wide_height = chat.desired_height(40);
     let narrow_height = chat.desired_height(12);
@@ -400,10 +436,46 @@ async fn desired_height_rewraps_live_tail_on_width_change_before_render() {
 }
 
 #[tokio::test]
+async fn active_cell_display_lines_are_separate_from_transcript_lines() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.active_cell = Some(Box::new(SplitActiveCell));
+
+    assert_eq!(
+        chat.active_cell_display_lines(80),
+        Some(vec![Line::from("wide")])
+    );
+    assert_eq!(
+        chat.active_cell_transcript_lines(80),
+        Some(vec![Line::from("transcript")])
+    );
+}
+
+#[tokio::test]
+async fn active_exec_transcript_key_changes_for_spinner_tick() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let event = begin_exec_with_source(&mut chat, "call-id", "sleep 1", ExecCommandSource::Agent);
+    chat.handle_exec_begin_now(event);
+
+    let first = chat
+        .active_cell_transcript_key()
+        .expect("expected active exec key");
+    tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+    let second = chat
+        .active_cell_transcript_key()
+        .expect("expected active exec key");
+
+    assert_ne!(first.animation_tick, second.animation_tick);
+}
+
+#[tokio::test]
 async fn desired_height_saturates_after_adding_bottom_pane_rows() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    chat.transcript = RefCell::new(TranscriptView::new(vec![Arc::new(MaxHeightTranscriptCell)]));
+    chat.transcript = RefCell::new(TranscriptView::new(
+        vec![Arc::new(MaxHeightTranscriptCell)],
+        TranscriptRenderMode::Display,
+    ));
 
     let width = 80;
     let bottom_height = chat.bottom_pane.desired_height(width);
@@ -1729,7 +1801,10 @@ async fn make_chatwidget_manual_inner(
         app_event_tx,
         codex_op_tx: op_tx,
         bottom_pane: bottom,
-        transcript: std::cell::RefCell::new(TranscriptView::new(Vec::new())),
+        transcript: std::cell::RefCell::new(TranscriptView::new(
+            Vec::new(),
+            TranscriptRenderMode::Display,
+        )),
         mouse_scroll: crate::mouse::MouseScrollState::default(),
         active_cell: None,
         active_cell_revision: 0,
@@ -1849,7 +1924,10 @@ async fn make_chatwidget_manual_with_frame_requester(
         app_event_tx,
         codex_op_tx: op_tx,
         bottom_pane: bottom,
-        transcript: std::cell::RefCell::new(TranscriptView::new(Vec::new())),
+        transcript: std::cell::RefCell::new(TranscriptView::new(
+            Vec::new(),
+            TranscriptRenderMode::Display,
+        )),
         mouse_scroll: crate::mouse::MouseScrollState::default(),
         active_cell: None,
         active_cell_revision: 0,
