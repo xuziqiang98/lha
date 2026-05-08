@@ -466,14 +466,14 @@ async fn active_cell_live_tail_respects_render_mode() {
 }
 
 #[tokio::test]
-async fn assistant_delta_renders_as_live_tail_before_newline_or_commit_tick() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+async fn assistant_delta_without_newline_stays_hidden_until_finalize() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.on_agent_message_delta("partial answer".to_string());
 
-    assert_eq!(
-        live_tail_text(chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)),
-        "• partial answer\n"
+    assert!(
+        chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+            .is_none()
     );
 
     let mut buf = Buffer::empty(Rect::new(0, 0, 80, 10));
@@ -486,25 +486,47 @@ async fn assistant_delta_renders_as_live_tail_before_newline_or_commit_tick() {
         })
         .collect::<Vec<_>>()
         .join("\n");
+    assert!(!rendered.contains("partial answer"));
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.flush_answer_stream_with_separator();
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
     assert!(rendered.contains("partial answer"));
 }
 
 #[tokio::test]
-async fn assistant_live_tail_shrinks_after_commit_tick() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+async fn assistant_stream_exposes_only_completed_lines_before_finalize() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.on_agent_message_delta("one\ntwo\npartial".to_string());
-    assert_eq!(
-        live_tail_text(chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)),
-        "• one\n  two\n  partial\n"
+    assert!(
+        chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+            .is_none()
     );
-
     chat.on_commit_tick();
+    let before_finalize = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(before_finalize.contains("one"));
+    assert!(before_finalize.contains("two"));
+    assert!(!before_finalize.contains("partial"));
 
-    assert_eq!(
-        live_tail_text(chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)),
-        "  two\n  partial\n"
+    assert!(
+        chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+            .is_none()
     );
+
+    chat.flush_answer_stream_with_separator();
+    let after_finalize = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(after_finalize.contains("partial"));
 }
 
 #[tokio::test]

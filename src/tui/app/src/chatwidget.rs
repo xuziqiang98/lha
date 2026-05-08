@@ -964,6 +964,7 @@ impl ChatWidget {
             && controller.push(&delta)
         {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
+            self.on_commit_tick();
         }
         self.request_redraw();
     }
@@ -1909,6 +1910,7 @@ impl ChatWidget {
             && controller.push(&delta)
         {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
+            self.on_commit_tick();
         }
         self.request_redraw();
     }
@@ -6260,28 +6262,6 @@ impl ChatWidget {
                 key.animation_tick,
             ));
         }
-        if let Some(controller) = self.stream_controller.as_ref()
-            && let Some(cell) = controller.live_tail_cell()
-        {
-            return Some(TranscriptLiveTailKey::new(
-                TranscriptLiveTailSource::AssistantStream,
-                0,
-                controller.live_tail_revision(),
-                cell.is_stream_continuation(),
-                None,
-            ));
-        }
-        if let Some(controller) = self.plan_stream_controller.as_ref()
-            && let Some(cell) = controller.live_tail_cell()
-        {
-            return Some(TranscriptLiveTailKey::new(
-                TranscriptLiveTailSource::PlanStream,
-                0,
-                controller.live_tail_revision(),
-                cell.is_stream_continuation(),
-                None,
-            ));
-        }
         None
     }
 
@@ -6299,16 +6279,6 @@ impl ChatWidget {
                     TranscriptView::live_tail_from_lines(cell.transcript_lines(width))
                 }
             };
-        }
-        if let Some(controller) = self.stream_controller.as_ref()
-            && let Some(cell) = controller.live_tail_cell()
-        {
-            return TranscriptView::live_tail_from_cell(Arc::new(cell), mode, width);
-        }
-        if let Some(controller) = self.plan_stream_controller.as_ref()
-            && let Some(cell) = controller.live_tail_cell()
-        {
-            return TranscriptView::live_tail_from_cell(Arc::new(cell), mode, width);
         }
         None
     }

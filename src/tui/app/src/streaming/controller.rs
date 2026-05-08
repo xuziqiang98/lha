@@ -68,16 +68,6 @@ impl StreamController {
         (self.emit(step), self.state.is_idle())
     }
 
-    pub(crate) fn live_tail_revision(&self) -> u64 {
-        self.state.revision()
-    }
-
-    pub(crate) fn live_tail_cell(&self) -> Option<history_cell::AgentMessageCell> {
-        let lines = self.state.live_tail_lines();
-        (!lines.is_empty())
-            .then(|| history_cell::AgentMessageCell::new(lines, !self.header_emitted))
-    }
-
     fn emit(&mut self, lines: Vec<Line<'static>>) -> Option<Box<dyn HistoryCell>> {
         if lines.is_empty() {
             return None;
@@ -146,18 +136,6 @@ impl PlanStreamController {
         (self.emit(step, false), self.state.is_idle())
     }
 
-    pub(crate) fn live_tail_revision(&self) -> u64 {
-        self.state.revision()
-    }
-
-    pub(crate) fn live_tail_cell(&self) -> Option<history_cell::ProposedPlanStreamCell> {
-        let lines = self.state.live_tail_lines();
-        if lines.is_empty() {
-            return None;
-        }
-        Some(self.build_cell(lines, false))
-    }
-
     fn emit(
         &mut self,
         lines: Vec<Line<'static>>,
@@ -223,66 +201,91 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn assistant_live_tail_shows_queued_and_partial_lines() {
+    async fn assistant_commits_only_complete_lines_until_finalize() {
         let mut ctrl = StreamController::new(None);
 
-        assert!(ctrl.push("one\ntwo\npartial"));
-        let tail = ctrl
-            .live_tail_cell()
-            .expect("expected assistant live tail")
-            .display_lines(u16::MAX);
+        assert!(!ctrl.push("partial"));
+        let (cell, idle) = ctrl.on_commit_tick();
+        assert!(cell.is_none());
+        assert!(idle);
+
+        let cell = ctrl
+            .finalize()
+            .expect("expected final partial assistant line");
         assert_eq!(
-            lines_to_plain_strings(&tail),
-            vec![
-                "• one".to_string(),
-                "  two".to_string(),
-                "  partial".to_string()
-            ]
+            lines_to_plain_strings(&cell.display_lines(u16::MAX)),
+            vec!["• partial".to_string()]
         );
 
+        let mut ctrl = StreamController::new(None);
+        assert!(ctrl.push("one\ntwo\npartial"));
+
         let (cell, idle) = ctrl.on_commit_tick();
-        assert!(cell.is_some());
-        assert!(!idle);
-        let tail = ctrl
-            .live_tail_cell()
-            .expect("expected remaining assistant live tail")
-            .display_lines(u16::MAX);
+        let cell = cell.expect("expected completed assistant line");
         assert_eq!(
-            lines_to_plain_strings(&tail),
-            vec!["  two".to_string(), "  partial".to_string()]
+            lines_to_plain_strings(&cell.display_lines(u16::MAX)),
+            vec!["• one".to_string()]
+        );
+        assert!(!idle);
+
+        let (cell, idle) = ctrl.on_commit_tick();
+        let cell = cell.expect("expected second completed assistant line");
+        assert_eq!(
+            lines_to_plain_strings(&cell.display_lines(u16::MAX)),
+            vec!["  two".to_string()]
+        );
+        assert!(idle);
+
+        let cell = ctrl
+            .finalize()
+            .expect("expected final partial assistant line");
+        assert_eq!(
+            lines_to_plain_strings(&cell.display_lines(u16::MAX)),
+            vec!["  partial".to_string()]
         );
     }
 
     #[tokio::test]
-    async fn plan_live_tail_shows_header_until_first_commit() {
+    async fn plan_commits_only_complete_lines_until_finalize() {
         let mut ctrl = PlanStreamController::new(None);
 
-        assert!(ctrl.push("- step\npartial"));
-        let tail = ctrl
-            .live_tail_cell()
-            .expect("expected plan live tail")
-            .display_lines(u16::MAX);
+        assert!(!ctrl.push("partial"));
+        let (cell, idle) = ctrl.on_commit_tick();
+        assert!(cell.is_none());
+        assert!(idle);
+
+        let cell = ctrl.finalize().expect("expected final partial plan line");
         assert_eq!(
-            lines_to_plain_strings(&tail),
+            lines_to_plain_strings(&cell.display_lines(u16::MAX)),
+            vec![
+                "• Proposed Plan".to_string(),
+                " ".to_string(),
+                "   ".to_string(),
+                "  partial".to_string(),
+                "   ".to_string(),
+            ]
+        );
+
+        let mut ctrl = PlanStreamController::new(None);
+        assert!(ctrl.push("- step\npartial"));
+
+        let (cell, idle) = ctrl.on_commit_tick();
+        let cell = cell.expect("expected completed plan line");
+        assert_eq!(
+            lines_to_plain_strings(&cell.display_lines(u16::MAX)),
             vec![
                 "• Proposed Plan".to_string(),
                 " ".to_string(),
                 "   ".to_string(),
                 "  - step".to_string(),
-                "    partial".to_string()
             ]
         );
-
-        let (cell, idle) = ctrl.on_commit_tick();
-        assert!(cell.is_some());
         assert!(idle);
-        let tail = ctrl
-            .live_tail_cell()
-            .expect("expected remaining plan live tail")
-            .display_lines(u16::MAX);
+
+        let cell = ctrl.finalize().expect("expected final partial plan line");
         assert_eq!(
-            lines_to_plain_strings(&tail),
-            vec!["    partial".to_string()]
+            lines_to_plain_strings(&cell.display_lines(u16::MAX)),
+            vec!["    partial".to_string(), "   ".to_string()]
         );
     }
 

@@ -36,8 +36,6 @@ const DRAG_AUTOSCROLL_EDGE_ROWS: u16 = 1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TranscriptLiveTailSource {
     ActiveCell,
-    AssistantStream,
-    PlanStream,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -944,25 +942,6 @@ impl TranscriptView {
         let renderable = Box::new(CachedRenderable::new(Paragraph::new(Text::from(
             lines.clone(),
         ))));
-        Some(TranscriptLiveTail { lines, renderable })
-    }
-
-    pub(crate) fn live_tail_from_cell(
-        cell: Arc<dyn HistoryCell>,
-        mode: TranscriptRenderMode,
-        width: u16,
-    ) -> Option<TranscriptLiveTail> {
-        let lines = mode.lines(cell.as_ref(), width);
-        if lines.is_empty() {
-            return None;
-        }
-        let renderable = Box::new(CachedRenderable::new(CellRenderable {
-            cell,
-            mode,
-            top_gap: false,
-            style: Style::default(),
-            cache: std::cell::RefCell::new(None),
-        }));
         Some(TranscriptLiveTail { lines, renderable })
     }
 
