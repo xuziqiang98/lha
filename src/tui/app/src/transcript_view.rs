@@ -10,6 +10,7 @@ use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
 use crate::style::transcript_selection_style;
 use crate::style::user_message_style;
+use crate::terminal_palette;
 use crate::transcript_selection::TranscriptSelection;
 use crate::transcript_selection::TranscriptSelectionPoint;
 use crossterm::event::MouseButton;
@@ -854,6 +855,7 @@ impl TranscriptView {
                         } else {
                             user_message_style()
                         },
+                        cache: std::cell::RefCell::new(None),
                     }))
                 } else {
                     Box::new(CachedRenderable::new(CellRenderable {
@@ -861,6 +863,7 @@ impl TranscriptView {
                         mode,
                         top_gap,
                         style: Style::default(),
+                        cache: std::cell::RefCell::new(None),
                     }))
                 };
                 renderable
@@ -1011,11 +1014,49 @@ struct CellRenderable {
     mode: TranscriptRenderMode,
     top_gap: bool,
     style: Style,
+    cache: std::cell::RefCell<Option<CellRenderCache>>,
+}
+
+#[derive(Clone, Debug)]
+struct CellRenderState {
+    lines: Vec<Line<'static>>,
+    height: u16,
+}
+
+#[derive(Clone, Debug)]
+struct CellRenderCache {
+    width: u16,
+    palette_version: u64,
+    state: CellRenderState,
+}
+
+impl CellRenderable {
+    fn render_state(&self, width: u16) -> CellRenderState {
+        let palette_version = terminal_palette::palette_version();
+        if let Some(cache) = self.cache.borrow().as_ref()
+            && cache.width == width
+            && cache.palette_version == palette_version
+        {
+            return cache.state.clone();
+        }
+
+        let lines = self.mode.lines(self.cell.as_ref(), width);
+        let height = rendered_lines_height(&lines, width)
+            .max(self.mode.desired_height(self.cell.as_ref(), width));
+        let state = CellRenderState { lines, height };
+        self.cache.replace(Some(CellRenderCache {
+            width,
+            palette_version,
+            state: state.clone(),
+        }));
+        state
+    }
 }
 
 impl Renderable for CellRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        if self.mode.desired_height(self.cell.as_ref(), area.width) == 0 {
+        let state = self.render_state(area.width);
+        if state.height == 0 {
             return;
         }
         let area = if self.top_gap {
@@ -1034,14 +1075,14 @@ impl Renderable for CellRenderable {
             .unwrap_or_default()
             .patch(self.style);
         Block::default().style(style).render(area, buf);
-        Paragraph::new(Text::from(self.mode.lines(self.cell.as_ref(), area.width)))
+        Paragraph::new(Text::from(state.lines))
             .style(style)
             .wrap(Wrap { trim: false })
             .render(area, buf);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        let height = self.mode.desired_height(self.cell.as_ref(), width);
+        let height = self.render_state(width).height;
         if height == 0 {
             0
         } else {
@@ -1068,6 +1109,26 @@ impl TranscriptRenderMode {
     fn is_visible(self, cell: &dyn HistoryCell, width: u16) -> bool {
         self.desired_height(cell, width) > 0
     }
+}
+
+fn rendered_lines_height(lines: &[Line<'static>], width: u16) -> u16 {
+    if lines.is_empty() {
+        return 0;
+    }
+    if let [line] = lines
+        && line
+            .spans
+            .iter()
+            .all(|span| span.content.chars().all(char::is_whitespace))
+    {
+        return 1;
+    }
+
+    Paragraph::new(Text::from(lines.to_vec()))
+        .wrap(Wrap { trim: false })
+        .line_count(width)
+        .try_into()
+        .unwrap_or(u16::MAX)
 }
 
 fn render_offset_content(
@@ -1171,6 +1232,11 @@ mod tests {
     #[derive(Debug)]
     struct HiddenDisplayCell;
 
+    #[derive(Debug)]
+    struct CountingDisplayCell {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
     impl HistoryCell for TestCell {
         fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
             textwrap::wrap(self.0, usize::from(width.max(1)))
@@ -1235,6 +1301,18 @@ mod tests {
         }
     }
 
+    impl HistoryCell for CountingDisplayCell {
+        fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            vec!["counted".into()]
+        }
+
+        fn desired_height(&self, _width: u16) -> u16 {
+            1
+        }
+    }
+
     fn area_lines(buf: &Buffer, area: Rect) -> Vec<String> {
         (area.y..area.bottom())
             .map(|y| {
@@ -1277,6 +1355,57 @@ mod tests {
             column: end_column,
         });
         view.selection_to_text()
+    }
+
+    fn counting_display_view() -> (TranscriptView, Arc<std::sync::atomic::AtomicUsize>) {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let view = TranscriptView::new(
+            vec![Arc::new(CountingDisplayCell {
+                calls: calls.clone(),
+            })],
+            TranscriptRenderMode::Display,
+        );
+        calls.store(0, std::sync::atomic::Ordering::Relaxed);
+        (view, calls)
+    }
+
+    #[test]
+    fn render_reuses_display_lines_within_frame() {
+        let (mut view, calls) = counting_display_view();
+
+        let _ = render_test_view(&mut view, 20, 3);
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn render_reuses_display_lines_across_frames() {
+        let (mut view, calls) = counting_display_view();
+
+        let _ = render_test_view(&mut view, 20, 3);
+        let _ = render_test_view(&mut view, 20, 3);
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn render_cache_invalidates_on_width_change() {
+        let (mut view, calls) = counting_display_view();
+
+        let _ = render_test_view(&mut view, 20, 3);
+        let _ = render_test_view(&mut view, 30, 3);
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn desired_height_and_render_share_cached_lines() {
+        let (mut view, calls) = counting_display_view();
+
+        assert_eq!(view.desired_height(20), 1);
+        let _ = render_test_view(&mut view, 20, 3);
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
     #[test]

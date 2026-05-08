@@ -305,6 +305,13 @@ pub(crate) struct ReasoningSummaryCell {
     _header: String,
     content: String,
     transcript_only: bool,
+    lines_cache: std::sync::Mutex<Option<ReasoningSummaryLinesCache>>,
+}
+
+#[derive(Debug, Clone)]
+struct ReasoningSummaryLinesCache {
+    width: u16,
+    lines: Vec<Line<'static>>,
 }
 
 impl ReasoningSummaryCell {
@@ -313,10 +320,18 @@ impl ReasoningSummaryCell {
             _header: header,
             content,
             transcript_only,
+            lines_cache: std::sync::Mutex::new(None),
         }
     }
 
     fn lines(&self, width: u16) -> Vec<Line<'static>> {
+        if let Ok(cache) = self.lines_cache.lock()
+            && let Some(cache) = cache.as_ref()
+            && cache.width == width
+        {
+            return cache.lines.clone();
+        }
+
         let mut lines: Vec<Line<'static>> = Vec::new();
         append_markdown(
             &self.content,
@@ -336,12 +351,19 @@ impl ReasoningSummaryCell {
             })
             .collect::<Vec<_>>();
 
-        word_wrap_lines(
+        let wrapped = word_wrap_lines(
             &summary_lines,
             RtOptions::new(width as usize)
                 .initial_indent("• ".dim().into())
                 .subsequent_indent("  ".into()),
-        )
+        );
+        if let Ok(mut cache) = self.lines_cache.lock() {
+            *cache = Some(ReasoningSummaryLinesCache {
+                width,
+                lines: wrapped.clone(),
+            });
+        }
+        wrapped
     }
 }
 
@@ -1474,6 +1496,13 @@ impl HistoryCell for WebSearchCell {
         };
         PrefixedWrappedHistoryCell::new(text, vec![bullet, " ".into()], "  ").display_lines(width)
     }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        if !self.animations_enabled || self.completed {
+            return None;
+        }
+        Some((self.start_time.elapsed().as_millis() / 50) as u64)
+    }
 }
 
 pub(crate) fn new_active_web_search_call(
@@ -2039,6 +2068,10 @@ impl HistoryCell for ProposedPlanStreamCell {
         self.lines.clone()
     }
 
+    fn block_style(&self) -> Option<Style> {
+        Some(proposed_plan_style())
+    }
+
     fn is_stream_continuation(&self) -> bool {
         self.is_stream_continuation
     }
@@ -2369,6 +2402,35 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines(u16::MAX))
+    }
+
+    fn assert_cell_background_fills_text_row(cell: Box<dyn HistoryCell>, width: u16, text: &str) {
+        let Some(style) = cell.block_style() else {
+            panic!("expected proposed plan block style");
+        };
+        let Some(bg) = style.bg else {
+            return;
+        };
+        let height = cell.desired_height(width);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        cell.render(buf.area, &mut buf);
+
+        let row = (0..height)
+            .find(|y| {
+                (0..width)
+                    .map(|x| buf[(x, *y)].symbol())
+                    .collect::<String>()
+                    .contains(text)
+            })
+            .expect("expected rendered proposed plan row");
+
+        for x in 0..width {
+            assert_eq!(
+                buf[(x, row)].style().bg,
+                Some(bg),
+                "expected proposed plan background at x={x}, y={row}"
+            );
+        }
     }
 
     #[test]
@@ -2780,6 +2842,34 @@ mod tests {
         let rendered = render_lines(&cell.transcript_lines(64)).join("\n");
 
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn active_web_search_exposes_animation_tick() {
+        let cell = new_active_web_search_call("call-1".to_string(), "rust tui".to_string(), true);
+
+        assert!(cell.transcript_animation_tick().is_some());
+    }
+
+    #[test]
+    fn web_search_without_animations_has_no_animation_tick() {
+        let cell = new_active_web_search_call("call-1".to_string(), "rust tui".to_string(), false);
+
+        assert_eq!(cell.transcript_animation_tick(), None);
+    }
+
+    #[test]
+    fn completed_web_search_has_no_animation_tick() {
+        let cell = new_web_search_call(
+            "call-1".to_string(),
+            "rust tui".to_string(),
+            WebSearchAction::Search {
+                query: Some("rust tui".to_string()),
+                queries: None,
+            },
+        );
+
+        assert_eq!(cell.transcript_animation_tick(), None);
     }
 
     #[test]
@@ -3504,6 +3594,44 @@ mod tests {
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
+
+    #[test]
+    fn proposed_plan_background_fills_rendered_rows() {
+        assert_cell_background_fills_text_row(
+            Box::new(new_proposed_plan("short plan line".to_string())),
+            40,
+            "short plan line",
+        );
+    }
+
+    #[test]
+    fn proposed_plan_stream_background_fills_rendered_rows() {
+        let cell = new_proposed_plan_stream(
+            vec![
+                vec!["• ".dim(), "Proposed Plan".bold()].into(),
+                Line::from("  short plan line").style(proposed_plan_style()),
+            ],
+            false,
+        );
+        assert!(cell.block_style().is_some());
+        assert_cell_background_fills_text_row(Box::new(cell), 40, "short plan line");
+    }
+
+    #[test]
+    fn proposed_plan_stream_reflows_background_after_resize() {
+        let lines = vec![Line::from("  short plan line").style(proposed_plan_style())];
+        assert_cell_background_fills_text_row(
+            Box::new(new_proposed_plan_stream(lines.clone(), false)),
+            20,
+            "short plan line",
+        );
+        assert_cell_background_fills_text_row(
+            Box::new(new_proposed_plan_stream(lines, false)),
+            60,
+            "short plan line",
+        );
+    }
+
     #[test]
     fn reasoning_summary_block() {
         let cell = new_reasoning_summary_block(

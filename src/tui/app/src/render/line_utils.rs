@@ -1,5 +1,7 @@
+use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use unicode_width::UnicodeWidthStr;
 
 /// Clone a borrowed ratatui `Line` into an owned `'static` line.
 pub fn line_to_static(line: &Line<'_>) -> Line<'static> {
@@ -22,6 +24,23 @@ pub fn push_owned_lines<'a>(src: &[Line<'a>], out: &mut Vec<Line<'static>>) {
     for l in src {
         out.push(line_to_static(l));
     }
+}
+
+pub fn pad_line_to_width(mut line: Line<'static>, width: usize, style: Style) -> Line<'static> {
+    if style.bg.is_none() || width == 0 {
+        return line;
+    }
+
+    let current_width: usize = line
+        .spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum();
+    let padding = width.saturating_sub(current_width);
+    if padding > 0 {
+        line.spans.push(Span::styled(" ".repeat(padding), style));
+    }
+    line
 }
 
 /// Consider a line blank if it has no spans or only spans whose contents are

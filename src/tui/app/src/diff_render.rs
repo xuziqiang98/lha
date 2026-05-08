@@ -11,11 +11,11 @@ use ratatui::widgets::Paragraph;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
-use unicode_width::UnicodeWidthStr;
 
 use crate::color::is_light;
 use crate::exec_command::relativize_to_home;
 use crate::render::Insets;
+use crate::render::line_utils::pad_line_to_width;
 use crate::render::line_utils::prefix_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::InsetRenderable;
@@ -521,23 +521,6 @@ fn push_wrapped_diff_line_with_style_context(
         }
     }
     lines
-}
-
-fn pad_line_to_width(mut line: RtLine<'static>, width: usize, style: Style) -> RtLine<'static> {
-    if style.bg.is_none() || width == 0 {
-        return line;
-    }
-
-    let current_width: usize = line
-        .spans
-        .iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-        .sum();
-    let padding = width.saturating_sub(current_width);
-    if padding > 0 {
-        line.spans.push(RtSpan::styled(" ".repeat(padding), style));
-    }
-    line
 }
 
 fn line_number_width(max_line_number: usize) -> usize {

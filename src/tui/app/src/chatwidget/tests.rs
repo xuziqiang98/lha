@@ -11,6 +11,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::UserHistoryCell;
+use crate::style::proposed_plan_style;
 use crate::test_backend::VT100Backend;
 use crate::transcript_view::TranscriptRenderMode;
 use crate::transcript_view::TranscriptView;
@@ -2332,6 +2333,45 @@ async fn plan_implementation_popup_shows_after_proposed_plan_output() {
         "expected plan popup after proposed plan output, got {popup:?}"
     );
 }
+
+#[tokio::test]
+async fn streamed_proposed_plan_background_fills_rendered_row() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+
+    chat.on_task_started();
+    chat.on_plan_delta("- Step 1\n".to_string());
+    chat.on_plan_item_completed("- Step 1\n".to_string());
+    chat.on_task_complete(None, false);
+
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+
+    let Some(plan_bg) = proposed_plan_style().bg else {
+        return;
+    };
+    let plan_row = (0..area.height)
+        .find(|y| {
+            (0..area.width)
+                .map(|x| buf[(x, *y)].symbol())
+                .collect::<String>()
+                .contains("Step 1")
+        })
+        .expect("expected rendered proposed plan row");
+
+    for x in 0..area.width {
+        assert_eq!(
+            buf[(x, plan_row)].style().bg,
+            Some(plan_bg),
+            "expected proposed plan background at x={x}, y={plan_row}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn prevent_idle_sleep_syncs_with_turn_lifecycle() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
