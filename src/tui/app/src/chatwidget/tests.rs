@@ -420,6 +420,19 @@ impl HistoryCell for TallTranscriptCell {
     }
 }
 
+#[derive(Debug)]
+struct CountingHistoryCell {
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl HistoryCell for CountingHistoryCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        vec!["counted".into()]
+    }
+}
+
 #[tokio::test]
 async fn desired_height_rewraps_live_tail_on_width_change_before_render() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -2743,6 +2756,39 @@ fn active_blob(chat: &ChatWidget) -> String {
         .expect("active cell present")
         .display_lines(80);
     lines_to_single_string(&lines)
+}
+
+#[tokio::test]
+async fn add_boxed_history_does_not_render_to_check_visibility() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    chat.add_boxed_history(Box::new(CountingHistoryCell {
+        calls: calls.clone(),
+    }));
+
+    assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn exec_events_render_while_agent_message_stream_is_active() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "msg".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "thinking without newline".into(),
+        }),
+    });
+    let begin = begin_exec(&mut chat, "call-1", "printf hello");
+
+    assert!(chat.active_cell.is_some());
+
+    output_delta(&mut chat, "call-1", "hello");
+    assert!(active_blob(&chat).contains("hello"));
+
+    end_exec(&mut chat, begin, "hello", "", 0);
+    assert!(chat.active_cell.is_none());
 }
 
 fn get_available_model(chat: &ChatWidget, model: &str) -> ModelPreset {

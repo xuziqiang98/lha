@@ -1473,7 +1473,7 @@ impl ChatWidget {
             }
         }
         let ev2 = ev.clone();
-        self.defer_or_handle(|q| q.push_exec_begin(ev), |s| s.handle_exec_begin_now(ev2));
+        self.defer_or_handle_exec(|q| q.push_exec_begin(ev), |s| s.handle_exec_begin_now(ev2));
     }
 
     fn on_exec_command_output_delta(&mut self, ev: ExecCommandOutputDeltaEvent) {
@@ -1585,7 +1585,7 @@ impl ChatWidget {
             }
         }
         let ev2 = ev.clone();
-        self.defer_or_handle(|q| q.push_exec_end(ev), |s| s.handle_exec_end_now(ev2));
+        self.defer_or_handle_exec(|q| q.push_exec_end(ev), |s| s.handle_exec_end_now(ev2));
     }
 
     fn track_unified_exec_process_begin(&mut self, ev: &ExecCommandBeginEvent) {
@@ -1851,6 +1851,19 @@ impl ChatWidget {
             push(&mut self.interrupts);
         } else {
             handle(self);
+        }
+    }
+
+    #[inline]
+    fn defer_or_handle_exec(
+        &mut self,
+        push: impl FnOnce(&mut InterruptManager),
+        handle: impl FnOnce(&mut Self),
+    ) {
+        if self.interrupts.is_empty() {
+            handle(self);
+        } else {
+            push(&mut self.interrupts);
         }
     }
 
@@ -3245,7 +3258,7 @@ impl ChatWidget {
                 .as_ref()
                 .is_some_and(|c| c.as_any().is::<history_cell::SessionHeaderHistoryCell>());
 
-        if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
+        if !keep_placeholder_header_active && cell.has_display_content() {
             // Only break exec grouping if the cell renders visible lines.
             self.flush_active_cell();
             self.needs_final_message_separator = true;

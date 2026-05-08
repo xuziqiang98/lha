@@ -82,6 +82,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
@@ -93,6 +94,10 @@ use unicode_width::UnicodeWidthStr;
 /// scrollable list.
 pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
+
+    fn has_display_content(&self) -> bool {
+        true
+    }
 
     fn block_style(&self) -> Option<Style> {
         None
@@ -384,6 +389,10 @@ impl HistoryCell for ReasoningSummaryCell {
         }
     }
 
+    fn has_display_content(&self) -> bool {
+        !self.transcript_only
+    }
+
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.lines(width)
     }
@@ -441,6 +450,10 @@ impl PlainHistoryCell {
 impl HistoryCell for PlainHistoryCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         self.lines.clone()
+    }
+
+    fn has_display_content(&self) -> bool {
+        !self.lines.is_empty()
     }
 }
 
@@ -848,11 +861,32 @@ pub(crate) fn new_review_status_line(message: String) -> PlainHistoryCell {
 pub(crate) struct PatchHistoryCell {
     changes: HashMap<PathBuf, FileChange>,
     cwd: PathBuf,
+    lines_cache: Mutex<Option<PatchHistoryCellLinesCache>>,
+}
+
+#[derive(Debug)]
+struct PatchHistoryCellLinesCache {
+    width: u16,
+    lines: Vec<Line<'static>>,
 }
 
 impl HistoryCell for PatchHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        create_diff_summary(&self.changes, &self.cwd, width as usize)
+        if let Ok(cache) = self.lines_cache.lock()
+            && let Some(cache) = cache.as_ref()
+            && cache.width == width
+        {
+            return cache.lines.clone();
+        }
+
+        let lines = create_diff_summary(&self.changes, &self.cwd, width as usize);
+        if let Ok(mut cache) = self.lines_cache.lock() {
+            *cache = Some(PatchHistoryCellLinesCache {
+                width,
+                lines: lines.clone(),
+            });
+        }
+        lines
     }
 
     fn block_style(&self) -> Option<Style> {
@@ -2151,6 +2185,7 @@ pub(crate) fn new_patch_event(
     PatchHistoryCell {
         changes,
         cwd: cwd.to_path_buf(),
+        lines_cache: Mutex::new(None),
     }
 }
 

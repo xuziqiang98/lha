@@ -178,9 +178,18 @@ impl TranscriptView {
         let spacing_width = self.last_width.unwrap_or(u16::MAX).max(1);
         let had_prior_cells = self.has_visible_committed_cells(spacing_width);
         let inserted_cell_visible = self.mode.is_visible(cell.as_ref(), spacing_width);
+        let has_visible_prior_cell_for_gap = self.has_visible_committed_cells(u16::MAX);
         let tail_renderable = self.take_live_tail_renderable();
+        let cell_index = self.cells.len();
+        let renderable = Self::render_cell(
+            cell_index,
+            cell.clone(),
+            has_visible_prior_cell_for_gap,
+            self.highlight_cell,
+            self.mode,
+        );
         self.cells.push(cell);
-        self.renderables = Self::render_cells(&self.cells, self.highlight_cell, self.mode);
+        self.renderables.push(renderable);
         if let Some(tail) = tail_renderable {
             let tail = if !had_prior_cells
                 && inserted_cell_visible
@@ -872,36 +881,48 @@ impl TranscriptView {
             .iter()
             .enumerate()
             .map(|(idx, cell)| {
+                let renderable = Self::render_cell(
+                    idx,
+                    cell.clone(),
+                    has_visible_prior_cell,
+                    highlight_cell,
+                    mode,
+                );
                 let is_visible = mode.is_visible(cell.as_ref(), u16::MAX);
-                let top_gap =
-                    is_visible && has_visible_prior_cell && !cell.is_stream_continuation();
                 if is_visible {
                     has_visible_prior_cell = true;
                 }
-                let renderable: Box<dyn Renderable> = if cell.as_any().is::<UserHistoryCell>() {
-                    Box::new(CachedRenderable::new(CellRenderable {
-                        cell: cell.clone(),
-                        mode,
-                        top_gap,
-                        style: if highlight_cell == Some(idx) {
-                            user_message_style().reversed()
-                        } else {
-                            user_message_style()
-                        },
-                        cache: std::cell::RefCell::new(None),
-                    }))
-                } else {
-                    Box::new(CachedRenderable::new(CellRenderable {
-                        cell: cell.clone(),
-                        mode,
-                        top_gap,
-                        style: Style::default(),
-                        cache: std::cell::RefCell::new(None),
-                    }))
-                };
                 renderable
             })
             .collect()
+    }
+
+    fn render_cell(
+        idx: usize,
+        cell: Arc<dyn HistoryCell>,
+        has_visible_prior_cell: bool,
+        highlight_cell: Option<usize>,
+        mode: TranscriptRenderMode,
+    ) -> Box<dyn Renderable> {
+        let is_visible = mode.is_visible(cell.as_ref(), u16::MAX);
+        let top_gap = is_visible && has_visible_prior_cell && !cell.is_stream_continuation();
+        let style = if cell.as_any().is::<UserHistoryCell>() {
+            if highlight_cell == Some(idx) {
+                user_message_style().reversed()
+            } else {
+                user_message_style()
+            }
+        } else {
+            Style::default()
+        };
+
+        Box::new(CachedRenderable::new(CellRenderable {
+            cell,
+            mode,
+            top_gap,
+            style,
+            cache: std::cell::RefCell::new(None),
+        }))
     }
 
     fn rebuild_renderables(&mut self) {
@@ -1453,6 +1474,19 @@ mod tests {
 
         assert_eq!(view.desired_height(20), 1);
         let _ = render_test_view(&mut view, 20, 3);
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn insert_cell_preserves_existing_render_cache() {
+        let (mut view, calls) = counting_display_view();
+
+        let _ = render_test_view(&mut view, 20, 3);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+
+        view.insert_cell(Arc::new(TestCell("second")));
+        let _ = render_test_view(&mut view, 20, 5);
 
         assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
