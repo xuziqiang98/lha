@@ -10,9 +10,9 @@
 //! visible immediately.
 //!
 //! The transcript overlay is kept in sync by `App::overlay_forward_event`, which syncs a live tail
-//! during draws using `active_cell_transcript_key()` and `active_cell_transcript_lines()`. The
-//! cache key is designed to change when the active cell mutates in place or when its transcript
-//! output is time-dependent so the overlay can refresh its cached tail without rebuilding it on
+//! during draws using `transcript_live_tail_key()` and `transcript_live_tail_for_mode()`. The cache
+//! key is designed to change when the active cell or markdown stream mutates, or when transcript
+//! output is time-dependent, so the overlay can refresh its cached tail without rebuilding it on
 //! every draw.
 //!
 //! The bottom pane exposes a single "task running" indicator that drives the spinner and interrupt
@@ -193,6 +193,9 @@ use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::capitalize_first;
 use crate::text_formatting::truncate_text;
+use crate::transcript_view::TranscriptLiveTail;
+use crate::transcript_view::TranscriptLiveTailKey;
+use crate::transcript_view::TranscriptLiveTailSource;
 use crate::transcript_view::TranscriptMouseOutcome;
 use crate::transcript_view::TranscriptRenderMode;
 use crate::transcript_view::TranscriptScroll;
@@ -6234,22 +6237,67 @@ impl ChatWidget {
         })
     }
 
-    /// Returns the active cell's transcript lines for a given terminal width.
-    ///
-    /// This is a convenience for the transcript overlay live-tail path, and it intentionally
-    /// filters out empty results so the overlay can treat "nothing to render" as "no tail". Callers
-    /// should pass the same width the overlay uses; using a different width will cause wrapping
-    /// mismatches between the main viewport and the transcript overlay.
-    pub(crate) fn active_cell_transcript_lines(&self, width: u16) -> Option<Vec<Line<'static>>> {
-        let cell = self.active_cell.as_ref()?;
-        let lines = cell.transcript_lines(width);
-        (!lines.is_empty()).then_some(lines)
+    pub(crate) fn transcript_live_tail_key(&self) -> Option<TranscriptLiveTailKey> {
+        if let Some(key) = self.active_cell_transcript_key() {
+            return Some(TranscriptLiveTailKey::new(
+                TranscriptLiveTailSource::ActiveCell,
+                0,
+                key.revision,
+                key.is_stream_continuation,
+                key.animation_tick,
+            ));
+        }
+        if let Some(controller) = self.stream_controller.as_ref()
+            && let Some(cell) = controller.live_tail_cell()
+        {
+            return Some(TranscriptLiveTailKey::new(
+                TranscriptLiveTailSource::AssistantStream,
+                0,
+                controller.live_tail_revision(),
+                cell.is_stream_continuation(),
+                None,
+            ));
+        }
+        if let Some(controller) = self.plan_stream_controller.as_ref()
+            && let Some(cell) = controller.live_tail_cell()
+        {
+            return Some(TranscriptLiveTailKey::new(
+                TranscriptLiveTailSource::PlanStream,
+                0,
+                controller.live_tail_revision(),
+                cell.is_stream_continuation(),
+                None,
+            ));
+        }
+        None
     }
 
-    pub(crate) fn active_cell_display_lines(&self, width: u16) -> Option<Vec<Line<'static>>> {
-        let cell = self.active_cell.as_ref()?;
-        let lines = cell.display_lines(width);
-        (!lines.is_empty()).then_some(lines)
+    pub(crate) fn transcript_live_tail_for_mode(
+        &self,
+        width: u16,
+        mode: TranscriptRenderMode,
+    ) -> Option<TranscriptLiveTail> {
+        if let Some(cell) = self.active_cell.as_ref() {
+            return match mode {
+                TranscriptRenderMode::Display => {
+                    TranscriptView::live_tail_from_lines(cell.display_lines(width))
+                }
+                TranscriptRenderMode::Transcript => {
+                    TranscriptView::live_tail_from_lines(cell.transcript_lines(width))
+                }
+            };
+        }
+        if let Some(controller) = self.stream_controller.as_ref()
+            && let Some(cell) = controller.live_tail_cell()
+        {
+            return TranscriptView::live_tail_from_cell(Arc::new(cell), mode, width);
+        }
+        if let Some(controller) = self.plan_stream_controller.as_ref()
+            && let Some(cell) = controller.live_tail_cell()
+        {
+            return TranscriptView::live_tail_from_cell(Arc::new(cell), mode, width);
+        }
+        None
     }
 
     /// Return a reference to the widget's current config (includes any
@@ -6279,8 +6327,10 @@ impl ChatWidget {
     fn sync_transcript_live_tail_for_width(&self, width: u16) {
         self.transcript.borrow_mut().sync_live_tail(
             width.max(1),
-            self.active_cell_transcript_key(),
-            |tail_width| self.active_cell_display_lines(tail_width),
+            self.transcript_live_tail_key(),
+            |tail_width| {
+                self.transcript_live_tail_for_mode(tail_width, TranscriptRenderMode::Display)
+            },
         );
     }
 

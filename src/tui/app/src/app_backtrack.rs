@@ -343,13 +343,16 @@ impl App {
         if let TuiEvent::Draw = &event
             && let Some(Overlay::Transcript(t)) = &mut self.overlay
         {
-            let active_key = self.chat_widget.active_cell_transcript_key();
+            let live_tail_key = self.chat_widget.transcript_live_tail_key();
             let chat_widget = &self.chat_widget;
             let mut schedule_drag_frame = false;
             tui.draw(u16::MAX, |frame| {
                 let width = frame.area().width.max(1);
-                t.sync_live_tail(width, active_key, |w| {
-                    chat_widget.active_cell_transcript_lines(w)
+                t.sync_live_tail(width, live_tail_key, |w| {
+                    chat_widget.transcript_live_tail_for_mode(
+                        w,
+                        crate::transcript_view::TranscriptRenderMode::Transcript,
+                    )
                 });
                 if t.advance_drag_autoscroll(frame.area()) {
                     schedule_drag_frame = true;
@@ -365,7 +368,7 @@ impl App {
                     .schedule_frame_in(crate::chatwidget::DRAG_AUTOSCROLL_INTERVAL);
             }
             if !close_overlay
-                && active_key.is_some_and(|key| key.animation_tick.is_some())
+                && live_tail_key.is_some_and(|key| key.animation_tick().is_some())
                 && t.is_scrolled_to_bottom()
             {
                 tui.frame_requester()

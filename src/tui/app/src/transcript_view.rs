@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crate::chatwidget::ActiveCellTranscriptKey;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::mouse::MouseScrollState;
@@ -35,11 +34,50 @@ const DRAG_AUTOSCROLL_LINES_PER_TICK: isize = 1;
 const DRAG_AUTOSCROLL_EDGE_ROWS: u16 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct LiveTailKey {
+pub(crate) enum TranscriptLiveTailSource {
+    ActiveCell,
+    AssistantStream,
+    PlanStream,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TranscriptLiveTailKey {
+    source: TranscriptLiveTailSource,
     width: u16,
     revision: u64,
     is_stream_continuation: bool,
     animation_tick: Option<u64>,
+}
+
+impl TranscriptLiveTailKey {
+    pub(crate) fn new(
+        source: TranscriptLiveTailSource,
+        width: u16,
+        revision: u64,
+        is_stream_continuation: bool,
+        animation_tick: Option<u64>,
+    ) -> Self {
+        Self {
+            source,
+            width,
+            revision,
+            is_stream_continuation,
+            animation_tick,
+        }
+    }
+
+    fn with_width(self, width: u16) -> Self {
+        Self { width, ..self }
+    }
+
+    pub(crate) fn animation_tick(self) -> Option<u64> {
+        self.animation_tick
+    }
+}
+
+pub(crate) struct TranscriptLiveTail {
+    pub(crate) lines: Vec<Line<'static>>,
+    pub(crate) renderable: Box<dyn Renderable>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,7 +132,7 @@ pub(crate) struct TranscriptView {
     last_rendered_height: Option<usize>,
     pending_scroll_chunk: Option<usize>,
     highlight_cell: Option<usize>,
-    live_tail_key: Option<LiveTailKey>,
+    live_tail_key: Option<TranscriptLiveTailKey>,
     live_tail_lines: Vec<Line<'static>>,
     last_width: Option<u16>,
     last_area: Option<Rect>,
@@ -174,15 +212,10 @@ impl TranscriptView {
     pub(crate) fn sync_live_tail(
         &mut self,
         width: u16,
-        active_key: Option<ActiveCellTranscriptKey>,
-        compute_lines: impl FnOnce(u16) -> Option<Vec<Line<'static>>>,
+        live_tail_key: Option<TranscriptLiveTailKey>,
+        compute_tail: impl FnOnce(u16) -> Option<TranscriptLiveTail>,
     ) {
-        let next_key = active_key.map(|key| LiveTailKey {
-            width,
-            revision: key.revision,
-            is_stream_continuation: key.is_stream_continuation,
-            animation_tick: key.animation_tick,
-        });
+        let next_key = live_tail_key.map(|key| key.with_width(width));
 
         if self.live_tail_key == next_key {
             return;
@@ -193,16 +226,16 @@ impl TranscriptView {
         self.live_tail_key = next_key;
         self.live_tail_lines.clear();
 
-        if let Some(key) = next_key {
-            let lines = compute_lines(width).unwrap_or_default();
-            if !lines.is_empty() {
-                self.renderables.push(Self::live_tail_renderable(
-                    lines.clone(),
-                    self.has_visible_committed_cells(width),
-                    key.is_stream_continuation,
-                ));
-                self.live_tail_lines = lines;
+        if let Some(key) = next_key
+            && let Some(tail) = compute_tail(width)
+            && !tail.lines.is_empty()
+        {
+            let mut renderable = tail.renderable;
+            if self.has_visible_committed_cells(width) && !key.is_stream_continuation {
+                renderable = Box::new(InsetRenderable::new(renderable, Insets::tlbr(1, 0, 0, 0)));
             }
+            self.renderables.push(renderable);
+            self.live_tail_lines = tail.lines;
         }
 
         if follow_bottom {
@@ -883,17 +916,33 @@ impl TranscriptView {
         (self.renderables.len() > self.cells.len()).then(|| self.renderables.pop())?
     }
 
-    fn live_tail_renderable(
-        lines: Vec<Line<'static>>,
-        has_prior_cells: bool,
-        is_stream_continuation: bool,
-    ) -> Box<dyn Renderable> {
-        let paragraph = Paragraph::new(Text::from(lines));
-        let mut renderable: Box<dyn Renderable> = Box::new(CachedRenderable::new(paragraph));
-        if has_prior_cells && !is_stream_continuation {
-            renderable = Box::new(InsetRenderable::new(renderable, Insets::tlbr(1, 0, 0, 0)));
+    pub(crate) fn live_tail_from_lines(lines: Vec<Line<'static>>) -> Option<TranscriptLiveTail> {
+        if lines.is_empty() {
+            return None;
         }
-        renderable
+        let renderable = Box::new(CachedRenderable::new(Paragraph::new(Text::from(
+            lines.clone(),
+        ))));
+        Some(TranscriptLiveTail { lines, renderable })
+    }
+
+    pub(crate) fn live_tail_from_cell(
+        cell: Arc<dyn HistoryCell>,
+        mode: TranscriptRenderMode,
+        width: u16,
+    ) -> Option<TranscriptLiveTail> {
+        let lines = mode.lines(cell.as_ref(), width);
+        if lines.is_empty() {
+            return None;
+        }
+        let renderable = Box::new(CachedRenderable::new(CellRenderable {
+            cell,
+            mode,
+            top_gap: false,
+            style: Style::default(),
+            cache: std::cell::RefCell::new(None),
+        }));
+        Some(TranscriptLiveTail { lines, renderable })
     }
 
     fn has_visible_committed_cells(&self, width: u16) -> bool {
@@ -1469,12 +1518,14 @@ mod tests {
         );
         view.sync_live_tail(
             20,
-            Some(ActiveCellTranscriptKey {
-                revision: 1,
-                is_stream_continuation: false,
-                animation_tick: None,
-            }),
-            |_| Some(vec!["tail".into()]),
+            Some(TranscriptLiveTailKey::new(
+                TranscriptLiveTailSource::ActiveCell,
+                0,
+                1,
+                false,
+                None,
+            )),
+            |_| TranscriptView::live_tail_from_lines(vec!["tail".into()]),
         );
         let buf = render_test_view(&mut view, 20, 2);
 
@@ -1490,12 +1541,14 @@ mod tests {
         let mut view = TranscriptView::new(Vec::new(), TranscriptRenderMode::Display);
         view.sync_live_tail(
             20,
-            Some(ActiveCellTranscriptKey {
-                revision: 1,
-                is_stream_continuation: false,
-                animation_tick: None,
-            }),
-            |_| Some(vec!["tail".into()]),
+            Some(TranscriptLiveTailKey::new(
+                TranscriptLiveTailSource::ActiveCell,
+                0,
+                1,
+                false,
+                None,
+            )),
+            |_| TranscriptView::live_tail_from_lines(vec!["tail".into()]),
         );
 
         view.insert_cell(Arc::new(HiddenDisplayCell));
@@ -1513,12 +1566,14 @@ mod tests {
         let mut view = TranscriptView::new(Vec::new(), TranscriptRenderMode::Display);
         view.sync_live_tail(
             20,
-            Some(ActiveCellTranscriptKey {
-                revision: 1,
-                is_stream_continuation: false,
-                animation_tick: None,
-            }),
-            |_| Some(vec!["tail".into()]),
+            Some(TranscriptLiveTailKey::new(
+                TranscriptLiveTailSource::ActiveCell,
+                0,
+                1,
+                false,
+                None,
+            )),
+            |_| TranscriptView::live_tail_from_lines(vec!["tail".into()]),
         );
 
         view.insert_cell(Arc::new(TestCell("first")));

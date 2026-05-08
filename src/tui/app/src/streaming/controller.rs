@@ -27,10 +27,7 @@ impl StreamController {
     /// Push a delta; if it contains a newline, commit completed lines and start animation.
     pub(crate) fn push(&mut self, delta: &str) -> bool {
         let state = &mut self.state;
-        if !delta.is_empty() {
-            state.has_seen_delta = true;
-        }
-        state.collector.push_delta(delta);
+        state.push_delta(delta);
         if delta.contains('\n') {
             let newly_completed = state.collector.commit_complete_lines();
             if !newly_completed.is_empty() {
@@ -71,6 +68,16 @@ impl StreamController {
         (self.emit(step), self.state.is_idle())
     }
 
+    pub(crate) fn live_tail_revision(&self) -> u64 {
+        self.state.revision()
+    }
+
+    pub(crate) fn live_tail_cell(&self) -> Option<history_cell::AgentMessageCell> {
+        let lines = self.state.live_tail_lines();
+        (!lines.is_empty())
+            .then(|| history_cell::AgentMessageCell::new(lines, !self.header_emitted))
+    }
+
     fn emit(&mut self, lines: Vec<Line<'static>>) -> Option<Box<dyn HistoryCell>> {
         if lines.is_empty() {
             return None;
@@ -102,10 +109,7 @@ impl PlanStreamController {
     /// Push a delta; if it contains a newline, commit completed lines and start animation.
     pub(crate) fn push(&mut self, delta: &str) -> bool {
         let state = &mut self.state;
-        if !delta.is_empty() {
-            state.has_seen_delta = true;
-        }
-        state.collector.push_delta(delta);
+        state.push_delta(delta);
         if delta.contains('\n') {
             let newly_completed = state.collector.commit_complete_lines();
             if !newly_completed.is_empty() {
@@ -142,6 +146,18 @@ impl PlanStreamController {
         (self.emit(step, false), self.state.is_idle())
     }
 
+    pub(crate) fn live_tail_revision(&self) -> u64 {
+        self.state.revision()
+    }
+
+    pub(crate) fn live_tail_cell(&self) -> Option<history_cell::ProposedPlanStreamCell> {
+        let lines = self.state.live_tail_lines();
+        if lines.is_empty() {
+            return None;
+        }
+        Some(self.build_cell(lines, false))
+    }
+
     fn emit(
         &mut self,
         lines: Vec<Line<'static>>,
@@ -151,18 +167,27 @@ impl PlanStreamController {
             return None;
         }
 
+        let cell = self.build_cell(lines, include_bottom_padding);
+        self.header_emitted = true;
+        self.top_padding_emitted = true;
+        Some(Box::new(cell))
+    }
+
+    fn build_cell(
+        &self,
+        lines: Vec<Line<'static>>,
+        include_bottom_padding: bool,
+    ) -> history_cell::ProposedPlanStreamCell {
         let mut out_lines: Vec<Line<'static>> = Vec::new();
         let is_stream_continuation = self.header_emitted;
         if !self.header_emitted {
             out_lines.push(vec!["• ".dim(), "Proposed Plan".bold()].into());
             out_lines.push(Line::from(" "));
-            self.header_emitted = true;
         }
 
         let mut plan_lines: Vec<Line<'static>> = Vec::new();
         if !self.top_padding_emitted {
             plan_lines.push(Line::from(" "));
-            self.top_padding_emitted = true;
         }
         plan_lines.extend(lines);
         if include_bottom_padding {
@@ -176,10 +201,7 @@ impl PlanStreamController {
             .collect::<Vec<_>>();
         out_lines.extend(plan_lines);
 
-        Some(Box::new(history_cell::new_proposed_plan_stream(
-            out_lines,
-            is_stream_continuation,
-        )))
+        history_cell::new_proposed_plan_stream(out_lines, is_stream_continuation)
     }
 }
 
@@ -198,6 +220,70 @@ mod tests {
                     .join("")
             })
             .collect()
+    }
+
+    #[tokio::test]
+    async fn assistant_live_tail_shows_queued_and_partial_lines() {
+        let mut ctrl = StreamController::new(None);
+
+        assert!(ctrl.push("one\ntwo\npartial"));
+        let tail = ctrl
+            .live_tail_cell()
+            .expect("expected assistant live tail")
+            .display_lines(u16::MAX);
+        assert_eq!(
+            lines_to_plain_strings(&tail),
+            vec![
+                "• one".to_string(),
+                "  two".to_string(),
+                "  partial".to_string()
+            ]
+        );
+
+        let (cell, idle) = ctrl.on_commit_tick();
+        assert!(cell.is_some());
+        assert!(!idle);
+        let tail = ctrl
+            .live_tail_cell()
+            .expect("expected remaining assistant live tail")
+            .display_lines(u16::MAX);
+        assert_eq!(
+            lines_to_plain_strings(&tail),
+            vec!["  two".to_string(), "  partial".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn plan_live_tail_shows_header_until_first_commit() {
+        let mut ctrl = PlanStreamController::new(None);
+
+        assert!(ctrl.push("- step\npartial"));
+        let tail = ctrl
+            .live_tail_cell()
+            .expect("expected plan live tail")
+            .display_lines(u16::MAX);
+        assert_eq!(
+            lines_to_plain_strings(&tail),
+            vec![
+                "• Proposed Plan".to_string(),
+                " ".to_string(),
+                "   ".to_string(),
+                "  - step".to_string(),
+                "    partial".to_string()
+            ]
+        );
+
+        let (cell, idle) = ctrl.on_commit_tick();
+        assert!(cell.is_some());
+        assert!(idle);
+        let tail = ctrl
+            .live_tail_cell()
+            .expect("expected remaining plan live tail")
+            .display_lines(u16::MAX);
+        assert_eq!(
+            lines_to_plain_strings(&tail),
+            vec!["    partial".to_string()]
+        );
     }
 
     #[tokio::test]

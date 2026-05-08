@@ -29,6 +29,29 @@ impl MarkdownStreamCollector {
         self.buffer.push_str(delta);
     }
 
+    /// Render the current uncommitted tail without mutating stream state.
+    ///
+    /// Completed lines already accounted for by `committed_line_count` are skipped, and an
+    /// unfinished final line is rendered by temporarily appending a newline.
+    pub fn preview_uncommitted_lines(&self) -> Vec<Line<'static>> {
+        if self.buffer.is_empty() {
+            return Vec::new();
+        }
+
+        let mut source = self.buffer.clone();
+        if !source.ends_with('\n') {
+            source.push('\n');
+        }
+
+        let mut rendered: Vec<Line<'static>> = Vec::new();
+        markdown::append_markdown(&source, self.width, &mut rendered);
+        if self.committed_line_count >= rendered.len() {
+            Vec::new()
+        } else {
+            rendered[self.committed_line_count..].to_vec()
+        }
+    }
+
     /// Render the full buffer and return only the newly completed logical lines
     /// since the last commit. When the buffer does not end with a newline, the
     /// final rendered line is considered incomplete and is not emitted.
@@ -137,6 +160,40 @@ mod tests {
         c.push_delta("Line without newline");
         let out = c.finalize_and_drain();
         assert_eq!(out.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn preview_uncommitted_lines_does_not_commit_partial_line() {
+        let mut c = super::MarkdownStreamCollector::new(None);
+        c.push_delta("Hello");
+
+        let preview = c.preview_uncommitted_lines();
+        assert_eq!(
+            preview
+                .iter()
+                .map(|line| line
+                    .spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect())
+                .collect::<Vec<String>>(),
+            vec!["Hello".to_string()]
+        );
+        assert!(c.commit_complete_lines().is_empty());
+
+        c.push_delta("\n");
+        let committed = c.commit_complete_lines();
+        assert_eq!(
+            committed
+                .iter()
+                .map(|line| line
+                    .spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect())
+                .collect::<Vec<String>>(),
+            vec!["Hello".to_string()]
+        );
     }
 
     #[tokio::test]

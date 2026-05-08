@@ -9,17 +9,16 @@
 //! is derived from the terminal width (wrapping), an active-cell revision (in-place mutations), the
 //! stream-continuation flag (spacing), and an animation tick (time-based spinner/shimmer output).
 //!
-//! The transcript overlay live tail is kept in sync by `App` during draws: `App` supplies an
-//! `ActiveCellTranscriptKey` and a function to compute the active cell transcript lines, and
+//! The transcript overlay live tail is kept in sync by `App` during draws: `App` supplies a
+//! `TranscriptLiveTailKey` and a function to compute the current live tail, and
 //! `TranscriptOverlay::sync_live_tail` uses the key to decide when the cached tail must be
-//! recomputed. `ChatWidget` is responsible for producing a key that changes when the active cell
-//! mutates in place or when its transcript output is time-dependent.
+//! recomputed. `ChatWidget` is responsible for producing a key that changes when the active cell or
+//! markdown stream mutates, or when transcript output is time-dependent.
 
 use std::io::Result;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::chatwidget::ActiveCellTranscriptKey;
 use crate::clipboard_text::write_text_to_clipboard;
 use crate::history_cell::HistoryCell;
 use crate::key_hint;
@@ -27,6 +26,8 @@ use crate::key_hint::KeyBinding;
 use crate::mouse::MouseScrollState;
 use crate::mouse::ScrollDirection;
 use crate::render::renderable::Renderable;
+use crate::transcript_view::TranscriptLiveTail;
+use crate::transcript_view::TranscriptLiveTailKey;
 use crate::transcript_view::TranscriptMouseOutcome;
 use crate::transcript_view::TranscriptRenderMode;
 use crate::transcript_view::TranscriptScroll;
@@ -491,10 +492,10 @@ impl TranscriptOverlay {
     pub(crate) fn sync_live_tail(
         &mut self,
         width: u16,
-        active_key: Option<ActiveCellTranscriptKey>,
-        compute_lines: impl FnOnce(u16) -> Option<Vec<Line<'static>>>,
+        live_tail_key: Option<TranscriptLiveTailKey>,
+        compute_tail: impl FnOnce(u16) -> Option<TranscriptLiveTail>,
     ) {
-        self.view.sync_live_tail(width, active_key, compute_lines);
+        self.view.sync_live_tail(width, live_tail_key, compute_tail);
     }
 
     pub(crate) fn set_highlight_cell(&mut self, cell: Option<usize>) {
@@ -749,6 +750,7 @@ fn render_offset_content(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transcript_view::TranscriptLiveTailSource;
     use adam_agent::protocol::ExecCommandSource;
     use adam_agent::protocol::ReviewDecision;
     use insta::assert_snapshot;
@@ -856,12 +858,14 @@ mod tests {
         })]);
         overlay.sync_live_tail(
             40,
-            Some(ActiveCellTranscriptKey {
-                revision: 1,
-                is_stream_continuation: false,
-                animation_tick: None,
-            }),
-            |_| Some(vec![Line::from("tail")]),
+            Some(TranscriptLiveTailKey::new(
+                TranscriptLiveTailSource::ActiveCell,
+                0,
+                1,
+                false,
+                None,
+            )),
+            |_| TranscriptView::live_tail_from_lines(vec![Line::from("tail")]),
         );
 
         let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
@@ -877,19 +881,16 @@ mod tests {
         })]);
 
         let calls = std::cell::Cell::new(0usize);
-        let key = ActiveCellTranscriptKey {
-            revision: 1,
-            is_stream_continuation: false,
-            animation_tick: None,
-        };
+        let key =
+            TranscriptLiveTailKey::new(TranscriptLiveTailSource::ActiveCell, 0, 1, false, None);
 
         overlay.sync_live_tail(40, Some(key), |_| {
             calls.set(calls.get() + 1);
-            Some(vec![Line::from("tail")])
+            TranscriptView::live_tail_from_lines(vec![Line::from("tail")])
         });
         overlay.sync_live_tail(40, Some(key), |_| {
             calls.set(calls.get() + 1);
-            Some(vec![Line::from("tail2")])
+            TranscriptView::live_tail_from_lines(vec![Line::from("tail2")])
         });
 
         assert_eq!(calls.get(), 1);

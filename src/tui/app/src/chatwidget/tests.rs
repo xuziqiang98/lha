@@ -437,18 +437,60 @@ async fn desired_height_rewraps_live_tail_on_width_change_before_render() {
 }
 
 #[tokio::test]
-async fn active_cell_display_lines_are_separate_from_transcript_lines() {
+async fn active_cell_live_tail_respects_render_mode() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.active_cell = Some(Box::new(SplitActiveCell));
 
     assert_eq!(
-        chat.active_cell_display_lines(80),
-        Some(vec![Line::from("wide")])
+        live_tail_text(chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)),
+        "wide\n"
     );
     assert_eq!(
-        chat.active_cell_transcript_lines(80),
-        Some(vec![Line::from("transcript")])
+        live_tail_text(chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Transcript)),
+        "transcript\n"
+    );
+}
+
+#[tokio::test]
+async fn assistant_delta_renders_as_live_tail_before_newline_or_commit_tick() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_agent_message_delta("partial answer".to_string());
+
+    assert_eq!(
+        live_tail_text(chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)),
+        "• partial answer\n"
+    );
+
+    let mut buf = Buffer::empty(Rect::new(0, 0, 80, 10));
+    chat.render(buf.area, &mut buf);
+    let rendered = (0..buf.area.height)
+        .map(|y| {
+            (0..buf.area.width)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("partial answer"));
+}
+
+#[tokio::test]
+async fn assistant_live_tail_shrinks_after_commit_tick() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_agent_message_delta("one\ntwo\npartial".to_string());
+    assert_eq!(
+        live_tail_text(chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)),
+        "• one\n  two\n  partial\n"
+    );
+
+    chat.on_commit_tick();
+
+    assert_eq!(
+        live_tail_text(chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)),
+        "  two\n  partial\n"
     );
 }
 
@@ -2091,6 +2133,11 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
         s.push('\n');
     }
     s
+}
+
+fn live_tail_text(tail: Option<crate::transcript_view::TranscriptLiveTail>) -> String {
+    tail.map(|tail| lines_to_single_string(&tail.lines))
+        .unwrap_or_default()
 }
 
 fn status_output_text(
