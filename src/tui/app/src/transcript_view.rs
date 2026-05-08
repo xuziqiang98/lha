@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
+#[cfg(test)]
+use crate::history_cell::new_proposed_plan;
 use crate::mouse::MouseScrollState;
 use crate::mouse::ScrollDirection;
 use crate::render::Insets;
@@ -12,6 +14,7 @@ use crate::style::user_message_style;
 use crate::terminal_palette;
 use crate::transcript_selection::TranscriptSelection;
 use crate::transcript_selection::TranscriptSelectionPoint;
+use crate::wrapping::word_wrap_lines;
 use crossterm::event::MouseButton;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
@@ -89,6 +92,26 @@ struct DragAutoScroll {
     column: u16,
     direction: ScrollDirection,
     lines_per_tick: isize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TranscriptVisualLine {
+    plain: String,
+    display_width: usize,
+}
+
+impl TranscriptVisualLine {
+    fn from_plain(plain: String) -> Self {
+        let display_width = UnicodeWidthStr::width(plain.as_str());
+        Self {
+            plain,
+            display_width,
+        }
+    }
+
+    fn blank() -> Self {
+        Self::from_plain(String::new())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -803,7 +826,7 @@ impl TranscriptView {
     fn selection_to_text(&self) -> Option<String> {
         let (start, end) = self.selection.ordered_endpoints()?;
         let width = self.last_area?.width.max(1);
-        let lines = self.semantic_plain_lines_for_width(width);
+        let lines = self.visual_plain_lines_for_width(width);
         if lines.is_empty() {
             return None;
         }
@@ -817,7 +840,7 @@ impl TranscriptView {
             .take(end_index + 1)
             .skip(start_index)
         {
-            let line_width = UnicodeWidthStr::width(line_text.as_str());
+            let line_width = line_text.display_width;
             let (col_start, col_end) = if start_index == end_index {
                 (start.column.min(end.column), end.column.max(start.column))
             } else if line_index == start_index {
@@ -827,24 +850,25 @@ impl TranscriptView {
             } else {
                 (0, line_width)
             };
-            selected_lines.push(slice_display_columns(line_text, col_start, col_end));
+            selected_lines.push(slice_display_columns(&line_text.plain, col_start, col_end));
         }
         Some(selected_lines.join("\n"))
     }
 
-    fn semantic_plain_lines_for_width(&self, width: u16) -> Vec<String> {
+    fn visual_plain_lines_for_width(&self, width: u16) -> Vec<TranscriptVisualLine> {
         let width = width.max(1);
         let mut lines = Vec::new();
         let mut has_visible_prior_cell = false;
         for cell in &self.cells {
             let cell_lines = self.mode.lines(cell.as_ref(), width);
-            if cell_lines.is_empty() {
+            let desired_height = self.mode.desired_height(cell.as_ref(), width) as usize;
+            if cell_lines.is_empty() && desired_height == 0 {
                 continue;
             }
             if has_visible_prior_cell && !cell.is_stream_continuation() {
-                lines.push(String::new());
+                lines.push(TranscriptVisualLine::blank());
             }
-            push_plain_lines(&mut lines, cell_lines);
+            push_visual_lines(&mut lines, cell_lines, width, desired_height);
             has_visible_prior_cell = true;
         }
 
@@ -852,11 +876,19 @@ impl TranscriptView {
             && !self.live_tail_lines.is_empty()
         {
             if has_visible_prior_cell && !key.is_stream_continuation {
-                lines.push(String::new());
+                lines.push(TranscriptVisualLine::blank());
             }
-            push_plain_lines(&mut lines, self.live_tail_lines.clone());
+            push_visual_lines(&mut lines, self.live_tail_lines.clone(), width, 0);
         }
         lines
+    }
+
+    #[cfg(test)]
+    fn semantic_plain_lines_for_width(&self, width: u16) -> Vec<String> {
+        self.visual_plain_lines_for_width(width)
+            .into_iter()
+            .map(|line| line.plain)
+            .collect()
     }
 
     fn update_after_upward_scroll(&mut self, old_offset: usize, was_at_bottom: bool) {
@@ -939,9 +971,9 @@ impl TranscriptView {
         if lines.is_empty() {
             return None;
         }
-        let renderable = Box::new(CachedRenderable::new(Paragraph::new(Text::from(
-            lines.clone(),
-        ))));
+        let renderable = Box::new(CachedRenderable::new(
+            Paragraph::new(Text::from(lines.clone())).wrap(Wrap { trim: false }),
+        ));
         Some(TranscriptLiveTail { lines, renderable })
     }
 
@@ -1214,11 +1246,26 @@ fn clamp_to_area_column(area: Rect, column: u16) -> u16 {
     column.clamp(area.x, area.right().saturating_sub(1))
 }
 
-fn push_plain_lines<I>(out: &mut Vec<String>, lines: I)
-where
+fn push_visual_lines<I>(
+    out: &mut Vec<TranscriptVisualLine>,
+    lines: I,
+    width: u16,
+    min_height: usize,
+) where
     I: IntoIterator<Item = Line<'static>>,
 {
-    out.extend(lines.into_iter().map(|line| line_to_plain_text(&line)));
+    let start_len = out.len();
+    let wrapped_lines = word_wrap_lines(lines, width as usize);
+    out.extend(
+        wrapped_lines
+            .iter()
+            .map(line_to_plain_text)
+            .map(TranscriptVisualLine::from_plain),
+    );
+    let inserted = out.len().saturating_sub(start_len);
+    for _ in inserted..min_height {
+        out.push(TranscriptVisualLine::blank());
+    }
 }
 
 fn line_to_plain_text(line: &Line<'_>) -> String {
@@ -1743,21 +1790,83 @@ mod tests {
         let _ = render_test_view(&mut view, 30, 4);
 
         assert_eq!(
-            select_columns(&mut view, 1, 0, 2, UnicodeWidthStr::width("autoscroll"),),
+            select_columns(&mut view, 2, 0, 3, UnicodeWidthStr::width("autoscroll"),),
             Some("只会在\nautoscroll".to_string())
         );
     }
 
     #[test]
-    fn selection_copy_does_not_wrap_width_agnostic_long_lines() {
+    fn selection_copy_uses_visual_wrapped_rows() {
         let mut view = TranscriptView::new_transcript(vec![Arc::new(MultiLineTestCell(vec![
             "alpha beta gamma delta epsilon",
         ]))]);
         let _ = render_test_view(&mut view, 10, 3);
 
         assert_eq!(
-            select_columns(&mut view, 0, 0, 1, UnicodeWidthStr::width("alpha")),
-            Some("alpha".to_string())
+            select_columns(&mut view, 1, 0, 1, UnicodeWidthStr::width("gamma")),
+            Some("gamma".to_string())
+        );
+    }
+
+    #[test]
+    fn selection_copy_wraps_cjk_visual_rows_without_inserted_spaces() {
+        let text = "文档需要更新一下分析ProposedPlan只有文字有背景色";
+        let mut view =
+            TranscriptView::new_transcript(vec![Arc::new(MultiLineTestCell(vec![text]))]);
+        let _ = render_test_view(&mut view, 20, 4);
+
+        assert_eq!(
+            select_columns(&mut view, 1, 0, 2, UnicodeWidthStr::width("Plan只有文字")),
+            Some("ProposedPlan只有文字\n有背景色".to_string())
+        );
+    }
+
+    #[test]
+    fn live_tail_selection_copy_matches_rendered_wrapped_row() {
+        let mut view = TranscriptView::new_transcript(Vec::new());
+        view.sync_live_tail(
+            10,
+            Some(TranscriptLiveTailKey::new(
+                TranscriptLiveTailSource::ActiveCell,
+                0,
+                1,
+                false,
+                None,
+            )),
+            |_| {
+                TranscriptView::live_tail_from_lines(vec![Line::from(
+                    "alpha beta gamma delta epsilon",
+                )])
+            },
+        );
+        let buf = render_test_view(&mut view, 10, 4);
+
+        assert_eq!(
+            area_lines(&buf, Rect::new(0, 0, 10, 4)),
+            vec![
+                "alpha beta".to_string(),
+                "gamma     ".to_string(),
+                "delta     ".to_string(),
+                "epsilon   ".to_string(),
+            ]
+        );
+
+        assert_eq!(
+            select_columns(&mut view, 1, 0, 1, UnicodeWidthStr::width("gamma")),
+            Some("gamma".to_string())
+        );
+    }
+
+    #[test]
+    fn selection_copy_uses_visual_rows_for_proposed_plan() {
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(new_proposed_plan(
+            "alpha beta gamma delta epsilon".to_string(),
+        ))]);
+        let _ = render_test_view(&mut view, 12, 8);
+
+        assert_eq!(
+            select_columns(&mut view, 6, 2, 6, 2 + UnicodeWidthStr::width("gamma")),
+            Some("gamma".to_string())
         );
     }
 
