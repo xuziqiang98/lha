@@ -177,6 +177,9 @@ use std::time::Instant;
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
+/// If the pasted content exceeds this number of newline-delimited lines, replace
+/// it with a placeholder in the UI.
+const LARGE_PASTE_LINE_THRESHOLD: usize = 10;
 
 /// Result returned when the user interacts with the text area.
 #[derive(Debug, PartialEq)]
@@ -665,7 +668,7 @@ impl ChatComposer {
     ///
     /// Behavior:
     ///
-    /// - If the paste is larger than `LARGE_PASTE_CHAR_THRESHOLD` chars, inserts a placeholder
+    /// - If the paste exceeds the large-paste character or line threshold, inserts a placeholder
     ///   element (expanded on submit) and stores the full text in `pending_pastes`.
     /// - Otherwise, if the paste looks like an image path, attaches the image and inserts a
     ///   trailing space so the user can keep typing naturally.
@@ -676,7 +679,8 @@ impl ChatComposer {
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
         let char_count = pasted.chars().count();
-        if char_count > LARGE_PASTE_CHAR_THRESHOLD {
+        let line_count = Self::pasted_line_count(&pasted);
+        if char_count > LARGE_PASTE_CHAR_THRESHOLD || line_count > LARGE_PASTE_LINE_THRESHOLD {
             let placeholder = self.next_large_paste_placeholder(char_count);
             self.textarea.insert_element(&placeholder);
             self.pending_pastes.push((placeholder, pasted));
@@ -1076,6 +1080,10 @@ impl ChatComposer {
         } else {
             format!("{base} #{next_suffix}")
         }
+    }
+
+    fn pasted_line_count(pasted: &str) -> usize {
+        pasted.split('\n').count()
     }
 
     pub(crate) fn insert_str(&mut self, text: &str) {
@@ -2332,6 +2340,12 @@ impl ChatComposer {
     ///   otherwise `clear_window_after_non_char()` can leave buffered text waiting without a
     ///   timestamp to time out against.
     fn handle_input_basic(&mut self, input: KeyEvent) -> (InputResult, bool) {
+        // Ignore key releases here to avoid treating them as additional input
+        // (e.g., appending the same character twice via paste-burst logic).
+        if !matches!(input.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            return (InputResult::None, false);
+        }
+
         self.handle_input_basic_with_time(input, Instant::now())
     }
 
@@ -4462,7 +4476,15 @@ mod tests {
 
         assert!(composer.textarea.text().is_empty());
         let _ = flush_after_paste_burst(&mut composer);
-        assert_eq!(composer.textarea.text(), LARGE_MIXED_PAYLOAD);
+        let placeholder = format!(
+            "[Pasted Content {} chars]",
+            LARGE_MIXED_PAYLOAD.chars().count()
+        );
+        assert_eq!(composer.textarea.text(), placeholder);
+        assert_eq!(
+            composer.pending_pastes,
+            vec![(placeholder, LARGE_MIXED_PAYLOAD.to_string())]
+        );
     }
 
     /// Behavior: while a paste-like burst is active, Enter should not submit; it should insert a
@@ -7189,6 +7211,154 @@ mod tests {
         assert_eq!(composer.pending_pastes[0].0, expected_placeholder);
         assert_eq!(composer.pending_pastes[0].1.len(), count);
         assert!(composer.pending_pastes[0].1.chars().all(|c| c == 'x'));
+    }
+
+    #[test]
+    fn explicit_paste_more_than_ten_lines_inserts_placeholder() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Adam to do anything".to_string(),
+            false,
+        );
+        let pasted = (0..=10)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let char_count = pasted.chars().count();
+        let expected_placeholder = format!("[Pasted Content {char_count} chars]");
+
+        composer.handle_paste(pasted.clone());
+
+        assert_eq!(composer.textarea.text(), expected_placeholder);
+        assert_eq!(
+            composer.pending_pastes,
+            vec![(expected_placeholder, pasted)]
+        );
+    }
+
+    #[test]
+    fn explicit_paste_ten_lines_under_char_threshold_does_not_insert_placeholder() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Adam to do anything".to_string(),
+            false,
+        );
+        let pasted = (0..10)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        composer.handle_paste(pasted.clone());
+
+        assert_eq!(composer.textarea.text(), pasted);
+        assert!(composer.pending_pastes.is_empty());
+    }
+
+    #[test]
+    fn explicit_paste_trailing_newline_counts_as_extra_line() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Adam to do anything".to_string(),
+            false,
+        );
+        let pasted = format!(
+            "{}\n",
+            (0..10)
+                .map(|i| format!("line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let char_count = pasted.chars().count();
+        let expected_placeholder = format!("[Pasted Content {char_count} chars]");
+
+        composer.handle_paste(pasted.clone());
+
+        assert_eq!(composer.textarea.text(), expected_placeholder);
+        assert_eq!(
+            composer.pending_pastes,
+            vec![(expected_placeholder, pasted)]
+        );
+    }
+
+    #[test]
+    fn burst_paste_more_than_ten_lines_inserts_placeholder_on_flush() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Adam to do anything".to_string(),
+            false,
+        );
+
+        let pasted = (0..=10)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut now = Instant::now();
+        let step = Duration::from_millis(1);
+        for ch in pasted.chars() {
+            let input = if ch == '\n' {
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+            } else {
+                KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)
+            };
+            let _ = composer.handle_input_basic_with_time(input, now);
+            now += step;
+        }
+
+        assert!(composer.textarea.text().is_empty());
+        let flush_time = now + PasteBurst::recommended_active_flush_delay() + step;
+        let flushed = composer.handle_paste_burst_flush(flush_time);
+        assert!(flushed, "expected flush after stopping fast input");
+
+        let char_count = pasted.chars().count();
+        let expected_placeholder = format!("[Pasted Content {char_count} chars]");
+        assert_eq!(composer.textarea.text(), expected_placeholder);
+        assert_eq!(
+            composer.pending_pastes,
+            vec![(expected_placeholder, pasted)]
+        );
+    }
+
+    #[test]
+    fn key_release_is_ignored_by_basic_input_path() {
+        use crossterm::event::KeyEventState;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Adam to do anything".to_string(),
+            false,
+        );
+
+        let (result, needs_redraw) = composer.handle_input_basic(KeyEvent {
+            code: KeyCode::Char('x'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Release,
+            state: KeyEventState::NONE,
+        });
+
+        assert_eq!(result, InputResult::None);
+        assert!(!needs_redraw);
+        assert!(composer.textarea.text().is_empty());
+        assert!(!composer.is_in_paste_burst());
     }
 
     /// Behavior: human-like typing (with delays between chars) should not be classified as a paste
