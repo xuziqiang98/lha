@@ -14,7 +14,6 @@ use crate::style::user_message_style;
 use crate::terminal_palette;
 use crate::transcript_selection::TranscriptSelection;
 use crate::transcript_selection::TranscriptSelectionPoint;
-use crate::wrapping::word_wrap_lines;
 use crossterm::event::MouseButton;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
@@ -1267,24 +1266,40 @@ fn push_visual_lines<I>(
     I: IntoIterator<Item = Line<'static>>,
 {
     let start_len = out.len();
-    let wrapped_lines = word_wrap_lines(lines, width as usize);
-    out.extend(
-        wrapped_lines
-            .iter()
-            .map(line_to_plain_text)
-            .map(TranscriptVisualLine::from_plain),
-    );
+    let lines = lines.into_iter().collect::<Vec<_>>();
+    let height = rendered_lines_height(&lines, width).max(min_height as u16);
+    if height > 0 {
+        let area = Rect::new(0, 0, width.max(1), height);
+        let mut buf = Buffer::empty(area);
+        Paragraph::new(Text::from(lines))
+            .wrap(Wrap { trim: false })
+            .render(area, &mut buf);
+        out.extend((0..height).map(|y| buffer_row_plain_text(&buf, width, y)));
+    }
     let inserted = out.len().saturating_sub(start_len);
     for _ in inserted..min_height {
         out.push(TranscriptVisualLine::blank());
     }
 }
 
-fn line_to_plain_text(line: &Line<'_>) -> String {
-    line.spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect()
+fn buffer_row_plain_text(buf: &Buffer, width: u16, y: u16) -> TranscriptVisualLine {
+    let mut plain = String::new();
+    let mut cells_to_skip = 0usize;
+    for x in 0..width {
+        if cells_to_skip > 0 {
+            cells_to_skip -= 1;
+            continue;
+        }
+        let symbol = buf[(x, y)].symbol();
+        let symbol_width = UnicodeWidthStr::width(symbol);
+        if symbol_width == 0 {
+            continue;
+        }
+        plain.push_str(symbol);
+        cells_to_skip = symbol_width.saturating_sub(1);
+    }
+    plain.truncate(plain.trim_end_matches(' ').len());
+    TranscriptVisualLine::from_plain(plain)
 }
 
 fn slice_display_columns(text: &str, col_start: usize, col_end: usize) -> String {
@@ -1318,6 +1333,7 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use ratatui::style::Color;
+    use ratatui::style::Stylize;
 
     #[derive(Debug)]
     struct TestCell(&'static str);
@@ -1463,6 +1479,11 @@ mod tests {
             column: end_column,
         });
         view.selection_to_text()
+    }
+
+    fn content_line_for_rendered_row(view: &TranscriptView, rendered_row: usize) -> usize {
+        view.last_top_line
+            .saturating_add(rendered_row.saturating_sub(view.last_padding_top))
     }
 
     fn counting_display_view() -> (TranscriptView, Arc<std::sync::atomic::AtomicUsize>) {
@@ -1874,11 +1895,61 @@ mod tests {
         let mut view = TranscriptView::new_transcript(vec![Arc::new(new_proposed_plan(
             "alpha beta gamma delta epsilon".to_string(),
         ))]);
-        let _ = render_test_view(&mut view, 12, 8);
+        let buf = render_test_view(&mut view, 12, 8);
+        let rendered_lines = area_lines(&buf, Rect::new(0, 0, 12, 8));
+        let row = rendered_lines
+            .iter()
+            .position(|line| line.contains("gamma"))
+            .expect("rendered gamma row");
+        let content_line = content_line_for_rendered_row(&view, row);
 
         assert_eq!(
-            select_columns(&mut view, 6, 2, 6, 2 + UnicodeWidthStr::width("gamma")),
+            select_columns(
+                &mut view,
+                content_line,
+                2,
+                content_line,
+                2 + UnicodeWidthStr::width("gamma"),
+            ),
             Some("gamma".to_string())
+        );
+    }
+
+    #[test]
+    fn selection_copy_matches_rendered_row_after_leading_blank_agent_line() {
+        let lines = vec![
+            Line::default(),
+            Line::from(vec![
+                "No discrete regressions were found in the mouse routing, cached layout areas, or "
+                    .into(),
+                "transcript".underlined(),
+                " selection clearing changes. The targeted tests for the new bottom-pane mouse behavior pass."
+                    .into(),
+            ]),
+        ];
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(
+            crate::history_cell::AgentMessageCell::new(lines, false),
+        )]);
+        let buf = render_test_view(&mut view, 90, 6);
+        let rendered_lines = area_lines(&buf, Rect::new(0, 0, 90, 6));
+        let row = rendered_lines
+            .iter()
+            .position(|line| line.contains("No discrete regressions"))
+            .expect("rendered row");
+        let col = rendered_lines[row]
+            .find("No discrete regressions")
+            .expect("rendered column");
+        let content_line = content_line_for_rendered_row(&view, row);
+
+        assert_eq!(
+            select_columns(
+                &mut view,
+                content_line,
+                col,
+                content_line,
+                col + UnicodeWidthStr::width("No discrete"),
+            ),
+            Some("No discrete".to_string())
         );
     }
 
