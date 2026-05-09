@@ -91,6 +91,7 @@ use assert_matches::assert_matches;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
+use crossterm::event::MouseButton;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
 use dirs::home_dir;
@@ -1941,6 +1942,8 @@ async fn make_chatwidget_manual_inner(
         plan_item_active: false,
         last_separator_elapsed_secs: None,
         last_rendered_width: std::cell::Cell::new(None),
+        last_transcript_area: std::cell::Cell::new(None),
+        last_bottom_area: std::cell::Cell::new(None),
         feedback: adam_feedback::CodexFeedback::new(),
         current_rollout_path: None,
         external_editor_state: ExternalEditorState::Closed,
@@ -2064,6 +2067,8 @@ async fn make_chatwidget_manual_with_frame_requester(
         plan_item_active: false,
         last_separator_elapsed_secs: None,
         last_rendered_width: std::cell::Cell::new(None),
+        last_transcript_area: std::cell::Cell::new(None),
+        last_bottom_area: std::cell::Cell::new(None),
         feedback: adam_feedback::CodexFeedback::new(),
         current_rollout_path: None,
         external_editor_state: ExternalEditorState::Closed,
@@ -2331,6 +2336,78 @@ async fn plan_implementation_popup_ignores_mouse_scroll_over_prompt() {
     });
 
     assert_eq!(chat.transcript_scroll_offset(), at_tail);
+}
+
+#[tokio::test]
+async fn mouse_down_in_bottom_pane_does_not_start_transcript_selection() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let bottom_area = chat.cached_bottom_area().expect("bottom area cached");
+    let header_before = chat.current_status.header.clone();
+
+    chat.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: bottom_area.x,
+        row: bottom_area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    chat.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: bottom_area.x.saturating_add(10),
+        row: bottom_area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    chat.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: bottom_area.x.saturating_add(10),
+        row: bottom_area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert_eq!(chat.current_status.header, header_before);
+}
+
+#[tokio::test]
+async fn mouse_down_in_bottom_pane_clears_stale_transcript_selection_without_copying() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let transcript_area = chat
+        .cached_transcript_area()
+        .expect("transcript area cached");
+    let bottom_area = chat.cached_bottom_area().expect("bottom area cached");
+
+    chat.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: transcript_area.x,
+        row: transcript_area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    chat.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: transcript_area.x.saturating_add(5),
+        row: transcript_area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    chat.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: bottom_area.x,
+        row: bottom_area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    chat.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: bottom_area.x.saturating_add(5),
+        row: bottom_area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert_eq!(chat.current_status.header, "Working");
 }
 
 #[tokio::test]

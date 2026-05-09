@@ -390,6 +390,18 @@ impl TranscriptView {
         self.drag_autoscroll.is_some() && self.selection.dragging
     }
 
+    pub(crate) fn selection_dragging(&self) -> bool {
+        self.selection.dragging
+    }
+
+    pub(crate) fn clear_selection(&mut self) -> bool {
+        let changed =
+            self.selection.is_active() || self.selection.dragging || self.drag_autoscroll.is_some();
+        self.selection.clear();
+        self.drag_autoscroll = None;
+        changed
+    }
+
     pub(crate) fn apply_scroll(&mut self, command: TranscriptScroll) -> bool {
         let old = self.scroll_offset;
         let old_stick_to_bottom = self.stick_to_bottom;

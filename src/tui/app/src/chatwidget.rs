@@ -111,6 +111,9 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use crossterm::event::MouseButton;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
 use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -201,7 +204,6 @@ use crate::transcript_view::TranscriptRenderMode;
 use crate::transcript_view::TranscriptScroll;
 use crate::transcript_view::TranscriptView;
 use crate::tui::FrameRequester;
-use crossterm::event::MouseEvent;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
@@ -528,6 +530,8 @@ pub(crate) struct ChatWidget {
     last_separator_elapsed_secs: Option<u64>,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
+    last_transcript_area: std::cell::Cell<Option<Rect>>,
+    last_bottom_area: std::cell::Cell<Option<Rect>>,
     // Feedback sink for /feedback
     feedback: adam_feedback::CodexFeedback,
     // Current session rollout path (if known)
@@ -2301,6 +2305,8 @@ impl ChatWidget {
             plan_item_active: false,
             last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
+            last_transcript_area: std::cell::Cell::new(None),
+            last_bottom_area: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
@@ -2454,6 +2460,8 @@ impl ChatWidget {
             had_work_activity: false,
             last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
+            last_transcript_area: std::cell::Cell::new(None),
+            last_bottom_area: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
@@ -2594,6 +2602,8 @@ impl ChatWidget {
             plan_item_active: false,
             last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
+            last_transcript_area: std::cell::Cell::new(None),
+            last_bottom_area: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
@@ -2763,6 +2773,19 @@ impl ChatWidget {
             return;
         }
 
+        let in_transcript = Self::mouse_event_in_area(mouse_event, self.last_transcript_area.get());
+        let in_bottom = Self::mouse_event_in_area(mouse_event, self.last_bottom_area.get());
+        let transcript_dragging = self.transcript.borrow().selection_dragging();
+
+        if (!in_transcript || in_bottom) && !transcript_dragging {
+            if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left))
+                && self.transcript.borrow_mut().clear_selection()
+            {
+                self.request_redraw();
+            }
+            return;
+        }
+
         let outcome = self
             .transcript
             .borrow_mut()
@@ -2782,6 +2805,25 @@ impl ChatWidget {
                 self.request_redraw();
             }
         }
+    }
+
+    fn mouse_event_in_area(mouse_event: MouseEvent, area: Option<Rect>) -> bool {
+        area.is_some_and(|area| {
+            mouse_event.column >= area.x
+                && mouse_event.column < area.right()
+                && mouse_event.row >= area.y
+                && mouse_event.row < area.bottom()
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cached_transcript_area(&self) -> Option<Rect> {
+        self.last_transcript_area.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cached_bottom_area(&self) -> Option<Rect> {
+        self.last_bottom_area.get()
     }
 
     pub(crate) fn attach_image(&mut self, path: PathBuf) {
@@ -6451,6 +6493,8 @@ impl Renderable for ChatWidget {
             transcript_area.width,
             transcript_area.height.saturating_sub(top_inset),
         );
+        self.last_transcript_area.set(Some(transcript_area));
+        self.last_bottom_area.set(Some(bottom_area));
 
         {
             let mut transcript = self.transcript.borrow_mut();
