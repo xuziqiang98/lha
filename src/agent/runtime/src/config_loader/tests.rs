@@ -578,17 +578,17 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");
     let nested = project_root.join("child");
-    tokio::fs::create_dir_all(nested.join(".codex")).await?;
-    tokio::fs::create_dir_all(project_root.join(".codex")).await?;
+    tokio::fs::create_dir_all(nested.join(".adam")).await?;
+    tokio::fs::create_dir_all(project_root.join(".adam")).await?;
     tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
 
     tokio::fs::write(
-        project_root.join(".codex").join(CONFIG_TOML_FILE),
+        project_root.join(".adam").join(CONFIG_TOML_FILE),
         "instructions = \"root\"\n",
     )
     .await?;
     tokio::fs::write(
-        nested.join(".codex").join(CONFIG_TOML_FILE),
+        nested.join(".adam").join(CONFIG_TOML_FILE),
         "instructions = \"child\"\n",
     )
     .await?;
@@ -610,15 +610,15 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
         .layers_high_to_low()
         .into_iter()
         .filter_map(|layer| match &layer.name {
-            super::ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder),
+            super::ConfigLayerSource::Project { dot_adam_folder } => Some(dot_adam_folder),
             _ => None,
         })
         .collect();
     assert_eq!(project_layers.len(), 2);
-    assert_eq!(project_layers[0].as_path(), nested.join(".codex").as_path());
+    assert_eq!(project_layers[0].as_path(), nested.join(".adam").as_path());
     assert_eq!(
         project_layers[1].as_path(),
-        project_root.join(".codex").as_path()
+        project_root.join(".adam").as_path()
     );
 
     let config = layers.effective_config();
@@ -631,13 +631,12 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
 }
 
 #[tokio::test]
-async fn project_paths_resolve_relative_to_dot_codex_and_override_in_order() -> std::io::Result<()>
-{
+async fn project_paths_resolve_relative_to_dot_adam_and_override_in_order() -> std::io::Result<()> {
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");
     let nested = project_root.join("child");
-    tokio::fs::create_dir_all(project_root.join(".codex")).await?;
-    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::create_dir_all(project_root.join(".adam")).await?;
+    tokio::fs::create_dir_all(nested.join(".adam")).await?;
     tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
 
     let root_cfg = r#"
@@ -646,18 +645,14 @@ model_instructions_file = "root.txt"
     let nested_cfg = r#"
 model_instructions_file = "child.txt"
 "#;
-    tokio::fs::write(project_root.join(".codex").join(CONFIG_TOML_FILE), root_cfg).await?;
-    tokio::fs::write(nested.join(".codex").join(CONFIG_TOML_FILE), nested_cfg).await?;
+    tokio::fs::write(project_root.join(".adam").join(CONFIG_TOML_FILE), root_cfg).await?;
+    tokio::fs::write(nested.join(".adam").join(CONFIG_TOML_FILE), nested_cfg).await?;
     tokio::fs::write(
-        project_root.join(".codex").join("root.txt"),
+        project_root.join(".adam").join("root.txt"),
         "root instructions",
     )
     .await?;
-    tokio::fs::write(
-        nested.join(".codex").join("child.txt"),
-        "child instructions",
-    )
-    .await?;
+    tokio::fs::write(nested.join(".adam").join("child.txt"), "child instructions").await?;
 
     let adam_home = tmp.path().join("home");
     tokio::fs::create_dir_all(&adam_home).await?;
@@ -717,12 +712,12 @@ async fn cli_override_model_instructions_file_sets_base_instructions() -> std::i
 }
 
 #[tokio::test]
-async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> std::io::Result<()> {
+async fn project_layer_is_added_when_dot_adam_exists_without_config_toml() -> std::io::Result<()> {
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");
     let nested = project_root.join("child");
     tokio::fs::create_dir_all(&nested).await?;
-    tokio::fs::create_dir_all(project_root.join(".codex")).await?;
+    tokio::fs::create_dir_all(project_root.join(".adam")).await?;
     tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
 
     let adam_home = tmp.path().join("home");
@@ -746,7 +741,7 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
     assert_eq!(
         vec![&ConfigLayerEntry {
             name: super::ConfigLayerSource::Project {
-                dot_codex_folder: AbsolutePathBuf::from_absolute_path(project_root.join(".codex"))?,
+                dot_adam_folder: AbsolutePathBuf::from_absolute_path(project_root.join(".adam"))?,
             },
             config: TomlValue::Table(toml::map::Map::new()),
             version: version_for_toml(&TomlValue::Table(toml::map::Map::new())),
@@ -754,6 +749,43 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
         }],
         project_layers
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn dot_codex_project_config_is_ignored() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(
+        nested.join(".codex").join(CONFIG_TOML_FILE),
+        "instructions = \"legacy\"\n",
+    )
+    .await?;
+
+    let adam_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&adam_home).await?;
+    make_config_for_test(&adam_home, &project_root, TrustLevel::Trusted, None).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let layers = load_config_layers_state(
+        &adam_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .layers_high_to_low()
+        .into_iter()
+        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .collect();
+    assert_eq!(Vec::<&ConfigLayerEntry>::new(), project_layers);
+    assert_eq!(None, layers.effective_config().get("instructions"));
 
     Ok(())
 }
@@ -803,20 +835,20 @@ async fn adam_home_within_project_tree_is_not_double_loaded() -> std::io::Result
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");
     let nested = project_root.join("child");
-    let project_dot_codex = project_root.join(".codex");
-    let nested_dot_codex = nested.join(".codex");
+    let project_dot_adam = project_root.join(".adam");
+    let nested_dot_adam = nested.join(".adam");
 
-    tokio::fs::create_dir_all(&nested_dot_codex).await?;
+    tokio::fs::create_dir_all(&nested_dot_adam).await?;
     tokio::fs::create_dir_all(project_root.join(".git")).await?;
     tokio::fs::write(
-        nested_dot_codex.join(CONFIG_TOML_FILE),
+        nested_dot_adam.join(CONFIG_TOML_FILE),
         "instructions = \"child\"\n",
     )
     .await?;
 
-    tokio::fs::create_dir_all(&project_dot_codex).await?;
-    make_config_for_test(&project_dot_codex, &project_root, TrustLevel::Trusted, None).await?;
-    let user_config_path = project_dot_codex.join(CONFIG_TOML_FILE);
+    tokio::fs::create_dir_all(&project_dot_adam).await?;
+    make_config_for_test(&project_dot_adam, &project_root, TrustLevel::Trusted, None).await?;
+    let user_config_path = project_dot_adam.join(CONFIG_TOML_FILE);
     let user_config_contents = tokio::fs::read_to_string(&user_config_path).await?;
     tokio::fs::write(
         &user_config_path,
@@ -826,7 +858,7 @@ async fn adam_home_within_project_tree_is_not_double_loaded() -> std::io::Result
 
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let layers = load_config_layers_state(
-        &project_dot_codex,
+        &project_dot_adam,
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
@@ -848,7 +880,7 @@ async fn adam_home_within_project_tree_is_not_double_loaded() -> std::io::Result
     assert_eq!(
         vec![&ConfigLayerEntry {
             name: super::ConfigLayerSource::Project {
-                dot_codex_folder: AbsolutePathBuf::from_absolute_path(&nested_dot_codex)?,
+                dot_adam_folder: AbsolutePathBuf::from_absolute_path(&nested_dot_adam)?,
             },
             config: child_config.clone(),
             version: version_for_toml(&child_config),
@@ -869,9 +901,9 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");
     let nested = project_root.join("child");
-    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::create_dir_all(nested.join(".adam")).await?;
     tokio::fs::write(
-        nested.join(".codex").join(CONFIG_TOML_FILE),
+        nested.join(".adam").join(CONFIG_TOML_FILE),
         "instructions = \"child\"\n",
     )
     .await?;
@@ -971,10 +1003,10 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");
     let nested = project_root.join("child");
-    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::create_dir_all(nested.join(".adam")).await?;
     tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
     tokio::fs::write(
-        nested.join(".codex").join(CONFIG_TOML_FILE),
+        nested.join(".adam").join(CONFIG_TOML_FILE),
         "instructions =",
     )
     .await?;
@@ -1075,16 +1107,16 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");
     let nested = project_root.join("child");
-    tokio::fs::create_dir_all(project_root.join(".codex")).await?;
-    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::create_dir_all(project_root.join(".adam")).await?;
+    tokio::fs::create_dir_all(nested.join(".adam")).await?;
     tokio::fs::write(project_root.join(".hg"), "hg").await?;
     tokio::fs::write(
-        project_root.join(".codex").join(CONFIG_TOML_FILE),
+        project_root.join(".adam").join(CONFIG_TOML_FILE),
         "instructions = \"root\"\n",
     )
     .await?;
     tokio::fs::write(
-        nested.join(".codex").join(CONFIG_TOML_FILE),
+        nested.join(".adam").join(CONFIG_TOML_FILE),
         "instructions = \"child\"\n",
     )
     .await?;
@@ -1113,15 +1145,15 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
         .layers_high_to_low()
         .into_iter()
         .filter_map(|layer| match &layer.name {
-            super::ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder),
+            super::ConfigLayerSource::Project { dot_adam_folder } => Some(dot_adam_folder),
             _ => None,
         })
         .collect();
     assert_eq!(project_layers.len(), 2);
-    assert_eq!(project_layers[0].as_path(), nested.join(".codex").as_path());
+    assert_eq!(project_layers[0].as_path(), nested.join(".adam").as_path());
     assert_eq!(
         project_layers[1].as_path(),
-        project_root.join(".codex").as_path()
+        project_root.join(".adam").as_path()
     );
 
     let merged = layers.effective_config();
@@ -1166,14 +1198,14 @@ mod requirements_exec_policy_tests {
         panic!("rule should match so heuristic should not be called");
     }
 
-    fn config_stack_for_dot_codex_folder_with_requirements(
-        dot_codex_folder: &Path,
+    fn config_stack_for_dot_adam_folder_with_requirements(
+        dot_adam_folder: &Path,
         requirements: ConfigRequirements,
     ) -> ConfigLayerStack {
-        let dot_codex_folder = AbsolutePathBuf::from_absolute_path(dot_codex_folder)
-            .expect("absolute dot_codex_folder");
+        let dot_adam_folder =
+            AbsolutePathBuf::from_absolute_path(dot_adam_folder).expect("absolute dot_adam_folder");
         let layer = ConfigLayerEntry::new(
-            ConfigLayerSource::Project { dot_codex_folder },
+            ConfigLayerSource::Project { dot_adam_folder },
             TomlValue::Table(Default::default()),
         );
         ConfigLayerStack::new(vec![layer], requirements, ConfigRequirementsToml::default())
@@ -1384,7 +1416,7 @@ prefix_rules = []
             "#,
         );
         let config_stack =
-            config_stack_for_dot_codex_folder_with_requirements(temp_dir.path(), requirements);
+            config_stack_for_dot_adam_folder_with_requirements(temp_dir.path(), requirements);
 
         let policy = load_exec_policy(&config_stack).await?;
 
@@ -1422,7 +1454,7 @@ prefix_rules = []
             "#,
         );
         let config_stack =
-            config_stack_for_dot_codex_folder_with_requirements(temp_dir.path(), requirements);
+            config_stack_for_dot_adam_folder_with_requirements(temp_dir.path(), requirements);
 
         let policy = load_exec_policy(&config_stack).await?;
 

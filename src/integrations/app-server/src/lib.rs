@@ -130,9 +130,9 @@ fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> 
         {
             continue;
         }
-        if let ConfigLayerSource::Project { dot_codex_folder } = &layer.name {
+        if let ConfigLayerSource::Project { dot_adam_folder } = &layer.name {
             disabled_folders.push((
-                dot_codex_folder.as_path().display().to_string(),
+                dot_adam_folder.as_path().display().to_string(),
                 layer
                     .disabled_reason
                     .as_ref()

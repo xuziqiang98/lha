@@ -185,15 +185,15 @@ mod tests {
     }
 
     #[test]
-    fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
+    fn create_seatbelt_args_with_read_only_git_and_adam_subpaths() {
         // Create a temporary workspace with two writable roots: one containing
-        // top-level .git and .codex directories and one without them.
+        // top-level .git and .adam directories and one without them.
         let tmp = TempDir::new().expect("tempdir");
         let PopulatedTmp {
             vulnerable_root,
             vulnerable_root_canonical,
             dot_git_canonical,
-            dot_codex_canonical,
+            dot_adam_canonical,
             empty_root,
             empty_root_canonical,
         } = populate_tmpdir(tmp.path());
@@ -213,13 +213,13 @@ mod tests {
         };
 
         // Create the Seatbelt command to wrap a shell command that tries to
-        // write to .codex/config.toml in the vulnerable root.
+        // write to .adam/config.toml in the vulnerable root.
         let shell_command: Vec<String> = [
             "bash",
             "-c",
             "echo 'sandbox_mode = \"danger-full-access\"' > \"$1\"",
             "bash",
-            dot_codex_canonical
+            dot_adam_canonical
                 .join("config.toml")
                 .to_string_lossy()
                 .as_ref(),
@@ -233,7 +233,7 @@ mod tests {
         // Note that the policy includes:
         // - the base policy,
         // - read-only access to the filesystem,
-        // - write access to WRITABLE_ROOT_0 (but not its .git or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
+        // - write access to WRITABLE_ROOT_0 (but not its .git or .adam), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
         let expected_policy = format!(
             r#"{MACOS_SEATBELT_BASE_POLICY}
 ; allow read-only file operations
@@ -257,7 +257,7 @@ mod tests {
             ),
             format!(
                 "-DWRITABLE_ROOT_0_RO_1={}",
-                dot_codex_canonical.to_string_lossy()
+                dot_adam_canonical.to_string_lossy()
             ),
             format!(
                 "-DWRITABLE_ROOT_1={}",
@@ -282,9 +282,9 @@ mod tests {
 
         assert_eq!(expected_args, args);
 
-        // Verify that .codex/config.toml cannot be modified under the generated
+        // Verify that .adam/config.toml cannot be modified under the generated
         // Seatbelt policy.
-        let config_toml = dot_codex_canonical.join("config.toml");
+        let config_toml = dot_adam_canonical.join("config.toml");
         let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
             .args(&args)
             .current_dir(&cwd)
@@ -333,7 +333,7 @@ mod tests {
         );
         assert_seatbelt_denied(&output.stderr, &pre_commit_hook);
 
-        // Verify that writing a file to the folder containing .git and .codex is allowed.
+        // Verify that writing a file to the folder containing .git and .adam is allowed.
         let allowed_file = vulnerable_root_canonical.join("allowed.txt");
         let shell_command_allowed: Vec<String> = [
             "bash",
@@ -459,19 +459,19 @@ mod tests {
     #[test]
     fn create_seatbelt_args_for_cwd_as_git_repo() {
         // Create a temporary workspace with two writable roots: one containing
-        // top-level .git and .codex directories and one without them.
+        // top-level .git and .adam directories and one without them.
         let tmp = TempDir::new().expect("tempdir");
         let PopulatedTmp {
             vulnerable_root,
             vulnerable_root_canonical,
             dot_git_canonical,
-            dot_codex_canonical,
+            dot_adam_canonical,
             ..
         } = populate_tmpdir(tmp.path());
 
         // Build a policy that does not specify any writable_roots, but does
         // use the default ones (cwd and TMPDIR) and verifies the `.git` and
-        // `.codex` checks are done properly for cwd.
+        // `.adam` checks are done properly for cwd.
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: false,
@@ -484,7 +484,7 @@ mod tests {
             "-c",
             "echo 'sandbox_mode = \"danger-full-access\"' > \"$1\"",
             "bash",
-            dot_codex_canonical
+            dot_adam_canonical
                 .join("config.toml")
                 .to_string_lossy()
                 .as_ref(),
@@ -511,7 +511,7 @@ mod tests {
         // Note that the policy includes:
         // - the base policy,
         // - read-only access to the filesystem,
-        // - write access to WRITABLE_ROOT_0 (but not its .git or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
+        // - write access to WRITABLE_ROOT_0 (but not its .git or .adam), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
         let expected_policy = format!(
             r#"{MACOS_SEATBELT_BASE_POLICY}
 ; allow read-only file operations
@@ -535,7 +535,7 @@ mod tests {
             ),
             format!(
                 "-DWRITABLE_ROOT_0_RO_1={}",
-                dot_codex_canonical.to_string_lossy()
+                dot_adam_canonical.to_string_lossy()
             ),
             format!(
                 "-DWRITABLE_ROOT_1={}",
@@ -563,19 +563,19 @@ mod tests {
     }
 
     struct PopulatedTmp {
-        /// Path containing a .git and .codex subfolder.
+        /// Path containing a .git and .adam subfolder.
         /// For the purposes of this test, we consider this a "vulnerable" root
         /// because a bad actor could write to .git/hooks/pre-commit so an
         /// unsuspecting user would run code as privileged the next time they
-        /// ran `git commit` themselves, or modified .codex/config.toml to
+        /// ran `git commit` themselves, or modified .adam/config.toml to
         /// contain `sandbox_mode = "danger-full-access"` so the agent would
         /// have full privileges the next time it ran in that repo.
         vulnerable_root: PathBuf,
         vulnerable_root_canonical: PathBuf,
         dot_git_canonical: PathBuf,
-        dot_codex_canonical: PathBuf,
+        dot_adam_canonical: PathBuf,
 
-        /// Path without .git or .codex subfolders.
+        /// Path without .git or .adam subfolders.
         empty_root: PathBuf,
         /// Canonicalized version of `empty_root`.
         empty_root_canonical: PathBuf,
@@ -594,12 +594,12 @@ mod tests {
             .output()
             .expect("git init .");
 
-        fs::create_dir_all(vulnerable_root.join(".codex")).expect("create .codex");
+        fs::create_dir_all(vulnerable_root.join(".adam")).expect("create .adam");
         fs::write(
-            vulnerable_root.join(".codex").join("config.toml"),
+            vulnerable_root.join(".adam").join("config.toml"),
             "sandbox_mode = \"read-only\"\n",
         )
-        .expect("write .codex/config.toml");
+        .expect("write .adam/config.toml");
 
         let empty_root = tmp.join("empty_root");
         fs::create_dir_all(&empty_root).expect("create empty_root");
@@ -609,13 +609,13 @@ mod tests {
             .canonicalize()
             .expect("canonicalize vulnerable_root");
         let dot_git_canonical = vulnerable_root_canonical.join(".git");
-        let dot_codex_canonical = vulnerable_root_canonical.join(".codex");
+        let dot_adam_canonical = vulnerable_root_canonical.join(".adam");
         let empty_root_canonical = empty_root.canonicalize().expect("canonicalize empty_root");
         PopulatedTmp {
             vulnerable_root,
             vulnerable_root_canonical,
             dot_git_canonical,
-            dot_codex_canonical,
+            dot_adam_canonical,
             empty_root,
             empty_root_canonical,
         }

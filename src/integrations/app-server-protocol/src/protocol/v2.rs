@@ -261,12 +261,12 @@ pub enum ConfigLayerSource {
         file: AbsolutePathBuf,
     },
 
-    /// Path to a .codex/ folder within a project. There could be multiple of
+    /// Path to a .adam/ folder within a project. There could be multiple of
     /// these between `cwd` and the project/repo root.
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Project {
-        dot_codex_folder: AbsolutePathBuf,
+        dot_adam_folder: AbsolutePathBuf,
     },
 
     /// Session-layer overrides supplied via `-c`/`--config`.
@@ -2661,7 +2661,7 @@ mod tests {
                 },
                 CoreUserInput::Skill {
                     name: "skill-creator".to_string(),
-                    path: PathBuf::from("/repo/.codex/skills/skill-creator/SKILL.md"),
+                    path: PathBuf::from("/repo/.adam/skills/skill-creator/SKILL.md"),
                 },
                 CoreUserInput::Mention {
                     name: "Demo App".to_string(),
@@ -2687,7 +2687,7 @@ mod tests {
                     },
                     UserInput::Skill {
                         name: "skill-creator".to_string(),
-                        path: PathBuf::from("/repo/.codex/skills/skill-creator/SKILL.md"),
+                        path: PathBuf::from("/repo/.adam/skills/skill-creator/SKILL.md"),
                     },
                     UserInput::Mention {
                         name: "Demo App".to_string(),

@@ -196,8 +196,8 @@ fn skill_roots_from_layer_stack_inner(config_layer_stack: &ConfigLayerStack) -> 
                 });
             }
             ConfigLayerSource::System { .. } => {
-                // The system config layer lives under `/etc/codex/` on Unix, so treat
-                // `/etc/codex/skills` as admin-scoped skills.
+                // The system config layer lives under `/etc/adam/` on Unix, so treat
+                // `/etc/adam/skills` as admin-scoped skills.
                 roots.push(SkillRoot {
                     path: config_folder.as_path().join(SKILLS_DIR_NAME),
                     scope: SkillScope::Admin,
@@ -772,7 +772,7 @@ mod tests {
     use tempfile::TempDir;
     use toml::Value as TomlValue;
 
-    const REPO_ROOT_CONFIG_DIR_NAME: &str = ".codex";
+    const REPO_ROOT_CONFIG_DIR_NAME: &str = ".adam";
 
     async fn make_config(adam_home: &TempDir) -> Config {
         make_config_for_cwd(adam_home, adam_home.path().to_path_buf()).await
@@ -828,8 +828,8 @@ mod tests {
     -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
 
-        let system_folder = tmp.path().join("etc/codex");
-        let user_folder = tmp.path().join("home/codex");
+        let system_folder = tmp.path().join("etc/adam");
+        let user_folder = tmp.path().join("home/adam");
         fs::create_dir_all(&system_folder)?;
         fs::create_dir_all(&user_folder)?;
 
@@ -877,15 +877,15 @@ mod tests {
     fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
 
-        let user_folder = tmp.path().join("home/codex");
+        let user_folder = tmp.path().join("home/adam");
         fs::create_dir_all(&user_folder)?;
 
         let project_root = tmp.path().join("repo");
-        let dot_codex = project_root.join(".codex");
-        fs::create_dir_all(&dot_codex)?;
+        let dot_adam = project_root.join(".adam");
+        fs::create_dir_all(&dot_adam)?;
 
         let user_file = AbsolutePathBuf::from_absolute_path(user_folder.join("config.toml"))?;
-        let project_dot_codex = AbsolutePathBuf::from_absolute_path(&dot_codex)?;
+        let project_dot_adam = AbsolutePathBuf::from_absolute_path(&dot_adam)?;
 
         let layers = vec![
             ConfigLayerEntry::new(
@@ -894,7 +894,7 @@ mod tests {
             ),
             ConfigLayerEntry::new_disabled(
                 ConfigLayerSource::Project {
-                    dot_codex_folder: project_dot_codex,
+                    dot_adam_folder: project_dot_adam,
                 },
                 TomlValue::Table(toml::map::Map::new()),
                 "marked untrusted",
@@ -914,7 +914,7 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                (SkillScope::Repo, dot_codex.join("skills")),
+                (SkillScope::Repo, dot_adam.join("skills")),
                 (SkillScope::User, user_folder.join("skills")),
                 (
                     SkillScope::System,

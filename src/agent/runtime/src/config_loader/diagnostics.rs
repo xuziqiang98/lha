@@ -186,8 +186,8 @@ fn config_path_for_layer(layer: &ConfigLayerEntry) -> Option<PathBuf> {
     match &layer.name {
         ConfigLayerSource::System { file } => Some(file.to_path_buf()),
         ConfigLayerSource::User { file } => Some(file.to_path_buf()),
-        ConfigLayerSource::Project { dot_codex_folder } => {
-            Some(dot_codex_folder.as_path().join(CONFIG_TOML_FILE))
+        ConfigLayerSource::Project { dot_adam_folder } => {
+            Some(dot_adam_folder.as_path().join(CONFIG_TOML_FILE))
         }
         ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => Some(file.to_path_buf()),
         ConfigLayerSource::Mdm { .. }

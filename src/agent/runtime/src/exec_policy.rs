@@ -248,7 +248,7 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
     // from each layer, so that higher-precedence layers can override
     // rules defined in lower-precedence ones.
     let mut policy_paths = Vec::new();
-    // Include disabled project layers so .codex/rules still applies when
+    // Include disabled project layers so .adam/rules still applies when
     // project config.toml is trust-disabled.
     for layer in config_stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true) {
         if let Some(config_folder) = layer.config_folder() {
@@ -575,11 +575,11 @@ mod tests {
     use tempfile::tempdir;
     use toml::Value as TomlValue;
 
-    fn config_stack_for_dot_codex_folder(dot_codex_folder: &Path) -> ConfigLayerStack {
-        let dot_codex_folder = AbsolutePathBuf::from_absolute_path(dot_codex_folder)
-            .expect("absolute dot_codex_folder");
+    fn config_stack_for_dot_adam_folder(dot_adam_folder: &Path) -> ConfigLayerStack {
+        let dot_adam_folder =
+            AbsolutePathBuf::from_absolute_path(dot_adam_folder).expect("absolute dot_adam_folder");
         let layer = ConfigLayerEntry::new(
-            ConfigLayerSource::Project { dot_codex_folder },
+            ConfigLayerSource::Project { dot_adam_folder },
             TomlValue::Table(Default::default()),
         );
         ConfigLayerStack::new(
@@ -595,7 +595,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.disable(Feature::ExecPolicy);
         let temp_dir = tempdir().expect("create temp dir");
-        let config_stack = config_stack_for_dot_codex_folder(temp_dir.path());
+        let config_stack = config_stack_for_dot_adam_folder(temp_dir.path());
 
         let manager = ExecPolicyManager::load(&features, &config_stack)
             .await
@@ -631,7 +631,7 @@ mod tests {
     #[tokio::test]
     async fn loads_policies_from_policy_subdirectory() {
         let temp_dir = tempdir().expect("create temp dir");
-        let config_stack = config_stack_for_dot_codex_folder(temp_dir.path());
+        let config_stack = config_stack_for_dot_adam_folder(temp_dir.path());
         let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
         fs::create_dir_all(&policy_dir).expect("create policy dir");
         fs::write(
@@ -660,7 +660,7 @@ mod tests {
     #[tokio::test]
     async fn ignores_policies_outside_policy_dir() {
         let temp_dir = tempdir().expect("create temp dir");
-        let config_stack = config_stack_for_dot_codex_folder(temp_dir.path());
+        let config_stack = config_stack_for_dot_adam_folder(temp_dir.path());
         fs::write(
             temp_dir.path().join("root.rules"),
             r#"prefix_rule(pattern=["ls"], decision="prompt")"#,
@@ -693,10 +693,10 @@ mod tests {
             r#"prefix_rule(pattern=["ls"], decision="forbidden")"#,
         )?;
 
-        let project_dot_codex_folder = AbsolutePathBuf::from_absolute_path(project_dir.path())?;
+        let project_dot_adam_folder = AbsolutePathBuf::from_absolute_path(project_dir.path())?;
         let layers = vec![ConfigLayerEntry::new_disabled(
             ConfigLayerSource::Project {
-                dot_codex_folder: project_dot_codex_folder,
+                dot_adam_folder: project_dot_adam_folder,
             },
             TomlValue::Table(Default::default()),
             "trust disabled",
@@ -745,7 +745,7 @@ mod tests {
 
         let user_config_toml =
             AbsolutePathBuf::from_absolute_path(user_dir.path().join("config.toml"))?;
-        let project_dot_codex_folder = AbsolutePathBuf::from_absolute_path(project_dir.path())?;
+        let project_dot_adam_folder = AbsolutePathBuf::from_absolute_path(project_dir.path())?;
         let layers = vec![
             ConfigLayerEntry::new(
                 ConfigLayerSource::User {
@@ -755,7 +755,7 @@ mod tests {
             ),
             ConfigLayerEntry::new(
                 ConfigLayerSource::Project {
-                    dot_codex_folder: project_dot_codex_folder,
+                    dot_adam_folder: project_dot_adam_folder,
                 },
                 TomlValue::Table(Default::default()),
             ),

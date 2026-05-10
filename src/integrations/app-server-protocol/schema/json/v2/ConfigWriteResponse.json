@@ -100,9 +100,9 @@
           "type": "object"
         },
         {
-          "description": "Path to a .codex/ folder within a project. There could be multiple of these between `cwd` and the project/repo root.",
+          "description": "Path to a .adam/ folder within a project. There could be multiple of these between `cwd` and the project/repo root.",
           "properties": {
-            "dotCodexFolder": {
+            "dotAdamFolder": {
               "$ref": "#/definitions/AbsolutePathBuf"
             },
             "type": {
@@ -114,7 +114,7 @@
             }
           },
           "required": [
-            "dotCodexFolder",
+            "dotAdamFolder",
             "type"
           ],
           "title": "ProjectConfigLayerSource",

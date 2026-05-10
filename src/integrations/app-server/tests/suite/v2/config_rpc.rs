@@ -148,7 +148,7 @@ async fn config_read_includes_project_layers_for_cwd() -> Result<()> {
     write_config(&adam_home, r#"approval_policy = "on-request""#)?;
 
     let workspace = TempDir::new()?;
-    let project_config_dir = workspace.path().join(".codex");
+    let project_config_dir = workspace.path().join(".adam");
     std::fs::create_dir_all(&project_config_dir)?;
     std::fs::write(
         project_config_dir.join("config.toml"),
@@ -181,7 +181,7 @@ sandbox_mode = "read-only"
     assert_eq!(
         origins.get("sandbox_mode").expect("origin").name,
         ConfigLayerSource::Project {
-            dot_codex_folder: project_config
+            dot_adam_folder: project_config
         }
     );
 

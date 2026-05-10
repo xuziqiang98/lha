@@ -211,14 +211,14 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
         .config_layer_stack
         .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
     {
-        let ConfigLayerSource::Project { dot_codex_folder } = &layer.name else {
+        let ConfigLayerSource::Project { dot_adam_folder } = &layer.name else {
             continue;
         };
         if layer.disabled_reason.is_none() {
             continue;
         }
         disabled_folders.push((
-            dot_codex_folder.as_path().display().to_string(),
+            dot_adam_folder.as_path().display().to_string(),
             layer
                 .disabled_reason
                 .as_ref()

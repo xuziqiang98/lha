@@ -58,12 +58,12 @@ pub use state::ConfigLayerStackOrdering;
 pub use state::LoaderOverrides;
 
 /// On Unix systems, load requirements from this file path, if present.
-const DEFAULT_REQUIREMENTS_TOML_FILE_UNIX: &str = "/etc/codex/requirements.toml";
+const DEFAULT_REQUIREMENTS_TOML_FILE_UNIX: &str = "/etc/adam/requirements.toml";
 
 /// On Unix systems, load default settings from this file path, if present.
-/// Note that /etc/codex/ is treated as a "config folder," so subfolders such
+/// Note that /etc/adam/ is treated as a "config folder," so subfolders such
 /// as skills/ and rules/ will also be honored.
-pub const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/codex/config.toml";
+pub const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/adam/config.toml";
 
 const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 
@@ -73,20 +73,20 @@ const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 ///
 /// - admin:    managed preferences (*)
 /// - cloud:    managed cloud requirements
-/// - system    `/etc/codex/requirements.toml`
+/// - system    `/etc/adam/requirements.toml`
 ///
 /// For backwards compatibility, we also load from
-/// `/etc/codex/managed_config.toml` and map it to
-/// `/etc/codex/requirements.toml`.
+/// `/etc/adam/managed_config.toml` and map it to
+/// `/etc/adam/requirements.toml`.
 ///
 /// Configuration is built up from multiple layers in the following order:
 ///
 /// - admin:    managed preferences (*)
-/// - system    `/etc/codex/config.toml`
+/// - system    `/etc/adam/config.toml`
 /// - user      `${ADAM_HOME}/config.toml`
 /// - cwd       `${PWD}/config.toml` (loaded but disabled when the directory is untrusted)
-/// - tree      parent directories up to root looking for `./.codex/config.toml` (loaded but disabled when untrusted)
-/// - repo      `$(git rev-parse --show-toplevel)/.codex/config.toml` (loaded but disabled when untrusted)
+/// - tree      parent directories up to root looking for `./.adam/config.toml` (loaded but disabled when untrusted)
+/// - repo      `$(git rev-parse --show-toplevel)/.adam/config.toml` (loaded but disabled when untrusted)
 /// - runtime   e.g., --config flags, model selector in UI
 ///
 /// (*) Only available on macOS via managed device profiles.
@@ -120,7 +120,7 @@ pub async fn load_config_layers_state(
             .merge_unset_fields(RequirementSource::CloudRequirements, requirements);
     }
 
-    // Honor /etc/codex/requirements.toml.
+    // Honor /etc/adam/requirements.toml.
     if cfg!(unix) {
         load_requirements_toml(
             &mut config_requirements_toml,
@@ -334,7 +334,7 @@ async fn load_config_toml_for_required_layer(
     Ok(create_entry(toml_value))
 }
 
-/// If available, apply requirements from `/etc/codex/requirements.toml` to
+/// If available, apply requirements from `/etc/adam/requirements.toml` to
 /// `config_requirements_toml` by filling in any unset fields.
 async fn load_requirements_toml(
     config_requirements_toml: &mut ConfigRequirementsWithSources,
@@ -538,13 +538,13 @@ impl ProjectTrustContext {
 
 fn project_layer_entry(
     trust_context: &ProjectTrustContext,
-    dot_codex_folder: &AbsolutePathBuf,
+    dot_adam_folder: &AbsolutePathBuf,
     layer_dir: &AbsolutePathBuf,
     config: TomlValue,
     config_toml_exists: bool,
 ) -> ConfigLayerEntry {
     let source = ConfigLayerSource::Project {
-        dot_codex_folder: dot_codex_folder.clone(),
+        dot_adam_folder: dot_adam_folder.clone(),
     };
 
     if config_toml_exists && let Some(reason) = trust_context.disabled_reason_for_dir(layer_dir) {
@@ -697,8 +697,8 @@ async fn load_project_layers(
 
     let mut layers = Vec::new();
     for dir in dirs {
-        let dot_codex = dir.join(".codex");
-        if !tokio::fs::metadata(&dot_codex)
+        let dot_adam = dir.join(".adam");
+        if !tokio::fs::metadata(&dot_adam)
             .await
             .map(|meta| meta.is_dir())
             .unwrap_or(false)
@@ -708,13 +708,13 @@ async fn load_project_layers(
 
         let layer_dir = AbsolutePathBuf::from_absolute_path(dir)?;
         let decision = trust_context.decision_for_dir(&layer_dir);
-        let dot_codex_abs = AbsolutePathBuf::from_absolute_path(&dot_codex)?;
-        let dot_codex_normalized =
-            normalize_path(dot_codex_abs.as_path()).unwrap_or_else(|_| dot_codex_abs.to_path_buf());
-        if dot_codex_abs == adam_home_abs || dot_codex_normalized == adam_home_normalized {
+        let dot_adam_abs = AbsolutePathBuf::from_absolute_path(&dot_adam)?;
+        let dot_adam_normalized =
+            normalize_path(dot_adam_abs.as_path()).unwrap_or_else(|_| dot_adam_abs.to_path_buf());
+        if dot_adam_abs == adam_home_abs || dot_adam_normalized == adam_home_normalized {
             continue;
         }
-        let config_file = dot_codex_abs.join(CONFIG_TOML_FILE)?;
+        let config_file = dot_adam_abs.join(CONFIG_TOML_FILE)?;
         match tokio::fs::read_to_string(&config_file).await {
             Ok(contents) => {
                 let config: TomlValue = match toml::from_str(&contents) {
@@ -731,7 +731,7 @@ async fn load_project_layers(
                         }
                         layers.push(project_layer_entry(
                             trust_context,
-                            &dot_codex_abs,
+                            &dot_adam_abs,
                             &layer_dir,
                             TomlValue::Table(toml::map::Map::new()),
                             true,
@@ -739,10 +739,9 @@ async fn load_project_layers(
                         continue;
                     }
                 };
-                let config =
-                    resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
+                let config = resolve_relative_paths_in_config_toml(config, dot_adam_abs.as_path())?;
                 let entry =
-                    project_layer_entry(trust_context, &dot_codex_abs, &layer_dir, config, true);
+                    project_layer_entry(trust_context, &dot_adam_abs, &layer_dir, config, true);
                 layers.push(entry);
             }
             Err(err) => {
@@ -752,7 +751,7 @@ async fn load_project_layers(
                     // that are significant in the overall ConfigLayerStack.
                     layers.push(project_layer_entry(
                         trust_context,
-                        &dot_codex_abs,
+                        &dot_adam_abs,
                         &layer_dir,
                         TomlValue::Table(toml::map::Map::new()),
                         false,
@@ -772,7 +771,7 @@ async fn load_project_layers(
 }
 
 /// The legacy mechanism for specifying admin-enforced configuration is to read
-/// from a file like `/etc/codex/managed_config.toml` that has the same
+/// from a file like `/etc/adam/managed_config.toml` that has the same
 /// structure as `config.toml` where fields like `approval_policy` can specify
 /// exactly one value rather than a list of allowed values.
 ///

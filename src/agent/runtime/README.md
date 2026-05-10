@@ -23,7 +23,7 @@ Expects `/usr/bin/sandbox-exec` to be present.
 
 When using the workspace-write sandbox policy, the Seatbelt profile allows
 writes under the configured writable roots while keeping `.git` (directory or
-pointer file), the resolved `gitdir:` target, and `.codex` read-only.
+pointer file), the resolved `gitdir:` target, and `.adam` read-only.
 
 ### Linux
 

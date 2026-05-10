@@ -427,7 +427,7 @@ pub enum SandboxPolicy {
 /// A writable root path accompanied by a list of subpaths that should remain
 /// read‑only even when the root is writable. This is primarily used to ensure
 /// that folders containing files that could be modified to escalate the
-/// privileges of the agent (e.g. `.codex`, `.git`, notably `.git/hooks`) under
+/// privileges of the agent (e.g. `.adam`, `.git`, notably `.git/hooks`) under
 /// a writable root are not modified by the agent.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema)]
 pub struct WritableRoot {
@@ -598,11 +598,11 @@ impl SandboxPolicy {
                             subpaths.push(top_level_git);
                         }
                         #[allow(clippy::expect_used)]
-                        let top_level_codex = writable_root
-                            .join(".codex")
-                            .expect(".codex is a valid relative path");
-                        if top_level_codex.as_path().is_dir() {
-                            subpaths.push(top_level_codex);
+                        let top_level_adam = writable_root
+                            .join(".adam")
+                            .expect(".adam is a valid relative path");
+                        if top_level_adam.as_path().is_dir() {
+                            subpaths.push(top_level_adam);
                         }
                         WritableRoot {
                             root: writable_root,
