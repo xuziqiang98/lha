@@ -1458,7 +1458,7 @@ fn slice_display_columns(text: &str, col_start: usize, col_end: usize) -> String
     for ch in text.chars() {
         let width = UnicodeWidthChar::width(ch).unwrap_or(0);
         let next_col = col.saturating_add(width);
-        if next_col > col_start && col < col_end {
+        if col >= col_start && col < col_end {
             out.push(ch);
         }
         col = next_col;
@@ -1979,6 +1979,29 @@ mod tests {
         assert_eq!(
             select_columns(&mut view, 0, 0, 0, UnicodeWidthStr::width("已修复")),
             Some("已修复".to_string())
+        );
+    }
+
+    #[test]
+    fn selection_copy_excludes_cjk_char_when_start_is_inside_trailing_cell() {
+        let text = "于做一个\"上游语义对齐、局部最小改动\"的修法";
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(TestCell(text))]);
+        let _ = render_test_view(&mut view, 80, 3);
+
+        assert_eq!(
+            select_columns(&mut view, 0, 1, 0, UnicodeWidthStr::width(text)),
+            Some("做一个\"上游语义对齐、局部最小改动\"的修法".to_string())
+        );
+    }
+
+    #[test]
+    fn selection_copy_includes_cjk_char_when_leading_cell_is_selected() {
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(TestCell("于做"))]);
+        let _ = render_test_view(&mut view, 20, 3);
+
+        assert_eq!(
+            select_columns(&mut view, 0, 0, 0, 1),
+            Some("于".to_string())
         );
     }
 
