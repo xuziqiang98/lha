@@ -4,6 +4,7 @@ use std::sync::Arc;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::get_last_assistant_message_from_turn;
+use crate::codex::runtime_notice_to_event_msg;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
@@ -620,10 +621,8 @@ async fn drain_to_completed(
         };
         match event {
             Ok(TurnEvent::RuntimeNotice(notice)) => {
-                let warning = EventMsg::Warning(WarningEvent {
-                    message: notice.message,
-                });
-                sess.send_event(turn_context, warning).await;
+                sess.send_event(turn_context, runtime_notice_to_event_msg(notice))
+                    .await;
             }
             Ok(TurnEvent::ItemCompleted { item, .. }) => {
                 let item = item.into_item();

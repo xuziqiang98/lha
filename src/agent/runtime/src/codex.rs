@@ -44,6 +44,8 @@ use adam_agent_core::kernel::TurnEventUpdate;
 use adam_agent_core::kernel::TurnStreamOutcome;
 use adam_llm::DefaultRuntimeClientFactory;
 use adam_llm::RuntimeEndpoint;
+use adam_llm::RuntimeNotice;
+use adam_llm::RuntimeNoticeKind;
 use adam_llm::RuntimeSession;
 use adam_llm::ToolResultItem;
 use adam_llm::TurnEvent;
@@ -169,6 +171,7 @@ use crate::protocol::SkillErrorInfo;
 use crate::protocol::SkillInterface as ProtocolSkillInterface;
 use crate::protocol::SkillMetadata as ProtocolSkillMetadata;
 use crate::protocol::SkillToolDependency as ProtocolSkillToolDependency;
+use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
@@ -4696,12 +4699,7 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
             TurnEvent::Created => Ok(TurnEventUpdate::default()),
             TurnEvent::RuntimeNotice(notice) => {
                 self.sess
-                    .send_event(
-                        &self.turn_context,
-                        EventMsg::Warning(WarningEvent {
-                            message: notice.message,
-                        }),
-                    )
+                    .send_event(&self.turn_context, runtime_notice_to_event_msg(notice))
                     .await;
                 Ok(TurnEventUpdate::default())
             }
@@ -5103,6 +5101,23 @@ use crate::git_info::get_git_repo_root;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context_with_rx;
 
+pub(crate) fn runtime_notice_to_event_msg(notice: RuntimeNotice) -> EventMsg {
+    match notice.kind {
+        RuntimeNoticeKind::Reconnecting => EventMsg::StreamError(StreamErrorEvent {
+            message: notice.message,
+            codex_error_info: Some(CodexErrorInfo::ResponseStreamDisconnected {
+                http_status_code: None,
+            }),
+            additional_details: None,
+        }),
+        RuntimeNoticeKind::TransportFallback | RuntimeNoticeKind::CompatibilityRetry => {
+            EventMsg::Warning(WarningEvent {
+                message: notice.message,
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5157,6 +5172,63 @@ mod tests {
     struct InstructionsTestCase {
         slug: &'static str,
         expects_apply_patch_instructions: bool,
+    }
+
+    #[test]
+    fn reconnecting_runtime_notice_maps_to_stream_error() {
+        let notice = RuntimeNotice {
+            kind: RuntimeNoticeKind::Reconnecting,
+            message: "Reconnecting... 1/5".to_string(),
+        };
+
+        match runtime_notice_to_event_msg(notice) {
+            EventMsg::StreamError(StreamErrorEvent {
+                message,
+                codex_error_info,
+                additional_details,
+            }) => {
+                assert_eq!(message, "Reconnecting... 1/5");
+                assert_eq!(
+                    codex_error_info,
+                    Some(CodexErrorInfo::ResponseStreamDisconnected {
+                        http_status_code: None,
+                    })
+                );
+                assert_eq!(additional_details, None);
+            }
+            other => panic!("expected stream error event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_reconnecting_runtime_notices_map_to_warnings() {
+        let cases = [
+            RuntimeNotice {
+                kind: RuntimeNoticeKind::TransportFallback,
+                message: "Falling back from WebSockets to HTTPS transport.".to_string(),
+            },
+            RuntimeNotice {
+                kind: RuntimeNoticeKind::CompatibilityRetry,
+                message: "Retrying with a compatible request.".to_string(),
+            },
+        ];
+
+        let messages: Vec<String> = cases
+            .into_iter()
+            .map(runtime_notice_to_event_msg)
+            .map(|event| match event {
+                EventMsg::Warning(WarningEvent { message }) => message,
+                other => panic!("expected warning event, got {other:?}"),
+            })
+            .collect();
+
+        assert_eq!(
+            messages,
+            vec![
+                "Falling back from WebSockets to HTTPS transport.".to_string(),
+                "Retrying with a compatible request.".to_string(),
+            ]
+        );
     }
 
     fn user_message(text: &str) -> TranscriptItem {
