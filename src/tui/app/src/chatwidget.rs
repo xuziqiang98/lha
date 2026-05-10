@@ -234,6 +234,7 @@ use strum::IntoEnumIterator;
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const UNIFIED_EXEC_VISIBILITY_DELAY: Duration = Duration::from_millis(250);
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -245,6 +246,8 @@ struct UnifiedExecProcessSummary {
     key: String,
     call_id: String,
     command_display: String,
+    started_at: Instant,
+    visible: bool,
     recent_chunks: Vec<String>,
 }
 
@@ -1503,6 +1506,7 @@ impl ChatWidget {
             return;
         }
         self.flush_answer_stream_with_separator();
+        self.promote_unified_exec_process(&ev.process_id);
         let command_display = self
             .unified_exec_processes
             .iter()
@@ -1606,35 +1610,80 @@ impl ChatWidget {
         {
             existing.call_id = ev.call_id.clone();
             existing.command_display = command_display;
+            existing.started_at = Instant::now();
+            existing.visible = false;
             existing.recent_chunks.clear();
         } else {
             self.unified_exec_processes.push(UnifiedExecProcessSummary {
                 key,
                 call_id: ev.call_id.clone(),
                 command_display,
+                started_at: Instant::now(),
+                visible: false,
                 recent_chunks: Vec::new(),
             });
         }
-        self.sync_unified_exec_footer();
+        self.frame_requester
+            .schedule_frame_in(UNIFIED_EXEC_VISIBILITY_DELAY);
     }
 
     fn track_unified_exec_process_end(&mut self, ev: &ExecCommandEndEvent) {
         let key = ev.process_id.clone().unwrap_or(ev.call_id.to_string());
-        let before = self.unified_exec_processes.len();
+        let was_visible = self
+            .unified_exec_processes
+            .iter()
+            .any(|process| process.key == key && process.visible);
         self.unified_exec_processes
             .retain(|process| process.key != key);
-        if self.unified_exec_processes.len() != before {
+        if was_visible {
             self.sync_unified_exec_footer();
         }
     }
 
     fn sync_unified_exec_footer(&mut self) {
         let processes = self
-            .unified_exec_processes
-            .iter()
+            .visible_unified_exec_processes()
             .map(|process| process.command_display.clone())
             .collect();
         self.bottom_pane.set_unified_exec_processes(processes);
+    }
+
+    fn visible_unified_exec_processes(&self) -> impl Iterator<Item = &UnifiedExecProcessSummary> {
+        self.unified_exec_processes
+            .iter()
+            .filter(|process| process.visible)
+    }
+
+    fn promote_unified_exec_process(&mut self, process_id: &str) {
+        let Some(process) = self
+            .unified_exec_processes
+            .iter_mut()
+            .find(|process| process.key == process_id)
+        else {
+            return;
+        };
+        if process.visible {
+            return;
+        }
+        process.visible = true;
+        self.sync_unified_exec_footer();
+    }
+
+    fn promote_due_unified_exec_processes(&mut self) {
+        let now = Instant::now();
+        let mut changed = false;
+        for process in &mut self.unified_exec_processes {
+            if !process.visible
+                && now.saturating_duration_since(process.started_at)
+                    >= UNIFIED_EXEC_VISIBILITY_DELAY
+            {
+                process.visible = true;
+                changed = true;
+            }
+        }
+        if changed {
+            self.sync_unified_exec_footer();
+        }
     }
 
     /// Record recent stdout/stderr lines for the unified exec footer.
@@ -1669,6 +1718,10 @@ impl ChatWidget {
         }
         self.unified_exec_processes.clear();
         self.sync_unified_exec_footer();
+    }
+
+    pub(crate) fn prepare_for_draw(&mut self) {
+        self.promote_due_unified_exec_processes();
     }
 
     fn on_mcp_tool_call_begin(&mut self, ev: McpToolCallBeginEvent) {
@@ -6398,24 +6451,25 @@ impl ChatWidget {
     }
 
     fn sidebar_snapshot(&self) -> SidebarSnapshot {
+        let has_visible_unified_exec_processes =
+            self.visible_unified_exec_processes().next().is_some();
         let task = (self.agent_turn_running
             || self.mcp_startup_status.is_some()
             || !self.queued_user_messages.is_empty()
-            || !self.unified_exec_processes.is_empty())
-        .then(|| TaskPanelSnapshot {
-            status: if self.agent_turn_running || self.mcp_startup_status.is_some() {
-                self.current_status.header.clone()
-            } else {
-                "Idle".to_string()
-            },
-            detail: self.current_status.details.clone(),
-            queued_messages: self.queued_user_messages.len(),
-            active_commands: self
-                .unified_exec_processes
-                .iter()
-                .map(|process| process.command_display.clone())
-                .collect(),
-        });
+            || has_visible_unified_exec_processes)
+            .then(|| TaskPanelSnapshot {
+                status: if self.agent_turn_running || self.mcp_startup_status.is_some() {
+                    self.current_status.header.clone()
+                } else {
+                    "Idle".to_string()
+                },
+                detail: self.current_status.details.clone(),
+                queued_messages: self.queued_user_messages.len(),
+                active_commands: self
+                    .visible_unified_exec_processes()
+                    .map(|process| process.command_display.clone())
+                    .collect(),
+            });
 
         let mcp = self.mcp_startup_status.as_ref().map(|statuses| {
             let mut snapshot = McpPanelSnapshot {

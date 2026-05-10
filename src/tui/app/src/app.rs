@@ -1943,6 +1943,7 @@ impl App {
                         self.chat_widget
                             .replace_transcript_cells(self.transcript_cells.clone());
                     }
+                    self.chat_widget.prepare_for_draw();
                     self.chat_widget.maybe_post_pending_notification(tui);
                     if self
                         .chat_widget

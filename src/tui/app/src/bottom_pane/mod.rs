@@ -291,6 +291,11 @@ impl BottomPane {
         self.status.as_ref()
     }
 
+    #[cfg(test)]
+    pub(crate) fn unified_exec_processes(&self) -> &[String] {
+        self.unified_exec_footer.processes()
+    }
+
     pub fn skills(&self) -> Option<&Vec<SkillMetadata>> {
         self.composer.skills()
     }

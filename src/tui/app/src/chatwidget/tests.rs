@@ -3335,6 +3335,8 @@ async fn unified_exec_wait_status_header_updates_on_late_command_display() {
         key: "proc-1".to_string(),
         call_id: "call-1".to_string(),
         command_display: "sleep 5".to_string(),
+        started_at: Instant::now(),
+        visible: false,
         recent_chunks: Vec::new(),
     });
 
@@ -3402,6 +3404,87 @@ async fn unified_exec_wait_status_renders_command_in_single_details_row() {
     assert_snapshot!(
         "unified_exec_wait_status_renders_command_in_single_details_row",
         rendered
+    );
+}
+
+#[tokio::test]
+async fn short_unified_exec_does_not_show_footer_or_sidebar() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    let begin = begin_unified_exec_startup(&mut chat, "call-short", "proc-short", "true");
+    end_exec(&mut chat, begin, "", "", 0);
+
+    assert!(chat.unified_exec_processes.is_empty());
+    assert!(chat.bottom_pane.unified_exec_processes().is_empty());
+
+    let sidebar = chat.sidebar_snapshot();
+    let task = sidebar
+        .task
+        .expect("task should remain visible while the turn is running");
+    assert!(task.active_commands.is_empty());
+}
+
+#[tokio::test]
+async fn long_unified_exec_promotes_to_footer_and_sidebar() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    begin_unified_exec_startup(&mut chat, "call-long", "proc-long", "sleep 5");
+    assert!(chat.bottom_pane.unified_exec_processes().is_empty());
+    assert!(
+        chat.sidebar_snapshot()
+            .task
+            .expect("task should be visible while the turn is running")
+            .active_commands
+            .is_empty()
+    );
+
+    let process = chat
+        .unified_exec_processes
+        .iter_mut()
+        .find(|process| process.key == "proc-long")
+        .expect("process should be tracked");
+    process.started_at = Instant::now() - UNIFIED_EXEC_VISIBILITY_DELAY - Duration::from_millis(1);
+
+    chat.prepare_for_draw();
+
+    assert_eq!(
+        chat.bottom_pane.unified_exec_processes(),
+        &["sleep 5".to_string()]
+    );
+    assert_eq!(
+        chat.sidebar_snapshot()
+            .task
+            .expect("task should be visible")
+            .active_commands,
+        vec!["sleep 5".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn terminal_interaction_promotes_unified_exec_immediately() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    begin_unified_exec_startup(&mut chat, "call-interaction", "proc-interaction", "sleep 5");
+
+    terminal_interaction(&mut chat, "call-interaction-stdin", "proc-interaction", "");
+
+    assert_eq!(
+        chat.bottom_pane.unified_exec_processes(),
+        &["sleep 5".to_string()]
+    );
+    assert_eq!(
+        chat.current_status.header,
+        "Waiting for background terminal"
+    );
+    assert_eq!(chat.current_status.details, Some("sleep 5".to_string()));
+    assert_eq!(
+        chat.sidebar_snapshot()
+            .task
+            .expect("task should be visible")
+            .active_commands,
+        vec!["sleep 5".to_string()]
     );
 }
 

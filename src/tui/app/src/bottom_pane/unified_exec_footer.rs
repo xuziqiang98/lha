@@ -30,6 +30,11 @@ impl UnifiedExecFooter {
         self.processes.is_empty()
     }
 
+    #[cfg(test)]
+    pub(crate) fn processes(&self) -> &[String] {
+        &self.processes
+    }
+
     pub(crate) fn summary_text(&self) -> Option<String> {
         if self.processes.is_empty() {
             return None;
