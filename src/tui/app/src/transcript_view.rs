@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::history_cell::HistoryCell;
@@ -7,8 +9,6 @@ use crate::history_cell::new_proposed_plan;
 use crate::history_cell::render_line_backgrounds;
 use crate::mouse::MouseScrollState;
 use crate::mouse::ScrollDirection;
-use crate::render::Insets;
-use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
 use crate::style::transcript_selection_style;
 use crate::style::user_message_style;
@@ -81,6 +81,16 @@ pub(crate) struct TranscriptLiveTail {
     pub(crate) renderable: Box<dyn Renderable>,
 }
 
+type TranscriptRenderableList = Vec<Box<dyn Renderable>>;
+type CellLayoutRef = Rc<RefCell<CellLayoutInfo>>;
+type CellLayoutList = Vec<CellLayoutRef>;
+
+#[derive(Clone)]
+struct TranscriptLiveTailSpacing {
+    prior_visible_layout: Option<CellLayoutRef>,
+    is_stream_continuation: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ScrollAnchor {
     chunk_index: usize,
@@ -111,6 +121,10 @@ impl TranscriptVisualLine {
 
     fn blank() -> Self {
         Self::from_plain(String::new())
+    }
+
+    fn is_blank(&self) -> bool {
+        self.plain.trim().is_empty()
     }
 }
 
@@ -145,7 +159,8 @@ pub(crate) enum TranscriptMouseOutcome {
 pub(crate) struct TranscriptView {
     mode: TranscriptRenderMode,
     cells: Vec<Arc<dyn HistoryCell>>,
-    renderables: Vec<Box<dyn Renderable>>,
+    renderables: TranscriptRenderableList,
+    cell_layouts: CellLayoutList,
     scroll_offset: usize,
     stick_to_bottom: bool,
     user_scrolled_during_stream: bool,
@@ -154,6 +169,7 @@ pub(crate) struct TranscriptView {
     pending_scroll_chunk: Option<usize>,
     highlight_cell: Option<usize>,
     live_tail_key: Option<TranscriptLiveTailKey>,
+    live_tail_spacing: Option<Rc<RefCell<TranscriptLiveTailSpacing>>>,
     live_tail_lines: Vec<Line<'static>>,
     last_width: Option<u16>,
     last_area: Option<Rect>,
@@ -166,9 +182,11 @@ pub(crate) struct TranscriptView {
 
 impl TranscriptView {
     pub(crate) fn new(cells: Vec<Arc<dyn HistoryCell>>, mode: TranscriptRenderMode) -> Self {
+        let (renderables, cell_layouts) = Self::render_cells(&cells, None, mode);
         Self {
             mode,
-            renderables: Self::render_cells(&cells, None, mode),
+            renderables,
+            cell_layouts,
             cells,
             scroll_offset: 0,
             stick_to_bottom: true,
@@ -178,6 +196,7 @@ impl TranscriptView {
             pending_scroll_chunk: None,
             highlight_cell: None,
             live_tail_key: None,
+            live_tail_spacing: None,
             live_tail_lines: Vec::new(),
             last_width: None,
             last_area: None,
@@ -197,32 +216,26 @@ impl TranscriptView {
     pub(crate) fn insert_cell(&mut self, cell: Arc<dyn HistoryCell>) {
         let follow_bottom = self.is_scrolled_to_bottom();
         let spacing_width = self.last_width.unwrap_or(u16::MAX).max(1);
-        let had_prior_cells = self.has_visible_committed_cells(spacing_width);
         let inserted_cell_visible = self.mode.is_visible(cell.as_ref(), spacing_width);
-        let has_visible_prior_cell_for_gap = self.has_visible_committed_cells(u16::MAX);
+        let prior_visible_layout = self.prior_visible_committed_layout(u16::MAX);
         let tail_renderable = self.take_live_tail_renderable();
         let cell_index = self.cells.len();
+        let layout = Rc::new(RefCell::new(CellLayoutInfo::default()));
         let renderable = Self::render_cell(
             cell_index,
             cell.clone(),
-            has_visible_prior_cell_for_gap,
+            prior_visible_layout,
             self.highlight_cell,
             self.mode,
+            layout.clone(),
         );
-        self.cells.push(cell);
+        self.cells.push(cell.clone());
+        self.cell_layouts.push(layout);
         self.renderables.push(renderable);
         if let Some(tail) = tail_renderable {
-            let tail = if !had_prior_cells
-                && inserted_cell_visible
-                && self
-                    .live_tail_key
-                    .is_some_and(|key| !key.is_stream_continuation)
-            {
-                Box::new(InsetRenderable::new(tail, Insets::tlbr(1, 0, 0, 0)))
-                    as Box<dyn Renderable>
-            } else {
-                tail
-            };
+            if inserted_cell_visible && let Some(spacing) = &self.live_tail_spacing {
+                spacing.borrow_mut().prior_visible_layout = self.cell_layouts.last().map(Rc::clone);
+            }
             self.renderables.push(tail);
         }
         if follow_bottom {
@@ -254,17 +267,23 @@ impl TranscriptView {
         let follow_bottom = self.is_scrolled_to_bottom();
         self.take_live_tail_renderable();
         self.live_tail_key = next_key;
+        self.live_tail_spacing = None;
         self.live_tail_lines.clear();
 
         if let Some(key) = next_key
             && let Some(tail) = compute_tail(width)
             && !tail.lines.is_empty()
         {
-            let mut renderable = tail.renderable;
-            if self.has_visible_committed_cells(width) && !key.is_stream_continuation {
-                renderable = Box::new(InsetRenderable::new(renderable, Insets::tlbr(1, 0, 0, 0)));
-            }
+            let spacing = Rc::new(RefCell::new(TranscriptLiveTailSpacing {
+                prior_visible_layout: self.prior_visible_committed_layout(width),
+                is_stream_continuation: key.is_stream_continuation,
+            }));
+            let renderable = Box::new(ConditionalTopGapRenderable::new(
+                tail.renderable,
+                spacing.clone(),
+            ));
             self.renderables.push(renderable);
+            self.live_tail_spacing = Some(spacing);
             self.live_tail_lines = tail.lines;
         }
 
@@ -917,37 +936,41 @@ impl TranscriptView {
         cells: &[Arc<dyn HistoryCell>],
         highlight_cell: Option<usize>,
         mode: TranscriptRenderMode,
-    ) -> Vec<Box<dyn Renderable>> {
-        let mut has_visible_prior_cell = false;
-        cells
+    ) -> (TranscriptRenderableList, CellLayoutList) {
+        let mut prior_visible_layout = None;
+        let mut layouts = Vec::with_capacity(cells.len());
+        let renderables = cells
             .iter()
             .enumerate()
             .map(|(idx, cell)| {
+                let layout = Rc::new(RefCell::new(CellLayoutInfo::default()));
                 let renderable = Self::render_cell(
                     idx,
                     cell.clone(),
-                    has_visible_prior_cell,
+                    prior_visible_layout.clone(),
                     highlight_cell,
                     mode,
+                    layout.clone(),
                 );
                 let is_visible = mode.is_visible(cell.as_ref(), u16::MAX);
                 if is_visible {
-                    has_visible_prior_cell = true;
+                    prior_visible_layout = Some(layout.clone());
                 }
+                layouts.push(layout);
                 renderable
             })
-            .collect()
+            .collect();
+        (renderables, layouts)
     }
 
     fn render_cell(
         idx: usize,
         cell: Arc<dyn HistoryCell>,
-        has_visible_prior_cell: bool,
+        prior_visible_layout: Option<CellLayoutRef>,
         highlight_cell: Option<usize>,
         mode: TranscriptRenderMode,
+        layout: CellLayoutRef,
     ) -> Box<dyn Renderable> {
-        let is_visible = mode.is_visible(cell.as_ref(), u16::MAX);
-        let top_gap = is_visible && has_visible_prior_cell && !cell.is_stream_continuation();
         let style = if cell.as_any().is::<UserHistoryCell>() {
             if highlight_cell == Some(idx) {
                 user_message_style().reversed()
@@ -961,7 +984,8 @@ impl TranscriptView {
         Box::new(CachedRenderable::new(CellRenderable {
             cell,
             mode,
-            top_gap,
+            prior_visible_layout,
+            layout,
             style,
             cache: std::cell::RefCell::new(None),
         }))
@@ -969,7 +993,14 @@ impl TranscriptView {
 
     fn rebuild_renderables(&mut self) {
         let tail_renderable = self.take_live_tail_renderable();
-        self.renderables = Self::render_cells(&self.cells, self.highlight_cell, self.mode);
+        let (renderables, cell_layouts) =
+            Self::render_cells(&self.cells, self.highlight_cell, self.mode);
+        self.renderables = renderables;
+        self.cell_layouts = cell_layouts;
+        if let Some(spacing) = &self.live_tail_spacing {
+            spacing.borrow_mut().prior_visible_layout =
+                self.prior_visible_committed_layout(u16::MAX);
+        }
         if let Some(tail) = tail_renderable {
             self.renderables.push(tail);
         }
@@ -977,6 +1008,15 @@ impl TranscriptView {
 
     fn take_live_tail_renderable(&mut self) -> Option<Box<dyn Renderable>> {
         (self.renderables.len() > self.cells.len()).then(|| self.renderables.pop())?
+    }
+
+    fn prior_visible_committed_layout(&self, width: u16) -> Option<CellLayoutRef> {
+        self.cells
+            .iter()
+            .zip(&self.cell_layouts)
+            .rev()
+            .find(|(cell, _)| self.mode.is_visible(cell.as_ref(), width))
+            .map(|(_, layout)| layout.clone())
     }
 
     pub(crate) fn live_tail_from_lines(lines: Vec<Line<'static>>) -> Option<TranscriptLiveTail> {
@@ -987,12 +1027,6 @@ impl TranscriptView {
             Paragraph::new(Text::from(lines.clone())).wrap(Wrap { trim: false }),
         ));
         Some(TranscriptLiveTail { lines, renderable })
-    }
-
-    fn has_visible_committed_cells(&self, width: u16) -> bool {
-        self.cells
-            .iter()
-            .any(|cell| self.mode.is_visible(cell.as_ref(), width))
     }
 
     fn content_height(&self, width: u16) -> usize {
@@ -1101,11 +1135,66 @@ impl Renderable for CachedRenderable {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct CellLayoutInfo {
+    width: Option<u16>,
+    should_insert_separator_after: bool,
+}
+
+struct ConditionalTopGapRenderable {
+    renderable: Box<dyn Renderable>,
+    spacing: Rc<RefCell<TranscriptLiveTailSpacing>>,
+}
+
+impl ConditionalTopGapRenderable {
+    fn new(
+        renderable: Box<dyn Renderable>,
+        spacing: Rc<RefCell<TranscriptLiveTailSpacing>>,
+    ) -> Self {
+        Self {
+            renderable,
+            spacing,
+        }
+    }
+
+    fn top_gap(&self, width: u16) -> bool {
+        let spacing = self.spacing.borrow();
+        !spacing.is_stream_continuation
+            && spacing.prior_visible_layout.as_ref().is_some_and(|layout| {
+                let layout = layout.borrow();
+                layout.width == Some(width) && layout.should_insert_separator_after
+            })
+    }
+}
+
+impl Renderable for ConditionalTopGapRenderable {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        let area = if self.top_gap(area.width) {
+            Rect::new(
+                area.x,
+                area.y.saturating_add(1),
+                area.width,
+                area.height.saturating_sub(1),
+            )
+        } else {
+            area
+        };
+        self.renderable.render(area, buf);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.renderable
+            .desired_height(width)
+            .saturating_add(u16::from(self.top_gap(width)))
+    }
+}
+
 #[derive(Debug)]
 struct CellRenderable {
     cell: Arc<dyn HistoryCell>,
     mode: TranscriptRenderMode,
-    top_gap: bool,
+    prior_visible_layout: Option<CellLayoutRef>,
+    layout: CellLayoutRef,
     style: Style,
     cache: std::cell::RefCell<Option<CellRenderCache>>,
 }
@@ -1114,6 +1203,7 @@ struct CellRenderable {
 struct CellRenderState {
     lines: Vec<Line<'static>>,
     height: u16,
+    top_gap: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1136,7 +1226,23 @@ impl CellRenderable {
         let lines = self.mode.lines(self.cell.as_ref(), width);
         let height = rendered_lines_height(&lines, width)
             .max(self.mode.desired_height(self.cell.as_ref(), width));
-        let state = CellRenderState { lines, height };
+        let should_insert_separator_after =
+            should_insert_separator_after_rendered_lines(&lines, width, height as usize);
+        self.layout.replace(CellLayoutInfo {
+            width: Some(width),
+            should_insert_separator_after,
+        });
+        let top_gap = height > 0
+            && !self.cell.is_stream_continuation()
+            && self.prior_visible_layout.as_ref().is_some_and(|layout| {
+                let layout = layout.borrow();
+                layout.width == Some(width) && layout.should_insert_separator_after
+            });
+        let state = CellRenderState {
+            lines,
+            height,
+            top_gap,
+        };
         self.cache.replace(Some(CellRenderCache {
             width,
             palette_version,
@@ -1152,7 +1258,7 @@ impl Renderable for CellRenderable {
         if state.height == 0 {
             return;
         }
-        let area = if self.top_gap {
+        let area = if state.top_gap {
             Rect::new(
                 area.x,
                 area.y.saturating_add(1),
@@ -1178,11 +1284,11 @@ impl Renderable for CellRenderable {
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        let height = self.render_state(width).height;
-        if height == 0 {
+        let state = self.render_state(width);
+        if state.height == 0 {
             0
         } else {
-            height.saturating_add(u16::from(self.top_gap))
+            state.height.saturating_add(u16::from(state.top_gap))
         }
     }
 }
@@ -1208,12 +1314,23 @@ impl TranscriptRenderMode {
 }
 
 fn push_cell_separator_if_needed(lines: &mut Vec<TranscriptVisualLine>) {
-    if !lines
-        .last()
-        .is_some_and(|line| line.plain.trim().is_empty())
-    {
+    if should_insert_separator_after_visual_lines(lines) {
         lines.push(TranscriptVisualLine::blank());
     }
+}
+
+fn should_insert_separator_after_rendered_lines(
+    rendered_lines: &[Line<'static>],
+    width: u16,
+    height: usize,
+) -> bool {
+    let mut lines = Vec::new();
+    push_visual_lines(&mut lines, rendered_lines.to_vec(), width, height);
+    should_insert_separator_after_visual_lines(&lines)
+}
+
+fn should_insert_separator_after_visual_lines(lines: &[TranscriptVisualLine]) -> bool {
+    !lines.last().is_some_and(TranscriptVisualLine::is_blank)
 }
 
 fn rendered_lines_height(lines: &[Line<'static>], width: u16) -> u16 {
@@ -1994,11 +2111,24 @@ mod tests {
             Arc::new(MultiLineTestCell(vec!["first", ""])) as Arc<dyn HistoryCell>,
             Arc::new(TestCell("second")) as Arc<dyn HistoryCell>,
         ]);
-        let _ = render_test_view(&mut view, 20, 4);
+        let buf = render_test_view(&mut view, 20, 3);
 
+        assert_eq!(
+            area_lines(&buf, Rect::new(0, 0, 20, 3)),
+            vec![
+                "first               ".to_string(),
+                "                    ".to_string(),
+                "second              ".to_string(),
+            ]
+        );
+        assert_eq!(view.desired_height(20), 3);
         assert_eq!(
             view.semantic_plain_lines_for_width(20),
             vec!["first".to_string(), String::new(), "second".to_string()]
+        );
+        assert_eq!(
+            select_columns(&mut view, 0, 0, 2, UnicodeWidthStr::width("second")),
+            Some("first\n\nsecond".to_string())
         );
     }
 
@@ -2013,6 +2143,71 @@ mod tests {
         assert_eq!(
             view.semantic_plain_lines_for_width(20),
             vec!["• first".to_string(), String::new(), "  second".to_string()]
+        );
+    }
+
+    #[test]
+    fn live_tail_separator_does_not_double_existing_blank_line() {
+        let mut view =
+            TranscriptView::new_transcript(vec![Arc::new(MultiLineTestCell(vec!["first", ""]))]);
+        view.sync_live_tail(
+            20,
+            Some(TranscriptLiveTailKey::new(
+                TranscriptLiveTailSource::ActiveCell,
+                0,
+                1,
+                false,
+                None,
+            )),
+            |_| TranscriptView::live_tail_from_lines(vec!["tail".into()]),
+        );
+        let buf = render_test_view(&mut view, 20, 3);
+
+        assert_eq!(
+            area_lines(&buf, Rect::new(0, 0, 20, 3)),
+            vec![
+                "first               ".to_string(),
+                "                    ".to_string(),
+                "tail                ".to_string(),
+            ]
+        );
+        assert_eq!(view.desired_height(20), 3);
+        assert_eq!(
+            view.semantic_plain_lines_for_width(20),
+            vec!["first".to_string(), String::new(), "tail".to_string()]
+        );
+    }
+
+    #[test]
+    fn inserted_blank_ended_cell_updates_live_tail_separator() {
+        let mut view = TranscriptView::new_transcript(Vec::new());
+        view.sync_live_tail(
+            20,
+            Some(TranscriptLiveTailKey::new(
+                TranscriptLiveTailSource::ActiveCell,
+                0,
+                1,
+                false,
+                None,
+            )),
+            |_| TranscriptView::live_tail_from_lines(vec!["tail".into()]),
+        );
+
+        view.insert_cell(Arc::new(MultiLineTestCell(vec!["first", ""])));
+        let buf = render_test_view(&mut view, 20, 3);
+
+        assert_eq!(
+            area_lines(&buf, Rect::new(0, 0, 20, 3)),
+            vec![
+                "first               ".to_string(),
+                "                    ".to_string(),
+                "tail                ".to_string(),
+            ]
+        );
+        assert_eq!(view.desired_height(20), 3);
+        assert_eq!(
+            view.semantic_plain_lines_for_width(20),
+            vec!["first".to_string(), String::new(), "tail".to_string()]
         );
     }
 

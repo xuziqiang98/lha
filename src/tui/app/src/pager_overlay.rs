@@ -52,13 +52,13 @@ use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 
 pub(crate) enum Overlay {
-    Transcript(TranscriptOverlay),
+    Transcript(Box<TranscriptOverlay>),
     Static(StaticOverlay),
 }
 
 impl Overlay {
     pub(crate) fn new_transcript(cells: Vec<Arc<dyn HistoryCell>>) -> Self {
-        Self::Transcript(TranscriptOverlay::new(cells))
+        Self::Transcript(Box::new(TranscriptOverlay::new(cells)))
     }
 
     pub(crate) fn new_static_with_lines(lines: Vec<Line<'static>>, title: String) -> Self {
