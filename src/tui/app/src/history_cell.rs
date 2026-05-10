@@ -103,6 +103,10 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
         None
     }
 
+    fn fill_line_backgrounds(&self) -> bool {
+        false
+    }
+
     fn desired_height(&self, width: u16) -> u16 {
         Paragraph::new(Text::from(self.display_lines(width)))
             .wrap(Wrap { trim: false })
@@ -156,7 +160,7 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
 impl Renderable for Box<dyn HistoryCell> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let lines = self.display_lines(area.width);
-        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+        let paragraph = Paragraph::new(Text::from(lines.clone())).wrap(Wrap { trim: false });
         let y = if area.height == 0 {
             0
         } else {
@@ -169,11 +173,65 @@ impl Renderable for Box<dyn HistoryCell> {
         if let Some(style) = self.block_style() {
             Block::default().style(style).render(area, buf);
         }
+        if self.fill_line_backgrounds() {
+            render_line_backgrounds(&lines, area, buf, y);
+        }
         paragraph.scroll((y, 0)).render(area, buf);
     }
     fn desired_height(&self, width: u16) -> u16 {
         HistoryCell::desired_height(self.as_ref(), width)
     }
+}
+
+pub(crate) fn render_line_backgrounds(
+    lines: &[Line<'static>],
+    area: Rect,
+    buf: &mut Buffer,
+    scroll_y: u16,
+) {
+    if area.is_empty() {
+        return;
+    }
+
+    let mut visual_y = 0u16;
+    for line in lines {
+        let height = line_visual_height(line, area.width);
+        if let Some(bg) = line.style.bg {
+            let style = Style::default().bg(bg);
+            for row in visual_y..visual_y.saturating_add(height) {
+                let Some(target_y) = row.checked_sub(scroll_y) else {
+                    continue;
+                };
+                if target_y >= area.height {
+                    continue;
+                }
+                let y = area.y + target_y;
+                for x in area.x..area.right() {
+                    let current = buf[(x, y)].style();
+                    buf[(x, y)].set_style(current.patch(style));
+                }
+            }
+        }
+        visual_y = visual_y.saturating_add(height);
+    }
+}
+
+fn line_visual_height(line: &Line<'static>, width: u16) -> u16 {
+    if width == 0 {
+        return 0;
+    }
+    if line
+        .spans
+        .iter()
+        .all(|span| span.content.chars().all(char::is_whitespace))
+    {
+        return 1;
+    }
+    Paragraph::new(Text::from(vec![line.clone()]))
+        .wrap(Wrap { trim: false })
+        .line_count(width)
+        .try_into()
+        .unwrap_or(u16::MAX)
 }
 
 impl dyn HistoryCell {
@@ -2060,6 +2118,34 @@ pub(crate) fn new_proposed_plan_stream(
     }
 }
 
+pub(crate) fn style_proposed_plan_body_lines(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    let plan_style = proposed_plan_style();
+    lines
+        .into_iter()
+        .map(|line| line.style(plan_style))
+        .collect()
+}
+
+pub(crate) fn prefix_proposed_plan_body_lines(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .map(|line| {
+            if line
+                .spans
+                .iter()
+                .all(|span| span.content.chars().all(char::is_whitespace))
+            {
+                Line::default().style(line.style)
+            } else {
+                let mut spans = Vec::with_capacity(line.spans.len() + 1);
+                spans.push("  ".into());
+                spans.extend(line.spans);
+                Line::from(spans).style(line.style)
+            }
+        })
+        .collect()
+}
+
 #[derive(Debug)]
 pub(crate) struct ProposedPlanCell {
     plan_markdown: String,
@@ -2075,25 +2161,21 @@ impl HistoryCell for ProposedPlanCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(vec!["• ".dim(), "Proposed Plan".bold()].into());
-        lines.push(Line::from(" "));
 
-        let mut plan_lines: Vec<Line<'static>> = vec![Line::from(" ")];
-        let plan_style = proposed_plan_style();
         let wrap_width = width.saturating_sub(4).max(1) as usize;
         let mut body: Vec<Line<'static>> = Vec::new();
         append_markdown(&self.plan_markdown, Some(wrap_width), &mut body);
         if body.is_empty() {
             body.push(Line::from("(empty)".dim().italic()));
         }
-        plan_lines.extend(prefix_lines(body, "  ".into(), "  ".into()));
-        plan_lines.push(Line::from(" "));
 
-        lines.extend(plan_lines.into_iter().map(|line| line.style(plan_style)));
+        let plan_lines = prefix_proposed_plan_body_lines(body);
+        lines.extend(style_proposed_plan_body_lines(plan_lines));
         lines
     }
 
-    fn block_style(&self) -> Option<Style> {
-        Some(proposed_plan_style())
+    fn fill_line_backgrounds(&self) -> bool {
+        true
     }
 }
 
@@ -2102,8 +2184,8 @@ impl HistoryCell for ProposedPlanStreamCell {
         self.lines.clone()
     }
 
-    fn block_style(&self) -> Option<Style> {
-        Some(proposed_plan_style())
+    fn fill_line_backgrounds(&self) -> bool {
+        true
     }
 
     fn is_stream_continuation(&self) -> bool {
@@ -2440,10 +2522,7 @@ mod tests {
     }
 
     fn assert_cell_background_fills_text_row(cell: Box<dyn HistoryCell>, width: u16, text: &str) {
-        let Some(style) = cell.block_style() else {
-            panic!("expected proposed plan block style");
-        };
-        let Some(bg) = style.bg else {
+        let Some(bg) = proposed_plan_style().bg else {
             return;
         };
         let height = cell.desired_height(width);
@@ -2779,7 +2858,7 @@ mod tests {
     #[test]
     fn empty_agent_message_cell_transcript() {
         let cell = AgentMessageCell::new(vec![Line::default()], false);
-        assert_eq!(cell.transcript_lines(80), vec![Line::from("  ")]);
+        assert_eq!(cell.transcript_lines(80), vec![Line::default()]);
         assert_eq!(cell.desired_transcript_height(80), 1);
     }
 
@@ -3640,6 +3719,52 @@ mod tests {
     }
 
     #[test]
+    fn proposed_plan_header_has_no_background() {
+        let Some(plan_bg) = proposed_plan_style().bg else {
+            return;
+        };
+        let cell: Box<dyn HistoryCell> = Box::new(new_proposed_plan("short plan line".to_string()));
+        let width = 40;
+        let height = cell.desired_height(width);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        cell.render(buf.area, &mut buf);
+
+        let row = (0..height)
+            .find(|y| {
+                (0..width)
+                    .map(|x| buf[(x, *y)].symbol())
+                    .collect::<String>()
+                    .contains("Proposed Plan")
+            })
+            .expect("expected proposed plan header row");
+
+        for x in 0..width {
+            assert_ne!(
+                buf[(x, row)].style().bg,
+                Some(plan_bg),
+                "did not expect proposed plan background at x={x}, y={row}"
+            );
+        }
+    }
+
+    #[test]
+    fn proposed_plan_has_no_outer_padding() {
+        let cell = new_proposed_plan("# Title\n\n## Summary\n\nText".to_string());
+        let rendered = render_lines(&cell.display_lines(80));
+        assert_eq!(
+            rendered,
+            vec![
+                "• Proposed Plan".to_string(),
+                "  # Title".to_string(),
+                "".to_string(),
+                "  ## Summary".to_string(),
+                "".to_string(),
+                "  Text".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn proposed_plan_stream_background_fills_rendered_rows() {
         let cell = new_proposed_plan_stream(
             vec![
@@ -3648,7 +3773,6 @@ mod tests {
             ],
             false,
         );
-        assert!(cell.block_style().is_some());
         assert_cell_background_fills_text_row(Box::new(cell), 40, "short plan line");
     }
 

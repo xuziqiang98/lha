@@ -4,6 +4,7 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
 #[cfg(test)]
 use crate::history_cell::new_proposed_plan;
+use crate::history_cell::render_line_backgrounds;
 use crate::mouse::MouseScrollState;
 use crate::mouse::ScrollDirection;
 use crate::render::Insets;
@@ -877,7 +878,7 @@ impl TranscriptView {
                 continue;
             }
             if has_visible_prior_cell && !cell.is_stream_continuation() {
-                lines.push(TranscriptVisualLine::blank());
+                push_cell_separator_if_needed(&mut lines);
             }
             push_visual_lines(&mut lines, cell_lines, width, desired_height);
             has_visible_prior_cell = true;
@@ -887,7 +888,7 @@ impl TranscriptView {
             && !self.live_tail_lines.is_empty()
         {
             if has_visible_prior_cell && !key.is_stream_continuation {
-                lines.push(TranscriptVisualLine::blank());
+                push_cell_separator_if_needed(&mut lines);
             }
             push_visual_lines(&mut lines, self.live_tail_lines.clone(), width, 0);
         }
@@ -1167,6 +1168,9 @@ impl Renderable for CellRenderable {
             .unwrap_or_default()
             .patch(self.style);
         Block::default().style(style).render(area, buf);
+        if self.cell.fill_line_backgrounds() {
+            render_line_backgrounds(&state.lines, area, buf, 0);
+        }
         Paragraph::new(Text::from(state.lines))
             .style(style)
             .wrap(Wrap { trim: false })
@@ -1200,6 +1204,15 @@ impl TranscriptRenderMode {
 
     fn is_visible(self, cell: &dyn HistoryCell, width: u16) -> bool {
         self.desired_height(cell, width) > 0
+    }
+}
+
+fn push_cell_separator_if_needed(lines: &mut Vec<TranscriptVisualLine>) {
+    if !lines
+        .last()
+        .is_some_and(|line| line.plain.trim().is_empty())
+    {
+        lines.push(TranscriptVisualLine::blank());
     }
 }
 
@@ -1434,6 +1447,19 @@ mod tests {
 
         fn desired_height(&self, _width: u16) -> u16 {
             1
+        }
+    }
+
+    #[derive(Debug)]
+    struct ContinuationCell(Vec<&'static str>);
+
+    impl HistoryCell for ContinuationCell {
+        fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+            self.0.iter().map(|line| (*line).into()).collect()
+        }
+
+        fn is_stream_continuation(&self) -> bool {
+            true
         }
     }
 
@@ -1912,6 +1938,81 @@ mod tests {
                 2 + UnicodeWidthStr::width("gamma"),
             ),
             Some("gamma".to_string())
+        );
+    }
+
+    #[test]
+    fn selection_copy_proposed_plan_keeps_single_markdown_blank_lines() {
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(new_proposed_plan(
+            "# Title\n\n## Summary\n\nBody".to_string(),
+        ))]);
+        let buf = render_test_view(&mut view, 80, 8);
+        let rendered_lines = area_lines(&buf, Rect::new(0, 0, 80, 8));
+        let body_row = rendered_lines
+            .iter()
+            .position(|line| line.contains("Body"))
+            .expect("rendered body row");
+        let body_line = content_line_for_rendered_row(&view, body_row);
+
+        assert_eq!(
+            select_columns(&mut view, 1, 0, body_line, UnicodeWidthStr::width("  Body"),),
+            Some("  # Title\n\n  ## Summary\n\n  Body".to_string())
+        );
+    }
+
+    #[test]
+    fn selection_copy_assistant_markdown_keeps_single_blank_lines() {
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(
+            crate::history_cell::AgentMessageCell::new(
+                vec![
+                    "# Title".into(),
+                    Line::default(),
+                    "## Summary".into(),
+                    Line::default(),
+                    "Body".into(),
+                ],
+                true,
+            ),
+        )]);
+        let buf = render_test_view(&mut view, 80, 8);
+        let rendered_lines = area_lines(&buf, Rect::new(0, 0, 80, 8));
+        let body_row = rendered_lines
+            .iter()
+            .position(|line| line.contains("Body"))
+            .expect("rendered body row");
+        let body_line = content_line_for_rendered_row(&view, body_row);
+
+        assert_eq!(
+            select_columns(&mut view, 0, 0, body_line, UnicodeWidthStr::width("  Body"),),
+            Some("• # Title\n\n  ## Summary\n\n  Body".to_string())
+        );
+    }
+
+    #[test]
+    fn cell_separator_does_not_double_existing_blank_line() {
+        let mut view = TranscriptView::new_transcript(vec![
+            Arc::new(MultiLineTestCell(vec!["first", ""])) as Arc<dyn HistoryCell>,
+            Arc::new(TestCell("second")) as Arc<dyn HistoryCell>,
+        ]);
+        let _ = render_test_view(&mut view, 20, 4);
+
+        assert_eq!(
+            view.semantic_plain_lines_for_width(20),
+            vec!["first".to_string(), String::new(), "second".to_string()]
+        );
+    }
+
+    #[test]
+    fn stream_continuation_keeps_markdown_blank_line_without_extra_separator() {
+        let mut view = TranscriptView::new_transcript(vec![
+            Arc::new(MultiLineTestCell(vec!["• first", ""])) as Arc<dyn HistoryCell>,
+            Arc::new(ContinuationCell(vec!["  second"])) as Arc<dyn HistoryCell>,
+        ]);
+        let _ = render_test_view(&mut view, 20, 4);
+
+        assert_eq!(
+            view.semantic_plain_lines_for_width(20),
+            vec!["• first".to_string(), String::new(), "  second".to_string()]
         );
     }
 

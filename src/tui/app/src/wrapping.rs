@@ -317,6 +317,10 @@ where
 
     for (idx, line) in lines.into_iter().enumerate() {
         let line_input = line.into_line_input();
+        if line_is_blank_spaces_only(line_input.as_ref()) {
+            out.push(Line::default().style(line_input.as_ref().style));
+            continue;
+        }
         let opts = if idx == 0 {
             base_opts.clone()
         } else {
@@ -342,6 +346,11 @@ where
     let mut out: Vec<Line<'a>> = Vec::new();
     let mut first = true;
     for line in lines.into_iter() {
+        if line_is_blank_spaces_only(line) {
+            out.push(Line::default().style(line.style));
+            first = false;
+            continue;
+        }
         let opts = if first {
             base_opts.clone()
         } else {
@@ -353,6 +362,14 @@ where
         first = false;
     }
     out
+}
+
+fn line_is_blank_spaces_only(line: &Line<'_>) -> bool {
+    line.spans.is_empty()
+        || line
+            .spans
+            .iter()
+            .all(|span| span.content.chars().all(|c| c == ' '))
 }
 
 fn slice_line_spans<'a>(
@@ -568,6 +585,23 @@ mod tests {
         for r in rendered.iter().skip(1) {
             assert!(r.starts_with("  "));
         }
+    }
+
+    #[test]
+    fn wrap_lines_keeps_blank_lines_unindented() {
+        let opts = RtOptions::new(80)
+            .initial_indent(Line::from("• "))
+            .subsequent_indent(Line::from("  "));
+
+        let lines = vec![
+            Line::from("# Title"),
+            Line::default(),
+            Line::from("## Summary"),
+        ];
+        let out = word_wrap_lines(lines, opts);
+
+        let rendered: Vec<String> = out.iter().map(concat_line).collect();
+        assert_eq!(rendered, vec!["• # Title", "", "  ## Summary"]);
     }
 
     #[test]

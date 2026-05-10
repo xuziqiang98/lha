@@ -1,6 +1,5 @@
 use crate::history_cell::HistoryCell;
 use crate::history_cell::{self};
-use crate::render::line_utils::prefix_lines;
 use crate::style::proposed_plan_style;
 use ratatui::prelude::Stylize;
 use ratatui::text::Line;
@@ -84,7 +83,7 @@ impl StreamController {
 pub(crate) struct PlanStreamController {
     state: StreamState,
     header_emitted: bool,
-    top_padding_emitted: bool,
+    emitted_any: bool,
 }
 
 impl PlanStreamController {
@@ -92,7 +91,7 @@ impl PlanStreamController {
         Self {
             state: StreamState::new(width),
             header_emitted: false,
-            top_padding_emitted: false,
+            emitted_any: false,
         }
     }
 
@@ -127,55 +126,45 @@ impl PlanStreamController {
         }
 
         self.state.clear();
-        self.emit(out_lines, true)
+        if out_lines.is_empty() && self.emitted_any {
+            return Some(Box::new(history_cell::new_proposed_plan_stream(
+                Vec::new(),
+                true,
+            )));
+        }
+        self.emit(out_lines)
     }
 
     /// Step animation: commit at most one queued line and handle end-of-drain cleanup.
     pub(crate) fn on_commit_tick(&mut self) -> (Option<Box<dyn HistoryCell>>, bool) {
         let step = self.state.step();
-        (self.emit(step, false), self.state.is_idle())
+        (self.emit(step), self.state.is_idle())
     }
 
-    fn emit(
-        &mut self,
-        lines: Vec<Line<'static>>,
-        include_bottom_padding: bool,
-    ) -> Option<Box<dyn HistoryCell>> {
-        if lines.is_empty() && !include_bottom_padding {
+    fn emit(&mut self, lines: Vec<Line<'static>>) -> Option<Box<dyn HistoryCell>> {
+        if lines.is_empty() {
             return None;
         }
 
-        let cell = self.build_cell(lines, include_bottom_padding);
+        let cell = self.build_cell(lines);
         self.header_emitted = true;
-        self.top_padding_emitted = true;
+        self.emitted_any = true;
         Some(Box::new(cell))
     }
 
-    fn build_cell(
-        &self,
-        lines: Vec<Line<'static>>,
-        include_bottom_padding: bool,
-    ) -> history_cell::ProposedPlanStreamCell {
+    fn build_cell(&self, lines: Vec<Line<'static>>) -> history_cell::ProposedPlanStreamCell {
         let mut out_lines: Vec<Line<'static>> = Vec::new();
         let is_stream_continuation = self.header_emitted;
         if !self.header_emitted {
             out_lines.push(vec!["• ".dim(), "Proposed Plan".bold()].into());
-            out_lines.push(Line::from(" "));
         }
 
         let mut plan_lines: Vec<Line<'static>> = Vec::new();
-        if !self.top_padding_emitted {
-            plan_lines.push(Line::from(" "));
-        }
         plan_lines.extend(lines);
-        if include_bottom_padding {
-            plan_lines.push(Line::from(" "));
-        }
 
-        let plan_style = proposed_plan_style();
-        let plan_lines = prefix_lines(plan_lines, "  ".into(), "  ".into())
+        let plan_lines = history_cell::prefix_proposed_plan_body_lines(plan_lines)
             .into_iter()
-            .map(|line| line.style(plan_style))
+            .map(|line| line.style(proposed_plan_style()))
             .collect::<Vec<_>>();
         out_lines.extend(plan_lines);
 
@@ -257,13 +246,7 @@ mod tests {
         let cell = ctrl.finalize().expect("expected final partial plan line");
         assert_eq!(
             lines_to_plain_strings(&cell.display_lines(u16::MAX)),
-            vec![
-                "• Proposed Plan".to_string(),
-                " ".to_string(),
-                "   ".to_string(),
-                "  partial".to_string(),
-                "   ".to_string(),
-            ]
+            vec!["• Proposed Plan".to_string(), "  partial".to_string()]
         );
 
         let mut ctrl = PlanStreamController::new(None);
@@ -273,20 +256,40 @@ mod tests {
         let cell = cell.expect("expected completed plan line");
         assert_eq!(
             lines_to_plain_strings(&cell.display_lines(u16::MAX)),
-            vec![
-                "• Proposed Plan".to_string(),
-                " ".to_string(),
-                "   ".to_string(),
-                "  - step".to_string(),
-            ]
+            vec!["• Proposed Plan".to_string(), "  - step".to_string()]
         );
         assert!(idle);
 
         let cell = ctrl.finalize().expect("expected final partial plan line");
         assert_eq!(
             lines_to_plain_strings(&cell.display_lines(u16::MAX)),
-            vec!["    partial".to_string(), "   ".to_string()]
+            vec!["    partial".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn plan_finalize_after_drained_stream_returns_empty_continuation() {
+        let mut ctrl = PlanStreamController::new(None);
+        assert!(ctrl.push("- step\n"));
+        let (cell, idle) = ctrl.on_commit_tick();
+        let cell = cell.expect("expected completed plan line");
+        assert_eq!(
+            lines_to_plain_strings(&cell.display_lines(u16::MAX)),
+            vec!["• Proposed Plan".to_string(), "  - step".to_string()]
+        );
+        assert!(idle);
+
+        let cell = ctrl
+            .finalize()
+            .expect("expected empty continuation after drained stream");
+        assert!(cell.display_lines(u16::MAX).is_empty());
+        assert!(cell.is_stream_continuation());
+    }
+
+    #[tokio::test]
+    async fn plan_finalize_without_streamed_content_returns_none() {
+        let mut ctrl = PlanStreamController::new(None);
+        assert!(ctrl.finalize().is_none());
     }
 
     #[tokio::test]
