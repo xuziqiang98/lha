@@ -2073,7 +2073,7 @@ mod tests {
 
         assert_eq!(
             select_columns(&mut view, 1, 0, body_line, UnicodeWidthStr::width("  Body"),),
-            Some("  # Title\n\n  ## Summary\n\n  Body".to_string())
+            Some("\n\n  # Title\n\n  ## Summary\n\n  Body".to_string())
         );
     }
 

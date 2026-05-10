@@ -2126,6 +2126,17 @@ pub(crate) fn style_proposed_plan_body_lines(lines: Vec<Line<'static>>) -> Vec<L
         .collect()
 }
 
+pub(crate) fn proposed_plan_header_gap_lines() -> Vec<Line<'static>> {
+    vec![
+        Line::default(),
+        Line::default().style(proposed_plan_style()),
+    ]
+}
+
+pub(crate) fn proposed_plan_trailing_body_gap_line() -> Line<'static> {
+    Line::default().style(proposed_plan_style())
+}
+
 pub(crate) fn prefix_proposed_plan_body_lines(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
     lines
         .into_iter()
@@ -2161,6 +2172,7 @@ impl HistoryCell for ProposedPlanCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(vec!["• ".dim(), "Proposed Plan".bold()].into());
+        lines.extend(proposed_plan_header_gap_lines());
 
         let wrap_width = width.saturating_sub(4).max(1) as usize;
         let mut body: Vec<Line<'static>> = Vec::new();
@@ -2171,6 +2183,7 @@ impl HistoryCell for ProposedPlanCell {
 
         let plan_lines = prefix_proposed_plan_body_lines(body);
         lines.extend(style_proposed_plan_body_lines(plan_lines));
+        lines.push(proposed_plan_trailing_body_gap_line());
         lines
     }
 
@@ -3748,6 +3761,36 @@ mod tests {
     }
 
     #[test]
+    fn proposed_plan_gap_backgrounds_match_layout() {
+        let Some(plan_bg) = proposed_plan_style().bg else {
+            return;
+        };
+        let cell: Box<dyn HistoryCell> = Box::new(new_proposed_plan("short plan line".to_string()));
+        let width = 40;
+        let height = cell.desired_height(width);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        cell.render(buf.area, &mut buf);
+
+        for x in 0..width {
+            assert_ne!(
+                buf[(x, 1)].style().bg,
+                Some(plan_bg),
+                "did not expect proposed plan background on the first header gap at x={x}"
+            );
+            assert_eq!(
+                buf[(x, 2)].style().bg,
+                Some(plan_bg),
+                "expected proposed plan background on the second header gap at x={x}"
+            );
+            assert_eq!(
+                buf[(x, height - 1)].style().bg,
+                Some(plan_bg),
+                "expected proposed plan background on the trailing gap at x={x}"
+            );
+        }
+    }
+
+    #[test]
     fn proposed_plan_has_no_outer_padding() {
         let cell = new_proposed_plan("# Title\n\n## Summary\n\nText".to_string());
         let rendered = render_lines(&cell.display_lines(80));
@@ -3755,11 +3798,14 @@ mod tests {
             rendered,
             vec![
                 "• Proposed Plan".to_string(),
+                "".to_string(),
+                "".to_string(),
                 "  # Title".to_string(),
                 "".to_string(),
                 "  ## Summary".to_string(),
                 "".to_string(),
                 "  Text".to_string(),
+                "".to_string(),
             ]
         );
     }

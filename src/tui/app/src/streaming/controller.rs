@@ -128,35 +128,44 @@ impl PlanStreamController {
         self.state.clear();
         if out_lines.is_empty() && self.emitted_any {
             return Some(Box::new(history_cell::new_proposed_plan_stream(
-                Vec::new(),
+                vec![history_cell::proposed_plan_trailing_body_gap_line()],
                 true,
             )));
         }
-        self.emit(out_lines)
+        self.emit(out_lines, true)
     }
 
     /// Step animation: commit at most one queued line and handle end-of-drain cleanup.
     pub(crate) fn on_commit_tick(&mut self) -> (Option<Box<dyn HistoryCell>>, bool) {
         let step = self.state.step();
-        (self.emit(step), self.state.is_idle())
+        (self.emit(step, false), self.state.is_idle())
     }
 
-    fn emit(&mut self, lines: Vec<Line<'static>>) -> Option<Box<dyn HistoryCell>> {
+    fn emit(
+        &mut self,
+        lines: Vec<Line<'static>>,
+        include_trailing_gap: bool,
+    ) -> Option<Box<dyn HistoryCell>> {
         if lines.is_empty() {
             return None;
         }
 
-        let cell = self.build_cell(lines);
+        let cell = self.build_cell(lines, include_trailing_gap);
         self.header_emitted = true;
         self.emitted_any = true;
         Some(Box::new(cell))
     }
 
-    fn build_cell(&self, lines: Vec<Line<'static>>) -> history_cell::ProposedPlanStreamCell {
+    fn build_cell(
+        &self,
+        lines: Vec<Line<'static>>,
+        include_trailing_gap: bool,
+    ) -> history_cell::ProposedPlanStreamCell {
         let mut out_lines: Vec<Line<'static>> = Vec::new();
         let is_stream_continuation = self.header_emitted;
         if !self.header_emitted {
             out_lines.push(vec!["• ".dim(), "Proposed Plan".bold()].into());
+            out_lines.extend(history_cell::proposed_plan_header_gap_lines());
         }
 
         let mut plan_lines: Vec<Line<'static>> = Vec::new();
@@ -167,6 +176,9 @@ impl PlanStreamController {
             .map(|line| line.style(proposed_plan_style()))
             .collect::<Vec<_>>();
         out_lines.extend(plan_lines);
+        if include_trailing_gap {
+            out_lines.push(history_cell::proposed_plan_trailing_body_gap_line());
+        }
 
         history_cell::new_proposed_plan_stream(out_lines, is_stream_continuation)
     }
@@ -246,7 +258,13 @@ mod tests {
         let cell = ctrl.finalize().expect("expected final partial plan line");
         assert_eq!(
             lines_to_plain_strings(&cell.display_lines(u16::MAX)),
-            vec!["• Proposed Plan".to_string(), "  partial".to_string()]
+            vec![
+                "• Proposed Plan".to_string(),
+                "".to_string(),
+                "".to_string(),
+                "  partial".to_string(),
+                "".to_string(),
+            ]
         );
 
         let mut ctrl = PlanStreamController::new(None);
@@ -256,33 +274,46 @@ mod tests {
         let cell = cell.expect("expected completed plan line");
         assert_eq!(
             lines_to_plain_strings(&cell.display_lines(u16::MAX)),
-            vec!["• Proposed Plan".to_string(), "  - step".to_string()]
+            vec![
+                "• Proposed Plan".to_string(),
+                "".to_string(),
+                "".to_string(),
+                "  - step".to_string(),
+            ]
         );
         assert!(idle);
 
         let cell = ctrl.finalize().expect("expected final partial plan line");
         assert_eq!(
             lines_to_plain_strings(&cell.display_lines(u16::MAX)),
-            vec!["    partial".to_string()]
+            vec!["    partial".to_string(), "".to_string()]
         );
     }
 
     #[tokio::test]
-    async fn plan_finalize_after_drained_stream_returns_empty_continuation() {
+    async fn plan_finalize_after_drained_stream_returns_trailing_gap() {
         let mut ctrl = PlanStreamController::new(None);
         assert!(ctrl.push("- step\n"));
         let (cell, idle) = ctrl.on_commit_tick();
         let cell = cell.expect("expected completed plan line");
         assert_eq!(
             lines_to_plain_strings(&cell.display_lines(u16::MAX)),
-            vec!["• Proposed Plan".to_string(), "  - step".to_string()]
+            vec![
+                "• Proposed Plan".to_string(),
+                "".to_string(),
+                "".to_string(),
+                "  - step".to_string(),
+            ]
         );
         assert!(idle);
 
         let cell = ctrl
             .finalize()
-            .expect("expected empty continuation after drained stream");
-        assert!(cell.display_lines(u16::MAX).is_empty());
+            .expect("expected trailing gap after drained stream");
+        assert_eq!(
+            lines_to_plain_strings(&cell.display_lines(u16::MAX)),
+            vec!["".to_string()]
+        );
         assert!(cell.is_stream_continuation());
     }
 
