@@ -6,10 +6,18 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
 #[cfg(test)]
 use crate::history_cell::new_proposed_plan;
+#[cfg(test)]
+use crate::history_cell::new_proposed_plan_stream;
+#[cfg(test)]
+use crate::history_cell::new_user_prompt;
+#[cfg(test)]
+use crate::history_cell::proposed_plan_trailing_body_gap_line;
 use crate::history_cell::render_line_backgrounds;
 use crate::mouse::MouseScrollState;
 use crate::mouse::ScrollDirection;
 use crate::render::renderable::Renderable;
+#[cfg(test)]
+use crate::style::proposed_plan_style;
 use crate::style::transcript_selection_style;
 use crate::style::user_message_style;
 use crate::terminal_palette;
@@ -890,6 +898,7 @@ impl TranscriptView {
         let width = width.max(1);
         let mut lines = Vec::new();
         let mut has_visible_prior_cell = false;
+        let mut prior_force_separator_after = false;
         for cell in &self.cells {
             let cell_lines = self.mode.lines(cell.as_ref(), width);
             let desired_height = self.mode.desired_height(cell.as_ref(), width) as usize;
@@ -897,17 +906,18 @@ impl TranscriptView {
                 continue;
             }
             if has_visible_prior_cell && !cell.is_stream_continuation() {
-                push_cell_separator_if_needed(&mut lines);
+                push_cell_separator(&mut lines, prior_force_separator_after);
             }
             push_visual_lines(&mut lines, cell_lines, width, desired_height);
             has_visible_prior_cell = true;
+            prior_force_separator_after = cell.force_transcript_separator_after();
         }
 
         if let Some(key) = self.live_tail_key
             && !self.live_tail_lines.is_empty()
         {
             if has_visible_prior_cell && !key.is_stream_continuation {
-                push_cell_separator_if_needed(&mut lines);
+                push_cell_separator(&mut lines, prior_force_separator_after);
             }
             push_visual_lines(&mut lines, self.live_tail_lines.clone(), width, 0);
         }
@@ -1139,6 +1149,7 @@ impl Renderable for CachedRenderable {
 struct CellLayoutInfo {
     width: Option<u16>,
     should_insert_separator_after: bool,
+    force_separator_after: bool,
 }
 
 struct ConditionalTopGapRenderable {
@@ -1162,7 +1173,7 @@ impl ConditionalTopGapRenderable {
         !spacing.is_stream_continuation
             && spacing.prior_visible_layout.as_ref().is_some_and(|layout| {
                 let layout = layout.borrow();
-                layout.width == Some(width) && layout.should_insert_separator_after
+                layout.width == Some(width) && layout_wants_separator_after(&layout)
             })
     }
 }
@@ -1231,12 +1242,13 @@ impl CellRenderable {
         self.layout.replace(CellLayoutInfo {
             width: Some(width),
             should_insert_separator_after,
+            force_separator_after: self.cell.force_transcript_separator_after(),
         });
         let top_gap = height > 0
             && !self.cell.is_stream_continuation()
             && self.prior_visible_layout.as_ref().is_some_and(|layout| {
                 let layout = layout.borrow();
-                layout.width == Some(width) && layout.should_insert_separator_after
+                layout.width == Some(width) && layout_wants_separator_after(&layout)
             });
         let state = CellRenderState {
             lines,
@@ -1313,8 +1325,12 @@ impl TranscriptRenderMode {
     }
 }
 
-fn push_cell_separator_if_needed(lines: &mut Vec<TranscriptVisualLine>) {
-    if should_insert_separator_after_visual_lines(lines) {
+fn layout_wants_separator_after(layout: &CellLayoutInfo) -> bool {
+    layout.should_insert_separator_after || layout.force_separator_after
+}
+
+fn push_cell_separator(lines: &mut Vec<TranscriptVisualLine>, force: bool) {
+    if force || should_insert_separator_after_visual_lines(lines) {
         lines.push(TranscriptVisualLine::blank());
     }
 }
@@ -1588,6 +1604,16 @@ mod tests {
                     .collect::<String>()
             })
             .collect()
+    }
+
+    fn assert_row_bg_is_not(buf: &Buffer, width: u16, y: u16, bg: Option<Color>) {
+        for x in 0..width {
+            assert_ne!(
+                buf[(x, y)].style().bg,
+                bg,
+                "did not expect background {bg:?} at x={x}, y={y}"
+            );
+        }
     }
 
     fn render_test_view(view: &mut TranscriptView, width: u16, height: u16) -> Buffer {
@@ -2133,6 +2159,61 @@ mod tests {
     }
 
     #[test]
+    fn user_history_cell_forces_unstyled_separator_after() {
+        let mut view = TranscriptView::new_transcript(vec![
+            Arc::new(new_user_prompt("hello".to_string(), vec![], vec![])) as Arc<dyn HistoryCell>,
+            Arc::new(TestCell("agent reply")) as Arc<dyn HistoryCell>,
+        ]);
+        let buf = render_test_view(&mut view, 20, 5);
+
+        assert_eq!(
+            area_lines(&buf, Rect::new(0, 0, 20, 5)),
+            vec![
+                "                    ".to_string(),
+                "› hello             ".to_string(),
+                "                    ".to_string(),
+                "                    ".to_string(),
+                "agent reply         ".to_string(),
+            ]
+        );
+        assert_eq!(view.desired_height(20), 5);
+        assert_row_bg_is_not(&buf, 20, 3, user_message_style().bg);
+        assert_eq!(
+            view.semantic_plain_lines_for_width(20),
+            vec![
+                String::new(),
+                "› hello".to_string(),
+                String::new(),
+                String::new(),
+                "agent reply".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn proposed_plan_forces_unstyled_separator_before_following_user_prompt() {
+        let mut view = TranscriptView::new_transcript(vec![
+            Arc::new(new_proposed_plan("short plan line".to_string())) as Arc<dyn HistoryCell>,
+            Arc::new(new_user_prompt(
+                "Implement the plan.".to_string(),
+                vec![],
+                vec![],
+            )) as Arc<dyn HistoryCell>,
+        ]);
+        let buf = render_test_view(&mut view, 40, 8);
+        let rendered_lines = area_lines(&buf, Rect::new(0, 0, 40, 8));
+        let implement_row = rendered_lines
+            .iter()
+            .position(|line| line.contains("Implement the plan."))
+            .expect("implement prompt row");
+        let separator_row = implement_row - 2;
+
+        assert!(rendered_lines[separator_row].trim().is_empty());
+        assert_row_bg_is_not(&buf, 40, separator_row as u16, proposed_plan_style().bg);
+        assert_row_bg_is_not(&buf, 40, separator_row as u16, user_message_style().bg);
+    }
+
+    #[test]
     fn stream_continuation_keeps_markdown_blank_line_without_extra_separator() {
         let mut view = TranscriptView::new_transcript(vec![
             Arc::new(MultiLineTestCell(vec!["• first", ""])) as Arc<dyn HistoryCell>,
@@ -2143,6 +2224,33 @@ mod tests {
         assert_eq!(
             view.semantic_plain_lines_for_width(20),
             vec!["• first".to_string(), String::new(), "  second".to_string()]
+        );
+    }
+
+    #[test]
+    fn proposed_plan_stream_continuation_does_not_insert_forced_separator() {
+        let mut view = TranscriptView::new_transcript(vec![
+            Arc::new(new_proposed_plan_stream(
+                vec![
+                    vec!["• ".dim(), "Proposed Plan".bold()].into(),
+                    proposed_plan_trailing_body_gap_line(),
+                ],
+                false,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(new_proposed_plan_stream(
+                vec![Line::from("  second").style(proposed_plan_style())],
+                true,
+            )) as Arc<dyn HistoryCell>,
+        ]);
+        let _ = render_test_view(&mut view, 20, 3);
+
+        assert_eq!(
+            view.semantic_plain_lines_for_width(20),
+            vec![
+                "• Proposed Plan".to_string(),
+                String::new(),
+                "  second".to_string(),
+            ]
         );
     }
 
@@ -2175,6 +2283,50 @@ mod tests {
         assert_eq!(
             view.semantic_plain_lines_for_width(20),
             vec!["first".to_string(), String::new(), "tail".to_string()]
+        );
+    }
+
+    #[test]
+    fn forced_separator_applies_before_live_tail() {
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(new_user_prompt(
+            "hello".to_string(),
+            vec![],
+            vec![],
+        ))]);
+        view.sync_live_tail(
+            20,
+            Some(TranscriptLiveTailKey::new(
+                TranscriptLiveTailSource::ActiveCell,
+                0,
+                1,
+                false,
+                None,
+            )),
+            |_| TranscriptView::live_tail_from_lines(vec!["tail".into()]),
+        );
+        let buf = render_test_view(&mut view, 20, 5);
+
+        assert_eq!(
+            area_lines(&buf, Rect::new(0, 0, 20, 5)),
+            vec![
+                "                    ".to_string(),
+                "› hello             ".to_string(),
+                "                    ".to_string(),
+                "                    ".to_string(),
+                "tail                ".to_string(),
+            ]
+        );
+        assert_eq!(view.desired_height(20), 5);
+        assert_row_bg_is_not(&buf, 20, 3, user_message_style().bg);
+        assert_eq!(
+            view.semantic_plain_lines_for_width(20),
+            vec![
+                String::new(),
+                "› hello".to_string(),
+                String::new(),
+                String::new(),
+                "tail".to_string(),
+            ]
         );
     }
 

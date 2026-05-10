@@ -142,6 +142,10 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
         false
     }
 
+    fn force_transcript_separator_after(&self) -> bool {
+        false
+    }
+
     /// Returns a coarse "animation tick" when transcript output is time-dependent.
     ///
     /// The transcript overlay caches the rendered output of the in-flight active cell, so cells
@@ -360,6 +364,10 @@ impl HistoryCell for UserHistoryCell {
 
     fn block_style(&self) -> Option<Style> {
         Some(user_message_style())
+    }
+
+    fn force_transcript_separator_after(&self) -> bool {
+        true
     }
 }
 
@@ -2190,6 +2198,10 @@ impl HistoryCell for ProposedPlanCell {
     fn fill_line_backgrounds(&self) -> bool {
         true
     }
+
+    fn force_transcript_separator_after(&self) -> bool {
+        true
+    }
 }
 
 impl HistoryCell for ProposedPlanStreamCell {
@@ -2203,6 +2215,10 @@ impl HistoryCell for ProposedPlanStreamCell {
 
     fn is_stream_continuation(&self) -> bool {
         self.is_stream_continuation
+    }
+
+    fn force_transcript_separator_after(&self) -> bool {
+        true
     }
 }
 
