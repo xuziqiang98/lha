@@ -446,6 +446,7 @@ pub(crate) struct TranscriptOverlay {
     view: TranscriptView,
     mouse_scroll: MouseScrollState,
     highlight_cell: Option<usize>,
+    selection_snapshot: Option<String>,
     is_done: bool,
 }
 
@@ -465,6 +466,7 @@ impl TranscriptOverlay {
             view: TranscriptView::new(transcript_cells, TranscriptRenderMode::Transcript),
             mouse_scroll: MouseScrollState::default(),
             highlight_cell: None,
+            selection_snapshot: None,
             is_done: false,
         }
     }
@@ -528,10 +530,19 @@ impl TranscriptOverlay {
     }
 
     fn ctrl_c_action(&self) -> TranscriptCtrlCAction {
+        if let Some(text) = &self.selection_snapshot {
+            return TranscriptCtrlCAction::Copy(text.clone());
+        }
+
         match self.view.selected_text() {
             Some(text) => TranscriptCtrlCAction::Copy(text),
             None => TranscriptCtrlCAction::Close,
         }
+    }
+
+    fn set_selection_snapshot(&mut self, text: Option<String>) -> Option<&str> {
+        self.selection_snapshot = text.filter(|text| !text.is_empty());
+        self.selection_snapshot.as_deref()
     }
 
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
@@ -601,13 +612,18 @@ impl TranscriptOverlay {
                     .handle_mouse_event(mouse_event, &mut self.mouse_scroll)
                 {
                     TranscriptMouseOutcome::Ignored => {}
-                    TranscriptMouseOutcome::Scrolled | TranscriptMouseOutcome::SelectionChanged => {
+                    TranscriptMouseOutcome::Scrolled => {
+                        tui.frame_requester()
+                            .schedule_frame_in(Duration::from_millis(16));
+                    }
+                    TranscriptMouseOutcome::SelectionChanged => {
+                        self.selection_snapshot = None;
                         tui.frame_requester()
                             .schedule_frame_in(Duration::from_millis(16));
                     }
                     TranscriptMouseOutcome::SelectionCompleted(text) => {
-                        if let Some(text) = text.filter(|text| !text.is_empty())
-                            && let Err(err) = write_text_to_clipboard(&text)
+                        if let Some(text) = self.set_selection_snapshot(text)
+                            && let Err(err) = write_text_to_clipboard(text)
                         {
                             tracing::warn!("failed to copy transcript overlay selection: {err}");
                         }
@@ -823,6 +839,19 @@ mod tests {
         Box::new(Paragraph::new(text)) as Box<dyn Renderable>
     }
 
+    fn left_mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        }
+    }
+
+    fn overlay_content_y(area: Rect) -> u16 {
+        overlay_content_area(Rect::new(0, 0, area.width, area.height - 3)).y
+    }
+
     #[test]
     fn edit_prev_hint_is_visible() {
         let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
@@ -870,23 +899,21 @@ mod tests {
         overlay.render(area, &mut buf);
 
         let mut scroll = MouseScrollState::default();
-        let content_y = overlay_content_area(Rect::new(0, 0, area.width, area.height - 3)).y;
+        let content_y = overlay_content_y(area);
         overlay.view.handle_mouse_event(
-            MouseEvent {
-                kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
-                column: 0,
-                row: content_y,
-                modifiers: crossterm::event::KeyModifiers::NONE,
-            },
+            left_mouse(
+                MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                content_y,
+            ),
             &mut scroll,
         );
         overlay.view.handle_mouse_event(
-            MouseEvent {
-                kind: MouseEventKind::Drag(crossterm::event::MouseButton::Left),
-                column: 5,
-                row: content_y,
-                modifiers: crossterm::event::KeyModifiers::NONE,
-            },
+            left_mouse(
+                MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+                5,
+                content_y,
+            ),
             &mut scroll,
         );
 
@@ -901,6 +928,110 @@ mod tests {
         let overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
             lines: vec![Line::from("alpha beta")],
         })]);
+
+        assert_eq!(overlay.ctrl_c_action(), TranscriptCtrlCAction::Close);
+    }
+
+    #[test]
+    fn transcript_ctrl_c_uses_completed_selection_snapshot() {
+        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
+            lines: vec![Line::from("alpha beta")],
+        })]);
+        let area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+
+        let mut scroll = MouseScrollState::default();
+        let content_y = overlay_content_y(area);
+        let _ = overlay.view.handle_mouse_event(
+            left_mouse(
+                MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                content_y,
+            ),
+            &mut scroll,
+        );
+        let _ = overlay.view.handle_mouse_event(
+            left_mouse(
+                MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+                5,
+                content_y,
+            ),
+            &mut scroll,
+        );
+        let outcome = overlay.view.handle_mouse_event(
+            left_mouse(
+                MouseEventKind::Up(crossterm::event::MouseButton::Left),
+                5,
+                content_y,
+            ),
+            &mut scroll,
+        );
+        let TranscriptMouseOutcome::SelectionCompleted(text) = outcome else {
+            panic!("expected completed selection, got {outcome:?}");
+        };
+        overlay.set_selection_snapshot(text);
+
+        let narrow_area = Rect::new(0, 0, 4, 10);
+        let mut narrow_buf = Buffer::empty(narrow_area);
+        overlay.render(narrow_area, &mut narrow_buf);
+
+        assert_eq!(
+            overlay.ctrl_c_action(),
+            TranscriptCtrlCAction::Copy("alpha".to_string())
+        );
+    }
+
+    #[test]
+    fn transcript_ctrl_c_closes_after_selection_is_cleared() {
+        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
+            lines: vec![Line::from("alpha beta")],
+        })]);
+        let area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+
+        let mut scroll = MouseScrollState::default();
+        let content_y = overlay_content_y(area);
+        let _ = overlay.view.handle_mouse_event(
+            left_mouse(
+                MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                content_y,
+            ),
+            &mut scroll,
+        );
+        let _ = overlay.view.handle_mouse_event(
+            left_mouse(
+                MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+                5,
+                content_y,
+            ),
+            &mut scroll,
+        );
+        let outcome = overlay.view.handle_mouse_event(
+            left_mouse(
+                MouseEventKind::Up(crossterm::event::MouseButton::Left),
+                5,
+                content_y,
+            ),
+            &mut scroll,
+        );
+        let TranscriptMouseOutcome::SelectionCompleted(text) = outcome else {
+            panic!("expected completed selection, got {outcome:?}");
+        };
+        overlay.set_selection_snapshot(text);
+
+        let outcome = overlay.view.handle_mouse_event(
+            left_mouse(
+                MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                area.height - 1,
+            ),
+            &mut scroll,
+        );
+        assert_eq!(outcome, TranscriptMouseOutcome::SelectionChanged);
+        overlay.selection_snapshot = None;
 
         assert_eq!(overlay.ctrl_c_action(), TranscriptCtrlCAction::Close);
     }
