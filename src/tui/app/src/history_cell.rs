@@ -2316,7 +2316,7 @@ impl HistoryCell for PlanUpdateCell {
             prefix_lines(step_text, box_str.into(), "  ".into())
         };
 
-        let mut lines: Vec<Line<'static>> = vec![];
+        let mut lines: Vec<Line<'static>> = vec![Line::default()];
         lines.push(vec!["• ".dim(), "Updated Plan".bold()].into());
 
         let mut indented_lines = vec![];
@@ -2337,6 +2337,7 @@ impl HistoryCell for PlanUpdateCell {
             }
         }
         lines.extend(prefix_lines(indented_lines, "  └ ".dim(), "    ".into()));
+        lines.push(Line::default());
 
         lines
     }
@@ -3796,6 +3797,65 @@ mod tests {
         let lines = cell.display_lines(40);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn plan_update_display_lines_include_vertical_padding() {
+        let cell = new_plan_update(UpdatePlanArgs {
+            explanation: None,
+            plan: vec![PlanItemArg {
+                step: "Define error taxonomy".into(),
+                status: StepStatus::InProgress,
+            }],
+        });
+        let lines = render_lines(&cell.display_lines(40));
+
+        assert_eq!(
+            lines,
+            vec![
+                "".to_string(),
+                "• Updated Plan".to_string(),
+                "  └ □ Define error taxonomy".to_string(),
+                "".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn plan_update_padding_rows_have_block_background() {
+        let Some(plan_bg) = proposed_plan_style().bg else {
+            return;
+        };
+        let cell: Box<dyn HistoryCell> = Box::new(new_plan_update(UpdatePlanArgs {
+            explanation: None,
+            plan: vec![PlanItemArg {
+                step: "Define error taxonomy".into(),
+                status: StepStatus::InProgress,
+            }],
+        }));
+        let width = 40;
+        let height = cell.desired_height(width);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        cell.render(buf.area, &mut buf);
+
+        for y in [0, height - 1] {
+            for x in 0..width {
+                assert_eq!(
+                    buf[(x, y)].style().bg,
+                    Some(plan_bg),
+                    "expected plan update padding background at x={x}, y={y}"
+                );
+            }
+        }
+
+        let rendered = (0..height)
+            .map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains("Updated Plan"),
+            "expected rendered plan update header: {rendered:?}"
+        );
     }
 
     #[test]
