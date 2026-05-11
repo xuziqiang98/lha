@@ -1188,7 +1188,7 @@ impl ConditionalTopGapRenderable {
         !spacing.is_stream_continuation
             && spacing.prior_visible_layout.as_ref().is_some_and(|layout| {
                 let layout = layout.borrow();
-                layout.width == Some(width) && layout_wants_separator_after(&layout)
+                layout.width == Some(width) && layout_wants_separator_after(*layout)
             })
     }
 }
@@ -1263,7 +1263,7 @@ impl CellRenderable {
             && !self.cell.is_stream_continuation()
             && self.prior_visible_layout.as_ref().is_some_and(|layout| {
                 let layout = layout.borrow();
-                layout.width == Some(width) && layout_wants_separator_after(&layout)
+                layout.width == Some(width) && layout_wants_separator_after(*layout)
             });
         let state = CellRenderState {
             lines,
@@ -1340,7 +1340,7 @@ impl TranscriptRenderMode {
     }
 }
 
-fn layout_wants_separator_after(layout: &CellLayoutInfo) -> bool {
+fn layout_wants_separator_after(layout: CellLayoutInfo) -> bool {
     layout.should_insert_separator_after || layout.force_separator_after
 }
 

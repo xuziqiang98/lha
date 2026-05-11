@@ -1925,6 +1925,10 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
+        if matches!(event, TuiEvent::Draw) {
+            self.restore_shift_mouse_bypass_if_due(tui);
+        }
+
         if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
@@ -1944,12 +1948,6 @@ impl App {
                     self.chat_widget.handle_paste(pasted);
                 }
                 TuiEvent::Draw => {
-                    if self
-                        .shift_mouse_bypass_restore_at
-                        .is_some_and(|restore_at| Instant::now() >= restore_at)
-                    {
-                        self.restore_shift_mouse_bypass(tui, Some("Mouse capture restored"));
-                    }
                     if self.backtrack_render_pending {
                         self.backtrack_render_pending = false;
                         self.chat_widget
@@ -2002,6 +2000,22 @@ impl App {
 
         self.chat_widget.handle_mouse_event(mouse_event);
         tui.frame_requester().schedule_frame();
+    }
+
+    fn restore_shift_mouse_bypass_if_due(&mut self, tui: &mut tui::Tui) {
+        self.restore_shift_mouse_bypass_if_due_with(|| tui.restore_mouse_capture_after_bypass());
+    }
+
+    fn restore_shift_mouse_bypass_if_due_with(&mut self, restore_mouse_capture: impl FnOnce()) {
+        if self
+            .shift_mouse_bypass_restore_at
+            .is_some_and(|restore_at| Instant::now() >= restore_at)
+        {
+            self.restore_shift_mouse_bypass_with(
+                restore_mouse_capture,
+                Some("Mouse capture restored"),
+            );
+        }
     }
 
     fn restore_shift_mouse_bypass(&mut self, tui: &mut tui::Tui, status_header: Option<&str>) {
@@ -3501,6 +3515,35 @@ mod tests {
         assert!(restored);
         assert!(!app.shift_mouse_bypass_active);
         assert_eq!(app.shift_mouse_bypass_restore_at, None);
+    }
+
+    #[tokio::test]
+    async fn restore_shift_mouse_bypass_if_due_restores_after_deadline() {
+        let mut app = make_test_app().await;
+        app.shift_mouse_bypass_active = true;
+        app.shift_mouse_bypass_restore_at = Some(Instant::now() - Duration::from_millis(1));
+
+        let mut restored = false;
+        app.restore_shift_mouse_bypass_if_due_with(|| restored = true);
+
+        assert!(restored);
+        assert!(!app.shift_mouse_bypass_active);
+        assert_eq!(app.shift_mouse_bypass_restore_at, None);
+    }
+
+    #[tokio::test]
+    async fn restore_shift_mouse_bypass_if_due_waits_until_deadline() {
+        let mut app = make_test_app().await;
+        let restore_at = Instant::now() + Duration::from_secs(60);
+        app.shift_mouse_bypass_active = true;
+        app.shift_mouse_bypass_restore_at = Some(restore_at);
+
+        let mut restored = false;
+        app.restore_shift_mouse_bypass_if_due_with(|| restored = true);
+
+        assert!(!restored);
+        assert!(app.shift_mouse_bypass_active);
+        assert_eq!(app.shift_mouse_bypass_restore_at, Some(restore_at));
     }
 
     #[tokio::test]

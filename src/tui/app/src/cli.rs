@@ -4,7 +4,7 @@ use clap::Parser;
 use clap::ValueHint;
 use std::path::PathBuf;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Default)]
 #[command(version)]
 pub struct Cli {
     /// Optional user prompt to start the session.

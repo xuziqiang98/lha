@@ -284,6 +284,29 @@ impl Tui {
         self.mouse_capture_enabled
     }
 
+    pub fn set_mouse_capture_enabled(&mut self, enabled: bool) -> Result<()> {
+        if self.mouse_capture_enabled == enabled {
+            if !enabled {
+                self.mouse_capture_bypass_active = false;
+            }
+            return Ok(());
+        }
+
+        if enabled {
+            self.mouse_capture_enabled = true;
+            self.mouse_capture_bypass_active = false;
+            if self.is_alt_screen_active() {
+                execute!(self.terminal.backend_mut(), EnableMouseCapture)?;
+            }
+        } else {
+            execute!(self.terminal.backend_mut(), DisableMouseCapture)?;
+            self.mouse_capture_enabled = false;
+            self.mouse_capture_bypass_active = false;
+        }
+
+        Ok(())
+    }
+
     pub fn disable_mouse_capture_temporarily(&mut self) {
         if self.mouse_capture_enabled && !self.mouse_capture_bypass_active {
             let _ = execute!(self.terminal.backend_mut(), DisableMouseCapture);

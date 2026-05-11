@@ -790,6 +790,14 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     if subcommand_cli.dangerously_bypass_approvals_and_sandbox {
         interactive.dangerously_bypass_approvals_and_sandbox = true;
     }
+    if subcommand_cli.mouse_capture {
+        interactive.mouse_capture = true;
+        interactive.no_mouse_capture = false;
+    }
+    if subcommand_cli.no_mouse_capture {
+        interactive.no_mouse_capture = true;
+        interactive.mouse_capture = false;
+    }
     if let Some(cwd) = subcommand_cli.cwd {
         interactive.cwd = Some(cwd);
     }
@@ -1089,6 +1097,27 @@ mod tests {
     }
 
     #[test]
+    fn resume_merges_no_mouse_capture_flag() {
+        let interactive =
+            finalize_resume_from_args(["adam", "resume", "--no-mouse-capture"].as_ref());
+
+        assert!(interactive.no_mouse_capture);
+        assert!(!interactive.mouse_capture);
+        assert!(interactive.resume_picker);
+    }
+
+    #[test]
+    fn resume_mouse_capture_flag_overrides_root_no_mouse_capture() {
+        let interactive = finalize_resume_from_args(
+            ["adam", "--no-mouse-capture", "resume", "--mouse-capture"].as_ref(),
+        );
+
+        assert!(interactive.mouse_capture);
+        assert!(!interactive.no_mouse_capture);
+        assert!(interactive.resume_picker);
+    }
+
+    #[test]
     fn fork_picker_logic_none_and_not_last() {
         let interactive = finalize_fork_from_args(["adam", "fork"].as_ref());
         assert!(interactive.fork_picker);
@@ -1120,6 +1149,26 @@ mod tests {
         let interactive = finalize_fork_from_args(["adam", "fork", "--all"].as_ref());
         assert!(interactive.fork_picker);
         assert!(interactive.fork_show_all);
+    }
+
+    #[test]
+    fn fork_merges_mouse_capture_flag() {
+        let interactive = finalize_fork_from_args(["adam", "fork", "--mouse-capture"].as_ref());
+
+        assert!(interactive.mouse_capture);
+        assert!(!interactive.no_mouse_capture);
+        assert!(interactive.fork_picker);
+    }
+
+    #[test]
+    fn fork_no_mouse_capture_flag_overrides_root_mouse_capture() {
+        let interactive = finalize_fork_from_args(
+            ["adam", "--mouse-capture", "fork", "--no-mouse-capture"].as_ref(),
+        );
+
+        assert!(interactive.no_mouse_capture);
+        assert!(!interactive.mouse_capture);
+        assert!(interactive.fork_picker);
     }
 
     #[test]

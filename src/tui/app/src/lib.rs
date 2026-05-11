@@ -355,13 +355,7 @@ async fn run_ratatui_app(
         tracing::error!("panic: {info}");
         prev_hook(info);
     }));
-    let use_mouse_capture = if cli.no_mouse_capture {
-        false
-    } else if cli.mouse_capture {
-        true
-    } else {
-        initial_config.tui_mouse_capture
-    };
+    let use_mouse_capture = resolve_mouse_capture(&cli, &initial_config);
     let mut terminal = tui::init(use_mouse_capture)?;
     terminal.clear()?;
 
@@ -438,6 +432,7 @@ async fn run_ratatui_app(
     } else {
         initial_config
     };
+    tui.set_mouse_capture_enabled(resolve_mouse_capture(&cli, &config))?;
 
     let mut missing_session_exit = |id_str: &str, action: &str| {
         error!("Error finding conversation path: {id_str}");
@@ -601,6 +596,7 @@ async fn run_ratatui_app(
         }
         _ => config,
     };
+    tui.set_mouse_capture_enabled(resolve_mouse_capture(&cli, &config))?;
     let active_profile = config.active_profile.clone();
     let should_show_trust_screen = should_show_trust_screen(&config);
 
@@ -750,6 +746,16 @@ async fn load_config_or_exit_with_fallback_cwd(
     }
 }
 
+fn resolve_mouse_capture(cli: &Cli, config: &Config) -> bool {
+    if cli.no_mouse_capture {
+        false
+    } else if cli.mouse_capture {
+        true
+    } else {
+        config.tui_mouse_capture
+    }
+}
+
 /// Determine if user has configured a sandbox / approval policy,
 /// or if the current cwd project is already trusted. If not, we need to
 /// show the trust screen.
@@ -842,6 +848,52 @@ mod tests {
         }
         Ok(())
     }
+
+    #[tokio::test]
+    async fn resolve_mouse_capture_uses_config_by_default() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        let cli = Cli::default();
+
+        config.tui_mouse_capture = true;
+        assert!(resolve_mouse_capture(&cli, &config));
+
+        config.tui_mouse_capture = false;
+        assert!(!resolve_mouse_capture(&cli, &config));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resolve_mouse_capture_no_flag_overrides_config() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        config.tui_mouse_capture = true;
+        let cli = Cli {
+            no_mouse_capture: true,
+            ..Default::default()
+        };
+
+        assert!(!resolve_mouse_capture(&cli, &config));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resolve_mouse_capture_flag_overrides_config() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        config.tui_mouse_capture = false;
+        let cli = Cli {
+            mouse_capture: true,
+            ..Default::default()
+        };
+
+        assert!(resolve_mouse_capture(&cli, &config));
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn untrusted_project_skips_trust_prompt() -> std::io::Result<()> {
         use adam_protocol::config_types::TrustLevel;
