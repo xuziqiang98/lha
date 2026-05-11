@@ -49,6 +49,7 @@ use adam_agent::protocol::AgentReasoningRawContentDeltaEvent;
 use adam_agent::protocol::AgentReasoningRawContentEvent;
 use adam_agent::protocol::ApplyPatchApprovalRequestEvent;
 use adam_agent::protocol::BackgroundEventEvent;
+use adam_agent::protocol::BuddyTurnSnapshot;
 use adam_agent::protocol::CodexErrorInfo;
 use adam_agent::protocol::CollabAgentSpawnBeginEvent;
 use adam_agent::protocol::DeprecationNoticeEvent;
@@ -3204,14 +3205,47 @@ impl ChatWidget {
             .set_buddy_identity_kind(self.active_identity_kind());
     }
 
+    fn active_tui_buddy_for_turn(&self) -> TuiBuddy {
+        let mut config = self.config.tui_buddy.clone();
+        if let Some(buddy) = self.bottom_pane.buddy() {
+            config.name = Some(buddy.name.clone());
+            config.species = Some(buddy.species);
+            config.eye = Some(buddy.eye);
+            config.hat = Some(buddy.hat);
+            config.rarity = Some(buddy.rarity);
+            config.shiny = Some(buddy.shiny);
+            config.personality = Some(buddy.personality.clone());
+        }
+        config
+    }
+
+    fn active_buddy_snapshot_for_turn(&self) -> BuddyTurnSnapshot {
+        let buddy = self.active_tui_buddy_for_turn();
+        BuddyTurnSnapshot {
+            enabled: buddy.enabled,
+            muted: buddy.muted,
+            name: buddy.name,
+            species: buddy.species.map(|species| species.to_string()),
+            eye: buddy.eye.map(|eye| eye.to_string()),
+            hat: buddy.hat.map(|hat| hat.to_string()),
+            rarity: buddy.rarity.map(|rarity| rarity.to_string()),
+            shiny: buddy.shiny,
+            personality: buddy.personality,
+            observer_enabled: buddy.observer.enabled,
+            observer_model: buddy.observer.model,
+            observer_max_reaction_chars: buddy.observer.max_reaction_chars,
+        }
+    }
+
     fn show_buddy_status(&mut self) {
-        let config = self.bottom_pane.buddy_config();
         let Some(buddy) = self.bottom_pane.buddy().cloned() else {
             self.add_info_message("Buddy is getting ready.".to_string(), None);
             return;
         };
-        let _visible = config.enabled && !config.muted;
-        self.add_to_history(history_cell::new_buddy_details(buddy));
+        self.add_to_history(history_cell::new_buddy_details(
+            buddy,
+            self.active_tui_buddy_for_turn(),
+        ));
         self.request_redraw();
     }
 
@@ -3485,6 +3519,7 @@ impl ChatWidget {
             final_output_json_schema: None,
             identity,
             personality,
+            tui_buddy: Some(self.active_buddy_snapshot_for_turn()),
         };
 
         self.codex_op_tx.send(op).unwrap_or_else(|e| {

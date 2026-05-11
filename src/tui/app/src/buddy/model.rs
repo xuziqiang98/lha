@@ -113,6 +113,15 @@ const STAT_NAMES: [StatName; 5] = [
     StatName::Snark,
 ];
 
+const RARITY_WEIGHTS: [(BuddyRarity, u8); 5] = [
+    (BuddyRarity::Common, 45),
+    (BuddyRarity::Uncommon, 28),
+    (BuddyRarity::Rare, 15),
+    (BuddyRarity::Epic, 8),
+    (BuddyRarity::Legendary, 4),
+];
+const SHINY_PROBABILITY: f64 = 0.10;
+
 pub(crate) fn generate_buddy(identity_kind: IdentityKind, rng: &mut impl Rng) -> Buddy {
     let rarity = roll_rarity(rng);
     let species = pick(rng, &SPECIES);
@@ -122,7 +131,7 @@ pub(crate) fn generate_buddy(identity_kind: IdentityKind, rng: &mut impl Rng) ->
     } else {
         pick(rng, &HATS)
     };
-    let shiny = rng.random_bool(0.01);
+    let shiny = rng.random_bool(SHINY_PROBABILITY);
     let stats = roll_stats(rng, rarity);
 
     Buddy {
@@ -154,13 +163,7 @@ fn pick<T: Copy>(rng: &mut impl Rng, values: &[T]) -> T {
 
 fn roll_rarity(rng: &mut impl Rng) -> BuddyRarity {
     let mut roll = rng.random_range(0..100);
-    for (rarity, weight) in [
-        (BuddyRarity::Common, 60),
-        (BuddyRarity::Uncommon, 25),
-        (BuddyRarity::Rare, 10),
-        (BuddyRarity::Epic, 4),
-        (BuddyRarity::Legendary, 1),
-    ] {
+    for (rarity, weight) in RARITY_WEIGHTS {
         if roll < weight {
             return rarity;
         }
@@ -215,6 +218,7 @@ fn roll_stats(rng: &mut impl Rng, rarity: BuddyRarity) -> BuddyStats {
 
 #[cfg(test)]
 mod tests {
+    use pretty_assertions::assert_eq;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -248,5 +252,31 @@ mod tests {
             }
         }
         assert!(found_common);
+    }
+
+    #[test]
+    fn rarity_weights_match_expected_distribution() {
+        assert_eq!(
+            RARITY_WEIGHTS,
+            [
+                (BuddyRarity::Common, 45),
+                (BuddyRarity::Uncommon, 28),
+                (BuddyRarity::Rare, 15),
+                (BuddyRarity::Epic, 8),
+                (BuddyRarity::Legendary, 4),
+            ]
+        );
+    }
+
+    #[test]
+    fn rarity_weights_sum_to_100() {
+        let total: u8 = RARITY_WEIGHTS.iter().map(|(_, weight)| *weight).sum();
+
+        assert_eq!(total, 100);
+    }
+
+    #[test]
+    fn shiny_probability_is_ten_percent() {
+        assert_eq!(SHINY_PROBABILITY, 0.10);
     }
 }

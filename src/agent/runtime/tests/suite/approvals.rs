@@ -503,6 +503,7 @@ async fn submit_turn(
             summary: ReasoningSummary::Auto,
             identity: None,
             personality: None,
+            tui_buddy: None,
         })
         .await?;
 

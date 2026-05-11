@@ -7,7 +7,6 @@ mod user_shell;
 
 use std::sync::Arc;
 use std::time::Duration;
-use std::time::Instant;
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -250,13 +249,6 @@ impl Session {
         {
             return false;
         }
-
-        let cooldown = Duration::from_secs(buddy.observer.cooldown_seconds);
-        let mut last_reaction_at = self.buddy_last_reaction_at.lock().await;
-        if last_reaction_at.is_some_and(|last| last.elapsed() < cooldown) {
-            return false;
-        }
-        *last_reaction_at = Some(Instant::now());
         true
     }
 
@@ -428,7 +420,7 @@ fn buddy_observer_output_schema_for_runtime(
             "additionalProperties": false,
             "properties": {
                 "say": {
-                    "type": ["string", "null"]
+                    "type": "string"
                 }
             },
             "required": ["say"]
@@ -445,10 +437,10 @@ fn buddy_observer_prompt(
     let assistant_message = assistant_message.unwrap_or("The assistant just finished a turn.");
     format!(
         "You are {name}, a tiny {species} terminal companion.\n\
-You are not the assistant. You only make optional short side comments.\n\
-Return JSON only: {{\"say\": string|null}}.\n\
+You are not the assistant. You only make short side comments.\n\
+Return JSON only: {{\"say\": string}}.\n\
 Rules:\n\
-- Say nothing unless a tiny reaction would be delightful or useful.\n\
+- Always write one tiny side comment reacting to the completed turn.\n\
 - Max {max_chars} characters.\n\
 - One line only.\n\
 - Do not answer the user's task.\n\
@@ -456,7 +448,7 @@ Rules:\n\
 - Do not provide code blocks.\n\
 - Do not ask follow-up questions.\n\n\
 Assistant just finished with this context:\n<assistant>\n{assistant_message}\n</assistant>\n\n\
-Should you say a tiny companion reaction?"
+Write the tiny companion reaction now."
     )
 }
 
@@ -515,7 +507,7 @@ mod tests {
                 "additionalProperties": false,
                 "properties": {
                     "say": {
-                        "type": ["string", "null"]
+                        "type": "string"
                     }
                 },
                 "required": ["say"]

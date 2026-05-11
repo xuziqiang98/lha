@@ -85,6 +85,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
             summary: ReasoningSummary::Auto,
             identity: None,
             personality: None,
+            tui_buddy: None,
         })
         .await?;
 

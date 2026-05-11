@@ -47,6 +47,7 @@ use crate::wrapping::word_wrap_lines;
 use adam_agent::config::Config;
 use adam_agent::config::types::BuddyRarity;
 use adam_agent::config::types::McpServerTransportConfig;
+use adam_agent::config::types::TuiBuddy;
 use adam_agent::protocol::FileChange;
 use adam_agent::protocol::McpAuthStatus;
 use adam_agent::protocol::McpInvocation;
@@ -1916,10 +1917,11 @@ pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHist
 #[derive(Debug)]
 pub(crate) struct BuddyDetailsCell {
     buddy: Buddy,
+    config: TuiBuddy,
 }
 
-pub(crate) fn new_buddy_details(buddy: Buddy) -> BuddyDetailsCell {
-    BuddyDetailsCell { buddy }
+pub(crate) fn new_buddy_details(buddy: Buddy, config: TuiBuddy) -> BuddyDetailsCell {
+    BuddyDetailsCell { buddy, config }
 }
 
 impl HistoryCell for BuddyDetailsCell {
@@ -1938,7 +1940,7 @@ impl HistoryCell for BuddyDetailsCell {
         let sprite =
             sprites::render_sprite(self.buddy.species, self.buddy.eye, self.buddy.hat, false, 0);
         if inner_width >= 68 {
-            let details = detail_lines(&self.buddy);
+            let details = detail_lines(&self.buddy, &self.config);
             let rows = sprite.len().max(details.len());
             for index in 0..rows {
                 let left = sprite.get(index).map_or("", String::as_str);
@@ -1958,9 +1960,11 @@ impl HistoryCell for BuddyDetailsCell {
                 content.push(Line::from(line).fg(color));
             }
             content.push(Line::from(""));
-            content.extend(detail_lines(&self.buddy));
+            content.extend(detail_lines(&self.buddy, &self.config));
         }
 
+        content.extend(about_lines(&self.buddy, &self.config, inner_width));
+        content.push(Line::from(""));
         content.extend(stat_lines(self.buddy.stats, inner_width));
         content.push(Line::from(""));
         content.push(Line::from(vec![
@@ -1986,7 +1990,7 @@ fn center_text_to_width(text: &str, width: usize) -> String {
     format!("{}{}{}", " ".repeat(left_pad), text, " ".repeat(right_pad))
 }
 
-fn detail_lines(buddy: &Buddy) -> Vec<Line<'static>> {
+fn detail_lines(buddy: &Buddy, config: &TuiBuddy) -> Vec<Line<'static>> {
     vec![
         Line::from(vec![
             buddy.name.clone().bold().fg(rarity_color(buddy.rarity)),
@@ -2010,7 +2014,63 @@ fn detail_lines(buddy: &Buddy) -> Vec<Line<'static>> {
             "Personality: ".dim(),
             buddy.personality.clone().italic(),
         ]),
+        Line::from(vec![
+            "Status: ".dim(),
+            buddy_visibility_label(config).into(),
+            " · ".dim(),
+            buddy_talk_label(config).into(),
+        ]),
     ]
+}
+
+fn buddy_visibility_label(config: &TuiBuddy) -> &'static str {
+    if config.muted {
+        "muted"
+    } else if config.enabled {
+        "shown"
+    } else {
+        "hidden"
+    }
+}
+
+fn buddy_talk_label(config: &TuiBuddy) -> &'static str {
+    if config.observer.enabled {
+        "talk on"
+    } else {
+        "talk off"
+    }
+}
+
+fn buddy_intro_text(buddy: &Buddy, config: &TuiBuddy) -> String {
+    let mut intro = format!(
+        "A small {} named {} sits beside your input box and may comment in short speech bubbles.",
+        buddy.species, buddy.name
+    );
+    if !buddy.personality.trim().is_empty() {
+        intro.push_str(&format!(
+            " {} has a {} temperament.",
+            buddy.name, buddy.personality
+        ));
+    }
+    if !config.observer.enabled {
+        intro.push_str(" Talk is currently off.");
+    }
+    intro
+}
+
+fn about_lines(buddy: &Buddy, config: &TuiBuddy, width: u16) -> Vec<Line<'static>> {
+    let wrap_width = usize::from(width.saturating_sub(7).max(1));
+    textwrap::wrap(&buddy_intro_text(buddy, config), wrap_width)
+        .into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            if index == 0 {
+                Line::from(vec!["About: ".dim(), line.into_owned().into()])
+            } else {
+                Line::from(vec!["       ".dim(), line.into_owned().into()])
+            }
+        })
+        .collect()
 }
 
 fn shiny_suffix(rarity: BuddyRarity, shiny: bool) -> Span<'static> {
@@ -3962,7 +4022,7 @@ mod tests {
             identity_kind: adam_protocol::config_types::IdentityKind::Planner,
         };
 
-        let lines = new_buddy_details(buddy).display_lines(80);
+        let lines = new_buddy_details(buddy, visible_buddy_config()).display_lines(80);
         let rendered = lines
             .iter()
             .flat_map(|line| line.spans.iter())
@@ -3973,6 +4033,8 @@ mod tests {
         assert!(rendered.contains("planner buddy"));
         assert!(rendered.contains("Patch"));
         assert!(rendered.contains("quiet optimizer"));
+        assert!(rendered.contains("Status: shown · talk on"));
+        assert!(rendered.contains("About:"));
         assert!(rendered.contains("DEBUGGING"));
     }
 
@@ -3996,7 +4058,7 @@ mod tests {
             identity_kind: adam_protocol::config_types::IdentityKind::Planner,
         };
 
-        let lines = new_buddy_details(buddy).display_lines(120);
+        let lines = new_buddy_details(buddy, visible_buddy_config()).display_lines(120);
         let max_width = lines
             .iter()
             .map(|line| {
@@ -4031,7 +4093,8 @@ mod tests {
             identity_kind: adam_protocol::config_types::IdentityKind::Programmer,
         };
 
-        let rendered = render_lines(&new_buddy_details(buddy).display_lines(120));
+        let rendered =
+            render_lines(&new_buddy_details(buddy, visible_buddy_config()).display_lines(120));
 
         assert!(
             rendered
@@ -4043,5 +4106,17 @@ mod tests {
             rendered.iter().any(|line| line.contains("   ((°)(°))   ")),
             "expected owl face centered in the 14-column sprite detail area: {rendered:?}",
         );
+    }
+
+    fn visible_buddy_config() -> TuiBuddy {
+        TuiBuddy {
+            enabled: true,
+            muted: false,
+            observer: adam_agent::config::types::BuddyObserverConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
     }
 }

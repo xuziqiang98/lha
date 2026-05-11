@@ -798,10 +798,6 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub(crate) fn buddy_config(&self) -> &TuiBuddy {
-        self.composer.buddy_config()
-    }
-
     pub(crate) fn buddy_is_hatched(&self) -> bool {
         self.composer.buddy_is_hatched()
     }

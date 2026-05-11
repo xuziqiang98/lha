@@ -528,6 +528,10 @@ pub struct TuiBuddy {
     #[serde(default)]
     pub shiny: Option<bool>,
 
+    /// Short generated personality label used in buddy details and companion instructions.
+    #[serde(default)]
+    pub personality: Option<String>,
+
     /// Optional model-powered reaction settings.
     #[serde(default)]
     pub observer: BuddyObserverConfig,
@@ -544,6 +548,7 @@ impl Default for TuiBuddy {
             hat: None,
             rarity: None,
             shiny: None,
+            personality: None,
             observer: BuddyObserverConfig::default(),
         }
     }
@@ -654,6 +659,22 @@ impl std::fmt::Display for BuddyEye {
     }
 }
 
+impl std::str::FromStr for BuddyEye {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "dot" => Ok(BuddyEye::Dot),
+            "sparkle" => Ok(BuddyEye::Sparkle),
+            "cross" => Ok(BuddyEye::Cross),
+            "circle" => Ok(BuddyEye::Circle),
+            "at" => Ok(BuddyEye::At),
+            "degree" => Ok(BuddyEye::Degree),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Supported buddy hat/accessory variants.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -685,6 +706,24 @@ impl std::fmt::Display for BuddyHat {
     }
 }
 
+impl std::str::FromStr for BuddyHat {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "none" => Ok(BuddyHat::None),
+            "crown" => Ok(BuddyHat::Crown),
+            "top-hat" => Ok(BuddyHat::TopHat),
+            "propeller" => Ok(BuddyHat::Propeller),
+            "halo" => Ok(BuddyHat::Halo),
+            "wizard" => Ok(BuddyHat::Wizard),
+            "beanie" => Ok(BuddyHat::Beanie),
+            "tiny-duck" => Ok(BuddyHat::TinyDuck),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Rarity used for buddy accent styling.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -710,6 +749,21 @@ impl std::fmt::Display for BuddyRarity {
     }
 }
 
+impl std::str::FromStr for BuddyRarity {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "common" => Ok(BuddyRarity::Common),
+            "uncommon" => Ok(BuddyRarity::Uncommon),
+            "rare" => Ok(BuddyRarity::Rare),
+            "epic" => Ok(BuddyRarity::Epic),
+            "legendary" => Ok(BuddyRarity::Legendary),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Model-powered buddy reaction settings.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -722,7 +776,7 @@ pub struct BuddyObserverConfig {
     #[serde(default)]
     pub model: Option<String>,
 
-    /// Minimum seconds between reactions.
+    /// Legacy minimum seconds between reactions. Buddy reactions now attempt after every turn.
     #[serde(default = "default_buddy_reaction_cooldown_seconds")]
     pub cooldown_seconds: u64,
 
@@ -734,7 +788,7 @@ pub struct BuddyObserverConfig {
 impl Default for BuddyObserverConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             model: None,
             cooldown_seconds: default_buddy_reaction_cooldown_seconds(),
             max_reaction_chars: default_buddy_max_reaction_chars(),

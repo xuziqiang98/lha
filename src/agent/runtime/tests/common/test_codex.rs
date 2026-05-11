@@ -296,6 +296,7 @@ impl TestCodex {
                 summary: ReasoningSummary::Auto,
                 identity: None,
                 personality: None,
+                tui_buddy: None,
             })
             .await?;
 

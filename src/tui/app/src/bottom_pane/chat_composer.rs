@@ -485,10 +485,6 @@ impl ChatComposer {
         }
     }
 
-    pub(crate) fn buddy_config(&self) -> &TuiBuddy {
-        self.buddy_state.config()
-    }
-
     pub(crate) fn buddy_is_hatched(&self) -> bool {
         self.buddy_state.is_hatched()
     }

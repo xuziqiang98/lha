@@ -475,6 +475,7 @@ async fn remote_compact_backfills_latest_plan_into_replacement_history() -> Resu
             summary: ReasoningSummary::Auto,
             identity: Some(identity),
             personality: None,
+            tui_buddy: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -592,6 +593,7 @@ async fn remote_compact_backfills_recent_skills_into_replacement_history() -> Re
             summary: ReasoningSummary::Auto,
             identity: None,
             personality: None,
+            tui_buddy: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

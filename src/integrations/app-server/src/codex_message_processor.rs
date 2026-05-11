@@ -3454,6 +3454,7 @@ impl CodexMessageProcessor {
                 final_output_json_schema: output_schema,
                 identity: None,
                 personality: None,
+                tui_buddy: None,
             })
             .await;
 

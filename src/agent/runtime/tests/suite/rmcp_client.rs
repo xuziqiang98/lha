@@ -121,6 +121,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
             summary: ReasoningSummary::Auto,
             identity: None,
             personality: None,
+            tui_buddy: None,
         })
         .await?;
 
@@ -262,6 +263,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
             summary: ReasoningSummary::Auto,
             identity: None,
             personality: None,
+            tui_buddy: None,
         })
         .await?;
 
@@ -461,6 +463,7 @@ async fn stdio_image_completions_round_trip() -> anyhow::Result<()> {
             summary: ReasoningSummary::Auto,
             identity: None,
             personality: None,
+            tui_buddy: None,
         })
         .await?;
 
@@ -608,6 +611,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
             summary: ReasoningSummary::Auto,
             identity: None,
             personality: None,
+            tui_buddy: None,
         })
         .await?;
 
@@ -766,6 +770,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
             summary: ReasoningSummary::Auto,
             identity: None,
             personality: None,
+            tui_buddy: None,
         })
         .await?;
 
@@ -956,6 +961,7 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
             summary: ReasoningSummary::Auto,
             identity: None,
             personality: None,
+            tui_buddy: None,
         })
         .await?;
 

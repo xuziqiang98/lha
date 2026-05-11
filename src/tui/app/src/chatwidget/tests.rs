@@ -25,6 +25,7 @@ use adam_agent::config::Constrained;
 use adam_agent::config::ConstraintError;
 use adam_agent::config::model_ref::ModelRef;
 use adam_agent::config::state_json::AdamStateStore;
+use adam_agent::config::types::BuddyObserverConfig;
 use adam_agent::config::types::TuiBuddy;
 use adam_agent::config_loader::RequirementSource;
 use adam_agent::features::Feature;
@@ -4040,6 +4041,44 @@ async fn user_turn_includes_personality_from_config() {
             ..
         } => {}
         other => panic!("expected Op::UserTurn with friendly personality, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn user_turn_includes_active_buddy_snapshot() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_buddy_config(TuiBuddy {
+        enabled: true,
+        muted: false,
+        observer: BuddyObserverConfig {
+            enabled: true,
+            model: Some("buddy-model".to_string()),
+            max_reaction_chars: 42,
+            ..BuddyObserverConfig::default()
+        },
+        ..TuiBuddy::default()
+    });
+
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            tui_buddy: Some(buddy),
+            ..
+        } => {
+            assert!(buddy.enabled);
+            assert!(!buddy.muted);
+            assert_eq!(buddy.observer_enabled, true);
+            assert_eq!(buddy.observer_model, Some("buddy-model".to_string()));
+            assert_eq!(buddy.observer_max_reaction_chars, 42);
+            assert!(buddy.name.is_some());
+            assert!(buddy.species.is_some());
+            assert!(buddy.personality.is_some());
+        }
+        other => panic!("expected Op::UserTurn with buddy snapshot, got {other:?}"),
     }
 }
 

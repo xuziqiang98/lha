@@ -9,6 +9,7 @@ pub mod api_bridge;
 mod apply_patch;
 pub mod auth;
 pub mod bash;
+mod buddy_intro;
 mod client;
 mod client_common;
 pub mod codex;

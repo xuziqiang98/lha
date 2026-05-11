@@ -148,6 +148,10 @@ pub enum Op {
         /// Optional personality override for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
+
+        /// Optional TUI buddy snapshot for this turn.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tui_buddy: Option<BuddyTurnSnapshot>,
     },
 
     /// Override parts of the persistent turn context for subsequent turns.
@@ -314,6 +318,32 @@ pub enum Op {
 
     /// Request the list of available models.
     ListModels,
+}
+
+/// Snapshot of the active TUI buddy to attach to a user turn.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct BuddyTurnSnapshot {
+    pub enabled: bool,
+    pub muted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub species: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eye: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hat: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rarity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shiny: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personality: Option<String>,
+    pub observer_enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observer_model: Option<String>,
+    pub observer_max_reaction_chars: usize,
 }
 
 /// Determines the conditions under which the user is consulted to approve

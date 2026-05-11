@@ -731,6 +731,7 @@ async fn user_turn_identity_overrides_model_and_effort() -> anyhow::Result<()> {
             identity: Some(identity),
             final_output_json_schema: None,
             personality: None,
+            tui_buddy: None,
         })
         .await?;
 

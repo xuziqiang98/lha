@@ -93,10 +93,6 @@ fn default_rng() -> StdRng {
 }
 
 impl BuddyState {
-    pub(crate) fn config(&self) -> &TuiBuddy {
-        &self.config
-    }
-
     pub(crate) fn set_config(&mut self, config: TuiBuddy) {
         self.config = config;
         if !self.is_visible() {
@@ -247,6 +243,7 @@ mod tests {
             hat: None,
             rarity: None,
             shiny: None,
+            personality: None,
             observer: Default::default(),
         });
         state.ensure_active_buddy();

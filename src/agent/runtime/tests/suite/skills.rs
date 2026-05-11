@@ -80,6 +80,7 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
             summary: adam_protocol::config_types::ReasoningSummary::Auto,
             identity: None,
             personality: None,
+            tui_buddy: None,
         })
         .await?;
 

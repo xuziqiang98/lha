@@ -142,6 +142,7 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
                 },
             }),
             personality: None,
+            tui_buddy: None,
         })
         .await?;
 
@@ -259,6 +260,7 @@ where
             summary: ReasoningSummary::Auto,
             identity: Some(identity),
             personality: None,
+            tui_buddy: None,
         })
         .await?;
 

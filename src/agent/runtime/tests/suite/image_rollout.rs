@@ -130,6 +130,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
             summary: ReasoningSummary::Auto,
             identity: None,
             personality: None,
+            tui_buddy: None,
         })
         .await?;
 
@@ -211,6 +212,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
             summary: ReasoningSummary::Auto,
             identity: None,
             personality: None,
+            tui_buddy: None,
         })
         .await?;
 

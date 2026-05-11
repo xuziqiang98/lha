@@ -4539,6 +4539,7 @@ mod notifications_tests {
             muted = false
             name = "Byte"
             species = "duck"
+            personality = "quiet optimizer"
 
             [tui.buddy.observer]
             enabled = true
@@ -4557,6 +4558,7 @@ mod notifications_tests {
                 hat: None,
                 rarity: None,
                 shiny: None,
+                personality: Some("quiet optimizer".to_string()),
                 observer: BuddyObserverConfig {
                     enabled: true,
                     model: None,
@@ -4565,5 +4567,28 @@ mod notifications_tests {
                 },
             }
         );
+    }
+
+    #[test]
+    fn test_tui_buddy_observer_defaults_on() {
+        let toml = r#"
+            [tui.buddy]
+            name = "Byte"
+            species = "duck"
+        "#;
+        let parsed: RootTomlTest =
+            toml::from_str(toml).expect("deserialize tui buddy observer defaults");
+        assert!(parsed.tui.buddy.observer.enabled);
+    }
+
+    #[test]
+    fn test_tui_buddy_observer_can_be_disabled() {
+        let toml = r#"
+            [tui.buddy.observer]
+            enabled = false
+        "#;
+        let parsed: RootTomlTest =
+            toml::from_str(toml).expect("deserialize disabled tui buddy observer");
+        assert!(!parsed.tui.buddy.observer.enabled);
     }
 }

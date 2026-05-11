@@ -595,6 +595,7 @@ async fn local_compact_backfills_latest_plan_as_assistant_context() {
             summary: ReasoningSummary::Auto,
             identity: Some(identity),
             personality: None,
+            tui_buddy: None,
         })
         .await
         .unwrap();
@@ -706,6 +707,7 @@ async fn local_compact_backfills_plan_from_pre_compaction_history() {
             summary: ReasoningSummary::Auto,
             identity: Some(identity),
             personality: None,
+            tui_buddy: None,
         })
         .await
         .unwrap();
@@ -809,6 +811,7 @@ async fn local_compact_persists_replacement_history_in_rollout() {
             summary: ReasoningSummary::Auto,
             identity: Some(identity),
             personality: None,
+            tui_buddy: None,
         })
         .await
         .unwrap();
@@ -1037,6 +1040,7 @@ async fn local_compact_backfills_recent_skills_into_follow_up_history() {
             summary: ReasoningSummary::Auto,
             identity: None,
             personality: None,
+            tui_buddy: None,
         })
         .await
         .unwrap();
@@ -2616,6 +2620,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
             summary: ReasoningSummary::Auto,
             identity: None,
             personality: None,
+            tui_buddy: None,
         })
         .await
         .unwrap();

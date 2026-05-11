@@ -5,10 +5,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
 
 use crate::AuthManager;
 use crate::SandboxState;
+use crate::buddy_intro::buddy_model_instructions;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
@@ -63,6 +63,7 @@ use adam_protocol::items::UserMessageItem;
 use adam_protocol::models::BaseInstructions;
 use adam_protocol::models::format_allow_prefixes;
 use adam_protocol::openai_models::ModelInfo;
+use adam_protocol::protocol::BuddyTurnSnapshot;
 use adam_protocol::protocol::FileChange;
 use adam_protocol::protocol::GhostSnapshotRecord;
 use adam_protocol::protocol::GhostSnapshotStatus;
@@ -485,7 +486,6 @@ pub(crate) struct Session {
     features: Features,
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
-    pub(crate) buddy_last_reaction_at: Mutex<Option<Instant>>,
     pending_input_epoch: AtomicU64,
     pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
@@ -719,6 +719,37 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     pub(crate) personality: Option<Personality>,
     pub(crate) tui_buddy: Option<crate::config::types::TuiBuddy>,
+}
+
+fn buddy_turn_snapshot_to_config(snapshot: BuddyTurnSnapshot) -> crate::config::types::TuiBuddy {
+    use crate::config::types::BuddyEye;
+    use crate::config::types::BuddyHat;
+    use crate::config::types::BuddyRarity;
+    use crate::config::types::BuddySpecies;
+    use crate::config::types::TuiBuddy;
+    use std::str::FromStr;
+
+    fn parse_optional<T: FromStr>(value: Option<String>) -> Option<T> {
+        value.as_deref().and_then(|value| value.parse().ok())
+    }
+
+    TuiBuddy {
+        enabled: snapshot.enabled,
+        muted: snapshot.muted,
+        name: snapshot.name,
+        species: parse_optional::<BuddySpecies>(snapshot.species),
+        eye: parse_optional::<BuddyEye>(snapshot.eye),
+        hat: parse_optional::<BuddyHat>(snapshot.hat),
+        rarity: parse_optional::<BuddyRarity>(snapshot.rarity),
+        shiny: snapshot.shiny,
+        personality: snapshot.personality,
+        observer: crate::config::types::BuddyObserverConfig {
+            enabled: snapshot.observer_enabled,
+            model: snapshot.observer_model,
+            cooldown_seconds: crate::config::types::BuddyObserverConfig::default().cooldown_seconds,
+            max_reaction_chars: snapshot.observer_max_reaction_chars,
+        },
+    }
 }
 
 impl Session {
@@ -1093,7 +1124,6 @@ impl Session {
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
-            buddy_last_reaction_at: Mutex::new(None),
             pending_input_epoch: AtomicU64::new(0),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -2168,6 +2198,9 @@ impl Session {
                 );
             }
         }
+        if let Some(instructions) = buddy_model_instructions(&turn_context.tui_buddy) {
+            items.push(DeveloperInstructions::new(instructions).into());
+        }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             items.push(TranscriptItem::from(UserInstructions {
                 text: user_instructions.to_string(),
@@ -2777,6 +2810,7 @@ mod handlers {
     use crate::codex::Session;
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::TurnContext;
+    use crate::codex::buddy_turn_snapshot_to_config;
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
@@ -2865,6 +2899,7 @@ mod handlers {
                 items,
                 identity,
                 personality,
+                tui_buddy,
             } => {
                 let identity = identity.or_else(|| {
                     Some(Identity {
@@ -2887,7 +2922,7 @@ mod handlers {
                         reasoning_summary: Some(summary),
                         final_output_json_schema: Some(final_output_json_schema),
                         personality,
-                        tui_buddy: None,
+                        tui_buddy: tui_buddy.map(buddy_turn_snapshot_to_config),
                     },
                 )
             }
@@ -6379,7 +6414,6 @@ mod tests {
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
-            buddy_last_reaction_at: Mutex::new(None),
             pending_input_epoch: AtomicU64::new(0),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -6573,7 +6607,6 @@ mod tests {
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
-            buddy_last_reaction_at: Mutex::new(None),
             pending_input_epoch: AtomicU64::new(0),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -6624,6 +6657,7 @@ mod tests {
             hat: None,
             rarity: None,
             shiny: None,
+            personality: Some("patient debugger".to_string()),
             observer: crate::config::types::BuddyObserverConfig {
                 enabled: true,
                 model: Some("gpt-4.1-mini".to_string()),
@@ -6647,6 +6681,45 @@ mod tests {
             .new_default_turn_with_sub_id("updated-buddy".to_string())
             .await;
         assert_eq!(turn_context.tui_buddy, updated);
+    }
+
+    #[tokio::test]
+    async fn buddy_intro_is_injected_when_talk_is_on() {
+        let adam_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(adam_home.path()).await;
+        config.tui_buddy = crate::config::types::TuiBuddy {
+            enabled: true,
+            muted: false,
+            name: Some("Byte".to_string()),
+            species: Some(crate::config::types::BuddySpecies::Duck),
+            personality: Some("quiet optimizer".to_string()),
+            observer: crate::config::types::BuddyObserverConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (session, turn_context) = make_session_and_context_for_config(config).await;
+
+        let initial_context = session.build_initial_context(&turn_context).await;
+        let text = initial_context
+            .iter()
+            .filter_map(|item| match item {
+                TranscriptItem::Message { role, content, .. } if role == "developer" => {
+                    content.iter().find_map(|content| match content {
+                        ContentItem::InputText { text } => Some(text.as_str()),
+                        ContentItem::InputImage { .. } => None,
+                        ContentItem::OutputText { .. } => None,
+                    })
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("<buddy_companion>"));
+        assert!(text.contains("Byte"));
+        assert!(text.contains("quiet optimizer"));
     }
 
     #[tokio::test]

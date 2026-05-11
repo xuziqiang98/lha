@@ -49,6 +49,7 @@ async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
             summary: ReasoningSummary::Auto,
             identity: None,
             personality: None,
+            tui_buddy: None,
         })
         .await?;
 
@@ -367,6 +368,7 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
             summary: ReasoningSummary::Auto,
             identity: None,
             personality: None,
+            tui_buddy: None,
         })
         .await?;
 

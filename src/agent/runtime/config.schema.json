@@ -133,7 +133,7 @@
       "properties": {
         "cooldown_seconds": {
           "default": 60,
-          "description": "Minimum seconds between reactions.",
+          "description": "Legacy minimum seconds between reactions. Buddy reactions now attempt after every turn.",
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"
@@ -957,10 +957,11 @@
             "name": null,
             "observer": {
               "cooldown_seconds": 60,
-              "enabled": false,
+              "enabled": true,
               "max_reaction_chars": 80,
               "model": null
             },
+            "personality": null,
             "rarity": null,
             "shiny": null,
             "species": null
@@ -1038,11 +1039,16 @@
           ],
           "default": {
             "cooldown_seconds": 60,
-            "enabled": false,
+            "enabled": true,
             "max_reaction_chars": 80,
             "model": null
           },
           "description": "Optional model-powered reaction settings."
+        },
+        "personality": {
+          "default": null,
+          "description": "Short generated personality label used in buddy details and companion instructions.",
+          "type": "string"
         },
         "rarity": {
           "allOf": [

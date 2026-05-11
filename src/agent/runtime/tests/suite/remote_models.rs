@@ -180,6 +180,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             summary: ReasoningSummary::Auto,
             identity: None,
             personality: None,
+            tui_buddy: None,
         })
         .await?;
 
@@ -391,6 +392,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             summary: ReasoningSummary::Auto,
             identity: None,
             personality: None,
+            tui_buddy: None,
         })
         .await?;
 

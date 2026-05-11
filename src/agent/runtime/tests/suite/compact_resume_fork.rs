@@ -919,6 +919,7 @@ async fn compact_resume_and_fork_preserve_persisted_backfilled_plan_context() {
         summary: ReasoningSummary::Auto,
         identity: Some(identity),
         personality: None,
+        tui_buddy: None,
     })
     .await
     .expect("submit plan turn");
