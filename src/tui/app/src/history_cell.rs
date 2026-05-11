@@ -2345,6 +2345,10 @@ impl HistoryCell for PlanUpdateCell {
     fn block_style(&self) -> Option<Style> {
         Some(proposed_plan_style())
     }
+
+    fn force_transcript_separator_after(&self) -> bool {
+        true
+    }
 }
 
 /// Create a new `PendingPatch` cell that lists the file‑level summary of

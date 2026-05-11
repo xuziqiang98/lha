@@ -5,6 +5,8 @@ use std::sync::Arc;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
 #[cfg(test)]
+use crate::history_cell::new_plan_update;
+#[cfg(test)]
 use crate::history_cell::new_proposed_plan;
 #[cfg(test)]
 use crate::history_cell::new_proposed_plan_stream;
@@ -23,6 +25,12 @@ use crate::style::user_message_style;
 use crate::terminal_palette;
 use crate::transcript_selection::TranscriptSelection;
 use crate::transcript_selection::TranscriptSelectionPoint;
+#[cfg(test)]
+use adam_protocol::plan_tool::PlanItemArg;
+#[cfg(test)]
+use adam_protocol::plan_tool::StepStatus;
+#[cfg(test)]
+use adam_protocol::plan_tool::UpdatePlanArgs;
 use crossterm::event::MouseButton;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
@@ -2271,6 +2279,41 @@ mod tests {
         assert!(rendered_lines[separator_row].trim().is_empty());
         assert_row_bg_is_not(&buf, 40, separator_row as u16, proposed_plan_style().bg);
         assert_row_bg_is_not(&buf, 40, separator_row as u16, user_message_style().bg);
+    }
+
+    #[test]
+    fn plan_update_forces_unstyled_separator_before_following_cell() {
+        let mut view = TranscriptView::new_transcript(vec![
+            Arc::new(new_plan_update(UpdatePlanArgs {
+                explanation: None,
+                plan: vec![PlanItemArg {
+                    step: "Review layout".to_string(),
+                    status: StepStatus::InProgress,
+                }],
+            })) as Arc<dyn HistoryCell>,
+            Arc::new(TestCell("agent reply")) as Arc<dyn HistoryCell>,
+        ]);
+        let buf = render_test_view(&mut view, 40, 6);
+        let rendered_lines = area_lines(&buf, Rect::new(0, 0, 40, 6));
+        let reply_row = rendered_lines
+            .iter()
+            .position(|line| line.contains("agent reply"))
+            .expect("agent reply row");
+        let separator_row = reply_row - 1;
+
+        assert!(rendered_lines[separator_row].trim().is_empty());
+        assert_row_bg_is_not(&buf, 40, separator_row as u16, proposed_plan_style().bg);
+        assert_eq!(
+            view.semantic_plain_lines_for_width(40),
+            vec![
+                String::new(),
+                "• Updated Plan".to_string(),
+                "  └ □ Review layout".to_string(),
+                String::new(),
+                String::new(),
+                "agent reply".to_string(),
+            ]
+        );
     }
 
     #[test]
