@@ -1,5 +1,10 @@
 use crate::config::types::TuiBuddy;
 
+pub(crate) const BUDDY_COMPANION_DISABLED_INSTRUCTIONS: &str = "\
+<buddy_companion>
+The TUI buddy companion is currently inactive. Ignore any previous buddy_companion instructions.
+</buddy_companion>";
+
 fn buddy_identity(buddy: &TuiBuddy) -> Option<(&str, String)> {
     if !buddy.enabled || buddy.muted || !buddy.observer.enabled {
         return None;
@@ -28,6 +33,7 @@ pub(crate) fn buddy_model_instructions(buddy: &TuiBuddy) -> Option<String> {
         .unwrap_or_default();
     Some(format!(
         "<buddy_companion>\n\
+This is the current TUI buddy companion context and replaces any previous buddy_companion context.\n\
 A small {species} named {name} sits beside the user's input box and occasionally comments in a speech bubble.{personality}\n\n\
 You are not {name}; it is a separate UI companion. When the user addresses {name} directly, stay out of the way: respond in one line or less, or answer only the part meant for you. Do not narrate what {name} might say; the bubble handles that.\n\
 </buddy_companion>"

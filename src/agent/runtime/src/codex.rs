@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 
 use crate::AuthManager;
 use crate::SandboxState;
+use crate::buddy_intro::BUDDY_COMPANION_DISABLED_INSTRUCTIONS;
 use crate::buddy_intro::buddy_model_instructions;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
@@ -1620,6 +1621,23 @@ impl Session {
         }
     }
 
+    fn build_buddy_update_item(
+        &self,
+        previous: Option<&Arc<TurnContext>>,
+        next: &TurnContext,
+    ) -> Option<TranscriptItem> {
+        let prev = previous?;
+        let prev_instructions = buddy_model_instructions(&prev.tui_buddy);
+        let next_instructions = buddy_model_instructions(&next.tui_buddy);
+        if prev_instructions == next_instructions {
+            return None;
+        }
+
+        let instructions =
+            next_instructions.unwrap_or_else(|| BUDDY_COMPANION_DISABLED_INSTRUCTIONS.to_string());
+        Some(DeveloperInstructions::new(instructions).into())
+    }
+
     fn build_settings_update_items(
         &self,
         previous_context: Option<&Arc<TurnContext>>,
@@ -1645,6 +1663,9 @@ impl Session {
             self.build_personality_update_item(previous_context, current_context)
         {
             update_items.push(personality_item);
+        }
+        if let Some(buddy_item) = self.build_buddy_update_item(previous_context, current_context) {
+            update_items.push(buddy_item);
         }
         update_items
     }
@@ -6720,6 +6741,160 @@ mod tests {
         assert!(text.contains("<buddy_companion>"));
         assert!(text.contains("Byte"));
         assert!(text.contains("quiet optimizer"));
+    }
+
+    fn active_buddy(name: &str) -> crate::config::types::TuiBuddy {
+        crate::config::types::TuiBuddy {
+            enabled: true,
+            muted: false,
+            name: Some(name.to_string()),
+            species: Some(crate::config::types::BuddySpecies::Duck),
+            personality: Some("quiet optimizer".to_string()),
+            observer: crate::config::types::BuddyObserverConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn buddy_update_text(items: &[TranscriptItem]) -> String {
+        items
+            .iter()
+            .filter_map(|item| match item {
+                TranscriptItem::Message { role, content, .. } if role == "developer" => {
+                    content.iter().find_map(|content| match content {
+                        ContentItem::InputText { text } if text.contains("<buddy_companion>") => {
+                            Some(text.as_str())
+                        }
+                        ContentItem::InputText { .. }
+                        | ContentItem::InputImage { .. }
+                        | ContentItem::OutputText { .. } => None,
+                    })
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[tokio::test]
+    async fn buddy_intro_update_is_injected_when_talk_turns_on() {
+        let (session, previous) = make_session_and_context().await;
+        let previous = Arc::new(previous);
+        let current_buddy = active_buddy("Byte");
+
+        session
+            .update_settings(SessionSettingsUpdate {
+                tui_buddy: Some(current_buddy),
+                ..Default::default()
+            })
+            .await
+            .expect("update buddy settings");
+
+        let current = session
+            .new_default_turn_with_sub_id("buddy-on".to_string())
+            .await;
+        let items = session.build_settings_update_items(Some(&previous), &current);
+        let text = buddy_update_text(&items);
+
+        assert!(text.contains("<buddy_companion>"));
+        assert!(text.contains("Byte"));
+        assert!(text.contains("quiet optimizer"));
+        assert!(text.contains("replaces any previous buddy_companion context"));
+    }
+
+    #[tokio::test]
+    async fn buddy_intro_update_is_injected_when_buddy_identity_changes() {
+        let adam_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(adam_home.path()).await;
+        config.tui_buddy = active_buddy("Byte");
+        let (session, previous) = make_session_and_context_for_config(config).await;
+        let previous = Arc::new(previous);
+
+        session
+            .update_settings(SessionSettingsUpdate {
+                tui_buddy: Some(active_buddy("Quack")),
+                ..Default::default()
+            })
+            .await
+            .expect("update buddy settings");
+
+        let current = session
+            .new_default_turn_with_sub_id("buddy-change".to_string())
+            .await;
+        let items = session.build_settings_update_items(Some(&previous), &current);
+        let text = buddy_update_text(&items);
+
+        assert!(text.contains("<buddy_companion>"));
+        assert!(text.contains("Quack"));
+        assert!(!text.contains("Byte"));
+    }
+
+    #[tokio::test]
+    async fn buddy_intro_update_disables_stale_buddy_when_talk_turns_off() {
+        let adam_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(adam_home.path()).await;
+        config.tui_buddy = active_buddy("Byte");
+        let (session, previous) = make_session_and_context_for_config(config).await;
+        let previous = Arc::new(previous);
+        let current_buddy = crate::config::types::TuiBuddy {
+            observer: crate::config::types::BuddyObserverConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            ..active_buddy("Byte")
+        };
+
+        session
+            .update_settings(SessionSettingsUpdate {
+                tui_buddy: Some(current_buddy),
+                ..Default::default()
+            })
+            .await
+            .expect("update buddy settings");
+
+        let current = session
+            .new_default_turn_with_sub_id("buddy-off".to_string())
+            .await;
+        let items = session.build_settings_update_items(Some(&previous), &current);
+        let text = buddy_update_text(&items);
+
+        assert!(text.contains("<buddy_companion>"));
+        assert!(text.contains("currently inactive"));
+        assert!(text.contains("Ignore any previous buddy_companion instructions"));
+    }
+
+    #[tokio::test]
+    async fn buddy_intro_update_is_omitted_for_ui_only_buddy_changes() {
+        let adam_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(adam_home.path()).await;
+        config.tui_buddy = active_buddy("Byte");
+        let (session, previous) = make_session_and_context_for_config(config).await;
+        let previous = Arc::new(previous);
+        let current_buddy = crate::config::types::TuiBuddy {
+            eye: Some(crate::config::types::BuddyEye::Sparkle),
+            hat: Some(crate::config::types::BuddyHat::Crown),
+            rarity: Some(crate::config::types::BuddyRarity::Legendary),
+            shiny: Some(true),
+            ..active_buddy("Byte")
+        };
+
+        session
+            .update_settings(SessionSettingsUpdate {
+                tui_buddy: Some(current_buddy),
+                ..Default::default()
+            })
+            .await
+            .expect("update buddy settings");
+
+        let current = session
+            .new_default_turn_with_sub_id("buddy-ui-only".to_string())
+            .await;
+        let items = session.build_settings_update_items(Some(&previous), &current);
+        let text = buddy_update_text(&items);
+
+        assert_eq!(text, "");
     }
 
     #[tokio::test]
