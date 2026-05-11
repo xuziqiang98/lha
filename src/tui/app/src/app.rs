@@ -93,6 +93,7 @@ use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 use crossterm::event::MouseEvent;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -562,6 +563,7 @@ pub(crate) struct App {
     suppress_shutdown_complete: bool,
 
     windows_sandbox: WindowsSandboxState,
+    shift_mouse_bypass_active: bool,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     agent_picker_threads: HashMap<ThreadId, AgentPickerThreadEntry>,
@@ -1778,6 +1780,7 @@ impl App {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             windows_sandbox: WindowsSandboxState::default(),
+            shift_mouse_bypass_active: false,
             thread_event_channels: HashMap::new(),
             agent_picker_threads: HashMap::new(),
             active_thread_id: None,
@@ -1970,6 +1973,24 @@ impl App {
     }
 
     async fn handle_mouse_event(&mut self, tui: &mut tui::Tui, mouse_event: MouseEvent) {
+        if tui.mouse_capture_enabled() && mouse_event.modifiers.contains(KeyModifiers::SHIFT) {
+            if !self.shift_mouse_bypass_active {
+                tui.disable_mouse_capture_temporarily();
+                self.shift_mouse_bypass_active = true;
+                self.chat_widget
+                    .set_status_header("Native selection: release Shift to return".to_string());
+            }
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
+        if self.shift_mouse_bypass_active {
+            tui.restore_mouse_capture_after_bypass();
+            self.shift_mouse_bypass_active = false;
+            self.chat_widget
+                .set_status_header("Mouse capture restored".to_string());
+        }
+
         self.chat_widget.handle_mouse_event(mouse_event);
         tui.frame_requester().schedule_frame();
     }
@@ -3853,6 +3874,7 @@ mod tests {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             windows_sandbox: WindowsSandboxState::default(),
+            shift_mouse_bypass_active: false,
             thread_event_channels: HashMap::new(),
             agent_picker_threads: HashMap::new(),
             active_thread_id: None,
@@ -3906,6 +3928,7 @@ mod tests {
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
                 windows_sandbox: WindowsSandboxState::default(),
+                shift_mouse_bypass_active: false,
                 thread_event_channels: HashMap::new(),
                 agent_picker_threads: HashMap::new(),
                 active_thread_id: None,

@@ -59,17 +59,23 @@ impl SuspendContext {
     /// - If the alt screen is active, exit alt-scroll/alt-screen and record `RestoreAlt`.
     /// - Update the cached cursor row so suspend can place the cursor meaningfully.
     /// - Trigger SIGTSTP so the process can be resumed and continue drawing with the saved state.
-    pub(crate) fn suspend(&self, alt_screen_active: &Arc<AtomicBool>) -> Result<()> {
+    pub(crate) fn suspend(
+        &self,
+        alt_screen_active: &Arc<AtomicBool>,
+        use_mouse_capture: bool,
+    ) -> Result<()> {
         if alt_screen_active.load(Ordering::Relaxed) {
             // Leave alt-screen so the terminal returns to the normal buffer while suspended.
-            let _ = execute!(stdout(), DisableMouseCapture);
+            if use_mouse_capture {
+                let _ = execute!(stdout(), DisableMouseCapture);
+            }
             let _ = execute!(stdout(), DisableAlternateScroll);
             let _ = execute!(stdout(), LeaveAlternateScreen);
-            self.set_resume_action(ResumeAction::RestoreAlt);
+            self.set_resume_action(ResumeAction::RestoreAlt { use_mouse_capture });
         }
         let y = self.suspend_cursor_y.load(Ordering::Relaxed);
         let _ = execute!(stdout(), MoveTo(0, y), Show);
-        suspend_process()
+        suspend_process(use_mouse_capture)
     }
 
     /// Consume the pending resume intent and precompute any alternate-screen restoration needed
@@ -81,13 +87,13 @@ impl SuspendContext {
     ) -> Option<PreparedResumeAction> {
         let action = self.take_resume_action()?;
         match action {
-            ResumeAction::RestoreAlt => {
+            ResumeAction::RestoreAlt { use_mouse_capture } => {
                 if let Ok(position) = _terminal.get_cursor_position()
                     && let Some(saved) = alt_saved_viewport.as_mut()
                 {
                     saved.y = position.y;
                 }
-                Some(PreparedResumeAction::RestoreAltScreen)
+                Some(PreparedResumeAction::RestoreAltScreen { use_mouse_capture })
             }
         }
     }
@@ -118,22 +124,24 @@ impl SuspendContext {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ResumeAction {
     /// Re-enter the alt screen and restore the fullscreen TUI.
-    RestoreAlt,
+    RestoreAlt { use_mouse_capture: bool },
 }
 
 /// Describes the terminal change to apply when resuming from suspend during the synchronized draw.
 #[derive(Clone, Debug)]
 pub(crate) enum PreparedResumeAction {
     /// Re-enter the alt screen and reset the viewport to the terminal dimensions.
-    RestoreAltScreen,
+    RestoreAltScreen { use_mouse_capture: bool },
 }
 
 impl PreparedResumeAction {
     pub(crate) fn apply(self, terminal: &mut Terminal) -> Result<()> {
         match self {
-            PreparedResumeAction::RestoreAltScreen => {
+            PreparedResumeAction::RestoreAltScreen { use_mouse_capture } => {
                 execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-                execute!(terminal.backend_mut(), EnableMouseCapture)?;
+                if use_mouse_capture {
+                    execute!(terminal.backend_mut(), EnableMouseCapture)?;
+                }
                 if let Ok(size) = terminal.size() {
                     terminal.set_viewport_area(Rect::new(0, 0, size.width, size.height));
                     terminal.clear()?;
@@ -145,10 +153,10 @@ impl PreparedResumeAction {
 }
 
 /// Deliver SIGTSTP after restoring terminal state, then re-applies terminal modes once resumed.
-fn suspend_process() -> Result<()> {
+fn suspend_process(use_mouse_capture: bool) -> Result<()> {
     super::restore()?;
     unsafe { libc::kill(0, libc::SIGTSTP) };
     // After the process resumes, reapply terminal modes so drawing can continue.
-    super::set_modes()?;
+    super::set_modes(use_mouse_capture)?;
     Ok(())
 }

@@ -433,6 +433,17 @@ impl TranscriptView {
         self.selection_to_text().filter(|text| !text.is_empty())
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_selection_for_test(
+        &mut self,
+        anchor: TranscriptSelectionPoint,
+        head: TranscriptSelectionPoint,
+    ) {
+        self.selection.anchor = Some(anchor);
+        self.selection.head = Some(head);
+        self.selection.dragging = false;
+    }
+
     pub(crate) fn apply_scroll(&mut self, command: TranscriptScroll) -> bool {
         let old = self.scroll_offset;
         let old_stick_to_bottom = self.stick_to_bottom;

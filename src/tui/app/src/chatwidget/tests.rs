@@ -13,6 +13,7 @@ use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::style::proposed_plan_style;
 use crate::test_backend::VT100Backend;
+use crate::transcript_selection::TranscriptSelectionPoint;
 use crate::transcript_view::TranscriptRenderMode;
 use crate::transcript_view::TranscriptView;
 use crate::tui::FrameRequester;
@@ -3016,6 +3017,49 @@ async fn ctrl_c_shutdown_works_with_caps_lock() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL));
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::Immediate)));
+}
+
+#[tokio::test]
+async fn ctrl_shift_c_copies_selection_without_quit() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(1))]);
+
+    let area = Rect::new(0, 0, 40, 8);
+    let mut buffer = Buffer::empty(area);
+    chat.render(area, &mut buffer);
+    chat.transcript.borrow_mut().set_selection_for_test(
+        TranscriptSelectionPoint {
+            line_index: 0,
+            column: 0,
+        },
+        TranscriptSelectionPoint {
+            line_index: 0,
+            column: 5,
+        },
+    );
+
+    chat.handle_key_event(KeyEvent::new(
+        KeyCode::Char('c'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
+
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert_ne!(chat.current_status.header, "No selection to copy");
+}
+
+#[tokio::test]
+async fn ctrl_shift_c_without_selection_does_not_quit() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_key_event(KeyEvent::new(
+        KeyCode::Char('c'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
+
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert_eq!(chat.current_status.header, "No selection to copy");
 }
 
 #[tokio::test]

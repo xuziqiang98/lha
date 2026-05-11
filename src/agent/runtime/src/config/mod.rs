@@ -335,6 +335,9 @@ pub struct Config {
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
 
+    /// Capture mouse input for internal scrolling and transcript selection.
+    pub tui_mouse_capture: bool,
+
     /// Last identity selected by the user in the TUI or app-server.
     pub last_selected_identity: Option<IdentityKind>,
 
@@ -1852,6 +1855,7 @@ impl Config {
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
+            tui_mouse_capture: cfg.tui.as_ref().map(|t| t.mouse_capture).unwrap_or(true),
             last_selected_identity: state_json.last_selected_identity,
             tui_buddy: cfg
                 .tui
@@ -2166,6 +2170,7 @@ job_max_runtime_seconds = 0
                 notification_method: NotificationMethod::Auto,
                 animations: true,
                 show_tooltips: true,
+                mouse_capture: true,
                 buddy: TuiBuddy::default(),
             }
         );
@@ -4487,8 +4492,14 @@ mod notifications_tests {
         notifications: Notifications,
         #[serde(default)]
         notification_method: NotificationMethod,
+        #[serde(default = "default_true_for_test")]
+        mouse_capture: bool,
         #[serde(default)]
         buddy: TuiBuddy,
+    }
+
+    fn default_true_for_test() -> bool {
+        true
     }
 
     #[derive(Deserialize, Debug, PartialEq)]
@@ -4529,6 +4540,25 @@ mod notifications_tests {
         let parsed: RootTomlTest =
             toml::from_str(toml).expect("deserialize notification_method=\"bel\"");
         assert_eq!(parsed.tui.notification_method, NotificationMethod::Bel);
+    }
+
+    #[test]
+    fn test_tui_mouse_capture_defaults_to_enabled() {
+        let toml = r#"
+            [tui]
+        "#;
+        let parsed: RootTomlTest = toml::from_str(toml).expect("deserialize tui defaults");
+        assert!(parsed.tui.mouse_capture);
+    }
+
+    #[test]
+    fn test_tui_mouse_capture_can_be_disabled() {
+        let toml = r#"
+            [tui]
+            mouse_capture = false
+        "#;
+        let parsed: RootTomlTest = toml::from_str(toml).expect("deserialize mouse_capture=false");
+        assert!(!parsed.tui.mouse_capture);
     }
 
     #[test]

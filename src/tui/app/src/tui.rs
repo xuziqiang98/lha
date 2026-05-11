@@ -55,7 +55,7 @@ mod job_control;
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
 
-pub fn set_modes() -> Result<()> {
+pub fn set_modes(use_mouse_capture: bool) -> Result<()> {
     execute!(stdout(), EnableBracketedPaste)?;
 
     enable_raw_mode()?;
@@ -75,7 +75,9 @@ pub fn set_modes() -> Result<()> {
     );
 
     let _ = execute!(stdout(), EnableFocusChange);
-    let _ = execute!(stdout(), EnableMouseCapture);
+    if use_mouse_capture {
+        let _ = execute!(stdout(), EnableMouseCapture);
+    }
     Ok(())
 }
 
@@ -184,14 +186,14 @@ fn flush_terminal_input_buffer() {
 pub(crate) fn flush_terminal_input_buffer() {}
 
 /// Initialize the terminal for the fullscreen TUI.
-pub fn init() -> Result<Terminal> {
+pub fn init(use_mouse_capture: bool) -> Result<Terminal> {
     if !stdin().is_terminal() {
         return Err(std::io::Error::other("stdin is not a terminal"));
     }
     if !stdout().is_terminal() {
         return Err(std::io::Error::other("stdout is not a terminal"));
     }
-    set_modes()?;
+    set_modes(use_mouse_capture)?;
 
     set_panic_hook();
 
@@ -230,10 +232,12 @@ pub struct Tui {
     terminal_focused: Arc<AtomicBool>,
     enhanced_keys_supported: bool,
     notification_backend: Option<DesktopNotificationBackend>,
+    mouse_capture_enabled: bool,
+    mouse_capture_bypass_active: bool,
 }
 
 impl Tui {
-    pub fn new(terminal: Terminal) -> Self {
+    pub fn new(terminal: Terminal, mouse_capture_enabled: bool) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
         let frame_requester = FrameRequester::new(draw_tx.clone());
 
@@ -255,6 +259,8 @@ impl Tui {
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
+            mouse_capture_enabled,
+            mouse_capture_bypass_active: false,
         }
     }
 
@@ -272,6 +278,24 @@ impl Tui {
 
     pub fn is_alt_screen_active(&self) -> bool {
         self.alt_screen_active.load(Ordering::Relaxed)
+    }
+
+    pub fn mouse_capture_enabled(&self) -> bool {
+        self.mouse_capture_enabled
+    }
+
+    pub fn disable_mouse_capture_temporarily(&mut self) {
+        if self.mouse_capture_enabled && !self.mouse_capture_bypass_active {
+            let _ = execute!(self.terminal.backend_mut(), DisableMouseCapture);
+            self.mouse_capture_bypass_active = true;
+        }
+    }
+
+    pub fn restore_mouse_capture_after_bypass(&mut self) {
+        if self.mouse_capture_enabled && self.mouse_capture_bypass_active {
+            let _ = execute!(self.terminal.backend_mut(), EnableMouseCapture);
+            self.mouse_capture_bypass_active = false;
+        }
     }
 
     // Drop crossterm EventStream to avoid stdin conflicts with other processes.
@@ -310,7 +334,7 @@ impl Tui {
 
         let output = f().await;
 
-        if let Err(err) = set_modes() {
+        if let Err(err) = set_modes(self.mouse_capture_enabled) {
             tracing::warn!("failed to re-enable terminal modes after external program: {err}");
         }
         // After the external program `f` finishes, reset terminal state and flush any buffered keypresses.
@@ -359,6 +383,7 @@ impl Tui {
             self.terminal_focused.clone(),
             self.suspend_context.clone(),
             self.alt_screen_active.clone(),
+            self.mouse_capture_enabled,
         );
         #[cfg(not(unix))]
         let stream = TuiEventStream::new(
@@ -373,7 +398,9 @@ impl Tui {
     /// viewport for restoration when leaving.
     pub fn enter_alt_screen(&mut self) -> Result<()> {
         let _ = execute!(self.terminal.backend_mut(), EnterAlternateScreen);
-        let _ = execute!(self.terminal.backend_mut(), EnableMouseCapture);
+        if self.mouse_capture_enabled {
+            let _ = execute!(self.terminal.backend_mut(), EnableMouseCapture);
+        }
         let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
         if let Ok(size) = self.terminal.size() {
             self.alt_saved_viewport = Some(self.terminal.viewport_area);
@@ -386,18 +413,22 @@ impl Tui {
             let _ = self.terminal.clear();
         }
         self.alt_screen_active.store(true, Ordering::Relaxed);
+        self.mouse_capture_bypass_active = false;
         Ok(())
     }
 
     /// Leave alternate screen and restore the previously saved viewport, if any.
     pub fn leave_alt_screen(&mut self) -> Result<()> {
-        let _ = execute!(self.terminal.backend_mut(), DisableMouseCapture);
+        if self.mouse_capture_enabled {
+            let _ = execute!(self.terminal.backend_mut(), DisableMouseCapture);
+        }
         let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
         let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
         if let Some(saved) = self.alt_saved_viewport.take() {
             self.terminal.set_viewport_area(saved);
         }
         self.alt_screen_active.store(false, Ordering::Relaxed);
+        self.mouse_capture_bypass_active = false;
         Ok(())
     }
 

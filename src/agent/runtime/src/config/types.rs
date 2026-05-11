@@ -471,6 +471,11 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
 
+    /// Capture mouse input for internal scrolling and transcript selection.
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub mouse_capture: bool,
+
     /// Tiny companion rendered next to the TUI composer.
     #[serde(default)]
     pub buddy: TuiBuddy,

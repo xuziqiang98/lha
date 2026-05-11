@@ -355,10 +355,17 @@ async fn run_ratatui_app(
         tracing::error!("panic: {info}");
         prev_hook(info);
     }));
-    let mut terminal = tui::init()?;
+    let use_mouse_capture = if cli.no_mouse_capture {
+        false
+    } else if cli.mouse_capture {
+        true
+    } else {
+        initial_config.tui_mouse_capture
+    };
+    let mut terminal = tui::init(use_mouse_capture)?;
     terminal.clear()?;
 
-    let mut tui = Tui::new(terminal);
+    let mut tui = Tui::new(terminal, use_mouse_capture);
     tui.enter_alt_screen()?;
     let mut terminal_restore_guard = TerminalRestoreGuard::new();
 

@@ -88,6 +88,14 @@ pub struct Cli {
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
 
+    /// Enable mouse capture for internal transcript scrolling and selection.
+    #[arg(long = "mouse-capture", conflicts_with = "no_mouse_capture")]
+    pub mouse_capture: bool,
+
+    /// Disable mouse capture so terminal-native text selection works.
+    #[arg(long = "no-mouse-capture", conflicts_with = "mouse_capture")]
+    pub no_mouse_capture: bool,
+
     /// Additional directories that should be writable alongside the primary workspace.
     #[arg(long = "add-dir", value_name = "DIR", value_hint = ValueHint::DirPath)]
     pub add_dir: Vec<PathBuf>,

@@ -968,6 +968,11 @@
           },
           "description": "Tiny companion rendered next to the TUI composer."
         },
+        "mouse_capture": {
+          "default": true,
+          "description": "Capture mouse input for internal scrolling and transcript selection. Defaults to `true`.",
+          "type": "boolean"
+        },
         "notification_method": {
           "allOf": [
             {

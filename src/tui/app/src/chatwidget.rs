@@ -789,7 +789,7 @@ impl ChatWidget {
 
     /// Convenience wrapper around [`Self::set_status`];
     /// updates the status indicator header and clears any existing details.
-    fn set_status_header(&mut self, header: String) {
+    pub(crate) fn set_status_header(&mut self, header: String) {
         self.set_status(
             header,
             None,
@@ -2687,6 +2687,10 @@ impl ChatWidget {
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
+            key if is_copy_shortcut(key) => {
+                self.copy_transcript_selection();
+                return;
+            }
             KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers,
@@ -2820,6 +2824,24 @@ impl ChatWidget {
         }
     }
 
+    fn copy_transcript_selection(&mut self) {
+        let Some(text) = self.transcript.borrow().selected_text() else {
+            self.set_status_header("No selection to copy".to_string());
+            self.request_redraw();
+            return;
+        };
+
+        self.write_selection_to_clipboard(&text);
+        self.request_redraw();
+    }
+
+    fn write_selection_to_clipboard(&mut self, text: &str) {
+        match write_text_to_clipboard(text) {
+            Ok(()) => self.set_status_header("Selection copied".to_string()),
+            Err(err) => self.set_status_header(format!("Copy failed: {err}")),
+        }
+    }
+
     pub(crate) fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
         if !self.bottom_pane.no_modal_or_popup_active()
             && !self.bottom_pane.allow_background_transcript_interaction()
@@ -2851,10 +2873,7 @@ impl ChatWidget {
             }
             TranscriptMouseOutcome::SelectionCompleted(text) => {
                 if let Some(text) = text.filter(|text| !text.is_empty()) {
-                    match write_text_to_clipboard(&text) {
-                        Ok(()) => self.set_status_header("Selection copied".to_string()),
-                        Err(err) => self.set_status_header(format!("Copy failed: {err}")),
-                    }
+                    self.write_selection_to_clipboard(&text);
                 }
                 self.request_redraw();
             }
@@ -6546,6 +6565,23 @@ impl ChatWidget {
             context,
         }
     }
+}
+
+fn is_copy_shortcut(key: KeyEvent) -> bool {
+    let KeyEvent {
+        code: KeyCode::Char(c),
+        modifiers,
+        kind: KeyEventKind::Press,
+        ..
+    } = key
+    else {
+        return false;
+    };
+
+    c.eq_ignore_ascii_case(&'c')
+        && (modifiers.contains(KeyModifiers::SUPER)
+            || (modifiers.contains(KeyModifiers::CONTROL)
+                && modifiers.contains(KeyModifiers::SHIFT)))
 }
 
 impl Renderable for ChatWidget {
