@@ -123,6 +123,7 @@ use tokio::sync::watch;
 use toml::Value as TomlValue;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
+const SHIFT_MOUSE_BYPASS_DURATION: Duration = Duration::from_millis(1500);
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 
 #[derive(Debug, Clone)]
@@ -564,6 +565,7 @@ pub(crate) struct App {
 
     windows_sandbox: WindowsSandboxState,
     shift_mouse_bypass_active: bool,
+    shift_mouse_bypass_restore_at: Option<Instant>,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     agent_picker_threads: HashMap<ThreadId, AgentPickerThreadEntry>,
@@ -1781,6 +1783,7 @@ impl App {
             suppress_shutdown_complete: false,
             windows_sandbox: WindowsSandboxState::default(),
             shift_mouse_bypass_active: false,
+            shift_mouse_bypass_restore_at: None,
             thread_event_channels: HashMap::new(),
             agent_picker_threads: HashMap::new(),
             active_thread_id: None,
@@ -1941,6 +1944,12 @@ impl App {
                     self.chat_widget.handle_paste(pasted);
                 }
                 TuiEvent::Draw => {
+                    if self
+                        .shift_mouse_bypass_restore_at
+                        .is_some_and(|restore_at| Instant::now() >= restore_at)
+                    {
+                        self.restore_shift_mouse_bypass(tui, Some("Mouse capture restored"));
+                    }
                     if self.backtrack_render_pending {
                         self.backtrack_render_pending = false;
                         self.chat_widget
@@ -1974,25 +1983,52 @@ impl App {
 
     async fn handle_mouse_event(&mut self, tui: &mut tui::Tui, mouse_event: MouseEvent) {
         if tui.mouse_capture_enabled() && mouse_event.modifiers.contains(KeyModifiers::SHIFT) {
+            let restore_in = SHIFT_MOUSE_BYPASS_DURATION;
             if !self.shift_mouse_bypass_active {
                 tui.disable_mouse_capture_temporarily();
                 self.shift_mouse_bypass_active = true;
                 self.chat_widget
                     .set_status_header("Native selection: release Shift to return".to_string());
             }
+            self.shift_mouse_bypass_restore_at = Some(Instant::now() + restore_in);
+            tui.frame_requester().schedule_frame_in(restore_in);
             tui.frame_requester().schedule_frame();
             return;
         }
 
         if self.shift_mouse_bypass_active {
-            tui.restore_mouse_capture_after_bypass();
-            self.shift_mouse_bypass_active = false;
-            self.chat_widget
-                .set_status_header("Mouse capture restored".to_string());
+            self.restore_shift_mouse_bypass(tui, Some("Mouse capture restored"));
         }
 
         self.chat_widget.handle_mouse_event(mouse_event);
         tui.frame_requester().schedule_frame();
+    }
+
+    fn restore_shift_mouse_bypass(&mut self, tui: &mut tui::Tui, status_header: Option<&str>) {
+        self.restore_shift_mouse_bypass_with(
+            || tui.restore_mouse_capture_after_bypass(),
+            status_header,
+        );
+    }
+
+    fn restore_shift_mouse_bypass_with(
+        &mut self,
+        restore_mouse_capture: impl FnOnce(),
+        status_header: Option<&str>,
+    ) {
+        if !self.shift_mouse_bypass_active {
+            self.shift_mouse_bypass_restore_at = None;
+            return;
+        }
+
+        restore_mouse_capture();
+        self.shift_mouse_bypass_active = false;
+        self.shift_mouse_bypass_restore_at = None;
+
+        if let Some(status_header) = status_header {
+            self.chat_widget
+                .set_status_header(status_header.to_string());
+        }
     }
 
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
@@ -3420,6 +3456,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shift_mouse_bypass_records_restore_deadline() {
+        let mut app = make_test_app().await;
+        assert_eq!(app.shift_mouse_bypass_restore_at, None);
+
+        let restore_at = Instant::now() + SHIFT_MOUSE_BYPASS_DURATION;
+        app.shift_mouse_bypass_active = true;
+        app.shift_mouse_bypass_restore_at = Some(restore_at);
+
+        assert!(app.shift_mouse_bypass_active);
+        assert_eq!(app.shift_mouse_bypass_restore_at, Some(restore_at));
+    }
+
+    #[tokio::test]
+    async fn draw_before_shift_mouse_bypass_deadline_keeps_bypass_active() {
+        let mut app = make_test_app().await;
+        let restore_at = Instant::now() + Duration::from_secs(60);
+        app.shift_mouse_bypass_active = true;
+        app.shift_mouse_bypass_restore_at = Some(restore_at);
+
+        let should_restore = app
+            .shift_mouse_bypass_restore_at
+            .is_some_and(|restore_at| Instant::now() >= restore_at);
+
+        assert!(!should_restore);
+        assert!(app.shift_mouse_bypass_active);
+        assert_eq!(app.shift_mouse_bypass_restore_at, Some(restore_at));
+    }
+
+    #[tokio::test]
+    async fn draw_restores_shift_mouse_bypass_after_deadline() {
+        let mut app = make_test_app().await;
+        app.shift_mouse_bypass_active = true;
+        app.shift_mouse_bypass_restore_at = Some(Instant::now() - Duration::from_millis(1));
+
+        let mut restored = false;
+        if app
+            .shift_mouse_bypass_restore_at
+            .is_some_and(|restore_at| Instant::now() >= restore_at)
+        {
+            app.restore_shift_mouse_bypass_with(|| restored = true, Some("Mouse capture restored"));
+        }
+
+        assert!(restored);
+        assert!(!app.shift_mouse_bypass_active);
+        assert_eq!(app.shift_mouse_bypass_restore_at, None);
+    }
+
+    #[tokio::test]
+    async fn restore_shift_mouse_bypass_clears_orphan_deadline_when_inactive() {
+        let mut app = make_test_app().await;
+        app.shift_mouse_bypass_active = false;
+        app.shift_mouse_bypass_restore_at = Some(Instant::now());
+
+        let mut restored = false;
+        app.restore_shift_mouse_bypass_with(|| restored = true, Some("Mouse capture restored"));
+
+        assert!(!restored);
+        assert!(!app.shift_mouse_bypass_active);
+        assert_eq!(app.shift_mouse_bypass_restore_at, None);
+    }
+
+    #[tokio::test]
     async fn request_changelog_uses_session_baseline_outside_git() {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let temp_dir = tempdir().expect("tempdir");
@@ -3875,6 +3973,7 @@ mod tests {
             suppress_shutdown_complete: false,
             windows_sandbox: WindowsSandboxState::default(),
             shift_mouse_bypass_active: false,
+            shift_mouse_bypass_restore_at: None,
             thread_event_channels: HashMap::new(),
             agent_picker_threads: HashMap::new(),
             active_thread_id: None,
@@ -3929,6 +4028,7 @@ mod tests {
                 suppress_shutdown_complete: false,
                 windows_sandbox: WindowsSandboxState::default(),
                 shift_mouse_bypass_active: false,
+                shift_mouse_bypass_restore_at: None,
                 thread_event_channels: HashMap::new(),
                 agent_picker_threads: HashMap::new(),
                 active_thread_id: None,
