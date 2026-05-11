@@ -449,6 +449,12 @@ pub(crate) struct TranscriptOverlay {
     is_done: bool,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum TranscriptCtrlCAction {
+    Copy(String),
+    Close,
+}
+
 impl TranscriptOverlay {
     /// Creates a transcript overlay for a fixed set of committed cells.
     ///
@@ -521,6 +527,13 @@ impl TranscriptOverlay {
         self.view.drag_autoscroll_active()
     }
 
+    fn ctrl_c_action(&self) -> TranscriptCtrlCAction {
+        match self.view.selected_text() {
+            Some(text) => TranscriptCtrlCAction::Copy(text),
+            None => TranscriptCtrlCAction::Close,
+        }
+    }
+
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
         let line1 = Rect::new(area.x, area.y, area.width, 1);
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
@@ -553,7 +566,23 @@ impl TranscriptOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
             TuiEvent::Key(key_event) => match key_event {
-                e if KEY_Q.is_press(e) || KEY_CTRL_C.is_press(e) || KEY_CTRL_T.is_press(e) => {
+                e if KEY_CTRL_C.is_press(e) => {
+                    match self.ctrl_c_action() {
+                        TranscriptCtrlCAction::Copy(text) => {
+                            if let Err(err) = write_text_to_clipboard(&text) {
+                                tracing::warn!(
+                                    "failed to copy transcript overlay selection: {err}"
+                                );
+                            }
+                            tui.frame_requester().schedule_frame();
+                        }
+                        TranscriptCtrlCAction::Close => {
+                            self.is_done = true;
+                        }
+                    }
+                    Ok(())
+                }
+                e if KEY_Q.is_press(e) || KEY_CTRL_T.is_press(e) => {
                     self.is_done = true;
                     Ok(())
                 }
@@ -829,6 +858,51 @@ mod tests {
             s.contains("edit next"),
             "expected 'edit next' hint in overlay footer, got: {s:?}"
         );
+    }
+
+    #[test]
+    fn transcript_ctrl_c_copies_selection_when_present() {
+        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
+            lines: vec![Line::from("alpha beta")],
+        })]);
+        let area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+
+        let mut scroll = MouseScrollState::default();
+        let content_y = overlay_content_area(Rect::new(0, 0, area.width, area.height - 3)).y;
+        overlay.view.handle_mouse_event(
+            MouseEvent {
+                kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                column: 0,
+                row: content_y,
+                modifiers: crossterm::event::KeyModifiers::NONE,
+            },
+            &mut scroll,
+        );
+        overlay.view.handle_mouse_event(
+            MouseEvent {
+                kind: MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+                column: 5,
+                row: content_y,
+                modifiers: crossterm::event::KeyModifiers::NONE,
+            },
+            &mut scroll,
+        );
+
+        assert_eq!(
+            overlay.ctrl_c_action(),
+            TranscriptCtrlCAction::Copy("alpha".to_string())
+        );
+    }
+
+    #[test]
+    fn transcript_ctrl_c_closes_without_selection() {
+        let overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
+            lines: vec![Line::from("alpha beta")],
+        })]);
+
+        assert_eq!(overlay.ctrl_c_action(), TranscriptCtrlCAction::Close);
     }
 
     #[test]

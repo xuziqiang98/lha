@@ -429,6 +429,10 @@ impl TranscriptView {
         changed
     }
 
+    pub(crate) fn selected_text(&self) -> Option<String> {
+        self.selection_to_text().filter(|text| !text.is_empty())
+    }
+
     pub(crate) fn apply_scroll(&mut self, command: TranscriptScroll) -> bool {
         let old = self.scroll_offset;
         let old_stick_to_bottom = self.stick_to_bottom;
@@ -1967,6 +1971,28 @@ mod tests {
             select_columns(&mut view, 0, 0, 0, UnicodeWidthStr::width(text)),
             Some(text.to_string())
         );
+    }
+
+    #[test]
+    fn selected_text_returns_non_empty_selection_only() {
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(TestCell("alpha beta"))]);
+        let _ = render_test_view(&mut view, 20, 3);
+
+        view.selection.anchor = Some(TranscriptSelectionPoint {
+            line_index: 0,
+            column: 0,
+        });
+        view.selection.head = Some(TranscriptSelectionPoint {
+            line_index: 0,
+            column: 5,
+        });
+        assert_eq!(view.selected_text(), Some("alpha".to_string()));
+
+        view.selection.head = Some(TranscriptSelectionPoint {
+            line_index: 0,
+            column: 0,
+        });
+        assert_eq!(view.selected_text(), None);
     }
 
     #[test]
