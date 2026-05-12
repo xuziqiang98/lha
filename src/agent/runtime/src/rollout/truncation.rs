@@ -1,18 +1,16 @@
 //! Helpers for truncating rollouts based on "user turn" boundaries.
 //!
 //! In core, "user turns" are detected by scanning `TranscriptItem::Message` items and
-//! interpreting them via `event_mapping::parse_turn_item(...)`.
+//! filtering them through ContextManager's real user-turn boundary helper.
 
-use crate::event_mapping;
-use adam_protocol::items::TurnItem;
-use adam_protocol::models::TranscriptItem;
+use crate::context_manager::is_user_turn_boundary;
 use adam_protocol::protocol::EventMsg;
 use adam_protocol::protocol::RolloutItem;
 
 /// Return the indices of user message boundaries in a rollout.
 ///
 /// A user message boundary is a `RolloutItem::TranscriptItem(TranscriptItem::Message { .. })`
-/// whose parsed turn item is `TurnItem::UserMessage`.
+/// that represents a real user turn rather than synthetic context.
 ///
 /// Rollouts can contain `ThreadRolledBack` markers. Those markers indicate that the
 /// last N user turns were removed from the effective thread history; we apply them here so
@@ -22,12 +20,7 @@ pub(crate) fn user_message_positions_in_rollout(items: &[RolloutItem]) -> Vec<us
     for (idx, item) in items.iter().enumerate() {
         match item {
             RolloutItem::TranscriptItem(item) => {
-                if matches!(item, TranscriptItem::Message { .. })
-                    && matches!(
-                        event_mapping::parse_turn_item(item),
-                        Some(TurnItem::UserMessage(_))
-                    )
-                {
+                if is_user_turn_boundary(item) {
                     user_positions.push(idx);
                 }
             }
@@ -74,8 +67,10 @@ pub(crate) fn truncate_rollout_before_nth_user_message_from_start(
 mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
+    use crate::compact::proposed_plan_backfill_items;
     use adam_protocol::models::ContentItem;
     use adam_protocol::models::ReasoningItemReasoningSummary;
+    use adam_protocol::models::TranscriptItem;
     use adam_protocol::protocol::ThreadRolledBackEvent;
     use assert_matches::assert_matches;
     use pretty_assertions::assert_eq;
@@ -163,6 +158,29 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&truncated).unwrap(),
             serde_json::to_value(&rollout).unwrap()
+        );
+    }
+
+    #[test]
+    fn ignores_backfilled_plan_reminder_when_truncating_rollout_from_start() {
+        let mut items = vec![user_msg("u1"), assistant_msg("a1"), assistant_msg("a2")];
+        items.extend(proposed_plan_backfill_items("- Step 1\n"));
+        items.extend([user_msg("u2"), assistant_msg("a3")]);
+
+        let rollout_items: Vec<RolloutItem> = items
+            .iter()
+            .cloned()
+            .map(RolloutItem::TranscriptItem)
+            .collect();
+
+        let user_positions = user_message_positions_in_rollout(&rollout_items);
+        assert_eq!(user_positions, vec![0, 5]);
+
+        let truncated = truncate_rollout_before_nth_user_message_from_start(&rollout_items, 1);
+        let expected = rollout_items[..5].to_vec();
+        assert_eq!(
+            serde_json::to_value(&truncated).unwrap(),
+            serde_json::to_value(&expected).unwrap()
         );
     }
 

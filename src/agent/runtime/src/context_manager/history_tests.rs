@@ -1,4 +1,5 @@
 use super::*;
+use crate::compact::proposed_plan_backfill_items;
 use crate::instructions::SkillInstructions;
 use crate::truncate;
 use crate::truncate::TruncationPolicy;
@@ -217,6 +218,20 @@ fn non_last_reasoning_tokens_ignore_entries_after_last_user() {
 }
 
 #[test]
+fn non_last_reasoning_tokens_ignore_backfilled_plan_reminder_as_last_user() {
+    let mut items = vec![
+        user_msg("first"),
+        reasoning_with_encrypted_content(1_000),
+        assistant_msg("answer"),
+    ];
+    items.extend(proposed_plan_backfill_items("- Step 1\n"));
+
+    let history = create_history_with_items(items);
+
+    assert_eq!(history.get_non_last_reasoning_items_tokens(), 0);
+}
+
+#[test]
 fn get_history_for_compaction_prompt_drops_compact_backfilled_skills() {
     let items = vec![
         backfilled_skill_item(SkillInstructions {
@@ -329,6 +344,26 @@ fn replace_last_turn_images_does_not_touch_user_images() {
 
     assert!(!history.replace_last_turn_images("Invalid image"));
     assert_eq!(history.raw_items(), items);
+}
+
+#[test]
+fn replace_last_turn_images_does_not_treat_backfilled_plan_reminder_as_boundary() {
+    let mut items = vec![
+        user_input_text_msg("hi"),
+        tool_result_structured(
+            "view_image",
+            "call-1",
+            "ok",
+            Some(vec![ToolResultContentItem::InputImage {
+                image_url: "data:image/png;base64,AAA".to_string(),
+            }]),
+            Some(true),
+        ),
+    ];
+    items.extend(proposed_plan_backfill_items("- Step 1\n"));
+    let mut history = create_history_with_items(items);
+
+    assert!(history.replace_last_turn_images("Invalid image"));
 }
 
 #[test]
@@ -465,6 +500,20 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
     ]);
     history.drop_last_n_user_turns(3);
     assert_eq!(history.for_prompt(), expected_prefix_only);
+}
+
+#[test]
+fn drop_last_n_user_turns_ignores_backfilled_plan_reminder() {
+    let mut items = vec![user_msg("u1"), assistant_msg("a1")];
+    items.extend(proposed_plan_backfill_items("- Step 1\n"));
+    items.extend([user_msg("u2"), assistant_msg("a2")]);
+
+    let mut history = create_history_with_items(items);
+    history.drop_last_n_user_turns(1);
+
+    let mut expected = vec![user_msg("u1"), assistant_msg("a1")];
+    expected.extend(proposed_plan_backfill_items("- Step 1\n"));
+    assert_eq!(history.for_prompt(), expected);
 }
 
 #[test]

@@ -1,6 +1,7 @@
 use std::ops::Deref;
 
 use crate::codex::TurnContext;
+use crate::compact::is_backfilled_proposed_plan_reminder;
 use crate::context_manager::normalize;
 use crate::instructions::SkillInstructionSource;
 use crate::instructions::SkillInstructions;
@@ -151,8 +152,7 @@ impl ContextManager {
     /// Returns true when a tool image was replaced, false otherwise.
     pub(crate) fn replace_last_turn_images(&mut self, placeholder: &str) -> bool {
         let Some(index) = self.items.iter().rposition(|item| {
-            matches!(item, TranscriptItem::ToolResult { .. })
-                || matches!(item, TranscriptItem::Message { role, .. } if role == "user")
+            matches!(item, TranscriptItem::ToolResult { .. }) || is_user_turn_boundary(item)
         }) else {
             return false;
         };
@@ -186,7 +186,7 @@ impl ContextManager {
 
     /// Drop the last `num_turns` user turns from this history.
     ///
-    /// "User turns" are identified as `TranscriptItem::Message` entries whose role is `"user"`.
+    /// "User turns" are identified as real user messages, excluding synthetic context messages.
     ///
     /// This mirrors thread-rollback semantics:
     /// - `num_turns == 0` is a no-op
@@ -229,9 +229,7 @@ impl ContextManager {
 
     fn get_non_last_reasoning_items_tokens(&self) -> usize {
         // get reasoning items excluding all the ones after the last user message
-        let Some(last_user_index) = self.items.iter().rposition(
-            |item| matches!(item, TranscriptItem::Message { role, .. } if role == "user"),
-        ) else {
+        let Some(last_user_index) = self.items.iter().rposition(is_user_turn_boundary) else {
             return 0usize;
         };
 
@@ -372,7 +370,10 @@ pub(crate) fn is_user_turn_boundary(item: &TranscriptItem) -> bool {
     for content_item in content {
         match content_item {
             ContentItem::InputText { text } => {
-                if is_session_prefix(text) || is_user_shell_command_text(text) {
+                if is_session_prefix(text)
+                    || is_user_shell_command_text(text)
+                    || is_backfilled_proposed_plan_reminder(text)
+                {
                     return false;
                 }
             }
