@@ -39,7 +39,6 @@ use adam_agent::connectors;
 use adam_agent::features::FEATURES;
 use adam_agent::features::Feature;
 use adam_agent::git_info::current_branch_name;
-use adam_agent::git_info::get_git_repo_root;
 use adam_agent::git_info::local_git_branches;
 use adam_agent::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use adam_agent::protocol::AgentMessageDeltaEvent;
@@ -101,7 +100,6 @@ use adam_protocol::config_types::IdentityKind;
 use adam_protocol::config_types::IdentityMask;
 use adam_protocol::config_types::Personality;
 use adam_protocol::config_types::Settings;
-use adam_protocol::config_types::TrustLevel;
 #[cfg(target_os = "windows")]
 use adam_protocol::config_types::WindowsSandboxLevel;
 use adam_protocol::models::local_image_label_text;
@@ -4665,60 +4663,6 @@ impl ChatWidget {
     pub(crate) fn open_permissions_popup(&mut self) {
         let include_read_only = cfg!(target_os = "windows");
         self.open_approval_mode_popup(include_read_only);
-    }
-
-    pub(crate) fn open_project_trust_popup(&mut self) {
-        let is_git_repo = get_git_repo_root(&self.config.cwd).is_some();
-        let initial_selected_idx = if is_git_repo { Some(0) } else { Some(1) };
-        let cwd = self.config.cwd.display().to_string();
-        let trust_description = if is_git_repo {
-            "Allow Adam to work in this folder with the standard project permissions."
-        } else {
-            "Allow Adam to work here without the extra first-run restriction."
-        };
-        let trust_actions: Vec<SelectionAction> = vec![Box::new(|tx| {
-            tx.send(AppEvent::ProjectTrustSelected {
-                trust_level: TrustLevel::Trusted,
-            });
-        })];
-        let untrusted_actions: Vec<SelectionAction> = vec![Box::new(|tx| {
-            tx.send(AppEvent::ProjectTrustSelected {
-                trust_level: TrustLevel::Untrusted,
-            });
-        })];
-        let cancel_actions: Vec<SelectionAction> = vec![Box::new(|tx| {
-            tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
-        })];
-
-        self.bottom_pane.set_composer_input_enabled(
-            false,
-            Some("Choose project trust to continue.".to_string()),
-        );
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Trust this project?".to_string()),
-            subtitle: Some(cwd),
-            footer_hint: Some(standard_popup_hint_line()),
-            items: vec![
-                SelectionItem {
-                    name: "Trust this project".to_string(),
-                    description: Some(trust_description.to_string()),
-                    actions: trust_actions,
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
-                SelectionItem {
-                    name: "Require approval".to_string(),
-                    description: Some("Ask before edits and commands in this project.".to_string()),
-                    actions: untrusted_actions,
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
-            ],
-            initial_selected_idx,
-            cancel_actions,
-            ..Default::default()
-        });
-        self.request_redraw();
     }
 
     fn open_approval_mode_popup(&mut self, include_read_only: bool) {

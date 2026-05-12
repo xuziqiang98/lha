@@ -79,6 +79,7 @@ mod notifications;
 #[allow(dead_code)]
 pub mod onboarding;
 mod pager_overlay;
+mod project_trust_modal;
 mod provider_config;
 pub mod public_widgets;
 mod render;

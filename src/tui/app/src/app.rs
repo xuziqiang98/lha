@@ -35,6 +35,8 @@ use crate::multi_agents::AgentPickerThreadEntry;
 use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::sort_agent_picker_threads;
 use crate::pager_overlay::Overlay;
+use crate::project_trust_modal::ProjectTrustModal;
+use crate::project_trust_modal::ProjectTrustModalAction;
 use crate::provider_config::CustomProviderConfig;
 use crate::provider_config::custom_provider_ref;
 use crate::provider_config::persist_custom_provider_files;
@@ -581,6 +583,7 @@ pub(crate) struct App {
     pending_primary_events: VecDeque<Event>,
     review_parent_by_child: HashMap<ThreadId, ThreadId>,
     non_git_changelog_baselines: HashMap<PathBuf, Arc<NonGitBaselineTracker>>,
+    project_trust_modal: Option<ProjectTrustModal>,
     pending_startup_trust_prompt: bool,
     deferred_initial_user_message: Option<UserMessage>,
 }
@@ -874,7 +877,7 @@ impl App {
             tracing::error!(%err, target = %target_display, "failed to persist project trust");
             self.chat_widget
                 .add_error_message(format!("Failed to save trust for {target_display}: {err}"));
-            self.chat_widget.open_project_trust_popup();
+            self.project_trust_modal = Some(ProjectTrustModal::new(self.config.cwd.clone()));
             return;
         }
 
@@ -935,7 +938,7 @@ impl App {
                 self.chat_widget.add_error_message(format!(
                     "Saved project trust, but failed to reload configuration: {err}"
                 ));
-                self.chat_widget.open_project_trust_popup();
+                self.project_trust_modal = Some(ProjectTrustModal::new(self.config.cwd.clone()));
             }
         }
     }
@@ -1846,6 +1849,8 @@ impl App {
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
+        let project_trust_modal =
+            show_trust_popup_on_startup.then(|| ProjectTrustModal::new(config.cwd.clone()));
 
         let mut app = Self {
             server: thread_manager.clone(),
@@ -1881,13 +1886,10 @@ impl App {
             pending_primary_events: VecDeque::new(),
             review_parent_by_child: HashMap::new(),
             non_git_changelog_baselines: HashMap::new(),
+            project_trust_modal,
             pending_startup_trust_prompt: show_trust_popup_on_startup,
             deferred_initial_user_message,
         };
-
-        if app.pending_startup_trust_prompt {
-            app.app_event_tx.send(AppEvent::OpenProjectTrustPopup);
-        }
 
         if let Err(err) = app
             .ensure_non_git_changelog_baseline(app.config.cwd.clone())
@@ -2023,7 +2025,17 @@ impl App {
             self.restore_shift_mouse_bypass_if_due(tui);
         }
 
-        if self.overlay.is_some() {
+        if self.project_trust_modal.is_some() {
+            match event {
+                TuiEvent::Key(key_event) => {
+                    return self.handle_project_trust_modal_key(tui, key_event).await;
+                }
+                TuiEvent::Draw => {
+                    self.draw_main_ui(tui)?;
+                }
+                TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
+            }
+        } else if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
             match event {
@@ -2042,35 +2054,71 @@ impl App {
                     self.chat_widget.handle_paste(pasted);
                 }
                 TuiEvent::Draw => {
-                    if self.backtrack_render_pending {
-                        self.backtrack_render_pending = false;
-                        self.chat_widget
-                            .replace_transcript_cells(self.transcript_cells.clone());
-                    }
-                    self.chat_widget.prepare_for_draw();
-                    self.chat_widget.maybe_post_pending_notification(tui);
-                    if self
-                        .chat_widget
-                        .handle_paste_burst_tick(tui.frame_requester())
-                    {
-                        return Ok(AppRunControl::Continue);
-                    }
-                    let size = tui.terminal.size()?;
-                    tui.draw(size.height, |frame| {
-                        self.chat_widget.render(frame.area(), frame.buffer);
-                        if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
-                            frame.set_cursor_position((x, y));
-                        }
-                    })?;
-                    if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
-                        self.chat_widget
-                            .set_external_editor_state(ExternalEditorState::Active);
-                        self.app_event_tx.send(AppEvent::LaunchExternalEditor);
-                    }
+                    self.draw_main_ui(tui)?;
                 }
             }
         }
         Ok(AppRunControl::Continue)
+    }
+
+    fn draw_main_ui(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        if self.backtrack_render_pending {
+            self.backtrack_render_pending = false;
+            self.chat_widget
+                .replace_transcript_cells(self.transcript_cells.clone());
+        }
+        self.chat_widget.prepare_for_draw();
+        self.chat_widget.maybe_post_pending_notification(tui);
+        if self
+            .chat_widget
+            .handle_paste_burst_tick(tui.frame_requester())
+        {
+            return Ok(());
+        }
+        let size = tui.terminal.size()?;
+        tui.draw(size.height, |frame| {
+            self.chat_widget.render(frame.area(), frame.buffer);
+            if let Some(modal) = &self.project_trust_modal {
+                modal.render(frame.area(), frame.buffer);
+            } else if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                frame.set_cursor_position((x, y));
+            }
+        })?;
+        if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
+            self.chat_widget
+                .set_external_editor_state(ExternalEditorState::Active);
+            self.app_event_tx.send(AppEvent::LaunchExternalEditor);
+        }
+        Ok(())
+    }
+
+    async fn handle_project_trust_modal_key(
+        &mut self,
+        tui: &mut tui::Tui,
+        key_event: KeyEvent,
+    ) -> Result<AppRunControl> {
+        let action = self
+            .project_trust_modal
+            .as_mut()
+            .map(|modal| modal.handle_key_event(key_event))
+            .unwrap_or(ProjectTrustModalAction::None);
+        match action {
+            ProjectTrustModalAction::None => {
+                tui.frame_requester().schedule_frame();
+                Ok(AppRunControl::Continue)
+            }
+            ProjectTrustModalAction::Exit => {
+                self.project_trust_modal = None;
+                self.handle_event(tui, AppEvent::Exit(ExitMode::ShutdownFirst))
+                    .await
+            }
+            ProjectTrustModalAction::Selected(trust_level) => {
+                self.project_trust_modal = None;
+                self.apply_project_trust_selection(trust_level).await;
+                tui.frame_requester().schedule_frame();
+                Ok(AppRunControl::Continue)
+            }
+        }
     }
 
     async fn handle_mouse_event(&mut self, tui: &mut tui::Tui, mouse_event: MouseEvent) {
@@ -3032,12 +3080,6 @@ impl App {
             }
             AppEvent::OpenPermissionsPopup => {
                 self.chat_widget.open_permissions_popup();
-            }
-            AppEvent::OpenProjectTrustPopup => {
-                self.chat_widget.open_project_trust_popup();
-            }
-            AppEvent::ProjectTrustSelected { trust_level } => {
-                self.apply_project_trust_selection(trust_level).await;
             }
             AppEvent::OpenReviewBranchPicker(cwd) => {
                 self.chat_widget.show_review_branch_picker(&cwd).await;
@@ -4126,6 +4168,7 @@ mod tests {
             pending_primary_events: VecDeque::new(),
             review_parent_by_child: HashMap::new(),
             non_git_changelog_baselines: HashMap::new(),
+            project_trust_modal: None,
             pending_startup_trust_prompt: false,
             deferred_initial_user_message: None,
         }
@@ -4183,6 +4226,7 @@ mod tests {
                 pending_primary_events: VecDeque::new(),
                 review_parent_by_child: HashMap::new(),
                 non_git_changelog_baselines: HashMap::new(),
+                project_trust_modal: None,
                 pending_startup_trust_prompt: false,
                 deferred_initial_user_message: None,
             },
