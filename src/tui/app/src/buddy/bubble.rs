@@ -22,7 +22,13 @@ pub(crate) fn render_bubble(area: Rect, buf: &mut Buffer, text: &str, fading: bo
     let wrapped = wrapped
         .into_iter()
         .take(area.height.saturating_sub(1) as usize)
-        .map(|line| if fading { line.dim() } else { line.italic() })
+        .map(|line| {
+            if fading {
+                line.italic().dim()
+            } else {
+                line.italic()
+            }
+        })
         .collect::<Vec<_>>();
     let block = if fading {
         Block::default()
@@ -39,4 +45,43 @@ pub(crate) fn render_bubble(area: Rect, buf: &mut Buffer, text: &str, fading: bo
     let tail_y = area.y.saturating_add(area.height / 2);
     let tail = if fading { "─".dim() } else { "─".into() };
     buf.set_line(tail_x, tail_y, &Line::from(vec![tail]), 1);
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::style::Modifier;
+
+    use super::*;
+
+    #[test]
+    fn render_bubble_uses_italic_text_before_fade() {
+        let area = Rect::new(0, 0, 16, 4);
+        let mut buf = Buffer::empty(area);
+
+        render_bubble(area, &mut buf, "hello", false);
+
+        let text_style = buf[(1, 1)].style();
+        assert!(text_style.add_modifier.contains(Modifier::ITALIC));
+        assert!(!text_style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn render_bubble_keeps_italic_text_when_fading() {
+        let area = Rect::new(0, 0, 16, 4);
+        let mut buf = Buffer::empty(area);
+
+        render_bubble(area, &mut buf, "hello", true);
+
+        let text_style = buf[(1, 1)].style();
+        assert!(text_style.add_modifier.contains(Modifier::ITALIC));
+        assert!(text_style.add_modifier.contains(Modifier::DIM));
+
+        let border_style = buf[(0, 0)].style();
+        assert!(border_style.add_modifier.contains(Modifier::DIM));
+
+        let tail_style = buf[(15, 2)].style();
+        assert!(tail_style.add_modifier.contains(Modifier::DIM));
+    }
 }
