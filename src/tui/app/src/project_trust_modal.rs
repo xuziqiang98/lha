@@ -8,15 +8,20 @@ use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Block;
+use ratatui::widgets::BorderType;
 use ratatui::widgets::Borders;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use textwrap::Options;
 use textwrap::wrap;
+
+use crate::render::Insets;
+use crate::render::RectExt as _;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ProjectTrustModal {
@@ -111,7 +116,18 @@ impl ProjectTrustModal {
         let modal_area = centered_modal_area(area);
         Clear.render(modal_area, buf);
 
-        let content_width = modal_area.width.saturating_sub(4).max(1) as usize;
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().dim());
+        let inner_area = block.inner(modal_area);
+        block.render(modal_area, buf);
+        let content_area = inner_area.inset(Insets::vh(1, 1));
+        if content_area.is_empty() {
+            return;
+        }
+
+        let content_width = content_area.width.max(1) as usize;
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push("Trust this project?".bold().into());
         lines.push(self.cwd.display().to_string().dim().into());
@@ -148,8 +164,7 @@ impl ProjectTrustModal {
             .into(),
         );
 
-        let block = Block::default().borders(Borders::ALL);
-        Paragraph::new(lines).block(block).render(modal_area, buf);
+        Paragraph::new(lines).render(content_area, buf);
     }
 
     fn push_option_lines(
@@ -299,6 +314,18 @@ mod tests {
         assert!(
             rendered.contains("Trust this project?"),
             "expected modal title:\n{rendered}"
+        );
+        assert!(
+            rendered.contains('╭') && rendered.contains('╯'),
+            "expected rounded modal border:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains('┌') && !rendered.contains('┘'),
+            "expected no square modal border:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("│ Trust this project?"),
+            "expected one-cell horizontal padding inside border:\n{rendered}"
         );
         assert!(
             rendered.contains("› 2. Require approval"),
