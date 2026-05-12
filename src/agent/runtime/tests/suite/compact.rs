@@ -564,7 +564,6 @@ async fn local_compact_backfills_latest_plan_as_assistant_context() {
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config.features.enable(Feature::BackfillCompactPlanContext);
         })
         .build(&server)
         .await
@@ -631,6 +630,13 @@ async fn local_compact_backfills_latest_plan_as_assistant_context() {
         contains_assistant_text(&follow_up_input, expected_plan),
         "expected compacted follow-up history to include backfilled proposed plan"
     );
+    assert!(
+        contains_user_text(
+            &follow_up_input,
+            "A proposed plan from before compaction is preserved below."
+        ),
+        "expected compacted follow-up history to include the preserved-plan reminder"
+    );
     let follow_up_body = requests[2].body_json().to_string();
     assert!(
         !follow_up_body.contains("Intro"),
@@ -676,7 +682,6 @@ async fn local_compact_backfills_plan_from_pre_compaction_history() {
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config.features.enable(Feature::BackfillCompactPlanContext);
         })
         .build(&server)
         .await
@@ -779,7 +784,6 @@ async fn local_compact_persists_replacement_history_in_rollout() {
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config.features.enable(Feature::BackfillCompactPlanContext);
         })
         .build(&server)
         .await
@@ -914,7 +918,6 @@ async fn local_compact_backfills_latest_unfinished_update_plan() {
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config.features.enable(Feature::BackfillCompactPlanContext);
         })
         .build(&server)
         .await
@@ -987,7 +990,6 @@ async fn local_compact_backfills_recent_skills_into_follow_up_history() {
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config.features.enable(Feature::BackfillCompactPlanContext);
         })
         .build(&server)
         .await
@@ -1137,7 +1139,6 @@ async fn local_compact_does_not_backfill_completed_update_plan() {
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config.features.enable(Feature::BackfillCompactPlanContext);
         })
         .build(&server)
         .await
@@ -1230,7 +1231,6 @@ async fn local_compact_does_not_revive_older_unfinished_update_plan_after_comple
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config.features.enable(Feature::BackfillCompactPlanContext);
         })
         .build(&server)
         .await
@@ -1327,7 +1327,6 @@ async fn local_compact_persists_backfilled_update_plan_in_rollout() {
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config.features.enable(Feature::BackfillCompactPlanContext);
         })
         .build(&server)
         .await

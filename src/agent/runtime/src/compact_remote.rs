@@ -6,10 +6,9 @@ use crate::compact::backfilled_skill_items;
 use crate::compact::backfilled_update_plan_items;
 use crate::compact::last_backfillable_update_plan_from_history;
 use crate::compact::last_completed_plan_from_history;
-use crate::compact::proposed_plan_message;
+use crate::compact::proposed_plan_backfill_items;
 use crate::compact::recent_backfillable_skills_from_history;
 use crate::error::Result as CodexResult;
-use crate::features::Feature;
 use crate::protocol::CompactedItem;
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
@@ -52,16 +51,11 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
     let history = sess.clone_history().await;
-    let (backfilled_plan_text, backfilled_update_plan, backfilled_skills) =
-        if sess.enabled(Feature::BackfillCompactPlanContext) {
-            (
-                last_completed_plan_from_history(history.raw_items()),
-                last_backfillable_update_plan_from_history(history.raw_items()),
-                recent_backfillable_skills_from_history(history.raw_items()),
-            )
-        } else {
-            (None, None, Vec::new())
-        };
+    let (backfilled_plan_text, backfilled_update_plan, backfilled_skills) = (
+        last_completed_plan_from_history(history.raw_items()),
+        last_backfillable_update_plan_from_history(history.raw_items()),
+        recent_backfillable_skills_from_history(history.raw_items()),
+    );
 
     let prompt = TurnRequest {
         conversation: history.for_compaction_prompt().into_iter().collect(),
@@ -73,7 +67,7 @@ async fn run_remote_compact_task_inner_impl(
     let mut new_history = turn_context.runtime.compact_turn_request(&prompt).await?;
 
     if let Some(plan_text) = backfilled_plan_text.as_deref() {
-        new_history.push(proposed_plan_message(plan_text));
+        new_history.extend(proposed_plan_backfill_items(plan_text));
     }
     if let Some(update_plan) = backfilled_update_plan.as_ref() {
         new_history.extend(backfilled_update_plan_items(update_plan));

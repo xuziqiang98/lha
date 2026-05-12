@@ -125,7 +125,7 @@ pub enum Feature {
     SkillEnvVarDependencyPrompt,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
-    /// Backfill the latest proposed plan into compacted history as an assistant message.
+    /// Backfill the latest proposed plan into compacted history.
     BackfillCompactPlanContext,
     /// Enable identities.
     Identities,
@@ -341,6 +341,7 @@ fn disable_removed_features(features: &mut Features) {
 
 fn enable_always_on_features(features: &mut Features) {
     features.enable(Feature::Collab);
+    features.enable(Feature::BackfillCompactPlanContext);
 }
 
 fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>) {
@@ -587,12 +588,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::BackfillCompactPlanContext,
         key: "backfill_compact_plan_context",
-        stage: Stage::Experimental {
-            name: "Backfill compact plan context",
-            menu_description: "After compaction, keep the latest proposed plan, unfinished update_plan checklist, and recently used skills in model context.",
-            announcement: "NEW! Preserve the latest proposed plan, unfinished checklist, and recent skills across compaction in /experimental.",
-        },
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Identities,
@@ -773,6 +770,21 @@ mod tests {
     }
 
     #[test]
+    fn backfill_compact_plan_context_stays_enabled_when_base_config_sets_false() {
+        let cfg = ConfigToml {
+            features: Some(FeaturesToml {
+                entries: BTreeMap::from([("backfill_compact_plan_context".to_string(), false)]),
+            }),
+            ..Default::default()
+        };
+
+        let features =
+            Features::from_config(&cfg, &ConfigProfile::default(), FeatureOverrides::default());
+
+        assert!(features.enabled(Feature::BackfillCompactPlanContext));
+    }
+
+    #[test]
     fn prevent_idle_sleep_has_expected_stage_and_metadata() {
         let stage = Feature::PreventIdleSleep.stage();
 
@@ -803,26 +815,14 @@ mod tests {
     }
 
     #[test]
-    fn backfill_compact_plan_context_is_experimental_and_disabled_by_default() {
+    fn backfill_compact_plan_context_is_stable_and_enabled_by_default() {
         let stage = Feature::BackfillCompactPlanContext.stage();
 
-        assert_eq!(false, Feature::BackfillCompactPlanContext.default_enabled());
-        assert_eq!(
-            Some("Backfill compact plan context"),
-            stage.experimental_menu_name()
-        );
-        assert_eq!(
-            Some(
-                "After compaction, keep the latest proposed plan, unfinished update_plan checklist, and recently used skills in model context.",
-            ),
-            stage.experimental_menu_description()
-        );
-        assert_eq!(
-            Some(
-                "NEW! Preserve the latest proposed plan, unfinished checklist, and recent skills across compaction in /experimental.",
-            ),
-            stage.experimental_announcement()
-        );
+        assert_eq!(Stage::Stable, stage);
+        assert_eq!(true, Feature::BackfillCompactPlanContext.default_enabled());
+        assert_eq!(None, stage.experimental_menu_name());
+        assert_eq!(None, stage.experimental_menu_description());
+        assert_eq!(None, stage.experimental_announcement());
     }
 
     #[test]

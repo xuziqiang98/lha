@@ -414,7 +414,6 @@ async fn remote_compact_backfills_latest_plan_into_replacement_history() -> Resu
             .with_auth(CodexAuth::from_api_key("Test API Key"))
             .with_config(|config| {
                 config.features.enable(Feature::RemoteCompaction);
-                config.features.enable(Feature::BackfillCompactPlanContext);
             }),
     )
     .await?;
@@ -506,6 +505,10 @@ async fn remote_compact_backfills_latest_plan_into_replacement_history() -> Resu
         "expected remote compacted history to backfill the proposed plan"
     );
     assert!(
+        follow_up_body.contains("A proposed plan from before compaction is preserved below."),
+        "expected remote compacted history to include the preserved-plan reminder"
+    );
+    assert!(
         !follow_up_body.contains("Intro"),
         "expected remote compacted history to strip assistant prose around the plan"
     );
@@ -530,7 +533,6 @@ async fn remote_compact_backfills_recent_skills_into_replacement_history() -> Re
             .with_auth(CodexAuth::from_api_key("Test API Key"))
             .with_config(|config| {
                 config.features.enable(Feature::RemoteCompaction);
-                config.features.enable(Feature::BackfillCompactPlanContext);
             }),
     )
     .await?;
@@ -656,7 +658,6 @@ async fn remote_compact_backfills_latest_unfinished_update_plan() -> Result<()> 
             .with_auth(CodexAuth::from_api_key("Test API Key"))
             .with_config(|config| {
                 config.features.enable(Feature::RemoteCompaction);
-                config.features.enable(Feature::BackfillCompactPlanContext);
             }),
     )
     .await?;

@@ -14,7 +14,6 @@ use adam_agent::CodexThread;
 use adam_agent::ThreadManager;
 use adam_agent::compact::SUMMARIZATION_PROMPT;
 use adam_agent::config::Config;
-use adam_agent::features::Feature;
 use adam_agent::protocol::EventMsg;
 use adam_agent::protocol::Op;
 use adam_agent::protocol::WarningEvent;
@@ -929,10 +928,7 @@ async fn compact_resume_and_fork_preserve_persisted_backfilled_plan_context() {
     user_turn(&base, "AFTER_COMPACT").await;
     let base_path = fetch_conversation_path(&base).await;
 
-    let mut resumed_config = config.clone();
-    resumed_config
-        .features
-        .disable(Feature::BackfillCompactPlanContext);
+    let resumed_config = config.clone();
     let resumed = resume_conversation(&manager, &resumed_config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
     let resumed_path = fetch_conversation_path(&resumed).await;
@@ -951,8 +947,16 @@ async fn compact_resume_and_fork_preserve_persisted_backfilled_plan_context() {
         "expected post-compact request to preserve the backfilled plan"
     );
     assert!(
+        after_compact_body.contains("A proposed plan from before compaction is preserved below."),
+        "expected post-compact request to include the preserved-plan reminder"
+    );
+    assert!(
         after_resume_body.contains(expected_plan),
         "expected resumed request to preserve the backfilled plan"
+    );
+    assert!(
+        after_resume_body.contains("A proposed plan from before compaction is preserved below."),
+        "expected resumed request to preserve the preserved-plan reminder"
     );
     assert!(
         after_fork_body.contains(expected_plan),
@@ -1021,10 +1025,7 @@ async fn compacted_update_plan_survives_resume_and_fork_when_flag_is_disabled_la
     user_turn(&base, "AFTER_COMPACT").await;
     let base_path = fetch_conversation_path(&base).await;
 
-    let mut resumed_config = config.clone();
-    resumed_config
-        .features
-        .disable(Feature::BackfillCompactPlanContext);
+    let resumed_config = config.clone();
     let resumed = resume_conversation(&manager, &resumed_config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
     let resumed_path = fetch_conversation_path(&resumed).await;
@@ -1195,7 +1196,6 @@ async fn start_test_conversation_with_plan_backfill(
         config.model_provider.name = "Non-OpenAI Model provider".to_string();
         config.model_provider.base_url = Some(base_url);
         config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
-        config.features.enable(Feature::BackfillCompactPlanContext);
         if let Some(model) = model {
             config.model = Some(model);
         }

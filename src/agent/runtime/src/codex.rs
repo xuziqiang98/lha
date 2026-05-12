@@ -2053,20 +2053,13 @@ impl Session {
                         // Compatibility path for older local compaction rollouts that did not
                         // persist replacement_history.
                         let user_messages = collect_user_messages(history.raw_items());
-                        let (backfilled_plan_text, backfilled_update_plan, backfilled_skills) =
-                            if self.enabled(Feature::BackfillCompactPlanContext) {
-                                (
-                                    compact::last_completed_plan_from_history(history.raw_items()),
-                                    compact::last_backfillable_update_plan_from_history(
-                                        history.raw_items(),
-                                    ),
-                                    compact::recent_backfillable_skills_from_history(
-                                        history.raw_items(),
-                                    ),
-                                )
-                            } else {
-                                (None, None, Vec::new())
-                            };
+                        let (backfilled_plan_text, backfilled_update_plan, backfilled_skills) = (
+                            compact::last_completed_plan_from_history(history.raw_items()),
+                            compact::last_backfillable_update_plan_from_history(
+                                history.raw_items(),
+                            ),
+                            compact::recent_backfillable_skills_from_history(history.raw_items()),
+                        );
                         let rebuilt = compact::build_compacted_history(
                             self.build_initial_context(turn_context).await,
                             &user_messages,
@@ -5605,8 +5598,7 @@ mod tests {
     #[tokio::test]
     async fn reconstruct_history_backfills_latest_surviving_plan_after_local_compaction() {
         let adam_home = tempfile::tempdir().expect("create temp dir");
-        let mut config = build_test_config(adam_home.path()).await;
-        config.features.enable(Feature::BackfillCompactPlanContext);
+        let config = build_test_config(adam_home.path()).await;
         let (session, turn_context) = make_session_and_context_for_config(config).await;
 
         let initial_context = session.build_initial_context(&turn_context).await;
@@ -5671,10 +5663,8 @@ mod tests {
             .reconstruct_history_from_rollout(&turn_context, &rollout_items)
             .await;
 
-        assert_eq!(
-            reconstructed.last(),
-            Some(&compact::proposed_plan_message("- Step 1\n"))
-        );
+        let backfilled_items = compact::proposed_plan_backfill_items("- Step 1\n");
+        assert_eq!(reconstructed[reconstructed.len() - 2..], backfilled_items);
     }
 
     #[tokio::test]

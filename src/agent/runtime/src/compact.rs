@@ -46,6 +46,7 @@ const BACKFILLED_SKILL_TOTAL_MAX_TOKENS: usize = 20_000;
 const PROPOSED_PLAN_OPEN_TAG: &str = "<proposed_plan>\n";
 const PROPOSED_PLAN_CLOSE_TAG: &str = "</proposed_plan>";
 const BACKFILLED_UPDATE_PLAN_CALL_ID: &str = "compact_backfill_update_plan";
+const BACKFILLED_PROPOSED_PLAN_REMINDER: &str = "A proposed plan from before compaction is preserved below. If it is still relevant and not complete, continue using it. If the current task has changed or the plan is already complete, treat it as historical context.";
 
 pub(crate) fn should_use_remote_compact_task(
     session: &Session,
@@ -92,16 +93,11 @@ async fn run_compact_task_inner(
     let initial_input_for_turn = transcript_item_from_user_input(input);
 
     let mut history = sess.clone_history().await;
-    let (backfilled_plan_text, backfilled_update_plan, backfilled_skills) =
-        if sess.enabled(Feature::BackfillCompactPlanContext) {
-            (
-                last_completed_plan_from_history(history.raw_items()),
-                last_backfillable_update_plan_from_history(history.raw_items()),
-                recent_backfillable_skills_from_history(history.raw_items()),
-            )
-        } else {
-            (None, None, Vec::new())
-        };
+    let (backfilled_plan_text, backfilled_update_plan, backfilled_skills) = (
+        last_completed_plan_from_history(history.raw_items()),
+        last_backfillable_update_plan_from_history(history.raw_items()),
+        recent_backfillable_skills_from_history(history.raw_items()),
+    );
     history.record_items([&initial_input_for_turn], turn_context.truncation_policy);
 
     let mut truncated_count = 0usize;
@@ -240,7 +236,9 @@ where
         .iter()
         .filter_map(|item| match crate::event_mapping::parse_turn_item(item) {
             Some(TurnItem::UserMessage(user)) => {
-                if is_summary_message(&user.message()) {
+                if is_summary_message(&user.message())
+                    || is_backfilled_proposed_plan_reminder(&user.message())
+                {
                     None
                 } else {
                     Some(user.message())
@@ -276,6 +274,10 @@ where
 
 pub(crate) fn is_summary_message(message: &str) -> bool {
     message.starts_with(format!("{SUMMARY_PREFIX}\n").as_str())
+}
+
+pub(crate) fn is_backfilled_proposed_plan_reminder(message: &str) -> bool {
+    message == BACKFILLED_PROPOSED_PLAN_REMINDER
 }
 
 pub(crate) fn build_compacted_history(
@@ -358,7 +360,7 @@ fn build_compacted_history_with_limit(
     });
 
     if let Some(plan_text) = backfilled_plan_text {
-        history.push(proposed_plan_message(plan_text));
+        history.extend(proposed_plan_backfill_items(plan_text));
     }
 
     if let Some(update_plan) = backfilled_update_plan {
@@ -591,6 +593,20 @@ fn apply_backfilled_skill_budget(skills: Vec<SkillInstructions>) -> Vec<SkillIns
     selected
 }
 
+pub(crate) fn proposed_plan_backfill_items(plan_text: &str) -> Vec<TranscriptItem> {
+    vec![
+        TranscriptItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: BACKFILLED_PROPOSED_PLAN_REMINDER.to_string(),
+            }],
+            end_turn: None,
+        },
+        proposed_plan_message(plan_text),
+    ]
+}
+
 pub(crate) fn proposed_plan_message(plan_text: &str) -> TranscriptItem {
     let text = format!("{PROPOSED_PLAN_OPEN_TAG}{plan_text}{PROPOSED_PLAN_CLOSE_TAG}");
     TranscriptItem::Message {
@@ -775,6 +791,18 @@ mod tests {
     }
 
     #[test]
+    fn collect_user_messages_filters_backfilled_plan_reminder() {
+        let items = vec![
+            proposed_plan_backfill_items("- Step 1\n")[0].clone(),
+            user_message("real user message"),
+        ];
+
+        let collected = collect_user_messages(&items);
+
+        assert_eq!(vec!["real user message".to_string()], collected);
+    }
+
+    #[test]
     fn build_token_limited_compacted_history_truncates_overlong_user_messages() {
         // Use a small truncation limit so the test remains fast while still validating
         // that oversized user content is truncated.
@@ -931,8 +959,8 @@ mod tests {
             "SUMMARY",
         );
 
-        assert_eq!(history.len(), 3);
-        assert_eq!(history[2], proposed_plan_message("- Step 1\n"));
+        assert_eq!(history.len(), 4);
+        assert_eq!(history[2..], proposed_plan_backfill_items("- Step 1\n"));
     }
 
     #[test]
@@ -1351,8 +1379,8 @@ mod tests {
             "SUMMARY",
         );
 
-        assert_eq!(history[2], proposed_plan_message("- Step 1\n"));
-        assert_eq!(history[3..5], backfilled_update_plan_items(&args));
-        assert_eq!(history[5], backfilled_skill_item(skills[0].clone()));
+        assert_eq!(history[2..4], proposed_plan_backfill_items("- Step 1\n"));
+        assert_eq!(history[4..6], backfilled_update_plan_items(&args));
+        assert_eq!(history[6], backfilled_skill_item(skills[0].clone()));
     }
 }
