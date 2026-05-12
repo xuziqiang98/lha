@@ -18,6 +18,7 @@ use crate::changelog::get_non_git_changelog;
 use crate::changelog::git_repo_root;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
+use crate::chatwidget::UserMessage;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
@@ -48,15 +49,18 @@ use adam_agent::ThreadManager;
 use adam_agent::config::Config;
 use adam_agent::config::ConfigBuilder;
 use adam_agent::config::ConfigOverrides;
+use adam_agent::config::ProjectConfig;
 use adam_agent::config::display_model_provider_ref;
 use adam_agent::config::edit::ConfigEdit;
 use adam_agent::config::edit::ConfigEditsBuilder;
 use adam_agent::config::model_ref::ModelRef;
 use adam_agent::config::models_json::ModelsJson;
+use adam_agent::config::set_project_trust_level;
 use adam_agent::config::state_json::AdamStateStore;
 use adam_agent::config::types::TuiBuddy;
 use adam_agent::config_loader::ConfigLayerStackOrdering;
 use adam_agent::features::Feature;
+use adam_agent::git_info::resolve_root_git_project_for_trust;
 use adam_agent::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use adam_agent::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use adam_agent::protocol::AskForApproval;
@@ -80,6 +84,7 @@ use adam_llm::RuntimeEndpoint;
 use adam_otel::OtelManager;
 use adam_protocol::ThreadId;
 use adam_protocol::config_types::Personality;
+use adam_protocol::config_types::TrustLevel;
 #[cfg(target_os = "windows")]
 use adam_protocol::config_types::WindowsSandboxLevel;
 use adam_protocol::items::TurnItem;
@@ -576,6 +581,8 @@ pub(crate) struct App {
     pending_primary_events: VecDeque<Event>,
     review_parent_by_child: HashMap<ThreadId, ThreadId>,
     non_git_changelog_baselines: HashMap<PathBuf, Arc<NonGitBaselineTracker>>,
+    pending_startup_trust_prompt: bool,
+    deferred_initial_user_message: Option<UserMessage>,
 }
 
 #[derive(Default)]
@@ -857,6 +864,80 @@ impl App {
             .await
             .wrap_err_with(|| format!("Failed to rebuild config for cwd {cwd_display}"))?;
         Ok(config)
+    }
+
+    async fn apply_project_trust_selection(&mut self, trust_level: TrustLevel) {
+        let target = resolve_root_git_project_for_trust(&self.config.cwd)
+            .unwrap_or_else(|| self.config.cwd.clone());
+        if let Err(err) = set_project_trust_level(&self.config.adam_home, &target, trust_level) {
+            let target_display = target.display();
+            tracing::error!(%err, target = %target_display, "failed to persist project trust");
+            self.chat_widget
+                .add_error_message(format!("Failed to save trust for {target_display}: {err}"));
+            self.chat_widget.open_project_trust_popup();
+            return;
+        }
+
+        let cwd = self.config.cwd.clone();
+        match self.rebuild_config_for_cwd(cwd).await {
+            Ok(config) => {
+                self.config.active_project = ProjectConfig {
+                    trust_level: Some(trust_level),
+                };
+                if let Err(err) = self
+                    .config
+                    .approval_policy
+                    .set(config.approval_policy.value())
+                {
+                    tracing::warn!(%err, "failed to apply project trust approval policy");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to apply approval policy: {err}"));
+                    return;
+                }
+                if let Err(err) = self
+                    .config
+                    .sandbox_policy
+                    .set(config.sandbox_policy.get().clone())
+                {
+                    tracing::warn!(%err, "failed to apply project trust sandbox policy");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to apply sandbox policy: {err}"));
+                    return;
+                }
+                self.chat_widget
+                    .set_approval_policy(config.approval_policy.value());
+                if let Err(err) = self
+                    .chat_widget
+                    .set_sandbox_policy(config.sandbox_policy.get().clone())
+                {
+                    tracing::warn!(%err, "failed to apply project trust sandbox policy to chat");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to apply sandbox policy: {err}"));
+                    return;
+                }
+                self.runtime_approval_policy_override = None;
+                self.runtime_sandbox_policy_override = None;
+                self.pending_startup_trust_prompt = false;
+                let message = match trust_level {
+                    TrustLevel::Trusted => "Project trusted.",
+                    TrustLevel::Untrusted => {
+                        "Project will require approval for edits and commands."
+                    }
+                };
+                self.chat_widget.add_info_message(message.to_string(), None);
+                if let Some(user_message) = self.deferred_initial_user_message.take() {
+                    self.chat_widget
+                        .submit_deferred_initial_user_message(user_message);
+                }
+            }
+            Err(err) => {
+                tracing::error!(%err, "failed to reload config after project trust selection");
+                self.chat_widget.add_error_message(format!(
+                    "Saved project trust, but failed to reload configuration: {err}"
+                ));
+                self.chat_widget.open_project_trust_popup();
+            }
+        }
     }
 
     async fn persist_buddy_config(&mut self, edit: BuddyConfigEdit) {
@@ -1609,6 +1690,7 @@ impl App {
         session_selection: SessionSelection,
         feedback: adam_feedback::CodexFeedback,
         is_first_run: bool,
+        show_trust_popup_on_startup: bool,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -1663,6 +1745,15 @@ impl App {
         );
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
+        let initial_user_message = crate::chatwidget::create_initial_user_message(
+            initial_prompt.clone(),
+            initial_images.clone(),
+            // CLI prompt args are plain strings, so they don't provide element ranges.
+            Vec::new(),
+        );
+        let deferred_initial_user_message = show_trust_popup_on_startup
+            .then(|| initial_user_message.clone())
+            .flatten();
         let mut chat_widget = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
@@ -1670,12 +1761,11 @@ impl App {
                     thread_manager: thread_manager.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
-                    initial_user_message: crate::chatwidget::create_initial_user_message(
-                        initial_prompt.clone(),
-                        initial_images.clone(),
-                        // CLI prompt args are plain strings, so they don't provide element ranges.
-                        Vec::new(),
-                    ),
+                    initial_user_message: if show_trust_popup_on_startup {
+                        None
+                    } else {
+                        initial_user_message.clone()
+                    },
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
@@ -1704,12 +1794,11 @@ impl App {
                     thread_manager: thread_manager.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
-                    initial_user_message: crate::chatwidget::create_initial_user_message(
-                        initial_prompt.clone(),
-                        initial_images.clone(),
-                        // CLI prompt args are plain strings, so they don't provide element ranges.
-                        Vec::new(),
-                    ),
+                    initial_user_message: if show_trust_popup_on_startup {
+                        None
+                    } else {
+                        initial_user_message.clone()
+                    },
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
@@ -1734,12 +1823,11 @@ impl App {
                     thread_manager: thread_manager.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
-                    initial_user_message: crate::chatwidget::create_initial_user_message(
-                        initial_prompt.clone(),
-                        initial_images.clone(),
-                        // CLI prompt args are plain strings, so they don't provide element ranges.
-                        Vec::new(),
-                    ),
+                    initial_user_message: if show_trust_popup_on_startup {
+                        None
+                    } else {
+                        initial_user_message.clone()
+                    },
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
@@ -1793,7 +1881,13 @@ impl App {
             pending_primary_events: VecDeque::new(),
             review_parent_by_child: HashMap::new(),
             non_git_changelog_baselines: HashMap::new(),
+            pending_startup_trust_prompt: show_trust_popup_on_startup,
+            deferred_initial_user_message,
         };
+
+        if app.pending_startup_trust_prompt {
+            app.app_event_tx.send(AppEvent::OpenProjectTrustPopup);
+        }
 
         if let Err(err) = app
             .ensure_non_git_changelog_baseline(app.config.cwd.clone())
@@ -2939,6 +3033,12 @@ impl App {
             AppEvent::OpenPermissionsPopup => {
                 self.chat_widget.open_permissions_popup();
             }
+            AppEvent::OpenProjectTrustPopup => {
+                self.chat_widget.open_project_trust_popup();
+            }
+            AppEvent::ProjectTrustSelected { trust_level } => {
+                self.apply_project_trust_selection(trust_level).await;
+            }
             AppEvent::OpenReviewBranchPicker(cwd) => {
                 self.chat_widget.show_review_branch_picker(&cwd).await;
             }
@@ -4026,6 +4126,8 @@ mod tests {
             pending_primary_events: VecDeque::new(),
             review_parent_by_child: HashMap::new(),
             non_git_changelog_baselines: HashMap::new(),
+            pending_startup_trust_prompt: false,
+            deferred_initial_user_message: None,
         }
     }
 
@@ -4081,6 +4183,8 @@ mod tests {
                 pending_primary_events: VecDeque::new(),
                 review_parent_by_child: HashMap::new(),
                 non_git_changelog_baselines: HashMap::new(),
+                pending_startup_trust_prompt: false,
+                deferred_initial_user_message: None,
             },
             rx,
             op_rx,

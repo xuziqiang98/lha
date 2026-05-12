@@ -5086,6 +5086,63 @@ async fn approvals_selection_popup_snapshot() {
     assert_snapshot!("approvals_selection_popup", popup);
 }
 
+#[tokio::test]
+async fn project_trust_popup_defaults_to_trusted_inside_git_repo() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let repo = tempdir().expect("tempdir");
+    std::fs::create_dir(repo.path().join(".git")).expect("create git marker");
+    chat.config.cwd = repo.path().to_path_buf();
+
+    chat.open_project_trust_popup();
+
+    let popup = render_bottom_popup(&chat, 90);
+    assert!(
+        popup.contains("Trust this project?"),
+        "expected project trust popup:\n{popup}"
+    );
+    assert!(
+        popup.contains("› 1. Trust this project"),
+        "expected git repos to default to trusted:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn project_trust_popup_defaults_to_untrusted_outside_git_repo() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let cwd = tempdir().expect("tempdir");
+    chat.config.cwd = cwd.path().to_path_buf();
+
+    chat.open_project_trust_popup();
+
+    let popup = render_bottom_popup(&chat, 90);
+    assert!(
+        popup.contains("› 2. Require approval"),
+        "expected non-git directories to default to require approval:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn project_trust_popup_dispatches_selection_and_escape_exit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let cwd = tempdir().expect("tempdir");
+    chat.config.cwd = cwd.path().to_path_buf();
+
+    chat.open_project_trust_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::ProjectTrustSelected {
+            trust_level: TrustLevel::Untrusted,
+        })
+    );
+
+    chat.open_project_trust_popup();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+}
+
 #[cfg(target_os = "windows")]
 #[tokio::test]
 #[serial]

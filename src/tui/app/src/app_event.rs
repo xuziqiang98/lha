@@ -29,6 +29,7 @@ use adam_agent::protocol::ReviewRequest;
 use adam_agent::protocol::SandboxPolicy;
 use adam_protocol::config_types::IdentityMask;
 use adam_protocol::config_types::Personality;
+use adam_protocol::config_types::TrustLevel;
 
 #[derive(Debug, Clone)]
 pub(crate) enum BuddyConfigEdit {
@@ -284,6 +285,14 @@ pub(crate) enum AppEvent {
 
     /// Re-open the permissions presets popup.
     OpenPermissionsPopup,
+
+    /// Open the first-run project trust popup inside the main TUI.
+    OpenProjectTrustPopup,
+
+    /// Persist the user's first-run project trust choice.
+    ProjectTrustSelected {
+        trust_level: TrustLevel,
+    },
 
     /// Open the branch picker option from the review popup.
     OpenReviewBranchPicker(PathBuf),

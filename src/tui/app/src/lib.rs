@@ -76,6 +76,7 @@ mod model_migration;
 mod mouse;
 mod multi_agents;
 mod notifications;
+#[allow(dead_code)]
 pub mod onboarding;
 mod pager_overlay;
 mod provider_config;
@@ -109,9 +110,6 @@ mod wrapping;
 #[cfg(test)]
 pub mod test_backend;
 
-use crate::onboarding::TrustDirectorySelection;
-use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
-use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::tui::Tui;
 pub use cli::Cli;
 pub use markdown_render::render_markdown_text;
@@ -389,49 +387,7 @@ async fn run_ratatui_app(
     session_log::maybe_init(&initial_config);
 
     let auth_manager = AuthManager::shared(initial_config.adam_home.clone(), false);
-    let should_show_onboarding = should_show_trust_screen(&initial_config);
-
-    let config = if should_show_onboarding {
-        let onboarding_result = run_onboarding_app(
-            OnboardingScreenArgs {
-                show_trust_screen: should_show_onboarding,
-                config: initial_config.clone(),
-            },
-            &mut tui,
-        )
-        .await?;
-        if onboarding_result.should_exit {
-            terminal_restore_guard.restore_silently();
-            session_log::log_session_end();
-            let _ = tui.terminal.clear();
-            return Ok(AppExitInfo {
-                token_usage: adam_agent::protocol::TokenUsage::default(),
-                thread_id: None,
-                thread_name: None,
-                update_action: None,
-                exit_reason: ExitReason::UserRequested,
-            });
-        }
-        let should_reload_config = onboarding_result.config_updated
-            || onboarding_result
-                .directory_trust_decision
-                .map(|d| d == TrustDirectorySelection::Trust)
-                .unwrap_or(false);
-
-        // Reload config if onboarding changed trust or switched to a new provider.
-        if should_reload_config {
-            load_config_or_exit(
-                cli_kv_overrides.clone(),
-                overrides.clone(),
-                cloud_requirements.clone(),
-            )
-            .await
-        } else {
-            initial_config
-        }
-    } else {
-        initial_config
-    };
+    let config = initial_config;
     tui.set_mouse_capture_enabled(resolve_mouse_capture(&cli, &config))?;
 
     let mut missing_session_exit = |id_str: &str, action: &str| {
@@ -598,7 +554,7 @@ async fn run_ratatui_app(
     };
     tui.set_mouse_capture_enabled(resolve_mouse_capture(&cli, &config))?;
     let active_profile = config.active_profile.clone();
-    let should_show_trust_screen = should_show_trust_screen(&config);
+    let show_trust_popup_on_startup = should_show_trust_screen(&config);
 
     let Cli { prompt, images, .. } = cli;
 
@@ -613,7 +569,8 @@ async fn run_ratatui_app(
         images,
         session_selection,
         feedback,
-        should_show_trust_screen, // Proxy to: is it a first run in this directory?
+        show_trust_popup_on_startup, // Proxy to: is it a first run in this directory?
+        show_trust_popup_on_startup,
     )
     .await;
 

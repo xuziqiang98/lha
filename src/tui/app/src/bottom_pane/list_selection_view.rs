@@ -56,6 +56,7 @@ pub(crate) struct SelectionViewParams {
     pub header: Box<dyn Renderable>,
     pub initial_selected_idx: Option<usize>,
     pub allow_background_transcript_interaction: bool,
+    pub cancel_actions: Vec<SelectionAction>,
 }
 
 impl Default for SelectionViewParams {
@@ -71,6 +72,7 @@ impl Default for SelectionViewParams {
             header: Box::new(()),
             initial_selected_idx: None,
             allow_background_transcript_interaction: false,
+            cancel_actions: Vec::new(),
         }
     }
 }
@@ -90,6 +92,7 @@ pub(crate) struct ListSelectionView {
     header: Box<dyn Renderable>,
     initial_selected_idx: Option<usize>,
     allow_background_transcript_interaction: bool,
+    cancel_actions: Vec<SelectionAction>,
 }
 
 impl ListSelectionView {
@@ -123,6 +126,7 @@ impl ListSelectionView {
             header,
             initial_selected_idx: params.initial_selected_idx,
             allow_background_transcript_interaction: params.allow_background_transcript_interaction,
+            cancel_actions: params.cancel_actions,
         };
         s.apply_filter();
         s
@@ -424,6 +428,9 @@ impl BottomPaneView for ListSelectionView {
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
+        for act in &self.cancel_actions {
+            act(&self.app_event_tx);
+        }
         self.complete = true;
         CancellationEvent::Handled
     }
