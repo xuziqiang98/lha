@@ -35,16 +35,32 @@ pub(crate) fn render_buddy(
     let sprite_color = style::rarity_color(buddy.rarity);
     let name_width = UnicodeWidthStr::width(buddy.name.as_str()) as u16;
     let sprite_width = layout::sprite_column_width(name_width);
-    let sprite_area = if let Some(reaction) = state.visible_reaction() {
+    let reaction = state.visible_reaction();
+    let content_width = if reaction.is_some() {
+        layout::BUBBLE_WIDTH
+            .saturating_add(sprite_width)
+            .saturating_add(layout::SPRITE_PADDING_X)
+    } else {
+        sprite_width.saturating_add(layout::SPRITE_PADDING_X)
+    }
+    .min(area.width);
+    let content_area = Rect::new(
+        area.x
+            .saturating_add(area.width.saturating_sub(content_width)),
+        area.y,
+        content_width,
+        area.height,
+    );
+    let sprite_area = if let Some(reaction) = reaction {
         let [bubble_area, sprite_area] = Layout::horizontal([
             Constraint::Length(layout::BUBBLE_WIDTH),
             Constraint::Length(sprite_width + layout::SPRITE_PADDING_X),
         ])
-        .areas(area);
+        .areas(content_area);
         bubble::render_bubble(bubble_area, buf, &reaction.text, state.reaction_fading());
         sprite_area
     } else {
-        area
+        content_area
     };
     let sprite_column_area = centered_column(sprite_area, sprite_width);
 
@@ -226,6 +242,41 @@ mod tests {
     }
 
     #[test]
+    fn render_buddy_keeps_name_right_anchor_when_reaction_visible() {
+        let mut state = BuddyState::default();
+        state.set_config(TuiBuddy {
+            enabled: true,
+            muted: false,
+            ..TuiBuddy::default()
+        });
+        state.ensure_active_buddy();
+        let name = state.buddy().expect("generated buddy").name.clone();
+        let name_width = UnicodeWidthStr::width(name.as_str()) as u16;
+        let sprite_width = layout::sprite_column_width(name_width);
+
+        let area = Rect::new(0, 0, 64, 6);
+        let mut idle_buf = Buffer::empty(area);
+        render_buddy(area, &mut idle_buf, &state, false);
+        let idle_name_x = rendered_name_x(&idle_buf, area, &name);
+
+        state.set_reaction("hello".to_string());
+        let mut speaking_buf = Buffer::empty(area);
+        render_buddy(area, &mut speaking_buf, &state, false);
+        let speaking_name_x = rendered_name_x(&speaking_buf, area, &name);
+
+        assert_eq!(speaking_name_x, idle_name_x);
+        assert!(
+            render_rows(&speaking_buf, area)
+                .iter()
+                .any(|row| row.contains("hello"))
+        );
+
+        let bubble_left =
+            area.width - layout::BUBBLE_WIDTH - sprite_width - layout::SPRITE_PADDING_X;
+        assert_eq!(speaking_buf[(bubble_left, 0)].symbol(), "╭");
+    }
+
+    #[test]
     fn render_buddy_centers_pixel_dragon_sprite_on_name_axis() {
         let mut state = BuddyState::default();
         state.set_config(TuiBuddy {
@@ -277,6 +328,19 @@ mod tests {
                     .collect()
             })
             .collect()
+    }
+
+    fn rendered_name_x(buf: &Buffer, area: Rect, name: &str) -> u16 {
+        let name_row = area.height - 1;
+        let name_width = UnicodeWidthStr::width(name) as u16;
+        (0..=area.width.saturating_sub(name_width))
+            .find(|x| {
+                (0..name_width)
+                    .map(|offset| buf[(x + offset, name_row)].symbol())
+                    .collect::<String>()
+                    == name
+            })
+            .expect("buddy name rendered")
     }
 
     fn substring_center_x2(row: &str, needle: &str) -> usize {
