@@ -51,7 +51,6 @@ use adam_agent::ThreadManager;
 use adam_agent::config::Config;
 use adam_agent::config::ConfigBuilder;
 use adam_agent::config::ConfigOverrides;
-use adam_agent::config::ProjectConfig;
 use adam_agent::config::display_model_provider_ref;
 use adam_agent::config::edit::ConfigEdit;
 use adam_agent::config::edit::ConfigEditsBuilder;
@@ -578,6 +577,8 @@ pub(crate) struct App {
     agent_picker_threads: HashMap<ThreadId, AgentPickerThreadEntry>,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<Event>>,
+    thread_created_rx: broadcast::Receiver<ThreadId>,
+    listen_for_threads: bool,
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
@@ -869,7 +870,124 @@ impl App {
         Ok(config)
     }
 
-    async fn apply_project_trust_selection(&mut self, trust_level: TrustLevel) {
+    async fn resolve_startup_model(
+        tui: &mut tui::Tui,
+        config: &mut Config,
+        thread_manager: &ThreadManager,
+        app_event_tx: &AppEventSender,
+    ) -> std::result::Result<Option<String>, AppExitInfo> {
+        if config.provider_config_required {
+            return Ok(None);
+        }
+
+        let mut resolved_model = thread_manager
+            .get_default_model(&config.model, config, CatalogRefreshStrategy::Offline)
+            .await
+            .map_err(|err| AppExitInfo::fatal(err.to_string()))?;
+        let available_models = thread_manager
+            .list_models(config, CatalogRefreshStrategy::Offline)
+            .await;
+        if let Some(exit_info) = handle_model_migration_prompt_if_needed(
+            tui,
+            config,
+            resolved_model.as_str(),
+            app_event_tx,
+            available_models,
+        )
+        .await
+        {
+            return Err(exit_info);
+        }
+        if let Some(updated_model) = config.model.clone() {
+            resolved_model = updated_model;
+        }
+
+        Ok(Some(resolved_model))
+    }
+
+    async fn restart_chat_after_project_trust(
+        &mut self,
+        tui: &mut tui::Tui,
+        mut config: Config,
+    ) -> std::result::Result<AppRunControl, AppExitInfo> {
+        let thread_manager = Arc::new(ThreadManager::new(
+            config.adam_home.clone(),
+            self.auth_manager.clone(),
+            config.model_provider_id.as_str(),
+            config.model_provider.clone(),
+            SessionSource::Cli,
+        ));
+        let model = match Self::resolve_startup_model(
+            tui,
+            &mut config,
+            thread_manager.as_ref(),
+            &self.app_event_tx,
+        )
+        .await
+        {
+            Ok(model) => model,
+            Err(exit_info) => return Ok(AppRunControl::Exit(exit_info.exit_reason)),
+        };
+        self.replace_chat_after_project_trust(config, thread_manager, model, tui.frame_requester());
+
+        Ok(AppRunControl::Continue)
+    }
+
+    fn replace_chat_after_project_trust(
+        &mut self,
+        config: Config,
+        thread_manager: Arc<ThreadManager>,
+        model: Option<String>,
+        frame_requester: tui::FrameRequester,
+    ) {
+        let otel_manager = OtelManager::new(
+            ThreadId::new(),
+            model.as_deref().unwrap_or("No provider configured"),
+            model.as_deref().unwrap_or("No provider configured"),
+            None,
+            None,
+            None,
+            config.otel.log_user_prompt,
+            adam_agent::terminal::user_agent(),
+            SessionSource::Cli,
+        );
+        let init = crate::chatwidget::ChatWidgetInit {
+            config: config.clone(),
+            thread_manager: thread_manager.clone(),
+            frame_requester,
+            app_event_tx: self.app_event_tx.clone(),
+            initial_user_message: None,
+            enhanced_keys_supported: self.enhanced_keys_supported,
+            auth_manager: self.auth_manager.clone(),
+            feedback: self.feedback.clone(),
+            is_first_run: false,
+            startup: if config.provider_config_required {
+                crate::chatwidget::ChatWidgetStartup::NeedsProviderConfig
+            } else {
+                crate::chatwidget::ChatWidgetStartup::Configured { model }
+            },
+            otel_manager: otel_manager.clone(),
+        };
+
+        self.server = thread_manager;
+        self.thread_created_rx = self.server.subscribe_thread_created();
+        self.listen_for_threads = true;
+        self.otel_manager = otel_manager;
+        self.config = config;
+        self.file_search =
+            FileSearchManager::new(self.config.cwd.clone(), self.app_event_tx.clone());
+        self.chat_widget = ChatWidget::new(init);
+        self.reset_thread_event_state();
+        self.runtime_approval_policy_override = None;
+        self.runtime_sandbox_policy_override = None;
+        self.pending_startup_trust_prompt = false;
+    }
+
+    async fn apply_project_trust_selection(
+        &mut self,
+        tui: &mut tui::Tui,
+        trust_level: TrustLevel,
+    ) -> AppRunControl {
         let target = resolve_root_git_project_for_trust(&self.config.cwd)
             .unwrap_or_else(|| self.config.cwd.clone());
         if let Err(err) = set_project_trust_level(&self.config.adam_home, &target, trust_level) {
@@ -878,49 +996,17 @@ impl App {
             self.chat_widget
                 .add_error_message(format!("Failed to save trust for {target_display}: {err}"));
             self.project_trust_modal = Some(ProjectTrustModal::new(self.config.cwd.clone()));
-            return;
+            return AppRunControl::Continue;
         }
 
         let cwd = self.config.cwd.clone();
         match self.rebuild_config_for_cwd(cwd).await {
             Ok(config) => {
-                self.config.active_project = ProjectConfig {
-                    trust_level: Some(trust_level),
-                };
-                if let Err(err) = self
-                    .config
-                    .approval_policy
-                    .set(config.approval_policy.value())
-                {
-                    tracing::warn!(%err, "failed to apply project trust approval policy");
-                    self.chat_widget
-                        .add_error_message(format!("Failed to apply approval policy: {err}"));
-                    return;
+                match self.restart_chat_after_project_trust(tui, config).await {
+                    Ok(AppRunControl::Continue) => {}
+                    Ok(exit) => return exit,
+                    Err(exit_info) => return AppRunControl::Exit(exit_info.exit_reason),
                 }
-                if let Err(err) = self
-                    .config
-                    .sandbox_policy
-                    .set(config.sandbox_policy.get().clone())
-                {
-                    tracing::warn!(%err, "failed to apply project trust sandbox policy");
-                    self.chat_widget
-                        .add_error_message(format!("Failed to apply sandbox policy: {err}"));
-                    return;
-                }
-                self.chat_widget
-                    .set_approval_policy(config.approval_policy.value());
-                if let Err(err) = self
-                    .chat_widget
-                    .set_sandbox_policy(config.sandbox_policy.get().clone())
-                {
-                    tracing::warn!(%err, "failed to apply project trust sandbox policy to chat");
-                    self.chat_widget
-                        .add_error_message(format!("Failed to apply sandbox policy: {err}"));
-                    return;
-                }
-                self.runtime_approval_policy_override = None;
-                self.runtime_sandbox_policy_override = None;
-                self.pending_startup_trust_prompt = false;
                 let message = match trust_level {
                     TrustLevel::Trusted => "Project trusted.",
                     TrustLevel::Untrusted => {
@@ -928,7 +1014,9 @@ impl App {
                     }
                 };
                 self.chat_widget.add_info_message(message.to_string(), None);
-                if let Some(user_message) = self.deferred_initial_user_message.take() {
+                if !self.config.provider_config_required
+                    && let Some(user_message) = self.deferred_initial_user_message.take()
+                {
                     self.chat_widget
                         .submit_deferred_initial_user_message(user_message);
                 }
@@ -941,6 +1029,7 @@ impl App {
                 self.project_trust_modal = Some(ProjectTrustModal::new(self.config.cwd.clone()));
             }
         }
+        AppRunControl::Continue
     }
 
     async fn persist_buddy_config(&mut self, edit: BuddyConfigEdit) {
@@ -1773,7 +1862,9 @@ impl App {
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    startup: if config.provider_config_required {
+                    startup: if show_trust_popup_on_startup {
+                        crate::chatwidget::ChatWidgetStartup::Deferred
+                    } else if config.provider_config_required {
                         crate::chatwidget::ChatWidgetStartup::NeedsProviderConfig
                     } else {
                         crate::chatwidget::ChatWidgetStartup::Configured {
@@ -1881,6 +1972,8 @@ impl App {
             agent_picker_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
+            thread_created_rx: thread_manager.subscribe_thread_created(),
+            listen_for_threads: true,
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
@@ -1954,9 +2047,6 @@ impl App {
 
         tui.frame_requester().schedule_frame();
 
-        let mut thread_created_rx = thread_manager.subscribe_thread_created();
-        let mut listen_for_threads = true;
-
         let exit_reason = loop {
             let control = select! {
                 Some(event) = app_event_rx.recv() => {
@@ -1986,7 +2076,7 @@ impl App {
                     }
                 }
                 // Listen on new thread creation due to collab tools.
-                created = thread_created_rx.recv(), if listen_for_threads => {
+                created = app.thread_created_rx.recv(), if app.listen_for_threads => {
                     match created {
                         Ok(thread_id) => {
                             app.handle_thread_created(thread_id).await?;
@@ -1995,7 +2085,7 @@ impl App {
                             tracing::warn!("thread_created receiver lagged; skipping resync");
                         }
                         Err(broadcast::error::RecvError::Closed) => {
-                            listen_for_threads = false;
+                            app.listen_for_threads = false;
                         }
                     }
                     AppRunControl::Continue
@@ -2114,9 +2204,9 @@ impl App {
             }
             ProjectTrustModalAction::Selected(trust_level) => {
                 self.project_trust_modal = None;
-                self.apply_project_trust_selection(trust_level).await;
+                let control = self.apply_project_trust_selection(tui, trust_level).await;
                 tui.frame_requester().schedule_frame();
-                Ok(AppRunControl::Continue)
+                Ok(control)
             }
         }
     }
@@ -3444,6 +3534,7 @@ mod tests {
     use adam_agent::AuthManager;
     use adam_agent::CodexAuth;
     use adam_agent::ThreadManager;
+    use adam_agent::config::CONFIG_TOML_FILE;
     use adam_agent::config::ConfigBuilder;
     use adam_agent::config::ConfigOverrides;
     use adam_agent::config::models_json::ModelsDialect;
@@ -3466,6 +3557,7 @@ mod tests {
     use adam_otel::OtelManager;
     use adam_protocol::ThreadId;
     use adam_protocol::config_types::IdentityKind;
+    use adam_protocol::config_types::TrustLevel;
     use adam_protocol::user_input::TextElement;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
@@ -4135,7 +4227,7 @@ mod tests {
         let otel_manager = test_otel_manager(&config, model.as_str());
 
         App {
-            server,
+            server: server.clone(),
             otel_manager,
             app_event_tx,
             chat_widget,
@@ -4163,6 +4255,8 @@ mod tests {
             agent_picker_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
+            thread_created_rx: server.subscribe_thread_created(),
+            listen_for_threads: true,
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
@@ -4193,7 +4287,7 @@ mod tests {
 
         (
             App {
-                server,
+                server: server.clone(),
                 otel_manager,
                 app_event_tx,
                 chat_widget,
@@ -4221,6 +4315,8 @@ mod tests {
                 agent_picker_threads: HashMap::new(),
                 active_thread_id: None,
                 active_thread_rx: None,
+                thread_created_rx: server.subscribe_thread_created(),
+                listen_for_threads: true,
                 primary_thread_id: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
@@ -4233,6 +4329,151 @@ mod tests {
             rx,
             op_rx,
         )
+    }
+
+    #[tokio::test]
+    async fn project_trust_rebuilds_full_config_for_deferred_startup() -> std::io::Result<()> {
+        let adam_home = tempdir()?;
+        let workspace = tempdir()?;
+        let workspace_key = workspace.path().to_string_lossy().replace('\\', "\\\\");
+        std::fs::write(
+            adam_home.path().join(CONFIG_TOML_FILE),
+            format!(
+                r#"
+[projects."{workspace_key}"]
+trust_level = "untrusted"
+"#,
+            ),
+        )?;
+        let project_config_dir = workspace.path().join(".adam");
+        std::fs::create_dir_all(&project_config_dir)?;
+        std::fs::write(
+            project_config_dir.join(CONFIG_TOML_FILE),
+            r#"
+approval_policy = "never"
+developer_instructions = "project-only developer instructions"
+show_raw_agent_reasoning = true
+"#,
+        )?;
+
+        let initial_config = ConfigBuilder::default()
+            .adam_home(adam_home.path().to_path_buf())
+            .provider_config_required(false)
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(workspace.path().to_path_buf()),
+                ..Default::default()
+            })
+            .build()
+            .await?;
+        assert_eq!(
+            initial_config.active_project.trust_level,
+            Some(TrustLevel::Untrusted)
+        );
+        assert_eq!(initial_config.developer_instructions, None);
+        assert!(!initial_config.show_raw_agent_reasoning);
+
+        let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let server = Arc::new(ThreadManager::with_models_provider_and_home(
+            CodexAuth::from_api_key("Test API Key"),
+            initial_config.model_provider_id.as_str(),
+            initial_config.model_provider.clone(),
+            adam_home.path().to_path_buf(),
+        ));
+        let mut app = App {
+            server: server.clone(),
+            otel_manager: test_otel_manager(&initial_config, "gpt-5.3-codex"),
+            app_event_tx: app_event_tx.clone(),
+            chat_widget,
+            auth_manager,
+            config: initial_config,
+            active_profile: None,
+            cli_kv_overrides: Vec::new(),
+            harness_overrides: ConfigOverrides {
+                cwd: Some(workspace.path().to_path_buf()),
+                ..Default::default()
+            },
+            runtime_approval_policy_override: None,
+            runtime_sandbox_policy_override: None,
+            file_search: FileSearchManager::new(
+                workspace.path().to_path_buf(),
+                app_event_tx.clone(),
+            ),
+            transcript_cells: Vec::new(),
+            overlay: None,
+            enhanced_keys_supported: false,
+            commit_anim_running: Arc::new(AtomicBool::new(false)),
+            backtrack: BacktrackState::default(),
+            backtrack_render_pending: false,
+            feedback: adam_feedback::CodexFeedback::new(),
+            pending_update_action: None,
+            suppress_shutdown_complete: false,
+            windows_sandbox: WindowsSandboxState::default(),
+            shift_mouse_bypass_active: false,
+            shift_mouse_bypass_restore_at: None,
+            thread_event_channels: HashMap::new(),
+            agent_picker_threads: HashMap::new(),
+            active_thread_id: None,
+            active_thread_rx: None,
+            thread_created_rx: server.subscribe_thread_created(),
+            listen_for_threads: true,
+            primary_thread_id: None,
+            primary_session_configured: None,
+            pending_primary_events: VecDeque::new(),
+            review_parent_by_child: HashMap::new(),
+            non_git_changelog_baselines: HashMap::new(),
+            project_trust_modal: None,
+            pending_startup_trust_prompt: true,
+            deferred_initial_user_message: None,
+        };
+
+        set_project_trust_level(adam_home.path(), workspace.path(), TrustLevel::Trusted)
+            .expect("set project trusted");
+        let rebuilt = app
+            .rebuild_config_for_cwd(workspace.path().to_path_buf())
+            .await
+            .expect("rebuild config");
+        assert_eq!(rebuilt.approval_policy.value(), AskForApproval::Never);
+        assert_eq!(
+            rebuilt.developer_instructions.as_deref(),
+            Some("project-only developer instructions")
+        );
+        assert!(rebuilt.show_raw_agent_reasoning);
+
+        let thread_manager = Arc::new(ThreadManager::with_models_provider_and_home(
+            CodexAuth::from_api_key("Test API Key"),
+            rebuilt.model_provider_id.as_str(),
+            rebuilt.model_provider.clone(),
+            adam_home.path().to_path_buf(),
+        ));
+        app.replace_chat_after_project_trust(
+            rebuilt,
+            thread_manager,
+            Some("gpt-5.3-codex".to_string()),
+            tui::FrameRequester::test_dummy(),
+        );
+
+        assert_eq!(app.config.approval_policy.value(), AskForApproval::Never);
+        assert_eq!(
+            app.chat_widget.config_ref().approval_policy.value(),
+            AskForApproval::Never
+        );
+        assert_eq!(
+            app.config.developer_instructions.as_deref(),
+            Some("project-only developer instructions")
+        );
+        assert_eq!(
+            app.chat_widget
+                .config_ref()
+                .developer_instructions
+                .as_deref(),
+            Some("project-only developer instructions")
+        );
+        assert!(app.config.show_raw_agent_reasoning);
+        assert!(app.chat_widget.config_ref().show_raw_agent_reasoning);
+        assert!(!app.pending_startup_trust_prompt);
+        Ok(())
     }
 
     fn persist_provider_fixture(adam_home: &Path, config: &CustomProviderConfig) {

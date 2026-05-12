@@ -352,6 +352,7 @@ pub(crate) struct ChatWidgetInit {
 pub(crate) enum ChatWidgetStartup {
     Configured { model: Option<String> },
     NeedsProviderConfig,
+    Deferred,
 }
 
 #[allow(dead_code)]
@@ -2245,9 +2246,10 @@ impl ChatWidget {
             otel_manager,
         } = common;
         let app_event_tx = app_event_tx.bind_history_to_widget();
-        let (model, needs_provider_config) = match startup {
-            ChatWidgetStartup::Configured { model } => (model, false),
-            ChatWidgetStartup::NeedsProviderConfig => (None, true),
+        let (model, needs_provider_config, defer_startup) = match startup {
+            ChatWidgetStartup::Configured { model } => (model, false, false),
+            ChatWidgetStartup::NeedsProviderConfig => (None, true, false),
+            ChatWidgetStartup::Deferred => (config.model.clone(), false, true),
         };
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
@@ -2255,7 +2257,7 @@ impl ChatWidget {
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
         let (codex_op_tx, _) = unbounded_channel::<Op>();
-        let codex_op_tx = if needs_provider_config {
+        let codex_op_tx = if needs_provider_config || defer_startup {
             codex_op_tx
         } else {
             spawn_agent(
@@ -5573,7 +5575,7 @@ impl ChatWidget {
         self.bottom_pane.no_modal_or_popup_active()
     }
 
-    fn is_session_configured(&self) -> bool {
+    pub(crate) fn is_session_configured(&self) -> bool {
         self.thread_id.is_some()
     }
 

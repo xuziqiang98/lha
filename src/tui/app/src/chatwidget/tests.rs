@@ -3756,6 +3756,44 @@ async fn identities_default_to_nobody_on_startup() {
 }
 
 #[tokio::test]
+async fn deferred_startup_does_not_configure_session() {
+    let adam_home = tempdir().expect("tempdir");
+    let cfg = ConfigBuilder::default()
+        .adam_home(adam_home.path().to_path_buf())
+        .provider_config_required(false)
+        .build()
+        .await
+        .expect("config");
+    let resolved_model = ModelsManager::get_model_offline(cfg.model.as_deref());
+    let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
+    let thread_manager = Arc::new(ThreadManager::with_models_provider(
+        CodexAuth::from_api_key("test"),
+        cfg.model_provider.clone(),
+    ));
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let (app_event_tx, mut app_event_rx) = unbounded_channel::<AppEvent>();
+    let init = ChatWidgetInit {
+        config: cfg,
+        thread_manager,
+        frame_requester: FrameRequester::test_dummy(),
+        app_event_tx: AppEventSender::new(app_event_tx),
+        initial_user_message: None,
+        enhanced_keys_supported: false,
+        auth_manager,
+        feedback: adam_feedback::CodexFeedback::new(),
+        is_first_run: true,
+        startup: ChatWidgetStartup::Deferred,
+        otel_manager,
+    };
+
+    let chat = ChatWidget::new(init);
+
+    assert_eq!(chat.thread_id(), None);
+    assert!(!chat.is_session_configured());
+    assert!(app_event_rx.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn last_selected_identity_plan_applies_on_startup() {
     let adam_home = tempdir().expect("tempdir");
     AdamStateStore::new(adam_home.path())
