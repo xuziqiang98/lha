@@ -349,6 +349,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) otel_manager: OtelManager,
 }
 
+#[derive(Clone)]
 pub(crate) enum ChatWidgetStartup {
     Configured { model: Option<String> },
     NeedsProviderConfig,
@@ -5398,10 +5399,6 @@ impl ChatWidget {
         Ok(())
     }
 
-    pub(crate) fn submit_deferred_initial_user_message(&mut self, user_message: UserMessage) {
-        self.submit_user_message(user_message);
-    }
-
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_feature_enabled(&mut self, feature: Feature, enabled: bool) {
         if enabled {
@@ -5573,6 +5570,11 @@ impl ChatWidget {
     #[cfg(test)]
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
         self.bottom_pane.no_modal_or_popup_active()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_initial_user_message(&self) -> bool {
+        self.initial_user_message.is_some()
     }
 
     pub(crate) fn is_session_configured(&self) -> bool {
