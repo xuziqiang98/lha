@@ -126,7 +126,7 @@ impl SlashCommand {
             | SlashCommand::Exit => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
-            SlashCommand::Identity => true,
+            SlashCommand::Identity => false,
             SlashCommand::Agent | SlashCommand::MultiAgents => true,
         }
     }

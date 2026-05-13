@@ -65,6 +65,7 @@ mod file_search;
 mod get_git_diff;
 mod history_cell;
 mod identities;
+mod identity_modal;
 pub mod insert_history;
 mod key_hint;
 mod line_truncation;

@@ -3696,25 +3696,61 @@ async fn slash_init_skips_when_project_doc_exists() {
 }
 
 #[tokio::test]
-async fn identity_slash_command_opens_picker_and_updates_identity() {
+async fn identity_slash_command_opens_identity_modal_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+
+    chat.dispatch_command(SlashCommand::Identity);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenIdentityModal));
+}
+
+#[tokio::test]
+async fn shift_tab_opens_identity_modal_event_when_idle() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenIdentityModal));
+}
+
+#[tokio::test]
+async fn shift_tab_does_not_open_identity_modal_while_task_running() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    chat.bottom_pane.set_task_running(true);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn shift_tab_does_not_open_identity_modal_with_popup_active() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    chat.bottom_pane
+        .set_composer_text("/".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn identity_mask_updates_identity_for_subsequent_messages() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::Identities, true);
 
     chat.dispatch_command(SlashCommand::Identity);
-    let popup = render_bottom_popup(&chat, 80);
-    assert!(
-        popup.contains("Select Identity"),
-        "expected identity picker: {popup}"
-    );
-
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-    let selected_mask = match rx.try_recv() {
-        Ok(AppEvent::UpdateIdentity(mask)) => mask,
-        other => panic!("expected UpdateIdentity event, got {other:?}"),
-    };
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenIdentityModal));
+    let selected_mask =
+        match identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Programmer) {
+            Some(mask) => mask,
+            None => panic!("expected programmer identity preset"),
+        };
     chat.set_identity_mask(selected_mask);
 
     chat.bottom_pane
@@ -3750,6 +3786,22 @@ async fn identity_slash_command_opens_picker_and_updates_identity() {
             panic!("expected Op::UserTurn with programmer identity, got {other:?}")
         }
     }
+}
+
+#[tokio::test]
+async fn identity_slash_command_disabled_during_task() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    chat.bottom_pane.set_task_running(true);
+
+    chat.dispatch_command(SlashCommand::Identity);
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("'/identity' is disabled while a task is in progress."),
+        "expected disabled message, got: {rendered}"
+    );
 }
 
 #[tokio::test]

@@ -2762,6 +2762,17 @@ impl ChatWidget {
                 ..
             } if self.handle_transcript_scroll_key(key_event) => {}
             KeyEvent {
+                code: KeyCode::BackTab,
+                kind: KeyEventKind::Press,
+                ..
+            } if self.identities_enabled()
+                && !self.bottom_pane.is_task_running()
+                && self.bottom_pane.no_modal_or_popup_active() =>
+            {
+                self.app_event_tx.send(AppEvent::OpenIdentityModal);
+                self.request_redraw();
+            }
+            KeyEvent {
                 code: KeyCode::Up,
                 modifiers: KeyModifiers::ALT,
                 kind: KeyEventKind::Press,
@@ -4383,44 +4394,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_identity_popup(&mut self) {
-        let presets = identities::presets_for_tui(self.thread_manager.as_ref());
-        if presets.is_empty() {
-            self.add_info_message("No identities are available right now.".to_string(), None);
-            return;
-        }
-
-        let current_kind = self
-            .active_identity_mask
-            .as_ref()
-            .and_then(|mask| mask.kind)
-            .or_else(|| {
-                identities::default_mask(self.thread_manager.as_ref()).and_then(|mask| mask.kind)
-            });
-        let items: Vec<SelectionItem> = presets
-            .into_iter()
-            .map(|mask| {
-                let name = mask.name.clone();
-                let is_current = current_kind == mask.kind;
-                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::UpdateIdentity(mask.clone()));
-                })];
-                SelectionItem {
-                    name,
-                    is_current,
-                    actions,
-                    dismiss_on_select: true,
-                    ..Default::default()
-                }
-            })
-            .collect();
-
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select Identity".to_string()),
-            subtitle: Some("Pick how Adam should behave for future turns.".to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            ..Default::default()
-        });
+        self.app_event_tx.send(AppEvent::OpenIdentityModal);
     }
 
     fn model_selection_actions(
@@ -5629,6 +5603,10 @@ impl ChatWidget {
             .unwrap_or(IdentityKind::Nobody)
     }
 
+    pub(crate) fn active_identity_kind_for_ui(&self) -> IdentityKind {
+        self.active_identity_kind()
+    }
+
     fn stores_effort_override_for(mode: IdentityKind) -> bool {
         matches!(mode, IdentityKind::Planner | IdentityKind::Programmer)
     }
@@ -5766,6 +5744,10 @@ impl ChatWidget {
         self.update_identity_indicator();
         self.refresh_model_display();
         self.update_footer_info();
+        self.request_redraw();
+    }
+
+    pub(crate) fn request_redraw_for_ui(&mut self) {
         self.request_redraw();
     }
 

@@ -143,8 +143,8 @@ pub(crate) enum AppEvent {
     StopCommitAnimation,
     CommitTick,
 
-    /// Update the active identity mask in the running app and widget.
-    UpdateIdentity(IdentityMask),
+    /// Open the centered identity selection modal.
+    OpenIdentityModal,
 
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),

@@ -28,6 +28,9 @@ use crate::history_cell;
 use crate::history_cell::HistoryCell;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
+use crate::identities;
+use crate::identity_modal::IdentityModal;
+use crate::identity_modal::IdentityModalAction;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
@@ -86,6 +89,7 @@ use adam_llm::CatalogRefreshStrategy;
 use adam_llm::RuntimeEndpoint;
 use adam_otel::OtelManager;
 use adam_protocol::ThreadId;
+use adam_protocol::config_types::IdentityMask;
 use adam_protocol::config_types::Personality;
 use adam_protocol::config_types::TrustLevel;
 #[cfg(target_os = "windows")]
@@ -595,6 +599,7 @@ pub(crate) struct App {
     non_git_changelog_baselines: HashMap<PathBuf, Arc<NonGitBaselineTracker>>,
     provider_config_modal: Option<ProviderConfigModal>,
     project_trust_modal: Option<ProjectTrustModal>,
+    identity_modal: Option<IdentityModal>,
     pending_startup_trust_prompt: bool,
     deferred_initial_user_message: Option<UserMessage>,
     deferred_startup_continuation: Option<DeferredStartupContinuation>,
@@ -2135,6 +2140,7 @@ impl App {
             non_git_changelog_baselines: HashMap::new(),
             provider_config_modal,
             project_trust_modal,
+            identity_modal: None,
             pending_startup_trust_prompt: show_trust_popup_on_startup,
             deferred_initial_user_message,
             deferred_startup_continuation,
@@ -2297,6 +2303,17 @@ impl App {
                 }
                 TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
             }
+        } else if self.identity_modal.is_some() {
+            match event {
+                TuiEvent::Key(key_event) => {
+                    self.handle_identity_modal_key_event(key_event);
+                    tui.frame_requester().schedule_frame();
+                }
+                TuiEvent::Draw => {
+                    self.draw_main_ui(tui)?;
+                }
+                TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
+            }
         } else if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
@@ -2346,6 +2363,8 @@ impl App {
                     frame.set_cursor_position((x, y));
                 }
             } else if let Some(modal) = &self.project_trust_modal {
+                modal.render(frame.area(), frame.buffer);
+            } else if let Some(modal) = &self.identity_modal {
                 modal.render(frame.area(), frame.buffer);
             } else if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
                 frame.set_cursor_position((x, y));
@@ -2407,6 +2426,24 @@ impl App {
                 let control = self.apply_project_trust_selection(tui, trust_level).await;
                 tui.frame_requester().schedule_frame();
                 Ok(control)
+            }
+        }
+    }
+
+    fn handle_identity_modal_key_event(&mut self, key_event: KeyEvent) {
+        let action = self
+            .identity_modal
+            .as_mut()
+            .map(|modal| modal.handle_key_event(key_event))
+            .unwrap_or(IdentityModalAction::None);
+        match action {
+            IdentityModalAction::None => {}
+            IdentityModalAction::Selected(mask) => {
+                self.identity_modal = None;
+                self.update_identity(mask);
+            }
+            IdentityModalAction::Exit => {
+                self.identity_modal = None;
             }
         }
     }
@@ -2816,25 +2853,7 @@ impl App {
             AppEvent::ConnectorsLoaded(result) => {
                 self.chat_widget.on_connectors_loaded(result);
             }
-            AppEvent::UpdateIdentity(mask) => {
-                let selected_kind = mask.kind;
-                let selected_name = mask.name.clone();
-                self.chat_widget.set_identity_mask(mask);
-                if let Some(kind) = selected_kind {
-                    match AdamStateStore::new(&self.config.adam_home)
-                        .set_last_selected_identity(kind)
-                    {
-                        Ok(()) => {
-                            self.config.last_selected_identity = Some(kind);
-                        }
-                        Err(err) => {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to save default identity: {err}. Switched the current session to identity `{selected_name}`."
-                            ));
-                        }
-                    }
-                }
-            }
+            AppEvent::OpenIdentityModal => self.open_identity_modal(),
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
             }
@@ -3561,6 +3580,41 @@ impl App {
         self.chat_widget.set_personality(personality);
     }
 
+    fn update_identity(&mut self, mask: IdentityMask) {
+        let selected_kind = mask.kind;
+        let selected_name = mask.name.clone();
+        self.chat_widget.set_identity_mask(mask);
+        if let Some(kind) = selected_kind {
+            match AdamStateStore::new(&self.config.adam_home).set_last_selected_identity(kind) {
+                Ok(()) => {
+                    self.config.last_selected_identity = Some(kind);
+                }
+                Err(err) => {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save default identity: {err}. Switched the current session to identity `{selected_name}`."
+                    ));
+                }
+            }
+        }
+    }
+
+    fn open_identity_modal(&mut self) {
+        if !self.config.features.enabled(Feature::Identities) {
+            return;
+        }
+        let presets = identities::presets_for_tui(self.server.as_ref());
+        let Some(modal) = IdentityModal::new(
+            presets,
+            Some(self.chat_widget.active_identity_kind_for_ui()),
+        ) else {
+            self.chat_widget
+                .add_info_message("No identities are available right now.".to_string(), None);
+            return;
+        };
+        self.identity_modal = Some(modal);
+        self.chat_widget.request_redraw_for_ui();
+    }
+
     fn personality_label(personality: Personality) -> &'static str {
         match personality {
             Personality::Friendly => "Friendly",
@@ -3921,6 +3975,40 @@ mod tests {
             .expect("wait task should complete")
             .expect("wait task should not panic");
         assert_eq!(result, Err("later".to_string()));
+    }
+
+    #[tokio::test]
+    async fn open_identity_modal_event_creates_centered_modal() {
+        let mut app = make_test_app().await;
+        app.chat_widget
+            .set_feature_enabled(Feature::Identities, true);
+        app.config = app.chat_widget.config_ref().clone();
+
+        app.open_identity_modal();
+
+        assert!(app.identity_modal.is_some());
+    }
+
+    #[tokio::test]
+    async fn identity_modal_enter_updates_identity() {
+        let mut app = make_test_app().await;
+        app.chat_widget
+            .set_feature_enabled(Feature::Identities, true);
+        app.config = app.chat_widget.config_ref().clone();
+
+        app.open_identity_modal();
+        app.handle_identity_modal_key_event(KeyEvent::from(KeyCode::Down));
+        app.handle_identity_modal_key_event(KeyEvent::from(KeyCode::Enter));
+
+        assert!(app.identity_modal.is_none());
+        assert_eq!(
+            app.chat_widget.active_identity_kind_for_ui(),
+            IdentityKind::Planner
+        );
+        assert_eq!(
+            app.config.last_selected_identity,
+            Some(IdentityKind::Planner)
+        );
     }
 
     #[tokio::test]
@@ -4484,6 +4572,7 @@ mod tests {
             non_git_changelog_baselines: HashMap::new(),
             provider_config_modal: None,
             project_trust_modal: None,
+            identity_modal: None,
             pending_startup_trust_prompt: false,
             deferred_initial_user_message: None,
             deferred_startup_continuation: None,
@@ -4546,6 +4635,7 @@ mod tests {
                 non_git_changelog_baselines: HashMap::new(),
                 provider_config_modal: None,
                 project_trust_modal: None,
+                identity_modal: None,
                 pending_startup_trust_prompt: false,
                 deferred_initial_user_message: None,
                 deferred_startup_continuation: None,
@@ -4677,6 +4767,7 @@ show_raw_agent_reasoning = true
             non_git_changelog_baselines: HashMap::new(),
             provider_config_modal: None,
             project_trust_modal: None,
+            identity_modal: None,
             pending_startup_trust_prompt: true,
             deferred_initial_user_message: None,
             deferred_startup_continuation: Some(DeferredStartupContinuation::StartFresh),
