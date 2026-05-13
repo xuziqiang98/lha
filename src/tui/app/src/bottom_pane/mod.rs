@@ -33,7 +33,7 @@ use adam_file_search::FileMatch;
 use adam_protocol::config_types::IdentityKind;
 use adam_protocol::request_user_input::RequestUserInputEvent;
 use adam_protocol::user_input::TextElement;
-use bottom_pane_view::BottomPaneView;
+pub(crate) use bottom_pane_view::BottomPaneView;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;

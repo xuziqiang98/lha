@@ -352,7 +352,7 @@ pub(crate) struct ChatWidgetInit {
 #[derive(Clone)]
 pub(crate) enum ChatWidgetStartup {
     Configured { model: Option<String> },
-    NeedsProviderConfig,
+    NeedsProviderConfig { auto_open: bool },
     Deferred,
 }
 
@@ -2247,9 +2247,13 @@ impl ChatWidget {
             otel_manager,
         } = common;
         let app_event_tx = app_event_tx.bind_history_to_widget();
+        let auto_open_provider_config = matches!(
+            startup,
+            ChatWidgetStartup::NeedsProviderConfig { auto_open: true }
+        );
         let (model, needs_provider_config, defer_startup) = match startup {
             ChatWidgetStartup::Configured { model } => (model, false, false),
-            ChatWidgetStartup::NeedsProviderConfig => (None, true, false),
+            ChatWidgetStartup::NeedsProviderConfig { .. } => (None, true, false),
             ChatWidgetStartup::Deferred => (config.model.clone(), false, true),
         };
         let model = model.filter(|m| !m.trim().is_empty());
@@ -2393,7 +2397,7 @@ impl ChatWidget {
             .bottom_pane
             .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
 
-        if needs_provider_config {
+        if auto_open_provider_config {
             widget.open_provider_popup();
         }
 

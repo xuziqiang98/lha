@@ -40,6 +40,8 @@ use crate::project_trust_modal::ProjectTrustModalAction;
 use crate::provider_config::CustomProviderConfig;
 use crate::provider_config::custom_provider_ref;
 use crate::provider_config::persist_custom_provider_files;
+use crate::provider_config_modal::ProviderConfigModal;
+use crate::provider_config_modal::ProviderConfigModalAction;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
@@ -166,7 +168,7 @@ pub enum ExitReason {
 }
 
 #[derive(Debug, Clone)]
-enum StartupTrustContinuation {
+enum DeferredStartupContinuation {
     StartFresh,
     Resume(PathBuf),
     Fork(PathBuf),
@@ -591,10 +593,11 @@ pub(crate) struct App {
     pending_primary_events: VecDeque<Event>,
     review_parent_by_child: HashMap<ThreadId, ThreadId>,
     non_git_changelog_baselines: HashMap<PathBuf, Arc<NonGitBaselineTracker>>,
+    provider_config_modal: Option<ProviderConfigModal>,
     project_trust_modal: Option<ProjectTrustModal>,
     pending_startup_trust_prompt: bool,
     deferred_initial_user_message: Option<UserMessage>,
-    startup_trust_continuation: Option<StartupTrustContinuation>,
+    deferred_startup_continuation: Option<DeferredStartupContinuation>,
 }
 
 #[derive(Default)]
@@ -919,9 +922,9 @@ impl App {
         mut config: Config,
     ) -> std::result::Result<AppRunControl, AppExitInfo> {
         let continuation = self
-            .startup_trust_continuation
+            .deferred_startup_continuation
             .clone()
-            .unwrap_or(StartupTrustContinuation::StartFresh);
+            .unwrap_or(DeferredStartupContinuation::StartFresh);
         let thread_manager = Arc::new(ThreadManager::new(
             config.adam_home.clone(),
             self.auth_manager.clone(),
@@ -963,7 +966,7 @@ impl App {
         thread_manager: Arc<ThreadManager>,
         model: Option<String>,
         frame_requester: tui::FrameRequester,
-        continuation: StartupTrustContinuation,
+        continuation: DeferredStartupContinuation,
     ) -> std::result::Result<(), String> {
         let otel_manager = OtelManager::new(
             ThreadId::new(),
@@ -979,7 +982,7 @@ impl App {
 
         let initial_user_message = self.deferred_initial_user_message.clone();
         let startup = if config.provider_config_required {
-            crate::chatwidget::ChatWidgetStartup::NeedsProviderConfig
+            crate::chatwidget::ChatWidgetStartup::NeedsProviderConfig { auto_open: false }
         } else {
             crate::chatwidget::ChatWidgetStartup::Configured {
                 model: model.clone(),
@@ -1000,10 +1003,10 @@ impl App {
                 otel_manager: otel_manager.clone(),
             };
         let chat_widget = match continuation {
-            StartupTrustContinuation::StartFresh => {
+            DeferredStartupContinuation::StartFresh => {
                 ChatWidget::new(make_init(initial_user_message))
             }
-            StartupTrustContinuation::Resume(path) => {
+            DeferredStartupContinuation::Resume(path) => {
                 let path_display = path.display();
                 let resumed = thread_manager
                     .resume_thread_from_rollout(
@@ -1026,7 +1029,7 @@ impl App {
                     resumed.session_configured,
                 )
             }
-            StartupTrustContinuation::Fork(path) => {
+            DeferredStartupContinuation::Fork(path) => {
                 let path_display = path.display();
                 let forked = thread_manager
                     .fork_thread(usize::MAX, config.clone(), path.clone())
@@ -1058,7 +1061,7 @@ impl App {
         self.runtime_sandbox_policy_override = None;
         self.pending_startup_trust_prompt = false;
         self.deferred_initial_user_message = None;
-        self.startup_trust_continuation = None;
+        self.deferred_startup_continuation = None;
         Ok(())
     }
 
@@ -1357,11 +1360,17 @@ impl App {
         Ok(provider_id)
     }
 
-    async fn handle_custom_provider_configured(&mut self, config: CustomProviderConfig) {
+    async fn handle_custom_provider_configured(
+        &mut self,
+        tui: Option<&mut tui::Tui>,
+        config: CustomProviderConfig,
+    ) -> AppRunControl {
         let provider_id = custom_provider_ref(&config);
         let provider_label = display_model_provider_ref(&provider_id);
         let model = config.model.clone();
 
+        let was_startup_provider_modal = self.provider_config_modal.is_some();
+        self.provider_config_modal = None;
         self.chat_widget.dismiss_active_view();
 
         match persist_custom_provider_files(&self.config.adam_home, &config) {
@@ -1373,7 +1382,31 @@ impl App {
                     self.chat_widget.add_error_message(format!(
                         "Saved provider `{provider_label}` with model `{model}`, but failed to activate it in this session: {err}. Restart Adam to use the updated settings."
                     ));
-                    return;
+                    return AppRunControl::Continue;
+                }
+
+                if was_startup_provider_modal && self.pending_startup_trust_prompt {
+                    self.project_trust_modal =
+                        Some(ProjectTrustModal::new(self.config.cwd.clone()));
+                    return AppRunControl::Continue;
+                }
+
+                if was_startup_provider_modal && self.deferred_startup_continuation.is_some() {
+                    if let Some(tui) = tui {
+                        match self
+                            .restart_chat_after_project_trust(tui, self.config.clone())
+                            .await
+                        {
+                            Ok(control) => return control,
+                            Err(exit_info) => return AppRunControl::Exit(exit_info.exit_reason),
+                        }
+                    } else {
+                        self.chat_widget.add_error_message(
+                            "Saved provider, but could not start a session without TUI state."
+                                .to_string(),
+                        );
+                        return AppRunControl::Continue;
+                    }
                 }
 
                 if self.chat_widget.thread_id().is_none() {
@@ -1388,7 +1421,7 @@ impl App {
                             self.chat_widget.add_error_message(format!(
                                 "Saved provider `{provider_label}` with model `{model}`, but failed to start a session: {err}."
                             ));
-                            return;
+                            return AppRunControl::Continue;
                         }
                     }
                 }
@@ -1408,6 +1441,7 @@ impl App {
                 ));
             }
         }
+        AppRunControl::Continue
     }
 
     fn ensure_thread_channel(&mut self, thread_id: ThreadId) -> &mut ThreadEventChannel {
@@ -1855,6 +1889,7 @@ impl App {
         session_selection: SessionSelection,
         feedback: adam_feedback::CodexFeedback,
         is_first_run: bool,
+        show_provider_popup_on_startup: bool,
         show_trust_popup_on_startup: bool,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
@@ -1916,17 +1951,37 @@ impl App {
             // CLI prompt args are plain strings, so they don't provide element ranges.
             Vec::new(),
         );
-        let deferred_initial_user_message = show_trust_popup_on_startup
+        let defer_startup = show_provider_popup_on_startup || show_trust_popup_on_startup;
+        let deferred_initial_user_message = defer_startup
             .then(|| initial_user_message.clone())
             .flatten();
-        let startup_trust_continuation =
-            show_trust_popup_on_startup.then(|| match &session_selection {
-                SessionSelection::StartFresh | SessionSelection::Exit => {
-                    StartupTrustContinuation::StartFresh
-                }
-                SessionSelection::Resume(path) => StartupTrustContinuation::Resume(path.clone()),
-                SessionSelection::Fork(path) => StartupTrustContinuation::Fork(path.clone()),
-            });
+        let deferred_startup_continuation = defer_startup.then(|| match &session_selection {
+            SessionSelection::StartFresh | SessionSelection::Exit => {
+                DeferredStartupContinuation::StartFresh
+            }
+            SessionSelection::Resume(path) => DeferredStartupContinuation::Resume(path.clone()),
+            SessionSelection::Fork(path) => DeferredStartupContinuation::Fork(path.clone()),
+        });
+        let deferred_startup = crate::chatwidget::ChatWidgetStartup::Deferred;
+        let needs_provider_config = crate::chatwidget::ChatWidgetStartup::NeedsProviderConfig {
+            auto_open: !show_provider_popup_on_startup,
+        };
+        let configured_startup = crate::chatwidget::ChatWidgetStartup::Configured {
+            model: model.clone(),
+        };
+        let startup_for_fresh = if defer_startup {
+            deferred_startup.clone()
+        } else if config.provider_config_required {
+            needs_provider_config.clone()
+        } else {
+            configured_startup.clone()
+        };
+        let startup_for_deferred = defer_startup.then_some(deferred_startup.clone());
+        let initial_message_for_startup = if defer_startup {
+            None
+        } else {
+            initial_user_message.clone()
+        };
         let mut chat_widget = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
@@ -1934,29 +1989,17 @@ impl App {
                     thread_manager: thread_manager.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
-                    initial_user_message: if show_trust_popup_on_startup {
-                        None
-                    } else {
-                        initial_user_message.clone()
-                    },
+                    initial_user_message: initial_message_for_startup.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    startup: if show_trust_popup_on_startup {
-                        crate::chatwidget::ChatWidgetStartup::Deferred
-                    } else if config.provider_config_required {
-                        crate::chatwidget::ChatWidgetStartup::NeedsProviderConfig
-                    } else {
-                        crate::chatwidget::ChatWidgetStartup::Configured {
-                            model: model.clone(),
-                        }
-                    },
+                    startup: startup_for_fresh,
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new(init)
             }
-            SessionSelection::Resume(_) if show_trust_popup_on_startup => {
+            SessionSelection::Resume(_) if startup_for_deferred.is_some() => {
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     thread_manager: thread_manager.clone(),
@@ -1967,7 +2010,7 @@ impl App {
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    startup: crate::chatwidget::ChatWidgetStartup::Deferred,
+                    startup: deferred_startup.clone(),
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new(init)
@@ -1997,7 +2040,7 @@ impl App {
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
-            SessionSelection::Fork(_) if show_trust_popup_on_startup => {
+            SessionSelection::Fork(_) if startup_for_deferred.is_some() => {
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     thread_manager: thread_manager.clone(),
@@ -2008,7 +2051,7 @@ impl App {
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    startup: crate::chatwidget::ChatWidgetStartup::Deferred,
+                    startup: deferred_startup,
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new(init)
@@ -2039,14 +2082,20 @@ impl App {
                 ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
             }
         };
-
         chat_widget.maybe_prompt_windows_sandbox_enable();
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
-        let project_trust_modal =
-            show_trust_popup_on_startup.then(|| ProjectTrustModal::new(config.cwd.clone()));
+        let provider_config_modal = show_provider_popup_on_startup.then(|| {
+            ProviderConfigModal::new(
+                config.adam_home.clone(),
+                app_event_tx.clone(),
+                tui.frame_requester(),
+            )
+        });
+        let project_trust_modal = (show_trust_popup_on_startup && !show_provider_popup_on_startup)
+            .then(|| ProjectTrustModal::new(config.cwd.clone()));
 
         let mut app = Self {
             server: thread_manager.clone(),
@@ -2084,10 +2133,11 @@ impl App {
             pending_primary_events: VecDeque::new(),
             review_parent_by_child: HashMap::new(),
             non_git_changelog_baselines: HashMap::new(),
+            provider_config_modal,
             project_trust_modal,
             pending_startup_trust_prompt: show_trust_popup_on_startup,
             deferred_initial_user_message,
-            startup_trust_continuation,
+            deferred_startup_continuation,
         };
 
         if let Err(err) = app
@@ -2221,7 +2271,23 @@ impl App {
             self.restore_shift_mouse_bypass_if_due(tui);
         }
 
-        if self.project_trust_modal.is_some() {
+        if self.provider_config_modal.is_some() {
+            match event {
+                TuiEvent::Key(key_event) => {
+                    return self.handle_provider_config_modal_key(tui, key_event).await;
+                }
+                TuiEvent::Paste(pasted) => {
+                    if let Some(modal) = self.provider_config_modal.as_mut() {
+                        modal.handle_paste(pasted.replace("\r", "\n"));
+                        tui.frame_requester().schedule_frame();
+                    }
+                }
+                TuiEvent::Draw => {
+                    self.draw_main_ui(tui)?;
+                }
+                TuiEvent::Mouse(_) => {}
+            }
+        } else if self.project_trust_modal.is_some() {
             match event {
                 TuiEvent::Key(key_event) => {
                     return self.handle_project_trust_modal_key(tui, key_event).await;
@@ -2274,7 +2340,12 @@ impl App {
         let size = tui.terminal.size()?;
         tui.draw(size.height, |frame| {
             self.chat_widget.render(frame.area(), frame.buffer);
-            if let Some(modal) = &self.project_trust_modal {
+            if let Some(modal) = &self.provider_config_modal {
+                modal.render(frame.area(), frame.buffer);
+                if let Some((x, y)) = modal.cursor_pos(frame.area()) {
+                    frame.set_cursor_position((x, y));
+                }
+            } else if let Some(modal) = &self.project_trust_modal {
                 modal.render(frame.area(), frame.buffer);
             } else if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
                 frame.set_cursor_position((x, y));
@@ -2286,6 +2357,29 @@ impl App {
             self.app_event_tx.send(AppEvent::LaunchExternalEditor);
         }
         Ok(())
+    }
+
+    async fn handle_provider_config_modal_key(
+        &mut self,
+        tui: &mut tui::Tui,
+        key_event: KeyEvent,
+    ) -> Result<AppRunControl> {
+        let action = self
+            .provider_config_modal
+            .as_mut()
+            .map(|modal| modal.handle_key_event(key_event))
+            .unwrap_or(ProviderConfigModalAction::None);
+        match action {
+            ProviderConfigModalAction::None => {
+                tui.frame_requester().schedule_frame();
+                Ok(AppRunControl::Continue)
+            }
+            ProviderConfigModalAction::Exit => {
+                self.provider_config_modal = None;
+                let exit_mode = self.provider_config_exit_mode();
+                self.handle_event(tui, AppEvent::Exit(exit_mode)).await
+            }
+        }
     }
 
     async fn handle_project_trust_modal_key(
@@ -2318,6 +2412,14 @@ impl App {
     }
 
     fn project_trust_exit_mode(&self) -> ExitMode {
+        if self.chat_widget.thread_id().is_some() {
+            ExitMode::ShutdownFirst
+        } else {
+            ExitMode::Immediate
+        }
+    }
+
+    fn provider_config_exit_mode(&self) -> ExitMode {
         if self.chat_widget.thread_id().is_some() {
             ExitMode::ShutdownFirst
         } else {
@@ -2416,7 +2518,9 @@ impl App {
                     feedback: self.feedback.clone(),
                     is_first_run: false,
                     startup: if self.config.provider_config_required {
-                        crate::chatwidget::ChatWidgetStartup::NeedsProviderConfig
+                        crate::chatwidget::ChatWidgetStartup::NeedsProviderConfig {
+                            auto_open: true,
+                        }
                     } else {
                         crate::chatwidget::ChatWidgetStartup::Configured { model: Some(model) }
                     },
@@ -2735,7 +2839,9 @@ impl App {
                 self.on_update_personality(personality);
             }
             AppEvent::CustomProviderConfigured(config) => {
-                self.handle_custom_provider_configured(config).await;
+                return Ok(self
+                    .handle_custom_provider_configured(Some(tui), config)
+                    .await);
             }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
@@ -4376,10 +4482,11 @@ mod tests {
             pending_primary_events: VecDeque::new(),
             review_parent_by_child: HashMap::new(),
             non_git_changelog_baselines: HashMap::new(),
+            provider_config_modal: None,
             project_trust_modal: None,
             pending_startup_trust_prompt: false,
             deferred_initial_user_message: None,
-            startup_trust_continuation: None,
+            deferred_startup_continuation: None,
         }
     }
 
@@ -4437,10 +4544,11 @@ mod tests {
                 pending_primary_events: VecDeque::new(),
                 review_parent_by_child: HashMap::new(),
                 non_git_changelog_baselines: HashMap::new(),
+                provider_config_modal: None,
                 project_trust_modal: None,
                 pending_startup_trust_prompt: false,
                 deferred_initial_user_message: None,
-                startup_trust_continuation: None,
+                deferred_startup_continuation: None,
             },
             rx,
             op_rx,
@@ -4567,10 +4675,11 @@ show_raw_agent_reasoning = true
             pending_primary_events: VecDeque::new(),
             review_parent_by_child: HashMap::new(),
             non_git_changelog_baselines: HashMap::new(),
+            provider_config_modal: None,
             project_trust_modal: None,
             pending_startup_trust_prompt: true,
             deferred_initial_user_message: None,
-            startup_trust_continuation: Some(StartupTrustContinuation::StartFresh),
+            deferred_startup_continuation: Some(DeferredStartupContinuation::StartFresh),
         };
 
         set_project_trust_level(adam_home.path(), workspace.path(), TrustLevel::Trusted)
@@ -4598,7 +4707,7 @@ show_raw_agent_reasoning = true
             thread_manager,
             Some("gpt-5.3-codex".to_string()),
             tui::FrameRequester::test_dummy(),
-            StartupTrustContinuation::StartFresh,
+            DeferredStartupContinuation::StartFresh,
         )
         .await
         .expect("replace chat");
@@ -4638,20 +4747,20 @@ show_raw_agent_reasoning = true
         let server = app.server.clone();
         app.pending_startup_trust_prompt = true;
         app.deferred_initial_user_message = Some(UserMessage::from("hello after trust"));
-        app.startup_trust_continuation = Some(StartupTrustContinuation::StartFresh);
+        app.deferred_startup_continuation = Some(DeferredStartupContinuation::StartFresh);
 
         app.replace_chat_after_project_trust(
             config,
             server,
             Some("gpt-test".to_string()),
             tui::FrameRequester::test_dummy(),
-            StartupTrustContinuation::StartFresh,
+            DeferredStartupContinuation::StartFresh,
         )
         .await
         .expect("replace chat");
 
         assert_eq!(app.deferred_initial_user_message.is_none(), true);
-        assert_eq!(app.startup_trust_continuation.is_none(), true);
+        assert_eq!(app.deferred_startup_continuation.is_none(), true);
         assert_eq!(app.chat_widget.has_initial_user_message(), true);
 
         app.chat_widget.handle_codex_event(Event {
@@ -4670,6 +4779,36 @@ show_raw_agent_reasoning = true
         app.pending_startup_trust_prompt = true;
 
         assert_eq!(app.project_trust_exit_mode(), ExitMode::Immediate);
+    }
+
+    #[tokio::test]
+    async fn provider_startup_modal_precedes_trust_modal() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let saved = CustomProviderConfig {
+            provider_id: "custom_1".to_string(),
+            dialect: ApiProviderDialect::Responses,
+            base_url: "https://example.com/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "gpt-test".to_string(),
+            model_context_window: None,
+        };
+        persist_provider_fixture(&app.config.adam_home, &saved);
+        app.provider_config_modal = Some(ProviderConfigModal::new(
+            app.config.adam_home.clone(),
+            app.app_event_tx.clone(),
+            tui::FrameRequester::test_dummy(),
+        ));
+        app.project_trust_modal = None;
+        app.pending_startup_trust_prompt = true;
+        app.deferred_startup_continuation = Some(DeferredStartupContinuation::StartFresh);
+
+        let control = app.handle_custom_provider_configured(None, saved).await;
+
+        assert!(matches!(control, AppRunControl::Continue));
+        assert!(app.provider_config_modal.is_none());
+        assert!(app.project_trust_modal.is_some());
+        assert!(app.pending_startup_trust_prompt);
+        assert!(app.deferred_startup_continuation.is_some());
     }
 
     fn persist_provider_fixture(adam_home: &Path, config: &CustomProviderConfig) {
@@ -5172,7 +5311,7 @@ show_raw_agent_reasoning = true
         app.chat_widget.sync_provider_config(&app.config, true);
         app.chat_widget.set_model("model-a");
 
-        app.handle_custom_provider_configured(saved).await;
+        app.handle_custom_provider_configured(None, saved).await;
 
         assert_eq!(app.config.model_provider.env_key.as_deref(), None);
         assert_eq!(app.config.model_provider.query_params.as_ref(), None);
@@ -5217,7 +5356,7 @@ show_raw_agent_reasoning = true
         };
         persist_provider_fixture(&app.config.adam_home, &saved);
 
-        app.handle_custom_provider_configured(saved).await;
+        app.handle_custom_provider_configured(None, saved).await;
 
         assert_eq!(app.config.model_provider_id, "custom_1.responses");
         assert_eq!(app.config.model.as_deref(), Some("gpt-test"));
@@ -5255,7 +5394,7 @@ show_raw_agent_reasoning = true
         };
         persist_provider_fixture(&app.config.adam_home, &saved);
 
-        app.handle_custom_provider_configured(saved).await;
+        app.handle_custom_provider_configured(None, saved).await;
 
         assert_eq!(app.config.model_provider_id, "custom_1.responses");
         assert_eq!(app.config.model.as_deref(), Some("gpt-test"));
@@ -5289,7 +5428,7 @@ show_raw_agent_reasoning = true
         persist_provider_fixture(&app.config.adam_home, &initial);
         persist_provider_fixture(&app.config.adam_home, &saved);
 
-        app.handle_custom_provider_configured(saved).await;
+        app.handle_custom_provider_configured(None, saved).await;
 
         assert_eq!(app.config.model_provider_id, "custom_1.chat");
         assert_eq!(app.config.model.as_deref(), Some("gpt-test"));
@@ -5319,7 +5458,7 @@ show_raw_agent_reasoning = true
         persist_provider_fixture(&app.config.adam_home, &initial);
         persist_provider_fixture(&app.config.adam_home, &saved);
 
-        app.handle_custom_provider_configured(saved).await;
+        app.handle_custom_provider_configured(None, saved).await;
 
         assert_eq!(app.config.model_provider_id, "custom_2.chat");
         assert_eq!(app.config.model.as_deref(), Some("gpt-other"));
@@ -5350,7 +5489,7 @@ show_raw_agent_reasoning = true
         };
         persist_provider_fixture(&app.config.adam_home, &saved);
 
-        app.handle_custom_provider_configured(saved).await;
+        app.handle_custom_provider_configured(None, saved).await;
 
         let thread = app
             .server

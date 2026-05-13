@@ -81,6 +81,7 @@ pub mod onboarding;
 mod pager_overlay;
 mod project_trust_modal;
 mod provider_config;
+mod provider_config_modal;
 pub mod public_widgets;
 mod render;
 mod resume_picker;
@@ -555,7 +556,9 @@ async fn run_ratatui_app(
     };
     tui.set_mouse_capture_enabled(resolve_mouse_capture(&cli, &config))?;
     let active_profile = config.active_profile.clone();
+    let show_provider_popup_on_startup = config.provider_config_required;
     let show_trust_popup_on_startup = should_show_trust_screen(&config);
+    let is_first_run = show_provider_popup_on_startup || show_trust_popup_on_startup;
 
     let Cli { prompt, images, .. } = cli;
 
@@ -570,7 +573,8 @@ async fn run_ratatui_app(
         images,
         session_selection,
         feedback,
-        show_trust_popup_on_startup, // Proxy to: is it a first run in this directory?
+        is_first_run,
+        show_provider_popup_on_startup,
         show_trust_popup_on_startup,
     )
     .await;

@@ -1954,6 +1954,44 @@ async fn make_chatwidget_manual_inner(
     (widget, rx, op_rx)
 }
 
+async fn make_provider_required_chatwidget(
+    auto_open: bool,
+) -> (ChatWidget, tokio::sync::mpsc::UnboundedReceiver<AppEvent>) {
+    let adam_home = tempdir().expect("tempdir");
+    let mut cfg = ConfigBuilder::default()
+        .adam_home(adam_home.path().to_path_buf())
+        .provider_config_required(false)
+        .build()
+        .await
+        .expect("config");
+    cfg.provider_config_required = true;
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let thread_manager = Arc::new(ThreadManager::new(
+        cfg.adam_home.clone(),
+        auth_manager.clone(),
+        cfg.model_provider_id.as_str(),
+        cfg.model_provider.clone(),
+        SessionSource::Cli,
+    ));
+    let (tx_raw, rx) = unbounded_channel::<AppEvent>();
+    let app_event_tx = AppEventSender::new(tx_raw);
+    let init = ChatWidgetInit {
+        config: cfg.clone(),
+        thread_manager,
+        frame_requester: FrameRequester::test_dummy(),
+        app_event_tx,
+        initial_user_message: None,
+        enhanced_keys_supported: false,
+        auth_manager,
+        feedback: adam_feedback::CodexFeedback::new(),
+        is_first_run: true,
+        startup: ChatWidgetStartup::NeedsProviderConfig { auto_open },
+        otel_manager: test_otel_manager(&cfg, "No provider configured"),
+    };
+
+    (ChatWidget::new(init), rx)
+}
+
 async fn make_chatwidget_manual_with_frame_requester(
     model_override: Option<&str>,
     frame_requester: FrameRequester,
@@ -5663,39 +5701,7 @@ async fn required_provider_config_ctrl_c_exits_immediately() {
 
 #[tokio::test]
 async fn missing_models_json_placeholder_header_shows_no_provider_configured() {
-    let adam_home = tempdir().expect("tempdir");
-    let mut cfg = ConfigBuilder::default()
-        .adam_home(adam_home.path().to_path_buf())
-        .provider_config_required(false)
-        .build()
-        .await
-        .expect("config");
-    cfg.provider_config_required = true;
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
-    let thread_manager = Arc::new(ThreadManager::new(
-        cfg.adam_home.clone(),
-        auth_manager.clone(),
-        cfg.model_provider_id.as_str(),
-        cfg.model_provider.clone(),
-        SessionSource::Cli,
-    ));
-    let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-    let app_event_tx = AppEventSender::new(tx_raw);
-    let init = ChatWidgetInit {
-        config: cfg.clone(),
-        thread_manager,
-        frame_requester: FrameRequester::test_dummy(),
-        app_event_tx,
-        initial_user_message: None,
-        enhanced_keys_supported: false,
-        auth_manager,
-        feedback: adam_feedback::CodexFeedback::new(),
-        is_first_run: true,
-        startup: ChatWidgetStartup::NeedsProviderConfig,
-        otel_manager: test_otel_manager(&cfg, "No provider configured"),
-    };
-
-    let chat = ChatWidget::new(init);
+    let (chat, _rx) = make_provider_required_chatwidget(true).await;
     let active_cell = chat.active_cell.as_ref().expect("placeholder header");
     let rendered = lines_to_single_string(&active_cell.display_lines(120));
     assert!(rendered.contains("No provider configured"));
@@ -5704,43 +5710,25 @@ async fn missing_models_json_placeholder_header_shows_no_provider_configured() {
 
 #[tokio::test]
 async fn missing_models_json_startup_does_not_emit_info_history_cell() {
-    let adam_home = tempdir().expect("tempdir");
-    let mut cfg = ConfigBuilder::default()
-        .adam_home(adam_home.path().to_path_buf())
-        .provider_config_required(false)
-        .build()
-        .await
-        .expect("config");
-    cfg.provider_config_required = true;
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
-    let thread_manager = Arc::new(ThreadManager::new(
-        cfg.adam_home.clone(),
-        auth_manager.clone(),
-        cfg.model_provider_id.as_str(),
-        cfg.model_provider.clone(),
-        SessionSource::Cli,
-    ));
-    let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
-    let app_event_tx = AppEventSender::new(tx_raw);
-    let init = ChatWidgetInit {
-        config: cfg.clone(),
-        thread_manager,
-        frame_requester: FrameRequester::test_dummy(),
-        app_event_tx,
-        initial_user_message: None,
-        enhanced_keys_supported: false,
-        auth_manager,
-        feedback: adam_feedback::CodexFeedback::new(),
-        is_first_run: true,
-        startup: ChatWidgetStartup::NeedsProviderConfig,
-        otel_manager: test_otel_manager(&cfg, "No provider configured"),
-    };
-
-    let chat = ChatWidget::new(init);
+    let (chat, mut rx) = make_provider_required_chatwidget(true).await;
     let popup = render_bottom_popup(&chat, 80);
     assert!(
         popup.contains("Configure a custom API provider"),
         "expected provider wizard to be shown:\n{popup}"
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "startup should not emit transcript history cells for required provider config"
+    );
+}
+
+#[tokio::test]
+async fn missing_models_json_startup_can_defer_provider_popup_to_app_modal() {
+    let (chat, mut rx) = make_provider_required_chatwidget(false).await;
+
+    assert!(
+        !render_bottom_popup(&chat, 80).contains("Configure a custom API provider"),
+        "startup provider modal should be owned by App, not the bottom pane"
     );
     assert!(
         rx.try_recv().is_err(),

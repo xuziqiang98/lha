@@ -2,7 +2,6 @@ use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
-use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
@@ -13,18 +12,9 @@ use std::cell::Cell;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
 use crate::tui::FrameRequester;
+use ratatui::style::Stylize;
 
 use super::onboarding_screen::StepState;
-
-const CODEY_ASCII: [&str; 5] = [
-    " ######   #####   ######   #######  ##   ##",
-    "###      ##   ##  ##   ##  ##       ##   ##",
-    "##       ##   ##  ##   ##  ######    #####",
-    "###      ##   ##  ##   ##  ##          ##",
-    " ######   #####   ######   #######     ##",
-];
-const ASCII_ART_HEIGHT: u16 = 5;
-const ASCII_ART_WIDTH: u16 = 43;
 
 pub(crate) struct WelcomeWidget {
     pub is_logged_in: bool,
@@ -55,22 +45,12 @@ impl WelcomeWidget {
 impl WidgetRef for &WelcomeWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
-        let layout_area = self.layout_area.get().unwrap_or(area);
-        // Skip the ASCII art when the viewport is too small so we don't clip it.
-        let show_ascii_art =
-            layout_area.height >= ASCII_ART_HEIGHT + 2 && layout_area.width >= ASCII_ART_WIDTH;
-
-        let mut lines: Vec<Line> = Vec::new();
-        if show_ascii_art {
-            lines.extend(CODEY_ASCII.into_iter().map(Into::into));
-            lines.push("".into());
-        }
-        lines.push(Line::from(vec![
+        let lines: Vec<Line> = vec![Line::from(vec![
             "  ".into(),
             "Welcome to ".into(),
             "Adam".bold(),
             ", a lightweight command-line coding agent".into(),
-        ]));
+        ])];
 
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
@@ -105,23 +85,9 @@ mod tests {
     }
 
     #[test]
-    fn welcome_renders_adam_ascii_on_first_draw() {
+    fn welcome_renders_copy_without_ascii_art() {
         let widget = WelcomeWidget::new(false, FrameRequester::test_dummy(), true);
-        let area = Rect::new(0, 0, ASCII_ART_WIDTH, ASCII_ART_HEIGHT + 2);
-        let mut buf = Buffer::empty(area);
-        (&widget).render(area, &mut buf);
-
-        let ascii_row = row_containing(&buf, "#######");
-        assert_eq!(ascii_row, Some(0));
-
-        let welcome_row = row_containing(&buf, "Welcome");
-        assert_eq!(welcome_row, Some(ASCII_ART_HEIGHT + 1));
-    }
-
-    #[test]
-    fn welcome_skips_adam_ascii_below_height_breakpoint() {
-        let widget = WelcomeWidget::new(false, FrameRequester::test_dummy(), true);
-        let area = Rect::new(0, 0, ASCII_ART_WIDTH, ASCII_ART_HEIGHT + 1);
+        let area = Rect::new(0, 0, 80, 8);
         let mut buf = Buffer::empty(area);
         (&widget).render(area, &mut buf);
 
