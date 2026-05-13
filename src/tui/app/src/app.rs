@@ -83,6 +83,7 @@ use adam_agent::protocol::SessionSource;
 use adam_agent::protocol::SkillErrorInfo;
 use adam_agent::protocol::SubAgentSource;
 use adam_agent::protocol::TokenUsage;
+use adam_agent::protocol::TurnAbortReason;
 #[cfg(target_os = "windows")]
 use adam_agent::windows_sandbox::WindowsSandboxLevelExt;
 use adam_ansi_escape::ansi_escape_line;
@@ -681,6 +682,22 @@ fn is_terminal_detached_review_event(msg: &EventMsg) -> bool {
         msg,
         EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) | EventMsg::Error(_)
     )
+}
+
+fn agent_status_from_lifecycle_event(msg: &EventMsg) -> Option<AgentStatus> {
+    match msg {
+        EventMsg::TurnStarted(_) => Some(AgentStatus::Running),
+        EventMsg::TurnComplete(ev) => Some(AgentStatus::Completed(ev.last_agent_message.clone())),
+        EventMsg::TurnAborted(ev) => match ev.reason {
+            TurnAbortReason::Interrupted => Some(AgentStatus::Interrupted),
+            TurnAbortReason::Replaced | TurnAbortReason::ReviewEnded => {
+                Some(AgentStatus::Errored(format!("{:?}", ev.reason)))
+            }
+        },
+        EventMsg::Error(ev) => Some(AgentStatus::Errored(ev.message.clone())),
+        EventMsg::ShutdownComplete => Some(AgentStatus::Shutdown),
+        _ => None,
+    }
 }
 
 fn normalize_harness_overrides_for_cwd(
@@ -1512,6 +1529,7 @@ impl App {
     }
 
     async fn enqueue_thread_event(&mut self, thread_id: ThreadId, event: Event) -> Result<()> {
+        self.sync_agent_picker_thread_lifecycle_event(thread_id, &event.msg);
         if let Some(parent_thread_id) = self.review_parent_by_child.get(&thread_id).copied()
             && should_mirror_detached_review_event(&event.msg)
         {
@@ -1671,10 +1689,16 @@ impl App {
             match self.server.get_thread(thread_id).await {
                 Ok(thread) => {
                     let session_source = thread.config_snapshot().await.session_source;
+                    let status = self
+                        .agent_picker_threads
+                        .get(&thread_id)
+                        .map(|entry| entry.status.clone())
+                        .unwrap_or(AgentStatus::Running);
                     self.upsert_agent_picker_thread(
                         thread_id,
                         session_source.get_nickname(),
                         session_source.get_agent_role(),
+                        status,
                         false,
                     );
                 }
@@ -1747,6 +1771,7 @@ impl App {
         thread_id: ThreadId,
         agent_nickname: Option<String>,
         agent_role: Option<String>,
+        status: AgentStatus,
         is_closed: bool,
     ) {
         self.agent_picker_threads.insert(
@@ -1754,6 +1779,7 @@ impl App {
             AgentPickerThreadEntry {
                 agent_nickname,
                 agent_role,
+                status,
                 is_closed,
             },
         );
@@ -1763,7 +1789,121 @@ impl App {
         if let Some(entry) = self.agent_picker_threads.get_mut(&thread_id) {
             entry.is_closed = true;
         } else {
-            self.upsert_agent_picker_thread(thread_id, None, None, true);
+            self.upsert_agent_picker_thread(thread_id, None, None, AgentStatus::Shutdown, true);
+        }
+    }
+
+    fn update_agent_picker_thread_status(
+        &mut self,
+        thread_id: ThreadId,
+        agent_nickname: Option<String>,
+        agent_role: Option<String>,
+        status: AgentStatus,
+        is_closed: bool,
+    ) {
+        if let Some(entry) = self.agent_picker_threads.get_mut(&thread_id) {
+            if agent_nickname.is_some() {
+                entry.agent_nickname = agent_nickname;
+            }
+            if agent_role.is_some() {
+                entry.agent_role = agent_role;
+            }
+            entry.status = status;
+            entry.is_closed = is_closed;
+        } else {
+            self.upsert_agent_picker_thread(
+                thread_id,
+                agent_nickname,
+                agent_role,
+                status,
+                is_closed,
+            );
+        }
+    }
+
+    fn sync_agent_picker_thread_lifecycle_event(&mut self, thread_id: ThreadId, msg: &EventMsg) {
+        let Some(status) = agent_status_from_lifecycle_event(msg) else {
+            return;
+        };
+        let is_closed = matches!(status, AgentStatus::Shutdown);
+        self.update_agent_picker_thread_status(thread_id, None, None, status, is_closed);
+    }
+
+    fn sync_agent_picker_thread_from_event(&mut self, msg: &EventMsg) {
+        match msg {
+            EventMsg::CollabAgentSpawnEnd(ev) => {
+                if let Some(thread_id) = ev.new_thread_id {
+                    self.update_agent_picker_thread_status(
+                        thread_id,
+                        ev.new_agent_nickname.clone(),
+                        ev.new_agent_role.clone(),
+                        ev.status.clone(),
+                        false,
+                    );
+                }
+            }
+            EventMsg::CollabAgentInteractionEnd(ev) => {
+                self.update_agent_picker_thread_status(
+                    ev.receiver_thread_id,
+                    ev.receiver_agent_nickname.clone(),
+                    ev.receiver_agent_role.clone(),
+                    ev.status.clone(),
+                    false,
+                );
+            }
+            EventMsg::CollabWaitingEnd(ev) => {
+                let mut updated_thread_ids = HashSet::new();
+                for entry in &ev.agent_statuses {
+                    updated_thread_ids.insert(entry.agent.thread_id);
+                    self.update_agent_picker_thread_status(
+                        entry.agent.thread_id,
+                        entry.agent.agent_nickname.clone(),
+                        entry.agent.agent_role.clone(),
+                        entry.status.clone(),
+                        false,
+                    );
+                }
+                for (thread_id, status) in &ev.statuses {
+                    if updated_thread_ids.contains(thread_id) {
+                        continue;
+                    }
+                    self.update_agent_picker_thread_status(
+                        *thread_id,
+                        None,
+                        None,
+                        status.clone(),
+                        false,
+                    );
+                }
+            }
+            EventMsg::CollabResumeBegin(ev) => {
+                self.update_agent_picker_thread_status(
+                    ev.receiver_thread_id,
+                    ev.receiver_agent_nickname.clone(),
+                    ev.receiver_agent_role.clone(),
+                    AgentStatus::Running,
+                    false,
+                );
+            }
+            EventMsg::CollabResumeEnd(ev) => {
+                self.update_agent_picker_thread_status(
+                    ev.receiver_thread_id,
+                    ev.receiver_agent_nickname.clone(),
+                    ev.receiver_agent_role.clone(),
+                    ev.status.clone(),
+                    false,
+                );
+            }
+            EventMsg::CollabCloseEnd(ev) => {
+                self.update_agent_picker_thread_status(
+                    ev.receiver_thread_id,
+                    ev.receiver_agent_nickname.clone(),
+                    ev.receiver_agent_role.clone(),
+                    ev.status.clone(),
+                    true,
+                );
+            }
+            _ => {}
         }
     }
 
@@ -1786,7 +1926,7 @@ impl App {
                     entry.agent_role.as_deref(),
                     false,
                 ),
-                status: AgentStatus::Running,
+                status: entry.status,
             })
             .collect()
     }
@@ -3501,11 +3641,13 @@ impl App {
             let errors = errors_for_cwd(&cwd, response);
             emit_skill_load_warnings(&self.app_event_tx, &errors);
         }
+        self.sync_agent_picker_thread_from_event(&event.msg);
         self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event(event);
     }
 
     fn handle_codex_event_replay(&mut self, event: Event) {
+        self.sync_agent_picker_thread_from_event(&event.msg);
         self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event_replay(event);
     }
@@ -3530,10 +3672,16 @@ impl App {
             }
         };
         let config_snapshot = thread.config_snapshot().await;
+        let status = if let Some(entry) = self.agent_picker_threads.get(&thread_id) {
+            entry.status.clone()
+        } else {
+            thread.agent_status().await
+        };
         self.upsert_agent_picker_thread(
             thread_id,
             config_snapshot.session_source.get_nickname(),
             config_snapshot.session_source.get_agent_role(),
+            status,
             false,
         );
         let event = Event {
@@ -3846,6 +3994,11 @@ mod tests {
     use adam_agent::features::Feature;
     use adam_agent::models_manager::manager::ModelsManager;
     use adam_agent::protocol::AskForApproval;
+    use adam_agent::protocol::CollabAgentRef;
+    use adam_agent::protocol::CollabAgentStatusEntry;
+    use adam_agent::protocol::CollabCloseEndEvent;
+    use adam_agent::protocol::CollabWaitingEndEvent;
+    use adam_agent::protocol::ErrorEvent;
     use adam_agent::protocol::Event;
     use adam_agent::protocol::EventMsg;
     use adam_agent::protocol::ReviewRequest;
@@ -3854,6 +4007,7 @@ mod tests {
     use adam_agent::protocol::SessionConfiguredEvent;
     use adam_agent::protocol::SessionSource;
     use adam_agent::protocol::ThreadRolledBackEvent;
+    use adam_agent::protocol::TurnAbortedEvent;
     use adam_agent::protocol::TurnCompleteEvent;
     use adam_agent::protocol::TurnStartedEvent;
     use adam_otel::OtelManager;
@@ -4252,18 +4406,21 @@ mod tests {
             primary_id,
             Some("Main".to_string()),
             Some("default".to_string()),
+            AgentStatus::Running,
             false,
         );
         app.upsert_agent_picker_thread(
             active_id,
             Some("Robie".to_string()),
             Some("explorer".to_string()),
+            AgentStatus::Completed(Some("done".to_string())),
             false,
         );
         app.upsert_agent_picker_thread(
             closed_id,
             Some("Closed".to_string()),
             Some("worker".to_string()),
+            AgentStatus::Errored("tool timeout".to_string()),
             true,
         );
 
@@ -4272,8 +4429,311 @@ mod tests {
             vec![AgentPanelEntry {
                 thread_id: active_id,
                 label: "Robie [explorer]".to_string(),
-                status: AgentStatus::Running,
+                status: AgentStatus::Completed(Some("done".to_string())),
             }]
+        );
+    }
+
+    #[tokio::test]
+    async fn collab_waiting_end_updates_sidebar_agent_status() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+
+        app.handle_codex_event_now(Event {
+            id: String::new(),
+            msg: EventMsg::CollabWaitingEnd(CollabWaitingEndEvent {
+                sender_thread_id: ThreadId::new(),
+                call_id: "wait-1".to_string(),
+                statuses: HashMap::new(),
+                agent_statuses: vec![CollabAgentStatusEntry {
+                    agent: CollabAgentRef {
+                        thread_id,
+                        agent_nickname: Some("Robie".to_string()),
+                        agent_role: Some("explorer".to_string()),
+                    },
+                    status: AgentStatus::Completed(Some("done".to_string())),
+                }],
+            }),
+        });
+
+        assert_eq!(
+            app.agent_picker_threads.get(&thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: Some("Robie".to_string()),
+                agent_role: Some("explorer".to_string()),
+                status: AgentStatus::Completed(Some("done".to_string())),
+                is_closed: false,
+            })
+        );
+        assert_eq!(
+            app.sidebar_agent_entries(),
+            vec![AgentPanelEntry {
+                thread_id,
+                label: "Robie [explorer]".to_string(),
+                status: AgentStatus::Completed(Some("done".to_string())),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn collab_close_end_marks_sidebar_agent_closed() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+
+        app.upsert_agent_picker_thread(
+            thread_id,
+            Some("Robie".to_string()),
+            Some("explorer".to_string()),
+            AgentStatus::Running,
+            false,
+        );
+        app.handle_codex_event_now(Event {
+            id: String::new(),
+            msg: EventMsg::CollabCloseEnd(CollabCloseEndEvent {
+                sender_thread_id: ThreadId::new(),
+                receiver_thread_id: thread_id,
+                receiver_agent_nickname: Some("Robie".to_string()),
+                receiver_agent_role: Some("explorer".to_string()),
+                call_id: "close-1".to_string(),
+                status: AgentStatus::Errored("tool timeout".to_string()),
+            }),
+        });
+
+        assert_eq!(
+            app.agent_picker_threads.get(&thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: Some("Robie".to_string()),
+                agent_role: Some("explorer".to_string()),
+                status: AgentStatus::Errored("tool timeout".to_string()),
+                is_closed: true,
+            })
+        );
+        assert_eq!(app.sidebar_agent_entries(), Vec::new());
+    }
+
+    #[tokio::test]
+    async fn handle_thread_created_preserves_cached_agent_status() {
+        let mut app = make_test_app().await;
+        let thread = app
+            .server
+            .start_thread(app.config.clone())
+            .await
+            .expect("start thread");
+
+        app.upsert_agent_picker_thread(
+            thread.thread_id,
+            Some("Robie".to_string()),
+            Some("explorer".to_string()),
+            AgentStatus::Completed(Some("done".to_string())),
+            false,
+        );
+
+        app.handle_thread_created(thread.thread_id)
+            .await
+            .expect("attach thread listener");
+
+        assert_eq!(
+            app.agent_picker_threads.get(&thread.thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: None,
+                agent_role: None,
+                status: AgentStatus::Completed(Some("done".to_string())),
+                is_closed: false,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_lifecycle_turn_complete_updates_sidebar_agent_status() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+
+        app.upsert_agent_picker_thread(
+            thread_id,
+            Some("Robie".to_string()),
+            Some("explorer".to_string()),
+            AgentStatus::Running,
+            false,
+        );
+        app.enqueue_thread_event(
+            thread_id,
+            Event {
+                id: "complete".to_string(),
+                msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                    last_agent_message: Some("done".to_string()),
+                }),
+            },
+        )
+        .await
+        .expect("enqueue turn complete");
+
+        assert_eq!(
+            app.sidebar_agent_entries(),
+            vec![AgentPanelEntry {
+                thread_id,
+                label: "Robie [explorer]".to_string(),
+                status: AgentStatus::Completed(Some("done".to_string())),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_lifecycle_interrupted_updates_sidebar_agent_status() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+
+        app.upsert_agent_picker_thread(
+            thread_id,
+            Some("Robie".to_string()),
+            Some("explorer".to_string()),
+            AgentStatus::Running,
+            false,
+        );
+        app.enqueue_thread_event(
+            thread_id,
+            Event {
+                id: "interrupted".to_string(),
+                msg: EventMsg::TurnAborted(TurnAbortedEvent {
+                    reason: TurnAbortReason::Interrupted,
+                }),
+            },
+        )
+        .await
+        .expect("enqueue turn aborted");
+
+        assert_eq!(
+            app.agent_picker_threads.get(&thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: Some("Robie".to_string()),
+                agent_role: Some("explorer".to_string()),
+                status: AgentStatus::Interrupted,
+                is_closed: false,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_lifecycle_error_updates_sidebar_agent_status() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+
+        app.upsert_agent_picker_thread(
+            thread_id,
+            Some("Robie".to_string()),
+            Some("explorer".to_string()),
+            AgentStatus::Running,
+            false,
+        );
+        app.enqueue_thread_event(
+            thread_id,
+            Event {
+                id: "error".to_string(),
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "boom".to_string(),
+                    codex_error_info: None,
+                }),
+            },
+        )
+        .await
+        .expect("enqueue error");
+
+        assert_eq!(
+            app.agent_picker_threads.get(&thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: Some("Robie".to_string()),
+                agent_role: Some("explorer".to_string()),
+                status: AgentStatus::Errored("boom".to_string()),
+                is_closed: false,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_lifecycle_shutdown_marks_agent_closed() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+
+        app.upsert_agent_picker_thread(
+            thread_id,
+            Some("Robie".to_string()),
+            Some("explorer".to_string()),
+            AgentStatus::Running,
+            false,
+        );
+        app.enqueue_thread_event(
+            thread_id,
+            Event {
+                id: "shutdown".to_string(),
+                msg: EventMsg::ShutdownComplete,
+            },
+        )
+        .await
+        .expect("enqueue shutdown");
+
+        assert_eq!(
+            app.agent_picker_threads.get(&thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: Some("Robie".to_string()),
+                agent_role: Some("explorer".to_string()),
+                status: AgentStatus::Shutdown,
+                is_closed: true,
+            })
+        );
+        assert_eq!(app.sidebar_agent_entries(), Vec::new());
+    }
+
+    #[tokio::test]
+    async fn mirrored_detached_review_lifecycle_updates_child_not_parent() {
+        let mut app = make_test_app().await;
+        let parent_thread_id = ThreadId::new();
+        let child_thread_id = ThreadId::new();
+
+        app.upsert_agent_picker_thread(
+            parent_thread_id,
+            Some("Parent".to_string()),
+            Some("default".to_string()),
+            AgentStatus::Running,
+            false,
+        );
+        app.upsert_agent_picker_thread(
+            child_thread_id,
+            Some("Review".to_string()),
+            Some("review".to_string()),
+            AgentStatus::Running,
+            false,
+        );
+        app.review_parent_by_child
+            .insert(child_thread_id, parent_thread_id);
+
+        app.enqueue_thread_event(
+            child_thread_id,
+            Event {
+                id: "review-complete".to_string(),
+                msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                    last_agent_message: Some("done".to_string()),
+                }),
+            },
+        )
+        .await
+        .expect("enqueue child turn complete");
+
+        assert_eq!(
+            app.agent_picker_threads.get(&parent_thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: Some("Parent".to_string()),
+                agent_role: Some("default".to_string()),
+                status: AgentStatus::Running,
+                is_closed: false,
+            })
+        );
+        assert_eq!(
+            app.agent_picker_threads.get(&child_thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: Some("Review".to_string()),
+                agent_role: Some("review".to_string()),
+                status: AgentStatus::Completed(Some("done".to_string())),
+                is_closed: false,
+            })
         );
     }
 
@@ -4331,6 +4791,7 @@ mod tests {
             Some(&AgentPickerThreadEntry {
                 agent_nickname: None,
                 agent_role: None,
+                status: AgentStatus::Shutdown,
                 is_closed: true,
             })
         );
@@ -4348,6 +4809,7 @@ mod tests {
             AgentPickerThreadEntry {
                 agent_nickname: Some("Robie".to_string()),
                 agent_role: Some("explorer".to_string()),
+                status: AgentStatus::Interrupted,
                 is_closed: false,
             },
         );
@@ -4360,6 +4822,7 @@ mod tests {
             Some(&AgentPickerThreadEntry {
                 agent_nickname: Some("Robie".to_string()),
                 agent_role: Some("explorer".to_string()),
+                status: AgentStatus::Interrupted,
                 is_closed: true,
             })
         );
@@ -4477,6 +4940,7 @@ mod tests {
             Some(&AgentPickerThreadEntry {
                 agent_nickname: None,
                 agent_role: Some("review".to_string()),
+                status: AgentStatus::PendingInit,
                 is_closed: false,
             })
         );

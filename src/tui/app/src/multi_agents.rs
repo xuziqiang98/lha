@@ -1,8 +1,11 @@
+use adam_agent::protocol::AgentStatus;
 use adam_protocol::ThreadId;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentPickerThreadEntry {
     pub(crate) agent_nickname: Option<String>,
     pub(crate) agent_role: Option<String>,
+    pub(crate) status: AgentStatus,
     pub(crate) is_closed: bool,
 }
 
