@@ -2765,12 +2765,15 @@ impl ChatWidget {
                 code: KeyCode::BackTab,
                 kind: KeyEventKind::Press,
                 ..
-            } if self.identities_enabled()
-                && !self.bottom_pane.is_task_running()
-                && self.bottom_pane.no_modal_or_popup_active() =>
-            {
-                self.app_event_tx.send(AppEvent::OpenIdentityModal);
-                self.request_redraw();
+            } if self.identities_enabled() => {
+                if self.bottom_pane.is_task_running() {
+                    self.on_warning("Cannot change identity while a task is running.");
+                } else if !self.bottom_pane.no_modal_or_popup_active() {
+                    self.on_warning("Cannot change identity while another picker is open.");
+                } else {
+                    self.app_event_tx.send(AppEvent::OpenIdentityModal);
+                    self.request_redraw();
+                }
             }
             KeyEvent {
                 code: KeyCode::Up,

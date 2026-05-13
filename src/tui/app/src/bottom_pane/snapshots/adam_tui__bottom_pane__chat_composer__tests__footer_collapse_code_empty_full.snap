@@ -10,4 +10,4 @@ expression: terminal.backend()
 "                                                                                                                Echo    "
 "› Ask Adam to do anything                                                                                               "
 "                                                                                                                        "
-"  gpt-5.4 high · 100% left · ~/Workspace/adam                                                      Identity programmer  "
+"  gpt-5.4 high · 100% left · ~/Workspace/adam                                Identity programmer (shift+tab to change)  "

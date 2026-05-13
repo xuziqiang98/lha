@@ -19,8 +19,10 @@
 //!    - When the queue hint is active, prefer keeping that queue hint visible,
 //!      even if it means dropping the right-side context earlier; the queue
 //!      hint may also be shortened before it is removed.
-//!    - When the queue hint is not active but the identity indicator is present,
-//!      drop "? for shortcuts" before dropping the right-side context.
+//!    - When the queue hint is not active but the identity change hint is applicable,
+//!      drop "? for shortcuts" before dropping "(shift+tab to change)".
+//!    - If "(shift+tab to change)" cannot fit, keep the right-side identity label
+//!      without the hint if that fits.
 //!    - Finally, try a mode-only line (with and without context), and fall
 //!      back to no left-side footer if nothing can fit.
 //! 3. When collapse chooses a specific line, callers render it via
@@ -56,6 +58,7 @@ pub(crate) struct FooterProps {
     pub(crate) mode: FooterMode,
     pub(crate) esc_backtrack_hint: bool,
     pub(crate) use_shift_enter_hint: bool,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) is_task_running: bool,
     pub(crate) is_wsl: bool,
     /// Which key the user must press again to quit.
@@ -77,13 +80,19 @@ pub(crate) enum IdentityIndicator {
 }
 
 const FOOTER_CONTEXT_GAP_COLS: u16 = 1;
+const IDENTITY_CHANGE_HINT: &str = "shift+tab to change";
 
 impl IdentityIndicator {
-    fn label(self, _show_cycle_hint: bool) -> String {
+    fn label(self, show_cycle_hint: bool) -> String {
+        let suffix = if show_cycle_hint {
+            format!(" ({IDENTITY_CHANGE_HINT})")
+        } else {
+            String::new()
+        };
         match self {
-            IdentityIndicator::Nobody => "Identity nobody".to_string(),
-            IdentityIndicator::Planner => "Identity planner".to_string(),
-            IdentityIndicator::Programmer => "Identity programmer".to_string(),
+            IdentityIndicator::Nobody => format!("Identity nobody{suffix}"),
+            IdentityIndicator::Planner => format!("Identity planner{suffix}"),
+            IdentityIndicator::Programmer => format!("Identity programmer{suffix}"),
         }
     }
 
@@ -1067,10 +1076,34 @@ mod tests {
     fn nobody_identity_indicator_is_magenta() {
         let line = mode_indicator_line(Some(IdentityIndicator::Nobody), true)
             .expect("identity indicator should render");
-        let style = span_style(&line, "Identity nobody");
+        let style = span_style(&line, "Identity nobody (shift+tab to change)");
 
         assert_eq!(style.fg, Some(Color::Magenta));
         assert!(!style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn identity_indicators_include_change_hint_when_requested() {
+        let cases = [
+            (
+                IdentityIndicator::Nobody,
+                "Identity nobody (shift+tab to change)",
+            ),
+            (
+                IdentityIndicator::Planner,
+                "Identity planner (shift+tab to change)",
+            ),
+            (
+                IdentityIndicator::Programmer,
+                "Identity programmer (shift+tab to change)",
+            ),
+        ];
+
+        for (indicator, expected) in cases {
+            let line = mode_indicator_line(Some(indicator), true)
+                .expect("identity indicator should render");
+            assert_eq!(line.to_string(), expected);
+        }
     }
 
     #[test]

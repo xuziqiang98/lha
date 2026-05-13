@@ -3723,6 +3723,12 @@ async fn shift_tab_does_not_open_identity_modal_while_task_running() {
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
 
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Cannot change identity while a task is running."),
+        "expected identity warning, got: {rendered}"
+    );
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
 
@@ -3735,6 +3741,12 @@ async fn shift_tab_does_not_open_identity_modal_with_popup_active() {
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
 
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Cannot change identity while another picker is open."),
+        "expected identity warning, got: {rendered}"
+    );
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
 

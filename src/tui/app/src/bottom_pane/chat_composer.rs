@@ -3069,8 +3069,7 @@ impl ChatComposer {
             }
             ActivePopup::None => {
                 let footer_props = self.footer_props();
-                let show_cycle_hint =
-                    !footer_props.is_task_running && self.identity_indicator.is_some();
+                let show_cycle_hint = self.identity_indicator.is_some();
                 let custom_height = self.custom_footer_height();
                 let footer_hint_height =
                     custom_height.unwrap_or_else(|| footer_height(&footer_props));
