@@ -229,11 +229,7 @@ mod tests {
 
         render_buddy(area, &mut buf, &state, false);
 
-        let name_row = area.height - 1;
-        let row = (0..area.width)
-            .map(|x| buf[(x, name_row)].symbol().chars().next().unwrap_or(' '))
-            .collect::<String>();
-        let name_x = row.find(&name).expect("buddy name rendered") as u16;
+        let name_x = rendered_name_x(&buf, area, &name);
         let name_width = UnicodeWidthStr::width(name.as_str()) as u16;
         let sprite_width = layout::sprite_column_width(name_width);
         let expected_x = area.width.saturating_sub(sprite_width) + (sprite_width - name_width) / 2;
@@ -331,14 +327,16 @@ mod tests {
     }
 
     fn rendered_name_x(buf: &Buffer, area: Rect, name: &str) -> u16 {
-        let name_row = area.height - 1;
         let name_width = UnicodeWidthStr::width(name) as u16;
-        (0..=area.width.saturating_sub(name_width))
-            .find(|x| {
-                (0..name_width)
-                    .map(|offset| buf[(x + offset, name_row)].symbol())
-                    .collect::<String>()
-                    == name
+        (0..area.height)
+            .rev()
+            .find_map(|row| {
+                (0..=area.width.saturating_sub(name_width)).find(|x| {
+                    (0..name_width)
+                        .map(|offset| buf[(x + offset, row)].symbol())
+                        .collect::<String>()
+                        == name
+                })
             })
             .expect("buddy name rendered")
     }

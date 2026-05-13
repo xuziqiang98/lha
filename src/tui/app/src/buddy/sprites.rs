@@ -5,10 +5,20 @@ use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
 const FRAMES: usize = 3;
+const BODY_LINES: u16 = 5;
 pub(crate) const SPRITE_WIDTH: usize = 12;
 
 pub(crate) fn sprite_frame_count(_species: BuddySpecies) -> usize {
     FRAMES
+}
+
+pub(crate) fn rendered_sprite_height(species: BuddySpecies, hat: BuddyHat) -> u16 {
+    let frames = frames_for(species);
+    if hat != BuddyHat::None || frames.iter().any(|frame| !frame[0].trim().is_empty()) {
+        BODY_LINES
+    } else {
+        BODY_LINES.saturating_sub(1)
+    }
 }
 
 pub(crate) fn render_sprite(
@@ -18,7 +28,8 @@ pub(crate) fn render_sprite(
     blink: bool,
     frame: usize,
 ) -> Vec<String> {
-    let body = frames_for(species)[frame % sprite_frame_count(species)];
+    let frames = frames_for(species);
+    let body = frames[frame % sprite_frame_count(species)];
     let mut lines = body
         .iter()
         .map(std::string::ToString::to_string)
@@ -29,8 +40,14 @@ pub(crate) fn render_sprite(
     }
     if let Some(hat_line) = hat_line(hat)
         && let Some(first_line) = lines.first_mut()
+        && first_line.trim().is_empty()
     {
         *first_line = hat_line.to_string();
+    }
+    if lines.first().is_some_and(|line| line.trim().is_empty())
+        && frames.iter().all(|frame| frame[0].trim().is_empty())
+    {
+        lines.remove(0);
     }
     lines
         .into_iter()
@@ -573,7 +590,10 @@ mod tests {
                     for blink in [false, true] {
                         for frame in 0..sprite_frame_count(species) {
                             let sprite = render_sprite(species, eye, hat, blink, frame);
-                            assert_eq!(sprite.len(), 5);
+                            assert_eq!(
+                                sprite.len(),
+                                usize::from(rendered_sprite_height(species, hat))
+                            );
                             for line in sprite {
                                 assert_eq!(
                                     UnicodeWidthStr::width(line.as_str()),
@@ -589,6 +609,98 @@ mod tests {
     }
 
     #[test]
+    fn hat_only_renders_when_hat_slot_is_blank() {
+        assert_eq!(
+            render_sprite(
+                BuddySpecies::Dragon,
+                BuddyEye::Degree,
+                BuddyHat::TopHat,
+                false,
+                0,
+            )[0],
+            "   .----.   "
+        );
+        assert_eq!(
+            render_sprite(
+                BuddySpecies::Dragon,
+                BuddyEye::Degree,
+                BuddyHat::TopHat,
+                false,
+                2,
+            )[0],
+            "   ~    ~   "
+        );
+        assert_eq!(
+            render_sprite(
+                BuddySpecies::Penguin,
+                BuddyEye::Degree,
+                BuddyHat::TopHat,
+                false,
+                0,
+            )[0],
+            "   .----.   "
+        );
+        assert_eq!(
+            render_sprite(
+                BuddySpecies::Penguin,
+                BuddyEye::Degree,
+                BuddyHat::TopHat,
+                false,
+                2,
+            )[0],
+            "   .---.    "
+        );
+    }
+
+    #[test]
+    fn blank_hat_slot_is_dropped_only_when_all_frames_are_blank() {
+        assert_eq!(
+            render_sprite(
+                BuddySpecies::Duck,
+                BuddyEye::Degree,
+                BuddyHat::None,
+                false,
+                0,
+            )
+            .len(),
+            4
+        );
+        assert_eq!(
+            render_sprite(
+                BuddySpecies::Duck,
+                BuddyEye::Degree,
+                BuddyHat::TopHat,
+                false,
+                0,
+            )
+            .len(),
+            5
+        );
+        assert_eq!(
+            render_sprite(
+                BuddySpecies::Dragon,
+                BuddyEye::Degree,
+                BuddyHat::None,
+                false,
+                0,
+            )
+            .len(),
+            5
+        );
+        assert_eq!(
+            render_sprite(
+                BuddySpecies::Robot,
+                BuddyEye::Degree,
+                BuddyHat::None,
+                false,
+                0,
+            )
+            .len(),
+            5
+        );
+    }
+
+    #[test]
     fn owl_sprite_is_symmetric_across_frames() {
         for frame in 0..sprite_frame_count(BuddySpecies::Owl) {
             let sprite = render_sprite(
@@ -598,9 +710,9 @@ mod tests {
                 false,
                 frame,
             );
-            assert_eq!(sprite[1], "   /\\  /\\   ");
-            assert_eq!(sprite[2], "  ((°)(°))  ");
-            assert_eq!(sprite[3], "  (  ><  )  ");
+            assert_eq!(sprite[0], "   /\\  /\\   ");
+            assert_eq!(sprite[1], "  ((°)(°))  ");
+            assert_eq!(sprite[2], "  (  ><  )  ");
         }
     }
 
