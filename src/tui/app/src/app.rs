@@ -1049,6 +1049,7 @@ impl App {
         self.listen_for_threads = true;
         self.otel_manager = otel_manager;
         self.config = config;
+        self.active_profile = self.config.active_profile.clone();
         self.file_search =
             FileSearchManager::new(self.config.cwd.clone(), self.app_event_tx.clone());
         self.chat_widget = chat_widget;
@@ -4474,6 +4475,14 @@ mod tests {
             adam_home.path().join(CONFIG_TOML_FILE),
             format!(
                 r#"
+profile = "saved"
+
+[profiles.saved]
+approval_policy = "on-request"
+
+[profiles.project]
+approval_policy = "never"
+
 [projects."{workspace_key}"]
 trust_level = "untrusted"
 "#,
@@ -4484,7 +4493,7 @@ trust_level = "untrusted"
         std::fs::write(
             project_config_dir.join(CONFIG_TOML_FILE),
             r#"
-approval_policy = "never"
+profile = "project"
 developer_instructions = "project-only developer instructions"
 show_raw_agent_reasoning = true
 "#,
@@ -4503,6 +4512,7 @@ show_raw_agent_reasoning = true
             initial_config.active_project.trust_level,
             Some(TrustLevel::Untrusted)
         );
+        assert_eq!(initial_config.active_profile.as_deref(), Some("saved"));
         assert_eq!(initial_config.developer_instructions, None);
         assert!(!initial_config.show_raw_agent_reasoning);
 
@@ -4522,7 +4532,7 @@ show_raw_agent_reasoning = true
             chat_widget,
             auth_manager,
             config: initial_config,
-            active_profile: None,
+            active_profile: Some("saved".to_string()),
             cli_kv_overrides: Vec::new(),
             harness_overrides: ConfigOverrides {
                 cwd: Some(workspace.path().to_path_buf()),
@@ -4569,6 +4579,7 @@ show_raw_agent_reasoning = true
             .rebuild_config_for_cwd(workspace.path().to_path_buf())
             .await
             .expect("rebuild config");
+        assert_eq!(rebuilt.active_profile.as_deref(), Some("project"));
         assert_eq!(rebuilt.approval_policy.value(), AskForApproval::Never);
         assert_eq!(
             rebuilt.developer_instructions.as_deref(),
@@ -4593,6 +4604,12 @@ show_raw_agent_reasoning = true
         .expect("replace chat");
 
         assert_eq!(app.config.approval_policy.value(), AskForApproval::Never);
+        assert_eq!(app.config.active_profile.as_deref(), Some("project"));
+        assert_eq!(app.active_profile.as_deref(), Some("project"));
+        assert_eq!(
+            app.chat_widget.config_ref().active_profile.as_deref(),
+            Some("project")
+        );
         assert_eq!(
             app.chat_widget.config_ref().approval_policy.value(),
             AskForApproval::Never
