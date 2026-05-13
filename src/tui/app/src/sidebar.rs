@@ -1,10 +1,14 @@
 use crate::buddy;
 use crate::buddy::state::BuddyState;
+use adam_agent::protocol::AgentStatus;
+use adam_protocol::ThreadId;
+use adam_protocol::plan_tool::StepStatus;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
+use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -12,6 +16,7 @@ use ratatui::widgets::Block;
 use ratatui::widgets::Borders;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+use std::path::PathBuf;
 
 pub(crate) const SIDEBAR_MIN_TERMINAL_WIDTH: u16 = 120;
 pub(crate) const SIDEBAR_MIN_WIDTH: u16 = 28;
@@ -23,20 +28,44 @@ const SIDEBAR_BUDDY_CONTENT_RESERVE: u16 = 2;
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SidebarSnapshot {
     pub(crate) task: Option<TaskPanelSnapshot>,
+    pub(crate) todo: Option<TodoPanelSnapshot>,
     pub(crate) files: Vec<String>,
+    pub(crate) agents: Vec<AgentPanelEntry>,
+    pub(crate) skills: Vec<SkillPanelEntry>,
     pub(crate) mcp: Option<McpPanelSnapshot>,
-    pub(crate) context: Option<ContextPanelSnapshot>,
+    pub(crate) status: Option<StatusPanelSnapshot>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TaskPanelSnapshot {
-    pub(crate) status: String,
-    pub(crate) detail: Option<String>,
-    pub(crate) queued_messages: usize,
-    pub(crate) active_commands: Vec<String>,
+    pub(crate) title: String,
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct TodoPanelSnapshot {
+    pub(crate) items: Vec<TodoPanelItem>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TodoPanelItem {
+    pub(crate) step: String,
+    pub(crate) status: StepStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AgentPanelEntry {
+    pub(crate) thread_id: ThreadId,
+    pub(crate) label: String,
+    pub(crate) status: AgentStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SkillPanelEntry {
+    pub(crate) name: String,
+    pub(crate) path: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct McpPanelSnapshot {
     pub(crate) starting: usize,
     pub(crate) ready: usize,
@@ -44,8 +73,8 @@ pub(crate) struct McpPanelSnapshot {
     pub(crate) cancelled: usize,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct ContextPanelSnapshot {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StatusPanelSnapshot {
     pub(crate) model: String,
     pub(crate) identity: String,
     pub(crate) used_tokens: i64,
@@ -93,9 +122,12 @@ impl Widget for SidebarWidget<'_> {
 
         let mut lines = Vec::new();
         push_task(&mut lines, self.snapshot.task.as_ref(), area.width);
+        push_todo(&mut lines, self.snapshot.todo.as_ref(), area.width);
         push_files(&mut lines, &self.snapshot.files, area.width);
+        push_agents(&mut lines, &self.snapshot.agents, area.width);
+        push_skills(&mut lines, &self.snapshot.skills, area.width);
         push_mcp(&mut lines, self.snapshot.mcp.as_ref(), area.width);
-        push_context(&mut lines, self.snapshot.context.as_ref(), area.width);
+        push_status(&mut lines, self.snapshot.status.as_ref(), area.width);
 
         Paragraph::new(lines)
             .block(
@@ -125,21 +157,35 @@ fn push_task(lines: &mut Vec<Line<'static>>, task: Option<&TaskPanelSnapshot>, w
         return;
     };
     push_section(lines, "Task");
-    lines.push(Line::from(vec!["  ".into(), task.status.clone().cyan()]));
-    if let Some(detail) = &task.detail {
-        lines.push(Line::from(vec!["  ".into(), truncate(detail, width).dim()]));
+    lines.push(Line::from(vec![
+        "  ".into(),
+        truncate(&task.title, width).cyan().bold(),
+    ]));
+}
+
+fn push_todo(lines: &mut Vec<Line<'static>>, todo: Option<&TodoPanelSnapshot>, width: u16) {
+    let Some(todo) = todo else {
+        return;
+    };
+    if todo.items.is_empty() {
+        return;
     }
-    if task.queued_messages > 0 {
+
+    push_section(lines, "Todo");
+    for item in todo.items.iter().take(8) {
+        let (marker, style) = match item.status {
+            StepStatus::Completed => ("[x] ", Style::default().dim().crossed_out()),
+            StepStatus::InProgress => ("[~] ", Style::default().cyan().bold()),
+            StepStatus::Pending => ("[ ] ", Style::default().dim()),
+        };
         lines.push(Line::from(vec![
-            "  queue ".dim(),
-            task.queued_messages.to_string().magenta(),
+            "  ".into(),
+            marker.into(),
+            truncate(&item.step, width).set_style(style),
         ]));
     }
-    for command in task.active_commands.iter().take(3) {
-        lines.push(Line::from(vec![
-            "  $ ".dim(),
-            truncate(command, width).into(),
-        ]));
+    if todo.items.len() > 8 {
+        lines.push(format!("  +{} more", todo.items.len() - 8).dim().into());
     }
 }
 
@@ -156,6 +202,45 @@ fn push_files(lines: &mut Vec<Line<'static>>, files: &[String], width: u16) {
     }
     if files.len() > 6 {
         lines.push(format!("  +{} more", files.len() - 6).dim().into());
+    }
+}
+
+fn push_agents(lines: &mut Vec<Line<'static>>, agents: &[AgentPanelEntry], width: u16) {
+    if agents.is_empty() {
+        return;
+    }
+
+    push_section(lines, "Agents");
+    for agent in agents.iter().take(6) {
+        let _thread_id = agent.thread_id;
+        let (dot, status) = agent_status_summary(&agent.status);
+        lines.push(Line::from(vec![
+            dot,
+            truncate(&agent.label, width).cyan(),
+            " ".dim(),
+            status,
+        ]));
+    }
+    if agents.len() > 6 {
+        lines.push(format!("  +{} more", agents.len() - 6).dim().into());
+    }
+}
+
+fn push_skills(lines: &mut Vec<Line<'static>>, skills: &[SkillPanelEntry], width: u16) {
+    if skills.is_empty() {
+        return;
+    }
+
+    push_section(lines, "Skills");
+    for skill in skills.iter().take(6) {
+        let _path = &skill.path;
+        lines.push(Line::from(vec![
+            "  ".into(),
+            truncate(&skill.name, width).magenta(),
+        ]));
+    }
+    if skills.len() > 6 {
+        lines.push(format!("  +{} more", skills.len() - 6).dim().into());
     }
 }
 
@@ -187,15 +272,11 @@ fn push_mcp(lines: &mut Vec<Line<'static>>, mcp: Option<&McpPanelSnapshot>, _wid
     }
 }
 
-fn push_context(
-    lines: &mut Vec<Line<'static>>,
-    context: Option<&ContextPanelSnapshot>,
-    _width: u16,
-) {
-    let Some(context) = context else {
+fn push_status(lines: &mut Vec<Line<'static>>, status: Option<&StatusPanelSnapshot>, _width: u16) {
+    let Some(context) = status else {
         return;
     };
-    push_section(lines, "Context");
+    push_section(lines, "Status");
     lines.push(Line::from(vec![
         "  model ".dim(),
         context.model.clone().into(),
@@ -226,6 +307,18 @@ fn push_context(
     }
 }
 
+fn agent_status_summary(status: &AgentStatus) -> (Span<'static>, Span<'static>) {
+    match status {
+        AgentStatus::PendingInit => ("  ● ".cyan(), "pending".dim()),
+        AgentStatus::Running => ("  ● ".green(), "running".dim()),
+        AgentStatus::Interrupted => ("  ● ".magenta(), "interrupted".dim()),
+        AgentStatus::Completed(_) => ("  ● ".green(), "completed".dim()),
+        AgentStatus::Errored(_) => ("  ● ".red(), "error".red()),
+        AgentStatus::Shutdown => ("  ● ".dim(), "shutdown".dim()),
+        AgentStatus::NotFound => ("  ● ".red(), "missing".red()),
+    }
+}
+
 fn truncate(value: &str, width: u16) -> String {
     let max = width.saturating_sub(4) as usize;
     if value.chars().count() <= max {
@@ -235,4 +328,131 @@ fn truncate(value: &str, width: u16) -> String {
     let mut out = value.chars().take(take).collect::<String>();
     out.push_str("...");
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn render_sidebar(snapshot: &SidebarSnapshot) -> String {
+        let area = Rect::new(0, 0, 42, 30);
+        let mut buf = Buffer::empty(area);
+        SidebarWidget {
+            snapshot,
+            buddy_state: None,
+            animations_enabled: false,
+        }
+        .render(area, &mut buf);
+
+        (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn renders_sections_in_sidebar_order() {
+        let snapshot = SidebarSnapshot {
+            task: Some(TaskPanelSnapshot {
+                title: "Build Sidebar".to_string(),
+            }),
+            todo: Some(TodoPanelSnapshot {
+                items: vec![
+                    TodoPanelItem {
+                        step: "Explore codebase".to_string(),
+                        status: StepStatus::Completed,
+                    },
+                    TodoPanelItem {
+                        step: "Implement feature".to_string(),
+                        status: StepStatus::InProgress,
+                    },
+                    TodoPanelItem {
+                        step: "Write tests".to_string(),
+                        status: StepStatus::Pending,
+                    },
+                ],
+            }),
+            files: vec!["src/tui/app/src/sidebar.rs".to_string()],
+            agents: vec![AgentPanelEntry {
+                thread_id: ThreadId::new(),
+                label: "Worker (worker)".to_string(),
+                status: AgentStatus::Running,
+            }],
+            skills: vec![SkillPanelEntry {
+                name: "skill-creator".to_string(),
+                path: PathBuf::from("/tmp/skill-creator/SKILL.md"),
+            }],
+            mcp: Some(McpPanelSnapshot {
+                starting: 1,
+                ready: 2,
+                failed: vec!["broken-server".to_string()],
+                cancelled: 1,
+            }),
+            status: Some(StatusPanelSnapshot {
+                model: "gpt-5".to_string(),
+                identity: "Planner".to_string(),
+                used_tokens: 45,
+                context_window: Some(100),
+            }),
+        };
+
+        let rendered = render_sidebar(&snapshot);
+        let sections = ["Task", "Todo", "Files", "Agents", "Skills", "MCP", "Status"];
+        let positions = sections
+            .iter()
+            .map(|section| {
+                rendered
+                    .find(section)
+                    .unwrap_or_else(|| panic!("missing section {section}: {rendered:?}"))
+            })
+            .collect::<Vec<_>>();
+        let mut sorted = positions.clone();
+        sorted.sort_unstable();
+        assert_eq!(positions, sorted);
+        assert!(rendered.contains("Build Sidebar"));
+        assert!(rendered.contains("[x] Explore codebase"));
+        assert!(rendered.contains("[~] Implement feature"));
+        assert!(rendered.contains("[ ] Write tests"));
+        assert!(rendered.contains("Worker (worker) running"));
+        assert!(rendered.contains("skill-creator"));
+        assert!(rendered.contains("model gpt-5"));
+        assert!(!rendered.contains("Context"));
+    }
+
+    #[test]
+    fn hides_empty_sections() {
+        let rendered = render_sidebar(&SidebarSnapshot::default());
+        for section in ["Task", "Todo", "Files", "Agents", "Skills", "MCP"] {
+            assert!(!rendered.contains(section));
+        }
+        assert!(!rendered.contains("Status"));
+    }
+
+    #[test]
+    fn files_and_skills_show_more_counts() {
+        let snapshot = SidebarSnapshot {
+            files: (0..8).map(|i| format!("file-{i}.rs")).collect(),
+            skills: (0..8)
+                .map(|i| SkillPanelEntry {
+                    name: format!("skill-{i}"),
+                    path: PathBuf::from(format!("/tmp/skill-{i}/SKILL.md")),
+                })
+                .collect(),
+            ..Default::default()
+        };
+
+        let rendered = render_sidebar(&snapshot);
+        assert!(rendered.contains("file-5.rs"));
+        assert!(!rendered.contains("file-6.rs"));
+        assert!(rendered.contains("skill-5"));
+        assert!(!rendered.contains("skill-6"));
+        assert_eq!(rendered.matches("+2 more").count(), 2);
+    }
 }

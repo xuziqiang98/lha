@@ -1906,6 +1906,7 @@ async fn make_chatwidget_manual_inner(
         pending_collab_spawn_requests: HashMap::new(),
         skills_all: Vec::new(),
         skills_initial_state: None,
+        loaded_skills: Vec::new(),
         last_unified_wait: None,
         unified_exec_wait_streak: None,
         turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
@@ -1942,6 +1943,9 @@ async fn make_chatwidget_manual_inner(
         saw_plan_item_this_turn: false,
         plan_delta_buffer: String::new(),
         plan_item_active: false,
+        latest_proposed_plan_title: None,
+        latest_update_plan: None,
+        sidebar_agents: Vec::new(),
         last_separator_elapsed_secs: None,
         last_rendered_width: std::cell::Cell::new(None),
         last_transcript_area: std::cell::Cell::new(None),
@@ -2069,6 +2073,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         pending_collab_spawn_requests: HashMap::new(),
         skills_all: Vec::new(),
         skills_initial_state: None,
+        loaded_skills: Vec::new(),
         last_unified_wait: None,
         unified_exec_wait_streak: None,
         turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
@@ -2105,6 +2110,9 @@ async fn make_chatwidget_manual_with_frame_requester(
         saw_plan_item_this_turn: false,
         plan_delta_buffer: String::new(),
         plan_item_active: false,
+        latest_proposed_plan_title: None,
+        latest_update_plan: None,
+        sidebar_agents: Vec::new(),
         last_separator_elapsed_secs: None,
         last_rendered_width: std::cell::Cell::new(None),
         last_transcript_area: std::cell::Cell::new(None),
@@ -2569,6 +2577,59 @@ async fn streamed_proposed_plan_background_fills_rendered_row() {
             "expected proposed plan background at x={x}, y={plan_row}"
         );
     }
+}
+
+#[tokio::test]
+async fn sidebar_task_uses_streamed_proposed_plan_heading() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+
+    chat.on_task_started();
+    chat.on_plan_delta("Intro\n".to_string());
+    assert!(chat.sidebar_snapshot().task.is_none());
+
+    chat.on_plan_delta("# Build Sidebar #\n- Step 1\n".to_string());
+
+    assert_eq!(
+        chat.sidebar_snapshot().task.map(|task| task.title),
+        Some("Build Sidebar".to_string())
+    );
+}
+
+#[tokio::test]
+async fn sidebar_task_uses_completed_proposed_plan_heading() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+
+    chat.on_task_started();
+    chat.on_plan_delta("# Streaming Title\n".to_string());
+    chat.on_plan_item_completed("## Final Title\n- Step 1\n".to_string());
+
+    assert_eq!(
+        chat.sidebar_snapshot().task.map(|task| task.title),
+        Some("Final Title".to_string())
+    );
+}
+
+#[tokio::test]
+async fn sidebar_task_hides_proposed_plan_without_heading() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+
+    chat.on_task_started();
+    chat.on_plan_delta("- Step 1\n".to_string());
+    chat.on_plan_item_completed("- Step 1\n".to_string());
+
+    assert!(chat.sidebar_snapshot().task.is_none());
 }
 
 #[tokio::test]
@@ -3502,26 +3563,17 @@ async fn short_unified_exec_does_not_show_footer_or_sidebar() {
     assert!(chat.bottom_pane.unified_exec_processes().is_empty());
 
     let sidebar = chat.sidebar_snapshot();
-    let task = sidebar
-        .task
-        .expect("task should remain visible while the turn is running");
-    assert!(task.active_commands.is_empty());
+    assert!(sidebar.task.is_none());
 }
 
 #[tokio::test]
-async fn long_unified_exec_promotes_to_footer_and_sidebar() {
+async fn long_unified_exec_promotes_to_footer_only() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
 
     begin_unified_exec_startup(&mut chat, "call-long", "proc-long", "sleep 5");
     assert!(chat.bottom_pane.unified_exec_processes().is_empty());
-    assert!(
-        chat.sidebar_snapshot()
-            .task
-            .expect("task should be visible while the turn is running")
-            .active_commands
-            .is_empty()
-    );
+    assert!(chat.sidebar_snapshot().task.is_none());
 
     let process = chat
         .unified_exec_processes
@@ -3536,13 +3588,7 @@ async fn long_unified_exec_promotes_to_footer_and_sidebar() {
         chat.bottom_pane.unified_exec_processes(),
         &["sleep 5".to_string()]
     );
-    assert_eq!(
-        chat.sidebar_snapshot()
-            .task
-            .expect("task should be visible")
-            .active_commands,
-        vec!["sleep 5".to_string()]
-    );
+    assert!(chat.sidebar_snapshot().task.is_none());
 }
 
 #[tokio::test]
@@ -3562,13 +3608,7 @@ async fn terminal_interaction_promotes_unified_exec_immediately() {
         "Waiting for background terminal"
     );
     assert_eq!(chat.current_status.details, Some("sleep 5".to_string()));
-    assert_eq!(
-        chat.sidebar_snapshot()
-            .task
-            .expect("task should be visible")
-            .active_commands,
-        vec!["sleep 5".to_string()]
-    );
+    assert!(chat.sidebar_snapshot().task.is_none());
 }
 
 #[tokio::test]
@@ -6918,6 +6958,85 @@ async fn plan_update_renders_history_cell() {
     assert!(blob.contains("Explore codebase"));
     assert!(blob.contains("Implement feature"));
     assert!(blob.contains("Write tests"));
+}
+
+#[tokio::test]
+async fn plan_update_populates_sidebar_todo() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_plan_update(UpdatePlanArgs {
+        explanation: Some("Adapting plan".to_string()),
+        plan: vec![
+            PlanItemArg {
+                step: "Explore codebase".into(),
+                status: StepStatus::Completed,
+            },
+            PlanItemArg {
+                step: "Implement feature".into(),
+                status: StepStatus::InProgress,
+            },
+            PlanItemArg {
+                step: "Write tests".into(),
+                status: StepStatus::Pending,
+            },
+        ],
+    });
+
+    let todo = chat
+        .sidebar_snapshot()
+        .todo
+        .expect("plan update should populate sidebar todo");
+    let steps = todo
+        .items
+        .iter()
+        .map(|item| item.step.as_str())
+        .collect::<Vec<_>>();
+    let statuses = todo
+        .items
+        .iter()
+        .map(|item| match item.status {
+            StepStatus::Completed => "completed",
+            StepStatus::InProgress => "in_progress",
+            StepStatus::Pending => "pending",
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        (steps, statuses),
+        (
+            vec!["Explore codebase", "Implement feature", "Write tests"],
+            vec!["completed", "in_progress", "pending"]
+        )
+    );
+}
+
+#[tokio::test]
+async fn loaded_skills_are_tracked_once_by_path() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let skill_path = PathBuf::from("/tmp/adam-test-skill/SKILL.md");
+    let items = vec![
+        UserInput::Skill {
+            name: "skill-one".to_string(),
+            path: skill_path.clone(),
+        },
+        UserInput::Skill {
+            name: "skill-one-again".to_string(),
+            path: skill_path.clone(),
+        },
+    ];
+
+    chat.track_loaded_skills_from_inputs(&items);
+
+    let skills = chat.sidebar_snapshot().skills;
+    assert_eq!(
+        skills,
+        vec![SkillPanelEntry {
+            name: "skill-one".to_string(),
+            path: skill_path,
+        }]
+    );
+    assert_eq!(
+        skills[0].path,
+        PathBuf::from("/tmp/adam-test-skill/SKILL.md")
+    );
 }
 
 #[tokio::test]

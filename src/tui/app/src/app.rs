@@ -48,6 +48,7 @@ use crate::provider_config_modal::ProviderConfigModalAction;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
+use crate::sidebar::AgentPanelEntry;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -69,6 +70,7 @@ use adam_agent::features::Feature;
 use adam_agent::git_info::resolve_root_git_project_for_trust;
 use adam_agent::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use adam_agent::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
+use adam_agent::protocol::AgentStatus;
 use adam_agent::protocol::AskForApproval;
 use adam_agent::protocol::Event;
 use adam_agent::protocol::EventMsg;
@@ -1765,6 +1767,30 @@ impl App {
         }
     }
 
+    fn sidebar_agent_entries(&self) -> Vec<AgentPanelEntry> {
+        let mut agent_threads: Vec<(ThreadId, AgentPickerThreadEntry)> = self
+            .agent_picker_threads
+            .iter()
+            .filter(|(thread_id, entry)| {
+                !entry.is_closed && Some(**thread_id) != self.primary_thread_id
+            })
+            .map(|(thread_id, entry)| (*thread_id, entry.clone()))
+            .collect();
+        sort_agent_picker_threads(&mut agent_threads);
+        agent_threads
+            .into_iter()
+            .map(|(thread_id, entry)| AgentPanelEntry {
+                thread_id,
+                label: format_agent_picker_item_name(
+                    entry.agent_nickname.as_deref(),
+                    entry.agent_role.as_deref(),
+                    false,
+                ),
+                status: AgentStatus::Running,
+            })
+            .collect()
+    }
+
     async fn select_agent_thread(&mut self, tui: &mut tui::Tui, thread_id: ThreadId) -> Result<()> {
         if self.active_thread_id == Some(thread_id) {
             return Ok(());
@@ -2354,6 +2380,8 @@ impl App {
         {
             return Ok(());
         }
+        self.chat_widget
+            .set_sidebar_agents(self.sidebar_agent_entries());
         let size = tui.terminal.size()?;
         tui.draw(size.height, |frame| {
             self.chat_widget.render(frame.area(), frame.buffer);
@@ -4207,6 +4235,46 @@ mod tests {
             Ok(AppEvent::SelectAgentThread(id)) => assert_eq!(id, thread_id),
             other => panic!("expected SelectAgentThread event, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn sidebar_agent_entries_match_active_agent_picker_threads() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let primary_id =
+            ThreadId::from_string("00000000-0000-7000-8000-000000000001").expect("primary id");
+        let active_id =
+            ThreadId::from_string("00000000-0000-7000-8000-000000000002").expect("active id");
+        let closed_id =
+            ThreadId::from_string("00000000-0000-7000-8000-000000000003").expect("closed id");
+
+        app.primary_thread_id = Some(primary_id);
+        app.upsert_agent_picker_thread(
+            primary_id,
+            Some("Main".to_string()),
+            Some("default".to_string()),
+            false,
+        );
+        app.upsert_agent_picker_thread(
+            active_id,
+            Some("Robie".to_string()),
+            Some("explorer".to_string()),
+            false,
+        );
+        app.upsert_agent_picker_thread(
+            closed_id,
+            Some("Closed".to_string()),
+            Some("worker".to_string()),
+            true,
+        );
+
+        assert_eq!(
+            app.sidebar_agent_entries(),
+            vec![AgentPanelEntry {
+                thread_id: active_id,
+                label: "Robie [explorer]".to_string(),
+                status: AgentStatus::Running,
+            }]
+        );
     }
 
     #[tokio::test]

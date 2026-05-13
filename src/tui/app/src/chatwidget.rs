@@ -186,11 +186,15 @@ use crate::markdown::append_markdown;
 use crate::mouse::MouseScrollState;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
-use crate::sidebar::ContextPanelSnapshot;
+use crate::sidebar::AgentPanelEntry;
 use crate::sidebar::McpPanelSnapshot;
 use crate::sidebar::SidebarSnapshot;
 use crate::sidebar::SidebarWidget;
+use crate::sidebar::SkillPanelEntry;
+use crate::sidebar::StatusPanelSnapshot;
 use crate::sidebar::TaskPanelSnapshot;
+use crate::sidebar::TodoPanelItem;
+use crate::sidebar::TodoPanelSnapshot;
 use crate::slash_command::SlashCommand;
 use crate::status::format_directory_display;
 use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
@@ -300,6 +304,31 @@ fn is_standard_tool_call(parsed_cmd: &[ParsedCommand]) -> bool {
         && parsed_cmd
             .iter()
             .all(|parsed| !matches!(parsed, ParsedCommand::Unknown { .. }))
+}
+
+fn extract_first_markdown_heading(markdown: &str) -> Option<String> {
+    for line in markdown.lines() {
+        let trimmed = line.trim_start();
+        let level = trimmed.chars().take_while(|c| *c == '#').count();
+        if !(1..=6).contains(&level) {
+            continue;
+        }
+        let rest = &trimmed[level..];
+        if !rest.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let title = rest.trim().trim_end_matches('#').trim().to_string();
+        if !title.is_empty() {
+            return Some(title);
+        }
+    }
+    None
+}
+
+#[derive(Clone, Debug)]
+struct LoadedSkillSummary {
+    name: String,
+    path: PathBuf,
 }
 
 #[derive(Debug)]
@@ -446,6 +475,7 @@ pub(crate) struct ChatWidget {
     pending_collab_spawn_requests: HashMap<String, collab::SpawnRequestSummary>,
     skills_all: Vec<ProtocolSkillMetadata>,
     skills_initial_state: Option<HashMap<PathBuf, bool>>,
+    loaded_skills: Vec<LoadedSkillSummary>,
     last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
     turn_sleep_inhibitor: SleepInhibitor,
@@ -529,6 +559,9 @@ pub(crate) struct ChatWidget {
     plan_delta_buffer: String,
     // True while a plan item is streaming.
     plan_item_active: bool,
+    latest_proposed_plan_title: Option<String>,
+    latest_update_plan: Option<UpdatePlanArgs>,
+    sidebar_agents: Vec<AgentPanelEntry>,
     // Status-indicator elapsed seconds captured at the last emitted final-message separator.
     //
     // This lets the separator show per-chunk work time (since the previous separator) rather than
@@ -960,8 +993,14 @@ impl ChatWidget {
         if !self.plan_item_active {
             self.plan_item_active = true;
             self.plan_delta_buffer.clear();
+            self.latest_proposed_plan_title = None;
         }
         self.plan_delta_buffer.push_str(&delta);
+        if self.latest_proposed_plan_title.is_none()
+            && let Some(title) = extract_first_markdown_heading(&self.plan_delta_buffer)
+        {
+            self.latest_proposed_plan_title = Some(title);
+        }
         // Before streaming plan content, flush any active exec cell group.
         self.flush_unified_exec_wait_streak();
         self.flush_active_cell();
@@ -990,6 +1029,9 @@ impl ChatWidget {
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.saw_plan_item_this_turn = true;
+        if !plan_text.is_empty() {
+            self.latest_proposed_plan_title = extract_first_markdown_heading(&plan_text);
+        }
         if let Some(mut controller) = self.plan_stream_controller.take()
             && let Some(cell) = controller.finalize()
         {
@@ -1196,6 +1238,10 @@ impl ChatWidget {
                 self.token_info = None;
             }
         }
+    }
+
+    pub(crate) fn set_sidebar_agents(&mut self, agents: Vec<AgentPanelEntry>) {
+        self.sidebar_agents = agents;
     }
 
     fn apply_token_info(&mut self, info: TokenUsageInfo) {
@@ -1439,7 +1485,28 @@ impl ChatWidget {
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
         self.saw_plan_update_this_turn = true;
+        self.latest_update_plan = Some(update.clone());
         self.add_to_history(history_cell::new_plan_update(update));
+    }
+
+    fn track_loaded_skills_from_inputs(&mut self, items: &[UserInput]) {
+        for item in items {
+            let UserInput::Skill { name, path } = item else {
+                continue;
+            };
+            let dedupe_path = dunce::canonicalize(path).unwrap_or_else(|_| path.clone());
+            if self
+                .loaded_skills
+                .iter()
+                .any(|skill| skill.path == dedupe_path)
+            {
+                continue;
+            }
+            self.loaded_skills.push(LoadedSkillSummary {
+                name: name.clone(),
+                path: dedupe_path,
+            });
+        }
     }
 
     fn on_exec_approval_request(&mut self, id: String, ev: ExecApprovalRequestEvent) {
@@ -2332,6 +2399,7 @@ impl ChatWidget {
             pending_collab_spawn_requests: HashMap::new(),
             last_unified_wait: None,
             unified_exec_wait_streak: None,
+            loaded_skills: Vec::new(),
             turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
@@ -2365,6 +2433,9 @@ impl ChatWidget {
             saw_plan_item_this_turn: false,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
+            latest_proposed_plan_title: None,
+            latest_update_plan: None,
+            sidebar_agents: Vec::new(),
             last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
             last_transcript_area: std::cell::Cell::new(None),
@@ -2487,6 +2558,7 @@ impl ChatWidget {
             pending_collab_spawn_requests: HashMap::new(),
             last_unified_wait: None,
             unified_exec_wait_streak: None,
+            loaded_skills: Vec::new(),
             turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
@@ -2510,6 +2582,9 @@ impl ChatWidget {
             saw_plan_item_this_turn: false,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
+            latest_proposed_plan_title: None,
+            latest_update_plan: None,
+            sidebar_agents: Vec::new(),
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
@@ -2629,6 +2704,7 @@ impl ChatWidget {
             pending_collab_spawn_requests: HashMap::new(),
             last_unified_wait: None,
             unified_exec_wait_streak: None,
+            loaded_skills: Vec::new(),
             turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
@@ -2662,6 +2738,9 @@ impl ChatWidget {
             saw_plan_item_this_turn: false,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
+            latest_proposed_plan_title: None,
+            latest_update_plan: None,
+            sidebar_agents: Vec::new(),
             last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
             last_transcript_area: std::cell::Cell::new(None),
@@ -3535,6 +3614,8 @@ impl ChatWidget {
                 });
             }
         }
+
+        self.track_loaded_skills_from_inputs(&items);
 
         let effective_mode = self.effective_identity();
         let identity = if self.identities_enabled() {
@@ -6503,25 +6584,24 @@ impl ChatWidget {
     }
 
     fn sidebar_snapshot(&self) -> SidebarSnapshot {
-        let has_visible_unified_exec_processes =
-            self.visible_unified_exec_processes().next().is_some();
-        let task = (self.agent_turn_running
-            || self.mcp_startup_status.is_some()
-            || !self.queued_user_messages.is_empty()
-            || has_visible_unified_exec_processes)
-            .then(|| TaskPanelSnapshot {
-                status: if self.agent_turn_running || self.mcp_startup_status.is_some() {
-                    self.current_status.header.clone()
-                } else {
-                    "Idle".to_string()
-                },
-                detail: self.current_status.details.clone(),
-                queued_messages: self.queued_user_messages.len(),
-                active_commands: self
-                    .visible_unified_exec_processes()
-                    .map(|process| process.command_display.clone())
-                    .collect(),
+        let task = self
+            .latest_proposed_plan_title
+            .as_ref()
+            .map(|title| TaskPanelSnapshot {
+                title: title.clone(),
             });
+        let todo = self.latest_update_plan.as_ref().and_then(|plan| {
+            (!plan.plan.is_empty()).then(|| TodoPanelSnapshot {
+                items: plan
+                    .plan
+                    .iter()
+                    .map(|item| TodoPanelItem {
+                        step: item.step.clone(),
+                        status: item.status.clone(),
+                    })
+                    .collect(),
+            })
+        });
 
         let mcp = self.mcp_startup_status.as_ref().map(|statuses| {
             let mut snapshot = McpPanelSnapshot {
@@ -6542,7 +6622,7 @@ impl ChatWidget {
             snapshot
         });
 
-        let context = Some(ContextPanelSnapshot {
+        let status = Some(StatusPanelSnapshot {
             model: self.current_model().to_string(),
             identity: format!("{:?}", self.active_identity_kind()),
             used_tokens: self
@@ -6558,9 +6638,19 @@ impl ChatWidget {
 
         SidebarSnapshot {
             task,
+            todo,
             files: self.changed_files.iter().cloned().collect(),
+            agents: self.sidebar_agents.clone(),
+            skills: self
+                .loaded_skills
+                .iter()
+                .map(|skill| SkillPanelEntry {
+                    name: skill.name.clone(),
+                    path: skill.path.clone(),
+                })
+                .collect(),
             mcp,
-            context,
+            status,
         }
     }
 }
