@@ -549,6 +549,24 @@ impl TranscriptView {
             || self.user_scrolled_during_stream != old_user_scrolled_during_stream
     }
 
+    pub(crate) fn scroll_to_bottom(&mut self) -> bool {
+        let old = self.scroll_offset;
+        let old_stick_to_bottom = self.stick_to_bottom;
+        let old_user_scrolled_during_stream = self.user_scrolled_during_stream;
+
+        self.stick_to_bottom = true;
+        self.user_scrolled_during_stream = false;
+        if let (Some(total_height), Some(content_height)) =
+            (self.last_rendered_height, self.last_content_height)
+        {
+            self.scroll_offset = total_height.saturating_sub(content_height);
+        }
+
+        self.scroll_offset != old
+            || self.stick_to_bottom != old_stick_to_bottom
+            || self.user_scrolled_during_stream != old_user_scrolled_during_stream
+    }
+
     pub(crate) fn is_scrolled_to_bottom(&self) -> bool {
         if self.stick_to_bottom {
             return true;
@@ -2764,6 +2782,49 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("tail-7")),
             "expected newest tail to remain visible after ineffective mouse wheel scroll"
+        );
+    }
+
+    #[test]
+    fn scroll_to_bottom_restores_follow_bottom_after_manual_scroll() {
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(FixedHeightCell(20))]);
+        let area = Rect::new(0, 0, 12, 4);
+        let mut buf = Buffer::empty(area);
+
+        view.render_inline(area, &mut buf);
+        let at_tail = view.scroll_offset();
+        view.apply_scroll(TranscriptScroll::PageUp);
+        assert!(!view.is_scrolled_to_bottom());
+
+        assert!(view.scroll_to_bottom());
+        let mut buf = Buffer::empty(area);
+        view.render_inline(area, &mut buf);
+
+        assert!(view.is_scrolled_to_bottom());
+        assert_eq!(view.scroll_offset(), at_tail);
+    }
+
+    #[test]
+    fn scroll_to_bottom_keeps_follow_bottom_for_future_insert() {
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(FixedHeightCell(20))]);
+        let area = Rect::new(0, 0, 12, 4);
+        let mut buf = Buffer::empty(area);
+
+        view.render_inline(area, &mut buf);
+        view.apply_scroll(TranscriptScroll::PageUp);
+        assert!(!view.is_scrolled_to_bottom());
+
+        assert!(view.scroll_to_bottom());
+        view.insert_cell(Arc::new(TestCell("newest")));
+        let mut buf = Buffer::empty(area);
+        view.render_inline(area, &mut buf);
+
+        assert!(view.is_scrolled_to_bottom());
+        assert!(
+            area_lines(&buf, area)
+                .iter()
+                .any(|line| line.contains("newest")),
+            "expected newest inserted cell to remain visible"
         );
     }
 

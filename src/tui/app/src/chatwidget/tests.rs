@@ -2395,6 +2395,77 @@ async fn plan_implementation_popup_ignores_mouse_scroll_over_prompt() {
 }
 
 #[tokio::test]
+async fn submitting_user_message_scrolls_transcript_to_bottom() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let at_tail = chat.transcript_scroll_offset();
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::PageUp));
+    assert!(chat.transcript_scroll_offset() < at_tail);
+
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+
+    assert_eq!(chat.transcript_scroll_offset(), at_tail);
+}
+
+#[tokio::test]
+async fn turn_complete_scrolls_transcript_to_bottom() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let at_tail = chat.transcript_scroll_offset();
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::PageUp));
+    assert!(chat.transcript_scroll_offset() < at_tail);
+
+    chat.handle_codex_event(Event {
+        id: "turn-complete".to_string(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: Some("done".to_string()),
+        }),
+    });
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+
+    assert_eq!(chat.transcript_scroll_offset(), at_tail);
+}
+
+#[tokio::test]
+async fn replay_turn_complete_does_not_force_transcript_to_bottom() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let at_tail = chat.transcript_scroll_offset();
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::PageUp));
+    let scrolled_up = chat.transcript_scroll_offset();
+    assert!(scrolled_up < at_tail);
+
+    chat.handle_codex_event_replay(Event {
+        id: "turn-complete".to_string(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: Some("done".to_string()),
+        }),
+    });
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+
+    assert_eq!(chat.transcript_scroll_offset(), scrolled_up);
+}
+
+#[tokio::test]
 async fn mouse_down_in_bottom_pane_does_not_start_transcript_selection() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);

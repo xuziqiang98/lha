@@ -1127,6 +1127,9 @@ impl ChatWidget {
             self.needs_final_message_separator = false;
             self.had_work_activity = false;
         }
+        if !from_replay {
+            self.scroll_transcript_to_bottom();
+        }
         // Mark task stopped and request redraw now that all content is in history.
         self.agent_turn_running = false;
         self.turn_sleep_inhibitor
@@ -3545,6 +3548,8 @@ impl ChatWidget {
         if text.is_empty() && local_images.is_empty() {
             return;
         }
+
+        self.scroll_transcript_to_bottom();
 
         let mut items: Vec<UserInput> = Vec::new();
 
@@ -6524,6 +6529,12 @@ impl ChatWidget {
     #[cfg(test)]
     pub(crate) fn transcript_scroll_offset(&self) -> usize {
         self.transcript.borrow().scroll_offset()
+    }
+
+    fn scroll_transcript_to_bottom(&mut self) {
+        if self.transcript.borrow_mut().scroll_to_bottom() {
+            self.request_redraw();
+        }
     }
 
     fn sync_transcript_live_tail_for_width(&self, width: u16) {
