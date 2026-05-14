@@ -171,14 +171,13 @@ fn push_todo(lines: &mut Vec<Line<'static>>, todo: Option<&TodoPanelSnapshot>, w
 
     push_section(lines, "Todo");
     for item in todo.items.iter().take(8) {
-        let (marker, style) = match item.status {
-            StepStatus::Completed => ("[x] ", Style::default().dim().crossed_out()),
-            StepStatus::InProgress => ("[~] ", Style::default().cyan().bold()),
-            StepStatus::Pending => ("[ ] ", Style::default().dim()),
+        let style = match item.status {
+            StepStatus::Completed => Style::default().dim().crossed_out(),
+            StepStatus::InProgress => Style::default().cyan().bold(),
+            StepStatus::Pending => Style::default().dim(),
         };
         lines.push(Line::from(vec![
             "  ".into(),
-            marker.into(),
             truncate(&item.step, width).set_style(style),
         ]));
     }
@@ -463,9 +462,12 @@ mod tests {
         sorted.sort_unstable();
         assert_eq!(positions, sorted);
         assert!(rendered.contains("Build Sidebar"));
-        assert!(rendered.contains("[x] Explore codebase"));
-        assert!(rendered.contains("[~] Implement feature"));
-        assert!(rendered.contains("[ ] Write tests"));
+        assert!(rendered.contains("Explore codebase"));
+        assert!(rendered.contains("Implement feature"));
+        assert!(rendered.contains("Write tests"));
+        assert!(!rendered.contains("[x]"));
+        assert!(!rendered.contains("[~]"));
+        assert!(!rendered.contains("[ ]"));
         assert!(rendered.contains("Worker (worker) running"));
         let agent_line = rendered
             .lines()
