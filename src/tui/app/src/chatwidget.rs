@@ -1022,9 +1022,7 @@ impl ChatWidget {
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.saw_plan_item_this_turn = true;
-        if let Some(title) = extract_first_markdown_heading(&plan_text) {
-            self.latest_proposed_plan_title = Some(title);
-        }
+        self.latest_proposed_plan_title = extract_first_markdown_heading(&plan_text);
         if let Some(mut controller) = self.plan_stream_controller.take()
             && let Some(cell) = controller.finalize()
         {
