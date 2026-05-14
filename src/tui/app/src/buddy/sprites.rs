@@ -38,13 +38,11 @@ pub(crate) fn render_sprite(
     for line in &mut lines {
         *line = line.replace("{E}", eye);
     }
-    let mut preserve_hat_line = false;
     if let Some(hat_line) = hat_line(hat)
         && let Some(first_line) = lines.first_mut()
         && first_line.trim().is_empty()
     {
         *first_line = hat_line.to_string();
-        preserve_hat_line = true;
     }
     if lines.first().is_some_and(|line| line.trim().is_empty())
         && frames.iter().all(|frame| frame[0].trim().is_empty())
@@ -53,26 +51,14 @@ pub(crate) fn render_sprite(
     }
     lines
         .into_iter()
-        .enumerate()
-        .map(|(index, line)| {
-            if preserve_hat_line
-                && index == 0
-                && UnicodeWidthStr::width(line.as_str()) == SPRITE_WIDTH
-            {
-                line
-            } else {
-                centered_to_width(line.trim(), SPRITE_WIDTH)
-            }
-        })
+        .map(|line| normalize_to_width(&line, SPRITE_WIDTH))
         .collect()
 }
 
-fn centered_to_width(text: &str, width: usize) -> String {
+fn normalize_to_width(text: &str, width: usize) -> String {
     let text = truncate_to_width(text, width);
     let text_width = UnicodeWidthStr::width(text.as_str());
-    let left_pad = width.saturating_sub(text_width) / 2;
-    let right_pad = width.saturating_sub(text_width + left_pad);
-    format!("{}{}{}", " ".repeat(left_pad), text, " ".repeat(right_pad))
+    format!("{}{}", text, " ".repeat(width.saturating_sub(text_width)))
 }
 
 fn truncate_to_width(text: &str, width: usize) -> String {
@@ -142,21 +128,21 @@ const DUCK: [[&str; 5]; FRAMES] = [
         "    __      ",
         "  <({E} )___  ",
         "   (  ._>   ",
-        "    `--`    ",
+        "    `--´    ",
     ],
     [
         "            ",
         "    __      ",
         "  <({E} )___  ",
         "   (  ._>   ",
-        "    `--`~   ",
+        "    `--´~   ",
     ],
     [
         "            ",
         "    __      ",
         "  <({E} )___  ",
         "   (  .__>  ",
-        "    `--`    ",
+        "    `--´    ",
     ],
 ];
 const GOOSE: [[&str; 5]; FRAMES] = [
@@ -188,67 +174,67 @@ const BLOB: [[&str; 5]; FRAMES] = [
         "   .----.   ",
         "  ( {E}  {E} )  ",
         "  (      )  ",
-        "   `----`   ",
+        "   `----´   ",
     ],
     [
         "            ",
         "  .------.  ",
         " (  {E}  {E}  ) ",
         " (        ) ",
-        "  `------`  ",
+        "  `------´  ",
     ],
     [
         "            ",
         "    .--.    ",
         "   ({E}  {E})   ",
         "   (    )   ",
-        "    `--`    ",
+        "    `--´    ",
     ],
 ];
 const CAT: [[&str; 5]; FRAMES] = [
     [
         "            ",
-        "   /\\_/\\\\    ",
+        "   /\\_/\\    ",
         "  ( {E}   {E})  ",
-        "  (  w  )   ",
+        "  (  ω  )   ",
         "  (\")_(\")   ",
     ],
     [
         "            ",
-        "   /\\_/\\\\    ",
+        "   /\\_/\\    ",
         "  ( {E}   {E})  ",
-        "  (  w  )   ",
+        "  (  ω  )   ",
         "  (\")_(\")~  ",
     ],
     [
         "            ",
-        "   /\\-/\\\\    ",
+        "   /\\-/\\    ",
         "  ( {E}   {E})  ",
-        "  (  w  )   ",
+        "  (  ω  )   ",
         "  (\")_(\")   ",
     ],
 ];
 const DRAGON: [[&str; 5]; FRAMES] = [
     [
         "            ",
-        "  /^\\\\  /^\\\\  ",
+        "  /^\\  /^\\  ",
         " <  {E}  {E}  > ",
         " (   ~~   ) ",
-        "  `-vvvv-`  ",
+        "  `-vvvv-´  ",
     ],
     [
         "            ",
-        "  /^\\\\  /^\\\\  ",
+        "  /^\\  /^\\  ",
         " <  {E}  {E}  > ",
         " (        ) ",
-        "  `-vvvv-`  ",
+        "  `-vvvv-´  ",
     ],
     [
         "   ~    ~   ",
-        "  /^\\\\  /^\\\\  ",
+        "  /^\\  /^\\  ",
         " <  {E}  {E}  > ",
         " (   ~~   ) ",
-        "  `-vvvv-`  ",
+        "  `-vvvv-´  ",
     ],
 ];
 const OCTOPUS: [[&str; 5]; FRAMES] = [
@@ -277,24 +263,24 @@ const OCTOPUS: [[&str; 5]; FRAMES] = [
 const OWL: [[&str; 5]; FRAMES] = [
     [
         "            ",
-        "  /\\  /\\  ",
-        " (({E})({E})) ",
-        " (  ><  ) ",
-        "  `----`  ",
+        "   /\\  /\\   ",
+        "  (({E})({E}))  ",
+        "  (  ><  )  ",
+        "   `----´   ",
     ],
     [
         "            ",
-        "  /\\  /\\  ",
-        " (({E})({E})) ",
-        " (  ><  ) ",
-        "  .----.  ",
+        "   /\\  /\\   ",
+        "  (({E})({E}))  ",
+        "  (  ><  )  ",
+        "   .----.   ",
     ],
     [
         "            ",
-        "  /\\  /\\  ",
-        " (({E})({E})) ",
-        " (  ><  ) ",
-        "  `----`  ",
+        "   /\\  /\\   ",
+        "  (({E})(-))  ",
+        "  (  ><  )  ",
+        "   `----´   ",
     ],
 ];
 const PENGUIN: [[&str; 5]; FRAMES] = [
@@ -302,21 +288,21 @@ const PENGUIN: [[&str; 5]; FRAMES] = [
         "            ",
         "  .---.     ",
         "  ({E}>{E})     ",
-        " /(   )\\\\    ",
-        "  `---`     ",
+        " /(   )\\    ",
+        "  `---´     ",
     ],
     [
         "            ",
         "  .---.     ",
         "  ({E}>{E})     ",
         " |(   )|    ",
-        "  `---`     ",
+        "  `---´     ",
     ],
     [
         "  .---.     ",
         "  ({E}>{E})     ",
-        " /(   )\\\\    ",
-        "  `---`     ",
+        " /(   )\\    ",
+        "  `---´     ",
         "   ~ ~      ",
     ],
 ];
@@ -347,22 +333,22 @@ const SNAIL: [[&str; 5]; FRAMES] = [
     [
         "            ",
         " {E}    .--.  ",
-        "  \\\\  ( @ )  ",
-        "   \\\\_`--`   ",
+        "  \\  ( @ )  ",
+        "   \\_`--´   ",
         "  ~~~~~~~   ",
     ],
     [
         "            ",
         "  {E}   .--.  ",
         "  |  ( @ )  ",
-        "   \\\\_`--`   ",
+        "   \\_`--´   ",
         "  ~~~~~~~   ",
     ],
     [
         "            ",
         " {E}    .--.  ",
-        "  \\\\  ( @  ) ",
-        "   \\\\_`--`   ",
+        "  \\  ( @  ) ",
+        "   \\_`--´   ",
         "   ~~~~~~   ",
     ],
 ];
@@ -370,184 +356,184 @@ const GHOST: [[&str; 5]; FRAMES] = [
     [
         "            ",
         "   .----.   ",
-        "  ( {E}  {E} )  ",
-        "  |  ..  |  ",
-        "  `~~~~~~`  ",
+        "  / {E}  {E} \\  ",
+        "  |      |  ",
+        "  ~`~``~`~  ",
     ],
     [
         "            ",
         "   .----.   ",
-        "  ( {E}  {E} )  ",
+        "  / {E}  {E} \\  ",
         "  |      |  ",
-        "  `~~~~~~`  ",
+        "  `~`~~`~`  ",
     ],
     [
-        "     .      ",
+        "    ~  ~    ",
         "   .----.   ",
-        "  ( {E}  {E} )  ",
-        "  |  ..  |  ",
-        "  `~~~~~~`  ",
+        "  / {E}  {E} \\  ",
+        "  |      |  ",
+        "  ~~`~~`~~  ",
     ],
 ];
 const AXOLOTL: [[&str; 5]; FRAMES] = [
     [
         "            ",
-        "  ~=\\__/=~  ",
-        "  ( {E}  {E} )  ",
-        "   /|~~|\\\\   ",
-        "    /  \\\\    ",
+        "}~(______)~{",
+        "}~({E} .. {E})~{",
+        "  ( .--. )  ",
+        "  (_/  \\_)  ",
     ],
     [
         "            ",
-        "  ~=\\__/=~  ",
-        "  ( {E}  {E} )  ",
-        "   /|==|\\\\   ",
-        "    /  \\\\    ",
+        "~}(______){~",
+        "~}({E} .. {E}){~",
+        "  ( .--. )  ",
+        "  (_/  \\_)  ",
     ],
     [
-        "   ~   ~    ",
-        "  ~=\\__/=~  ",
-        "  ( {E}  {E} )  ",
-        "   /|~~|\\\\   ",
-        "    /  \\\\    ",
+        "            ",
+        "}~(______)~{",
+        "}~({E} .. {E})~{",
+        "  (  --  )  ",
+        "  ~_/  \\_~  ",
     ],
 ];
 const CAPYBARA: [[&str; 5]; FRAMES] = [
     [
         "            ",
-        "   .----.   ",
-        " _( {E}  {E} )_ ",
-        "(__________) ",
-        "  /_/  \\\\_\\\\  ",
+        "  n______n  ",
+        " ( {E}    {E} ) ",
+        " (   oo   ) ",
+        "  `------´  ",
     ],
     [
         "            ",
-        "   .----.   ",
-        " _( {E}  {E} )_ ",
-        "(__________)~",
-        "  /_/  \\\\_\\\\  ",
+        "  n______n  ",
+        " ( {E}    {E} ) ",
+        " (   Oo   ) ",
+        "  `------´  ",
     ],
     [
-        "            ",
-        "   .----.   ",
-        " _( {E}  {E} )_ ",
-        "(_________)  ",
-        "  /_/  \\\\_\\\\  ",
+        "    ~  ~    ",
+        "  u______n  ",
+        " ( {E}    {E} ) ",
+        " (   oo   ) ",
+        "  `------´  ",
     ],
 ];
 const CACTUS: [[&str; 5]; FRAMES] = [
     [
         "            ",
-        "    _ _     ",
-        "  _| {E}|_   ",
-        " |  ___  |  ",
-        "    |_|     ",
+        " n  ____  n ",
+        " | |{E}  {E}| | ",
+        " |_|    |_| ",
+        "   |    |   ",
     ],
     [
         "            ",
-        "    _ _     ",
-        "  _| {E}|_   ",
-        " | |_ _| |  ",
-        "    |_|     ",
+        "    ____    ",
+        " n |{E}  {E}| n ",
+        " |_|    |_| ",
+        "   |    |   ",
     ],
     [
-        "     *      ",
-        "    _ _     ",
-        "  _| {E}|_   ",
-        " |  ___  |  ",
-        "    |_|     ",
+        " n        n ",
+        " |  ____  | ",
+        " | |{E}  {E}| | ",
+        " |_|    |_| ",
+        "   |    |   ",
     ],
 ];
 const ROBOT: [[&str; 5]; FRAMES] = [
     [
         "            ",
-        "  .------.  ",
-        "  | {E}  {E} |  ",
-        "  | [__] |  ",
-        "   /|_|\\\\   ",
+        "   .[||].   ",
+        "  [ {E}  {E} ]  ",
+        "  [ ==== ]  ",
+        "  `------´  ",
     ],
     [
         "            ",
-        "  .------.  ",
-        "  | {E}  {E} |  ",
-        "  | [__] |  ",
-        "  _/|_|\\\\_  ",
+        "   .[||].   ",
+        "  [ {E}  {E} ]  ",
+        "  [ -==- ]  ",
+        "  `------´  ",
     ],
     [
-        "   .----.   ",
-        "  .------.  ",
-        "  | {E}  {E} |  ",
-        "  | [__] |  ",
-        "   /|_|\\\\   ",
+        "     *      ",
+        "   .[||].   ",
+        "  [ {E}  {E} ]  ",
+        "  [ ==== ]  ",
+        "  `------´  ",
     ],
 ];
 const RABBIT: [[&str; 5]; FRAMES] = [
     [
-        "  ()  ()    ",
-        "  ( {E}  {E} )   ",
-        "  /  --  \\\\  ",
-        " (________) ",
-        "   /    \\\\   ",
+        "            ",
+        "   (\\__/)   ",
+        "  ( {E}  {E} )  ",
+        " =(  ..  )= ",
+        "  (\")__(\")  ",
     ],
     [
-        "  ()  ()    ",
-        "  ( {E}  {E} )   ",
-        "  /  --  \\\\  ",
-        " (________)~",
-        "   /    \\\\   ",
+        "            ",
+        "   (|__/)   ",
+        "  ( {E}  {E} )  ",
+        " =(  ..  )= ",
+        "  (\")__(\")  ",
     ],
     [
-        "  /\\  /\\    ",
-        "  ( {E}  {E} )   ",
-        "  /  --  \\\\  ",
-        " (________) ",
-        "   /    \\\\   ",
+        "            ",
+        "   (\\__/)   ",
+        "  ( {E}  {E} )  ",
+        " =( .  . )= ",
+        "  (\")__(\")  ",
     ],
 ];
 const MUSHROOM: [[&str; 5]; FRAMES] = [
     [
-        "   .----.   ",
-        " /( {E}  {E} )\\\\ ",
-        " `-.____.-`  ",
-        "    ||||     ",
-        "    ||||     ",
+        "            ",
+        " .-o-OO-o-. ",
+        "(__________)",
+        "   |{E}  {E}|   ",
+        "   |____|   ",
     ],
     [
-        "   .----.   ",
-        " /( {E}  {E} )\\\\ ",
-        " `-.____.-`~ ",
-        "    ||||     ",
-        "    ||||     ",
+        "            ",
+        " .-O-oo-O-. ",
+        "(__________)",
+        "   |{E}  {E}|   ",
+        "   |____|   ",
     ],
     [
-        "    .--.    ",
-        " /( {E}  {E} )\\\\ ",
-        " `-.____.-`  ",
-        "    ||||     ",
-        "    ||||     ",
+        "   . o  .   ",
+        " .-o-OO-o-. ",
+        "(__________)",
+        "   |{E}  {E}|   ",
+        "   |____|   ",
     ],
 ];
 const CHONK: [[&str; 5]; FRAMES] = [
     [
         "            ",
-        "  .------.  ",
-        " ( {E}  .. {E} ) ",
-        "(__________) ",
-        "  /_/  \\\\_\\\\  ",
+        "  /\\    /\\  ",
+        " ( {E}    {E} ) ",
+        " (   ..   ) ",
+        "  `------´  ",
     ],
     [
         "            ",
-        "  .------.  ",
-        " ( {E}  .. {E} ) ",
-        "(__________)~",
-        "  /_/  \\\\_\\\\  ",
+        "  /\\    /|  ",
+        " ( {E}    {E} ) ",
+        " (   ..   ) ",
+        "  `------´  ",
     ],
     [
         "            ",
-        "  .------.  ",
-        " ( {E}  -- {E} ) ",
-        "(__________) ",
-        "  /_/  \\\\_\\\\  ",
+        "  /\\    /\\  ",
+        " ( {E}    {E} ) ",
+        " (   ..   ) ",
+        "  `------´~ ",
     ],
 ];
 
@@ -660,7 +646,7 @@ mod tests {
                 false,
                 2,
             )[0],
-            "   .---.    "
+            "  .---.     "
         );
     }
 
@@ -713,18 +699,141 @@ mod tests {
     }
 
     #[test]
-    fn owl_sprite_is_symmetric_across_frames() {
-        for frame in 0..sprite_frame_count(BuddySpecies::Owl) {
-            let sprite = render_sprite(
-                BuddySpecies::Owl,
-                BuddyEye::Degree,
-                BuddyHat::None,
-                false,
-                frame,
+    fn owl_sprite_matches_claude_code_frames() {
+        let frames = (0..sprite_frame_count(BuddySpecies::Owl))
+            .map(|frame| {
+                render_sprite(
+                    BuddySpecies::Owl,
+                    BuddyEye::Degree,
+                    BuddyHat::None,
+                    false,
+                    frame,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            frames,
+            vec![
+                vec![
+                    "   /\\  /\\   ".to_string(),
+                    "  ((°)(°))  ".to_string(),
+                    "  (  ><  )  ".to_string(),
+                    "   `----´   ".to_string(),
+                ],
+                vec![
+                    "   /\\  /\\   ".to_string(),
+                    "  ((°)(°))  ".to_string(),
+                    "  (  ><  )  ".to_string(),
+                    "   .----.   ".to_string(),
+                ],
+                vec![
+                    "   /\\  /\\   ".to_string(),
+                    "  ((°)(-))  ".to_string(),
+                    "  (  ><  )  ".to_string(),
+                    "   `----´   ".to_string(),
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn changed_species_match_claude_code_shapes() {
+        let cases = [
+            (
+                BuddySpecies::Cat,
+                vec![
+                    "   /\\_/\\    ".to_string(),
+                    "  ( °   °)  ".to_string(),
+                    "  (  ω  )   ".to_string(),
+                    "  (\")_(\")   ".to_string(),
+                ],
+            ),
+            (
+                BuddySpecies::Ghost,
+                vec![
+                    "            ".to_string(),
+                    "   .----.   ".to_string(),
+                    "  / °  ° \\  ".to_string(),
+                    "  |      |  ".to_string(),
+                    "  ~`~``~`~  ".to_string(),
+                ],
+            ),
+            (
+                BuddySpecies::Axolotl,
+                vec![
+                    "}~(______)~{".to_string(),
+                    "}~(° .. °)~{".to_string(),
+                    "  ( .--. )  ".to_string(),
+                    "  (_/  \\_)  ".to_string(),
+                ],
+            ),
+            (
+                BuddySpecies::Capybara,
+                vec![
+                    "            ".to_string(),
+                    "  n______n  ".to_string(),
+                    " ( °    ° ) ".to_string(),
+                    " (   oo   ) ".to_string(),
+                    "  `------´  ".to_string(),
+                ],
+            ),
+            (
+                BuddySpecies::Cactus,
+                vec![
+                    "            ".to_string(),
+                    " n  ____  n ".to_string(),
+                    " | |°  °| | ".to_string(),
+                    " |_|    |_| ".to_string(),
+                    "   |    |   ".to_string(),
+                ],
+            ),
+            (
+                BuddySpecies::Robot,
+                vec![
+                    "            ".to_string(),
+                    "   .[||].   ".to_string(),
+                    "  [ °  ° ]  ".to_string(),
+                    "  [ ==== ]  ".to_string(),
+                    "  `------´  ".to_string(),
+                ],
+            ),
+            (
+                BuddySpecies::Rabbit,
+                vec![
+                    "   (\\__/)   ".to_string(),
+                    "  ( °  ° )  ".to_string(),
+                    " =(  ..  )= ".to_string(),
+                    "  (\")__(\")  ".to_string(),
+                ],
+            ),
+            (
+                BuddySpecies::Mushroom,
+                vec![
+                    "            ".to_string(),
+                    " .-o-OO-o-. ".to_string(),
+                    "(__________)".to_string(),
+                    "   |°  °|   ".to_string(),
+                    "   |____|   ".to_string(),
+                ],
+            ),
+            (
+                BuddySpecies::Chonk,
+                vec![
+                    "  /\\    /\\  ".to_string(),
+                    " ( °    ° ) ".to_string(),
+                    " (   ..   ) ".to_string(),
+                    "  `------´  ".to_string(),
+                ],
+            ),
+        ];
+
+        for (species, expected) in cases {
+            assert_eq!(
+                render_sprite(species, BuddyEye::Degree, BuddyHat::None, false, 0),
+                expected,
+                "species={species:?}"
             );
-            assert_eq!(sprite[0], "   /\\  /\\   ");
-            assert_eq!(sprite[1], "  ((°)(°))  ");
-            assert_eq!(sprite[2], "  (  ><  )  ");
         }
     }
 

@@ -3498,7 +3498,7 @@ mod tests {
         composer.render(area, &mut buf);
 
         let rows = render_buffer_rows(&buf, area);
-        let hat_center = row_substring_center_x2(&rows[buddy_rect.y as usize], "-|-");
+        let hat_center = row_substring_center_x2(&rows[buddy_rect.y as usize], "-+-");
         let face_center = row_substring_center_x2(&rows[buddy_rect.y as usize + 2], "<  ×  ×  >");
         let name_center = row_substring_center_x2(&rows[buddy_rect.y as usize + 5], "Pixel");
 

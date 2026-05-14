@@ -57,7 +57,13 @@ pub(crate) fn render_buddy(
             Constraint::Length(sprite_width + layout::SPRITE_PADDING_X),
         ])
         .areas(content_area);
-        bubble::render_bubble(bubble_area, buf, &reaction.text, state.reaction_fading());
+        bubble::render_bubble(
+            bubble_area,
+            buf,
+            &reaction.text,
+            state.reaction_fading(),
+            sprite_color,
+        );
         sprite_area
     } else {
         content_area
@@ -133,7 +139,7 @@ fn centered_column(area: Rect, width: u16) -> Rect {
 }
 
 fn centered_sprite_line(text: String, width: u16, style: Style) -> Line<'static> {
-    centered_line(text.trim().to_string(), width, style)
+    centered_line(text, width, style)
 }
 
 fn centered_line(text: String, width: u16, style: Style) -> Line<'static> {
