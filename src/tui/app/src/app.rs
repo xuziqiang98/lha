@@ -600,12 +600,23 @@ pub(crate) struct App {
     pending_primary_events: VecDeque<Event>,
     review_parent_by_child: HashMap<ThreadId, ThreadId>,
     non_git_changelog_baselines: HashMap<PathBuf, Arc<NonGitBaselineTracker>>,
-    provider_config_modal: Option<ProviderConfigModal>,
+    provider_config_modal: Option<ProviderConfigModalState>,
     project_trust_modal: Option<ProjectTrustModal>,
     identity_modal: Option<IdentityModal>,
     pending_startup_trust_prompt: bool,
     deferred_initial_user_message: Option<UserMessage>,
     deferred_startup_continuation: Option<DeferredStartupContinuation>,
+}
+
+struct ProviderConfigModalState {
+    mode: ProviderConfigModalMode,
+    modal: ProviderConfigModal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderConfigModalMode {
+    Startup,
+    InSession,
 }
 
 #[derive(Default)]
@@ -1393,7 +1404,10 @@ impl App {
         let provider_label = display_model_provider_ref(&provider_id);
         let model = config.model.clone();
 
-        let was_startup_provider_modal = self.provider_config_modal.is_some();
+        let was_startup_provider_modal = self
+            .provider_config_modal
+            .as_ref()
+            .is_some_and(|state| state.mode == ProviderConfigModalMode::Startup);
         self.provider_config_modal = None;
         self.chat_widget.dismiss_active_view();
 
@@ -2258,13 +2272,15 @@ impl App {
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
-        let provider_config_modal = show_provider_popup_on_startup.then(|| {
-            ProviderConfigModal::new(
-                config.adam_home.clone(),
-                app_event_tx.clone(),
-                tui.frame_requester(),
-            )
-        });
+        let provider_config_modal =
+            show_provider_popup_on_startup.then(|| ProviderConfigModalState {
+                mode: ProviderConfigModalMode::Startup,
+                modal: ProviderConfigModal::new(
+                    config.adam_home.clone(),
+                    app_event_tx.clone(),
+                    tui.frame_requester(),
+                ),
+            });
         let project_trust_modal = (show_trust_popup_on_startup && !show_provider_popup_on_startup)
             .then(|| ProjectTrustModal::new(config.cwd.clone()));
 
@@ -2449,8 +2465,8 @@ impl App {
                     return self.handle_provider_config_modal_key(tui, key_event).await;
                 }
                 TuiEvent::Paste(pasted) => {
-                    if let Some(modal) = self.provider_config_modal.as_mut() {
-                        modal.handle_paste(pasted.replace("\r", "\n"));
+                    if let Some(state) = self.provider_config_modal.as_mut() {
+                        state.modal.handle_paste(pasted.replace("\r", "\n"));
                         tui.frame_requester().schedule_frame();
                     }
                 }
@@ -2525,9 +2541,9 @@ impl App {
         let size = tui.terminal.size()?;
         tui.draw(size.height, |frame| {
             self.chat_widget.render(frame.area(), frame.buffer);
-            if let Some(modal) = &self.provider_config_modal {
-                modal.render(frame.area(), frame.buffer);
-                if let Some((x, y)) = modal.cursor_pos(frame.area()) {
+            if let Some(state) = &self.provider_config_modal {
+                state.modal.render(frame.area(), frame.buffer);
+                if let Some((x, y)) = state.modal.cursor_pos(frame.area()) {
                     frame.set_cursor_position((x, y));
                 }
             } else if let Some(modal) = &self.project_trust_modal {
@@ -2554,7 +2570,7 @@ impl App {
         let action = self
             .provider_config_modal
             .as_mut()
-            .map(|modal| modal.handle_key_event(key_event))
+            .map(|state| state.modal.handle_key_event(key_event))
             .unwrap_or(ProviderConfigModalAction::None);
         match action {
             ProviderConfigModalAction::None => {
@@ -2562,10 +2578,25 @@ impl App {
                 Ok(AppRunControl::Continue)
             }
             ProviderConfigModalAction::Exit => {
-                self.provider_config_modal = None;
-                let exit_mode = self.provider_config_exit_mode();
-                self.handle_event(tui, AppEvent::Exit(exit_mode)).await
+                if let Some(exit_mode) = self.close_provider_config_modal_for_exit() {
+                    self.handle_event(tui, AppEvent::Exit(exit_mode)).await
+                } else {
+                    Ok(AppRunControl::Continue)
+                }
             }
+        }
+    }
+
+    fn close_provider_config_modal_for_exit(&mut self) -> Option<ExitMode> {
+        let mode = self
+            .provider_config_modal
+            .as_ref()
+            .map(|state| state.mode)
+            .unwrap_or(ProviderConfigModalMode::InSession);
+        self.provider_config_modal = None;
+        match mode {
+            ProviderConfigModalMode::Startup => Some(self.provider_config_exit_mode()),
+            ProviderConfigModalMode::InSession => None,
         }
     }
 
@@ -3022,6 +3053,9 @@ impl App {
                 self.chat_widget.on_connectors_loaded(result);
             }
             AppEvent::OpenIdentityModal => self.open_identity_modal(),
+            AppEvent::OpenProviderConfigModal => {
+                self.open_provider_config_modal(ProviderConfigModalMode::InSession);
+            }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
             }
@@ -3791,6 +3825,19 @@ impl App {
         self.chat_widget.request_redraw_for_ui();
     }
 
+    fn open_provider_config_modal(&mut self, mode: ProviderConfigModalMode) {
+        self.chat_widget.dismiss_active_view();
+        self.provider_config_modal = Some(ProviderConfigModalState {
+            mode,
+            modal: ProviderConfigModal::new(
+                self.config.adam_home.clone(),
+                self.app_event_tx.clone(),
+                self.chat_widget.frame_requester(),
+            ),
+        });
+        self.chat_widget.request_redraw_for_ui();
+    }
+
     fn personality_label(personality: Personality) -> &'static str {
         match personality {
             Personality::Friendly => "Friendly",
@@ -4191,6 +4238,48 @@ mod tests {
             app.config.last_selected_identity,
             Some(IdentityKind::Planner)
         );
+    }
+
+    #[tokio::test]
+    async fn open_provider_config_modal_event_creates_centered_modal() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        app.open_provider_config_modal(ProviderConfigModalMode::InSession);
+
+        assert!(app.provider_config_modal.is_some());
+        assert_eq!(
+            app.provider_config_modal.as_ref().map(|state| state.mode),
+            Some(ProviderConfigModalMode::InSession)
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_in_session_modal_exit_only_closes_modal() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        app.open_provider_config_modal(ProviderConfigModalMode::InSession);
+
+        let exit_mode = app.close_provider_config_modal_for_exit();
+
+        assert_eq!(exit_mode, None);
+        assert!(app.provider_config_modal.is_none());
+    }
+
+    #[tokio::test]
+    async fn provider_startup_modal_exit_returns_exit_mode() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        app.provider_config_modal = Some(ProviderConfigModalState {
+            mode: ProviderConfigModalMode::Startup,
+            modal: ProviderConfigModal::new(
+                app.config.adam_home.clone(),
+                app.app_event_tx.clone(),
+                tui::FrameRequester::test_dummy(),
+            ),
+        });
+
+        let exit_mode = app.close_provider_config_modal_for_exit();
+
+        assert_eq!(exit_mode, Some(ExitMode::Immediate));
+        assert!(app.provider_config_modal.is_none());
     }
 
     #[tokio::test]
@@ -5416,11 +5505,14 @@ show_raw_agent_reasoning = true
             model_context_window: None,
         };
         persist_provider_fixture(&app.config.adam_home, &saved);
-        app.provider_config_modal = Some(ProviderConfigModal::new(
-            app.config.adam_home.clone(),
-            app.app_event_tx.clone(),
-            tui::FrameRequester::test_dummy(),
-        ));
+        app.provider_config_modal = Some(ProviderConfigModalState {
+            mode: ProviderConfigModalMode::Startup,
+            modal: ProviderConfigModal::new(
+                app.config.adam_home.clone(),
+                app.app_event_tx.clone(),
+                tui::FrameRequester::test_dummy(),
+            ),
+        });
         app.project_trust_modal = None;
         app.pending_startup_trust_prompt = true;
         app.deferred_startup_continuation = Some(DeferredStartupContinuation::StartFresh);

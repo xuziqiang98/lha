@@ -146,6 +146,9 @@ pub(crate) enum AppEvent {
     /// Open the centered identity selection modal.
     OpenIdentityModal,
 
+    /// Open the centered provider configuration modal.
+    OpenProviderConfigModal,
+
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),
 

@@ -2212,6 +2212,14 @@ fn drain_insert_history(
     out
 }
 
+fn drain_events(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> Vec<AppEvent> {
+    let mut out = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        out.push(event);
+    }
+    out
+}
+
 fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
     let mut s = String::new();
     for line in lines {
@@ -5731,23 +5739,12 @@ async fn disabled_slash_command_while_task_running_snapshot() {
 
 #[tokio::test]
 async fn providers_command_opens_provider_wizard() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.dispatch_command(SlashCommand::Providers);
 
-    let popup = render_bottom_popup(&chat, 80);
-    assert!(
-        popup.contains("Configure a custom API provider"),
-        "expected provider wizard to be shown:\n{popup}"
-    );
-    assert!(
-        popup.contains("Step 1/6: Provider ID"),
-        "expected provider wizard to start on provider id:\n{popup}"
-    );
-    assert!(
-        popup.contains("~/.adam/models.json"),
-        "expected provider wizard copy to mention models.json:\n{popup}"
-    );
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenProviderConfigModal));
+    assert!(!render_bottom_popup(&chat, 80).contains("Configure a custom API provider"));
 }
 
 #[tokio::test]
@@ -5761,12 +5758,17 @@ async fn missing_models_json_blocks_model_submit_and_opens_provider_wizard() {
         op_rx.try_recv().is_err(),
         "missing models.json must not submit a model turn"
     );
-    let popup = render_bottom_popup(&chat, 80);
+    let events = drain_events(&mut rx);
     assert!(
-        popup.contains("Configure a custom API provider"),
-        "expected provider wizard to be shown:\n{popup}"
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::OpenProviderConfigModal))
     );
-    let cells = drain_insert_history(&mut rx);
+    let cells = events
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .map(|cell| cell.display_lines(80))
+        .collect::<Vec<_>>();
     let blob = lines_to_single_string(cells.last().expect("info message cell"));
     assert!(blob.contains("Configure a model provider before starting a session."));
 }
@@ -5778,29 +5780,19 @@ async fn missing_models_json_routes_model_command_to_provider_wizard() {
 
     chat.dispatch_command(SlashCommand::Model);
 
-    let popup = render_bottom_popup(&chat, 80);
+    let events = drain_events(&mut rx);
     assert!(
-        popup.contains("Configure a custom API provider"),
-        "expected provider wizard to be shown:\n{popup}"
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::OpenProviderConfigModal))
     );
-    let cells = drain_insert_history(&mut rx);
+    let cells = events
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .map(|cell| cell.display_lines(80))
+        .collect::<Vec<_>>();
     let blob = lines_to_single_string(cells.last().expect("info message cell"));
     assert!(blob.contains("Configure a model provider before choosing a model."));
-}
-
-#[tokio::test]
-async fn required_provider_config_ctrl_c_exits_immediately() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
-    chat.config.provider_config_required = true;
-    chat.open_provider_popup();
-
-    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
-
-    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::Immediate)));
-    assert!(
-        op_rx.try_recv().is_err(),
-        "ctrl+c should not send shutdown ops"
-    );
 }
 
 #[tokio::test]
@@ -5817,13 +5809,11 @@ async fn missing_models_json_startup_does_not_emit_info_history_cell() {
     let (chat, mut rx) = make_provider_required_chatwidget(true).await;
     let popup = render_bottom_popup(&chat, 80);
     assert!(
-        popup.contains("Configure a custom API provider"),
-        "expected provider wizard to be shown:\n{popup}"
+        !popup.contains("Configure a custom API provider"),
+        "startup provider modal should be owned by App, not the bottom pane:\n{popup}"
     );
-    assert!(
-        rx.try_recv().is_err(),
-        "startup should not emit transcript history cells for required provider config"
-    );
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenProviderConfigModal));
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[tokio::test]
@@ -5850,6 +5840,7 @@ async fn providers_command_is_disabled_while_task_running() {
     let cells = drain_insert_history(&mut rx);
     let blob = lines_to_single_string(cells.last().expect("error message cell"));
     assert!(blob.contains("'/providers' is disabled while a task is in progress."));
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
     assert!(!render_bottom_popup(&chat, 80).contains("Configure a custom API provider"));
 }
 

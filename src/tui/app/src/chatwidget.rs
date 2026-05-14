@@ -163,7 +163,6 @@ use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
-use crate::bottom_pane::provider_config_view::ProviderConfigView;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::clipboard_text::write_text_to_clipboard;
 use crate::collab;
@@ -4201,11 +4200,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_provider_popup(&mut self) {
-        self.bottom_pane.show_view(Box::new(ProviderConfigView::new(
-            self.config.adam_home.clone(),
-            self.app_event_tx.clone(),
-            self.frame_requester.clone(),
-        )));
+        self.app_event_tx.send(AppEvent::OpenProviderConfigModal);
         self.request_redraw();
     }
 
@@ -5833,6 +5828,10 @@ impl ChatWidget {
 
     pub(crate) fn request_redraw_for_ui(&mut self) {
         self.request_redraw();
+    }
+
+    pub(crate) fn frame_requester(&self) -> FrameRequester {
+        self.frame_requester.clone()
     }
 
     fn connectors_enabled(&self) -> bool {
