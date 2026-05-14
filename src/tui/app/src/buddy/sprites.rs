@@ -38,11 +38,13 @@ pub(crate) fn render_sprite(
     for line in &mut lines {
         *line = line.replace("{E}", eye);
     }
+    let mut preserve_hat_line = false;
     if let Some(hat_line) = hat_line(hat)
         && let Some(first_line) = lines.first_mut()
         && first_line.trim().is_empty()
     {
         *first_line = hat_line.to_string();
+        preserve_hat_line = true;
     }
     if lines.first().is_some_and(|line| line.trim().is_empty())
         && frames.iter().all(|frame| frame[0].trim().is_empty())
@@ -51,7 +53,17 @@ pub(crate) fn render_sprite(
     }
     lines
         .into_iter()
-        .map(|line| centered_to_width(line.trim(), SPRITE_WIDTH))
+        .enumerate()
+        .map(|(index, line)| {
+            if preserve_hat_line
+                && index == 0
+                && UnicodeWidthStr::width(line.as_str()) == SPRITE_WIDTH
+            {
+                line
+            } else {
+                centered_to_width(line.trim(), SPRITE_WIDTH)
+            }
+        })
         .collect()
 }
 
@@ -91,13 +103,13 @@ fn eye_glyph(eye: BuddyEye) -> &'static str {
 fn hat_line(hat: BuddyHat) -> Option<&'static str> {
     match hat {
         BuddyHat::None => None,
-        BuddyHat::Crown => Some("    _/\\_    "),
-        BuddyHat::TopHat => Some("   .----.   "),
-        BuddyHat::Propeller => Some("-|-"),
-        BuddyHat::Halo => Some("   .----.   "),
-        BuddyHat::Wizard => Some("/\\"),
-        BuddyHat::Beanie => Some("   ,----.   "),
-        BuddyHat::TinyDuck => Some("__"),
+        BuddyHat::Crown => Some("   \\^^^/    "),
+        BuddyHat::TopHat => Some("   [___]    "),
+        BuddyHat::Propeller => Some("    -+-     "),
+        BuddyHat::Halo => Some("   (   )    "),
+        BuddyHat::Wizard => Some("    /^\\     "),
+        BuddyHat::Beanie => Some("   (___)    "),
+        BuddyHat::TinyDuck => Some("    ,>      "),
     }
 }
 
@@ -618,7 +630,7 @@ mod tests {
                 false,
                 0,
             )[0],
-            "   .----.   "
+            "   [___]    "
         );
         assert_eq!(
             render_sprite(
@@ -638,7 +650,7 @@ mod tests {
                 false,
                 0,
             )[0],
-            "   .----.   "
+            "   [___]    "
         );
         assert_eq!(
             render_sprite(
@@ -726,7 +738,7 @@ mod tests {
                 false,
                 0,
             )[0],
-            "    -|-     "
+            "    -+-     "
         );
         assert_eq!(
             render_sprite(
@@ -736,7 +748,7 @@ mod tests {
                 false,
                 0,
             )[0],
-            "     /\\     "
+            "    /^\\     "
         );
         assert_eq!(
             render_sprite(
@@ -746,7 +758,7 @@ mod tests {
                 false,
                 0,
             )[0],
-            "     __     "
+            "    ,>      "
         );
     }
 }

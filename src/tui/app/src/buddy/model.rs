@@ -68,7 +68,8 @@ const EYES: [BuddyEye; 6] = [
     BuddyEye::Degree,
 ];
 
-const HATS: [BuddyHat; 7] = [
+const HATS: [BuddyHat; 8] = [
+    BuddyHat::None,
     BuddyHat::Crown,
     BuddyHat::TopHat,
     BuddyHat::Propeller,
@@ -252,6 +253,23 @@ mod tests {
             }
         }
         assert!(found_common);
+    }
+
+    #[test]
+    fn non_common_hat_pool_includes_none() {
+        assert_eq!(
+            HATS,
+            [
+                BuddyHat::None,
+                BuddyHat::Crown,
+                BuddyHat::TopHat,
+                BuddyHat::Propeller,
+                BuddyHat::Halo,
+                BuddyHat::Wizard,
+                BuddyHat::Beanie,
+                BuddyHat::TinyDuck,
+            ]
+        );
     }
 
     #[test]

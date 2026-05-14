@@ -288,7 +288,7 @@ mod tests {
         render_buddy(area, &mut buf, &state, false);
 
         let rows = render_rows(&buf, area);
-        let hat_center = substring_center_x2(&rows[0], "-|-");
+        let hat_center = substring_center_x2(&rows[0], "-+-");
         let face_center = substring_center_x2(&rows[2], "<  ×  ×  >");
         let name_center = substring_center_x2(&rows[5], "Pixel");
 
