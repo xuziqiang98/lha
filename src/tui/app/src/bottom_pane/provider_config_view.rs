@@ -24,6 +24,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
+use textwrap::Options as WrapOptions;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -131,7 +132,39 @@ impl ProviderConfigView {
                 .saturating_add(2),
         }
     }
+
+    fn layout_parts(&self, area: Rect, state: &ApiKeyInputState) -> ProviderConfigLayout {
+        let input_height = self.input_height(area, state);
+        let full_intro_height = intro_height(area.width, state, true);
+        let compact_intro_height = intro_height(area.width, state, false);
+        let full_height = full_intro_height
+            .saturating_add(1)
+            .saturating_add(input_height)
+            .saturating_add(FOOTER_MIN_HEIGHT);
+        let show_summary = area.height >= full_height;
+        let intro_height = if show_summary {
+            full_intro_height
+        } else {
+            compact_intro_height
+        };
+        ProviderConfigLayout {
+            input_height,
+            intro_height,
+            show_summary,
+        }
+    }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ProviderConfigLayout {
+    input_height: u16,
+    intro_height: u16,
+    show_summary: bool,
+}
+
+const FOOTER_MIN_HEIGHT: u16 = 4;
+const INTRO_COPY: &str =
+    "This saves the provider to ~/.adam/models.json and selects the model for future sessions.";
 
 fn read_state(state: &RwLock<ApiKeyInputState>) -> RwLockReadGuard<'_, ApiKeyInputState> {
     state.read().unwrap_or_else(PoisonError::into_inner)
@@ -139,6 +172,69 @@ fn read_state(state: &RwLock<ApiKeyInputState>) -> RwLockReadGuard<'_, ApiKeyInp
 
 fn write_state(state: &RwLock<ApiKeyInputState>) -> RwLockWriteGuard<'_, ApiKeyInputState> {
     state.write().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn intro_height(width: u16, state: &ApiKeyInputState, show_summary: bool) -> u16 {
+    intro_lines(width, state, show_summary).len() as u16
+}
+
+fn intro_lines(width: u16, state: &ApiKeyInputState, show_summary: bool) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line> = vec![
+        vec!["> ".into(), "Configure a custom API provider".bold()].into(),
+        "".into(),
+        format!("  Step {}/6: {}", state.step.index(), state.step.title()).into(),
+    ];
+    lines.extend(wrapped_intro_copy(width));
+    if show_summary {
+        lines.push("".into());
+        lines.extend(summary_lines(state));
+    }
+    if state.validating {
+        lines.push("".into());
+        lines.push(
+            "  Validating provider settings and saving config.toml..."
+                .cyan()
+                .into(),
+        );
+    }
+    lines
+}
+
+fn wrapped_intro_copy(width: u16) -> Vec<Line<'static>> {
+    let options = WrapOptions::new(width.max(1) as usize)
+        .initial_indent("  ")
+        .subsequent_indent("  ");
+    textwrap::wrap(INTRO_COPY, &options)
+        .into_iter()
+        .map(|line| line.to_string().into())
+        .collect()
+}
+
+fn summary_lines(state: &ApiKeyInputState) -> Vec<Line<'static>> {
+    vec![
+        format!(
+            "  Provider ID: {}",
+            display_optional_value(&state.provider_id, "<not set>")
+        )
+        .into(),
+        format!("  Dialect: {}", state.dialect.label()).into(),
+        format!(
+            "  Base URL: {}",
+            display_optional_value(&state.base_url, "<not set>")
+        )
+        .into(),
+        format!("  API key: {}", mask_secret(&state.api_key)).into(),
+        format!(
+            "  Model: {}",
+            display_optional_value(&state.model, "<not set>")
+        )
+        .into(),
+        format!(
+            "  Context Window: {}",
+            display_optional_value(&state.model_context_window, "<not set>")
+        )
+        .into(),
+    ]
 }
 
 impl BottomPaneView for ProviderConfigView {
@@ -288,8 +384,7 @@ impl Renderable for ProviderConfigView {
             },
             &state,
         );
-        let intro_min_height = if state.validating { 13 } else { 11 };
-        intro_min_height + input_height + 5
+        intro_height(width, &state, true) + input_height + 5
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -298,54 +393,16 @@ impl Renderable for ProviderConfigView {
         }
 
         let state = read_state(&self.state).clone();
-        let input_height = self.input_height(area, &state);
-        let intro_min_height = if state.validating { 13 } else { 11 };
+        let layout = self.layout_parts(area, &state);
         let [intro_area, _spacer_area, input_area, footer_area] = Layout::vertical([
-            Constraint::Min(intro_min_height),
+            Constraint::Length(layout.intro_height),
             Constraint::Length(1),
-            Constraint::Length(input_height),
-            Constraint::Min(4),
+            Constraint::Length(layout.input_height),
+            Constraint::Min(FOOTER_MIN_HEIGHT),
         ])
         .areas(area);
 
-        let mut intro_lines: Vec<Line> = vec![
-            vec!["> ".into(), "Configure a custom API provider".bold()].into(),
-            "".into(),
-            format!("  Step {}/6: {}", state.step.index(), state.step.title()).into(),
-            "  This saves the provider to ~/.adam/models.json and selects the model for future sessions.".into(),
-            "".into(),
-            format!(
-                "  Provider ID: {}",
-                display_optional_value(&state.provider_id, "<not set>")
-            )
-            .into(),
-            format!("  Dialect: {}", state.dialect.label()).into(),
-            format!(
-                "  Base URL: {}",
-                display_optional_value(&state.base_url, "<not set>")
-            )
-            .into(),
-            format!("  API key: {}", mask_secret(&state.api_key)).into(),
-            format!(
-                "  Model: {}",
-                display_optional_value(&state.model, "<not set>")
-            )
-            .into(),
-            format!(
-                "  Context Window: {}",
-                display_optional_value(&state.model_context_window, "<not set>")
-            )
-            .into(),
-        ];
-        if state.validating {
-            intro_lines.push("".into());
-            intro_lines.push(
-                "  Validating provider settings and saving config.toml..."
-                    .cyan()
-                    .into(),
-            );
-        }
-        Paragraph::new(intro_lines)
+        Paragraph::new(intro_lines(area.width, &state, layout.show_summary))
             .wrap(Wrap { trim: false })
             .render(intro_area, buf);
 
@@ -436,13 +493,12 @@ impl Renderable for ProviderConfigView {
             return None;
         }
 
-        let input_height = self.input_height(area, &state);
-        let intro_min_height = if state.validating { 13 } else { 11 };
+        let layout = self.layout_parts(area, &state);
         let textarea_rect = Rect {
             x: area.x.saturating_add(1),
-            y: area.y.saturating_add(intro_min_height).saturating_add(2),
+            y: area.y.saturating_add(layout.intro_height).saturating_add(2),
             width: area.width.saturating_sub(2),
-            height: input_height.saturating_sub(2),
+            height: layout.input_height.saturating_sub(2),
         };
         let textarea_state = *self.textarea_state.borrow();
         self.textarea
@@ -494,6 +550,18 @@ mod tests {
             .collect::<String>()
             .trim_end()
             .to_string()
+    }
+
+    fn rendered_lines(view: &ProviderConfigView, area: Rect) -> Vec<String> {
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        (0..area.height)
+            .map(|row| row_text(&buf, row, area.width))
+            .collect()
+    }
+
+    fn rendered_text(view: &ProviderConfigView, area: Rect) -> String {
+        rendered_lines(view, area).join("\n")
     }
 
     #[test]
@@ -616,5 +684,52 @@ mod tests {
                 .any(|line| line.contains("Anthropic-compatible Messages API at /v1/messages")),
             false
         );
+    }
+
+    #[test]
+    fn small_height_hides_summary_and_keeps_input() {
+        let view = test_view();
+        let area = Rect::new(0, 0, 80, 15);
+
+        let rendered = rendered_text(&view, area);
+
+        assert_eq!(rendered.contains("Provider ID:"), false);
+        assert_eq!(rendered.contains("Dialect:"), false);
+        assert_eq!(rendered.contains("Base URL:"), false);
+        assert_eq!(rendered.contains("API key:"), false);
+        assert_eq!(rendered.contains("Model:"), false);
+        assert_eq!(rendered.contains("Context Window:"), false);
+        assert_eq!(rendered.contains("╭Provider ID"), true);
+        assert_eq!(rendered.contains("my-provider"), true);
+        assert_eq!(rendered.contains("Press Enter to continue"), true);
+    }
+
+    #[test]
+    fn comfortable_height_keeps_summary() {
+        let view = test_view();
+        let area = Rect::new(0, 0, 80, view.desired_height(80));
+
+        let rendered = rendered_text(&view, area);
+
+        assert_eq!(rendered.contains("Provider ID:"), true);
+        assert_eq!(rendered.contains("Dialect:"), true);
+        assert_eq!(rendered.contains("Base URL:"), true);
+        assert_eq!(rendered.contains("API key:"), true);
+        assert_eq!(rendered.contains("Model:"), true);
+        assert_eq!(rendered.contains("Context Window:"), true);
+    }
+
+    #[test]
+    fn cursor_pos_uses_compact_layout() {
+        let view = test_view();
+        let area = Rect::new(0, 0, 80, 15);
+        let cursor_pos = view.cursor_pos(area).expect("cursor position");
+        let lines = rendered_lines(&view, area);
+        let input_row = lines
+            .iter()
+            .position(|line| line.contains("╭Provider ID"))
+            .expect("input border row") as u16;
+
+        assert_eq!(cursor_pos.1, input_row + 1);
     }
 }
