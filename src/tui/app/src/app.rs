@@ -2578,13 +2578,28 @@ impl App {
                 Ok(AppRunControl::Continue)
             }
             ProviderConfigModalAction::Exit => {
-                if let Some(exit_mode) = self.close_provider_config_modal_for_exit() {
+                let frame_requester = tui.frame_requester();
+                if let Some(exit_mode) =
+                    self.close_provider_config_modal_for_exit_with_redraw(&frame_requester)
+                {
                     self.handle_event(tui, AppEvent::Exit(exit_mode)).await
                 } else {
                     Ok(AppRunControl::Continue)
                 }
             }
         }
+    }
+
+    fn close_provider_config_modal_for_exit_with_redraw(
+        &mut self,
+        frame_requester: &tui::FrameRequester,
+    ) -> Option<ExitMode> {
+        let modal_was_open = self.provider_config_modal.is_some();
+        let exit_mode = self.close_provider_config_modal_for_exit();
+        if modal_was_open && exit_mode.is_none() {
+            frame_requester.schedule_frame();
+        }
+        exit_mode
     }
 
     fn close_provider_config_modal_for_exit(&mut self) -> Option<ExitMode> {
@@ -4262,6 +4277,22 @@ mod tests {
 
         assert_eq!(exit_mode, None);
         assert!(app.provider_config_modal.is_none());
+    }
+
+    #[tokio::test]
+    async fn provider_in_session_modal_exit_requests_redraw() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        app.open_provider_config_modal(ProviderConfigModalMode::InSession);
+        let (frame_requester, mut frame_rx) = tui::FrameRequester::test_with_receiver();
+
+        let exit_mode = app.close_provider_config_modal_for_exit_with_redraw(&frame_requester);
+
+        assert_eq!(exit_mode, None);
+        assert!(app.provider_config_modal.is_none());
+        time::timeout(Duration::from_millis(50), frame_rx.recv())
+            .await
+            .expect("timed out waiting for redraw")
+            .expect("frame requester closed");
     }
 
     #[tokio::test]

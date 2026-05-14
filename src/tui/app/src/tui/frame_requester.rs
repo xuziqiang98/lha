@@ -65,6 +65,17 @@ impl FrameRequester {
             frame_schedule_tx: tx,
         }
     }
+
+    /// Create a frame requester whose raw schedule requests can be inspected by tests.
+    pub(crate) fn test_with_receiver() -> (Self, mpsc::UnboundedReceiver<Instant>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (
+            FrameRequester {
+                frame_schedule_tx: tx,
+            },
+            rx,
+        )
+    }
 }
 
 /// A scheduler for coalescing frame draw requests and notifying the TUI event loop.
