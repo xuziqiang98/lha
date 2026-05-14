@@ -17,6 +17,7 @@ use ratatui::widgets::Borders;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use std::path::PathBuf;
+use unicode_width::UnicodeWidthChar;
 
 pub(crate) const SIDEBAR_MIN_TERMINAL_WIDTH: u16 = 120;
 pub(crate) const SIDEBAR_MIN_WIDTH: u16 = 28;
@@ -157,10 +158,7 @@ fn push_task(lines: &mut Vec<Line<'static>>, task: Option<&TaskPanelSnapshot>, w
         return;
     };
     push_section(lines, "Task");
-    lines.push(Line::from(vec![
-        "  ".into(),
-        truncate(&task.title, width).cyan().bold(),
-    ]));
+    lines.extend(wrap_task_title(&task.title, width));
 }
 
 fn push_todo(lines: &mut Vec<Line<'static>>, todo: Option<&TodoPanelSnapshot>, width: u16) {
@@ -330,6 +328,54 @@ fn truncate(value: &str, width: u16) -> String {
     out
 }
 
+fn wrap_task_title(title: &str, width: u16) -> Vec<Line<'static>> {
+    let max = width.saturating_sub(4) as usize;
+    if max == 0 {
+        return vec![Line::from("  ")];
+    }
+
+    let wrapped = textwrap::wrap(title, max);
+    let mut title_lines = if wrapped.is_empty() {
+        vec![String::new()]
+    } else {
+        wrapped
+            .iter()
+            .take(2)
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    };
+
+    if wrapped.len() > 2
+        && let Some(second) = title_lines.get_mut(1)
+    {
+        *second = append_ellipsis(second, max);
+    }
+
+    title_lines
+        .into_iter()
+        .map(|line| Line::from(vec!["  ".into(), line.cyan().bold()]))
+        .collect()
+}
+
+fn append_ellipsis(value: &str, max: usize) -> String {
+    if max <= 3 {
+        return ".".repeat(max);
+    }
+
+    let mut out = String::new();
+    let mut width = 0usize;
+    for ch in value.chars() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width + ch_width > max.saturating_sub(3) {
+            break;
+        }
+        out.push(ch);
+        width += ch_width;
+    }
+    out.push_str("...");
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,6 +479,38 @@ mod tests {
             assert!(!rendered.contains(section));
         }
         assert!(!rendered.contains("Status"));
+    }
+
+    #[test]
+    fn task_title_wraps_to_two_lines_with_ellipsis() {
+        let snapshot = SidebarSnapshot {
+            task: Some(TaskPanelSnapshot {
+                title:
+                    "Repair sidebar task rendering after streamed proposed plan headings overflow"
+                        .to_string(),
+            }),
+            ..Default::default()
+        };
+
+        let rendered = render_sidebar(&snapshot);
+        assert!(rendered.contains("Repair sidebar task rendering after"));
+        assert!(rendered.contains("streamed proposed plan headings..."));
+        assert!(!rendered.contains("overflow"));
+    }
+
+    #[test]
+    fn task_title_wraps_to_two_lines_without_ellipsis_when_it_fits() {
+        let snapshot = SidebarSnapshot {
+            task: Some(TaskPanelSnapshot {
+                title: "Repair sidebar task rendering after streamed plan".to_string(),
+            }),
+            ..Default::default()
+        };
+
+        let rendered = render_sidebar(&snapshot);
+        assert!(rendered.contains("Repair sidebar task rendering after"));
+        assert!(rendered.contains("streamed plan"));
+        assert!(!rendered.contains("..."));
     }
 
     #[test]

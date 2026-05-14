@@ -992,14 +992,8 @@ impl ChatWidget {
         if !self.plan_item_active {
             self.plan_item_active = true;
             self.plan_delta_buffer.clear();
-            self.latest_proposed_plan_title = None;
         }
         self.plan_delta_buffer.push_str(&delta);
-        if self.latest_proposed_plan_title.is_none()
-            && let Some(title) = extract_first_markdown_heading(&self.plan_delta_buffer)
-        {
-            self.latest_proposed_plan_title = Some(title);
-        }
         // Before streaming plan content, flush any active exec cell group.
         self.flush_unified_exec_wait_streak();
         self.flush_active_cell();
@@ -1028,8 +1022,8 @@ impl ChatWidget {
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.saw_plan_item_this_turn = true;
-        if !plan_text.is_empty() {
-            self.latest_proposed_plan_title = extract_first_markdown_heading(&plan_text);
+        if let Some(title) = extract_first_markdown_heading(&plan_text) {
+            self.latest_proposed_plan_title = Some(title);
         }
         if let Some(mut controller) = self.plan_stream_controller.take()
             && let Some(cell) = controller.finalize()

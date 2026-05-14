@@ -2588,7 +2588,7 @@ async fn streamed_proposed_plan_background_fills_rendered_row() {
 }
 
 #[tokio::test]
-async fn sidebar_task_uses_streamed_proposed_plan_heading() {
+async fn sidebar_task_waits_for_completed_proposed_plan_heading() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::Identities, true);
     let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
@@ -2600,6 +2600,9 @@ async fn sidebar_task_uses_streamed_proposed_plan_heading() {
     assert!(chat.sidebar_snapshot().task.is_none());
 
     chat.on_plan_delta("# Build Sidebar #\n- Step 1\n".to_string());
+    assert!(chat.sidebar_snapshot().task.is_none());
+
+    chat.on_plan_item_completed("# Build Sidebar #\n- Step 1\n".to_string());
 
     assert_eq!(
         chat.sidebar_snapshot().task.map(|task| task.title),
@@ -2617,6 +2620,8 @@ async fn sidebar_task_uses_completed_proposed_plan_heading() {
 
     chat.on_task_started();
     chat.on_plan_delta("# Streaming Title\n".to_string());
+    assert!(chat.sidebar_snapshot().task.is_none());
+
     chat.on_plan_item_completed("## Final Title\n- Step 1\n".to_string());
 
     assert_eq!(
@@ -2638,6 +2643,53 @@ async fn sidebar_task_hides_proposed_plan_without_heading() {
     chat.on_plan_item_completed("- Step 1\n".to_string());
 
     assert!(chat.sidebar_snapshot().task.is_none());
+}
+
+#[tokio::test]
+async fn sidebar_task_keeps_existing_title_while_next_plan_streams() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+
+    chat.on_task_started();
+    chat.on_plan_item_completed("# Existing Task\n- Step 1\n".to_string());
+    assert_eq!(
+        chat.sidebar_snapshot().task.map(|task| task.title),
+        Some("Existing Task".to_string())
+    );
+
+    chat.on_plan_delta("# Partial New Task\n- Step 1\n".to_string());
+    assert_eq!(
+        chat.sidebar_snapshot().task.map(|task| task.title),
+        Some("Existing Task".to_string())
+    );
+
+    chat.on_plan_item_completed("# Final New Task\n- Step 1\n".to_string());
+    assert_eq!(
+        chat.sidebar_snapshot().task.map(|task| task.title),
+        Some("Final New Task".to_string())
+    );
+}
+
+#[tokio::test]
+async fn sidebar_task_keeps_existing_title_when_completed_plan_has_no_heading() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+
+    chat.on_task_started();
+    chat.on_plan_item_completed("# Existing Task\n- Step 1\n".to_string());
+    chat.on_plan_delta("- New Step 1\n".to_string());
+    chat.on_plan_item_completed("- New Step 1\n".to_string());
+
+    assert_eq!(
+        chat.sidebar_snapshot().task.map(|task| task.title),
+        Some("Existing Task".to_string())
+    );
 }
 
 #[tokio::test]
