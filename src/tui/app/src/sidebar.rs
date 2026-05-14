@@ -211,9 +211,9 @@ fn push_agents(lines: &mut Vec<Line<'static>>, agents: &[AgentPanelEntry], width
     push_section(lines, "Agents");
     for agent in agents.iter().take(6) {
         let _thread_id = agent.thread_id;
-        let (dot, status) = agent_status_summary(&agent.status);
+        let status = agent_status_label(&agent.status);
         lines.push(Line::from(vec![
-            dot,
+            "  ".into(),
             truncate(&agent.label, width).cyan(),
             " ".dim(),
             status,
@@ -305,15 +305,15 @@ fn push_status(lines: &mut Vec<Line<'static>>, status: Option<&StatusPanelSnapsh
     }
 }
 
-fn agent_status_summary(status: &AgentStatus) -> (Span<'static>, Span<'static>) {
+fn agent_status_label(status: &AgentStatus) -> Span<'static> {
     match status {
-        AgentStatus::PendingInit => ("  ● ".cyan(), "pending".dim()),
-        AgentStatus::Running => ("  ● ".green(), "running".dim()),
-        AgentStatus::Interrupted => ("  ● ".magenta(), "interrupted".dim()),
-        AgentStatus::Completed(_) => ("  ● ".green(), "completed".dim()),
-        AgentStatus::Errored(_) => ("  ● ".red(), "error".red()),
-        AgentStatus::Shutdown => ("  ● ".dim(), "shutdown".dim()),
-        AgentStatus::NotFound => ("  ● ".red(), "missing".red()),
+        AgentStatus::PendingInit => "pending".dim(),
+        AgentStatus::Running => "running".dim(),
+        AgentStatus::Interrupted => "interrupted".dim(),
+        AgentStatus::Completed(_) => "completed".dim(),
+        AgentStatus::Errored(_) => "error".red(),
+        AgentStatus::Shutdown => "shutdown".dim(),
+        AgentStatus::NotFound => "missing".red(),
     }
 }
 
@@ -467,6 +467,11 @@ mod tests {
         assert!(rendered.contains("[~] Implement feature"));
         assert!(rendered.contains("[ ] Write tests"));
         assert!(rendered.contains("Worker (worker) running"));
+        let agent_line = rendered
+            .lines()
+            .find(|line| line.contains("Worker (worker) running"))
+            .unwrap_or_else(|| panic!("missing agent line: {rendered:?}"));
+        assert!(!agent_line.contains("●"));
         assert!(rendered.contains("skill-creator"));
         assert!(rendered.contains("model gpt-5"));
         assert!(!rendered.contains("Context"));
