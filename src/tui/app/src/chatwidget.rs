@@ -2939,9 +2939,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn clipboard_text_config(&self) -> ClipboardTextConfig {
-        ClipboardTextConfig {
-            osc52_tmux_mode: self.config.tui_osc52_tmux_mode,
-        }
+        ClipboardTextConfig::new(self.config.tui_osc52_tmux_mode)
     }
 
     pub(crate) fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {

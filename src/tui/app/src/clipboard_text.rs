@@ -2,7 +2,32 @@ use adam_agent::config::types::Osc52TmuxMode;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ClipboardTextConfig {
+    #[cfg(all(
+        unix,
+        not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+    ))]
     pub(crate) osc52_tmux_mode: Osc52TmuxMode,
+}
+
+impl ClipboardTextConfig {
+    pub(crate) fn new(osc52_tmux_mode: Osc52TmuxMode) -> Self {
+        #[cfg(all(
+            unix,
+            not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+        ))]
+        {
+            Self { osc52_tmux_mode }
+        }
+
+        #[cfg(not(all(
+            unix,
+            not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+        )))]
+        {
+            let _ = osc52_tmux_mode;
+            Self {}
+        }
+    }
 }
 
 #[cfg(any(target_os = "macos", target_os = "emscripten", not(unix)))]
@@ -117,10 +142,16 @@ fn write_text_to_linux_system_clipboard(text: &str) -> Result<(), String> {
         .map_err(|err| format!("clipboard helper exited before reporting status: {err}"))?
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+))]
 const OSC52_MAX_BYTES: usize = 100 * 1024;
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+))]
 fn write_text_with_osc52(text: &str, tmux_mode: Osc52TmuxMode) -> Result<(), String> {
     use std::io;
     use std::io::IsTerminal;
@@ -141,7 +172,10 @@ fn write_text_with_osc52(text: &str, tmux_mode: Osc52TmuxMode) -> Result<(), Str
         .map_err(|err| err.to_string())
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResolvedOsc52TmuxMode {
     NotTmux,
@@ -149,7 +183,10 @@ enum ResolvedOsc52TmuxMode {
     Passthrough,
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+))]
 fn resolve_osc52_tmux_mode(in_tmux: bool, tmux_mode: Osc52TmuxMode) -> ResolvedOsc52TmuxMode {
     if !in_tmux {
         return ResolvedOsc52TmuxMode::NotTmux;
@@ -161,7 +198,10 @@ fn resolve_osc52_tmux_mode(in_tmux: bool, tmux_mode: Osc52TmuxMode) -> ResolvedO
     }
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+))]
 fn osc52_sequence(text: &str, tmux_mode: ResolvedOsc52TmuxMode) -> Result<String, String> {
     use base64::Engine as _;
 
@@ -212,7 +252,11 @@ pub(crate) fn write_text_to_clipboard(
     Err("clipboard text copy is unsupported on Android".to_string())
 }
 
-#[cfg(all(test, not(target_os = "android")))]
+#[cfg(all(
+    test,
+    unix,
+    not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+))]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
