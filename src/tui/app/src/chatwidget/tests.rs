@@ -3281,6 +3281,93 @@ async fn ctrl_shift_c_copies_selection_without_quit() {
 }
 
 #[tokio::test]
+async fn transcript_copy_success_clears_selection() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(1))]);
+
+    let area = Rect::new(0, 0, 40, 8);
+    let mut buffer = Buffer::empty(area);
+    chat.render(area, &mut buffer);
+    chat.transcript.borrow_mut().set_selection_for_test(
+        TranscriptSelectionPoint {
+            line_index: 0,
+            column: 0,
+        },
+        TranscriptSelectionPoint {
+            line_index: 0,
+            column: 5,
+        },
+    );
+
+    chat.copy_transcript_selection_with(|text, _config| {
+        assert_eq!(text, "trans");
+        Ok(())
+    });
+
+    assert_eq!(chat.current_status.header, "Selection copied");
+    assert!(!chat.transcript.borrow().selection_active_for_test());
+}
+
+#[tokio::test]
+async fn completed_mouse_selection_copy_success_clears_selection() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(1))]);
+
+    let area = Rect::new(0, 0, 40, 8);
+    let mut buffer = Buffer::empty(area);
+    chat.render(area, &mut buffer);
+    chat.transcript.borrow_mut().set_selection_for_test(
+        TranscriptSelectionPoint {
+            line_index: 0,
+            column: 0,
+        },
+        TranscriptSelectionPoint {
+            line_index: 0,
+            column: 5,
+        },
+    );
+
+    chat.copy_completed_transcript_selection_with(Some("trans".to_string()), |text, _config| {
+        assert_eq!(text, "trans");
+        Ok(())
+    });
+
+    assert_eq!(chat.current_status.header, "Selection copied");
+    assert!(!chat.transcript.borrow().selection_active_for_test());
+}
+
+#[tokio::test]
+async fn transcript_copy_failure_keeps_selection() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(1))]);
+
+    let area = Rect::new(0, 0, 40, 8);
+    let mut buffer = Buffer::empty(area);
+    chat.render(area, &mut buffer);
+    chat.transcript.borrow_mut().set_selection_for_test(
+        TranscriptSelectionPoint {
+            line_index: 0,
+            column: 0,
+        },
+        TranscriptSelectionPoint {
+            line_index: 0,
+            column: 5,
+        },
+    );
+
+    chat.copy_transcript_selection_with(|text, _config| {
+        assert_eq!(text, "trans");
+        Err("clipboard unavailable".to_string())
+    });
+
+    assert_eq!(
+        chat.current_status.header,
+        "Copy failed: clipboard unavailable"
+    );
+    assert!(chat.transcript.borrow().selection_active_for_test());
+}
+
+#[tokio::test]
 async fn ctrl_shift_c_without_selection_does_not_quit() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 

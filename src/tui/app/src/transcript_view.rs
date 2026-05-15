@@ -442,6 +442,11 @@ impl TranscriptView {
     }
 
     #[cfg(test)]
+    pub(crate) fn selection_active_for_test(&self) -> bool {
+        self.selection.is_active()
+    }
+
+    #[cfg(test)]
     pub(crate) fn set_selection_for_test(
         &mut self,
         anchor: TranscriptSelectionPoint,

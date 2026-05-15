@@ -2921,21 +2921,57 @@ impl ChatWidget {
     }
 
     fn copy_transcript_selection(&mut self) {
+        self.copy_transcript_selection_with(write_text_to_clipboard);
+    }
+
+    fn copy_transcript_selection_with(
+        &mut self,
+        write_clipboard: impl FnOnce(&str, ClipboardTextConfig) -> Result<(), String>,
+    ) {
         let Some(text) = self.transcript.borrow().selected_text() else {
             self.set_status_header("No selection to copy".to_string());
             self.request_redraw();
             return;
         };
 
-        self.write_selection_to_clipboard(&text);
+        if self.write_selection_to_clipboard_with(&text, write_clipboard) {
+            self.transcript.borrow_mut().clear_selection();
+        }
         self.request_redraw();
     }
 
-    fn write_selection_to_clipboard(&mut self, text: &str) {
-        match write_text_to_clipboard(text, self.clipboard_text_config()) {
-            Ok(()) => self.set_status_header("Selection copied".to_string()),
-            Err(err) => self.set_status_header(format!("Copy failed: {err}")),
+    fn write_selection_to_clipboard_with(
+        &mut self,
+        text: &str,
+        write_clipboard: impl FnOnce(&str, ClipboardTextConfig) -> Result<(), String>,
+    ) -> bool {
+        match write_clipboard(text, self.clipboard_text_config()) {
+            Ok(()) => {
+                self.set_status_header("Selection copied".to_string());
+                true
+            }
+            Err(err) => {
+                self.set_status_header(format!("Copy failed: {err}"));
+                false
+            }
         }
+    }
+
+    fn copy_completed_transcript_selection(&mut self, text: Option<String>) {
+        self.copy_completed_transcript_selection_with(text, write_text_to_clipboard);
+    }
+
+    fn copy_completed_transcript_selection_with(
+        &mut self,
+        text: Option<String>,
+        write_clipboard: impl FnOnce(&str, ClipboardTextConfig) -> Result<(), String>,
+    ) {
+        if let Some(text) = text.filter(|text| !text.is_empty())
+            && self.write_selection_to_clipboard_with(&text, write_clipboard)
+        {
+            self.transcript.borrow_mut().clear_selection();
+        }
+        self.request_redraw();
     }
 
     pub(crate) fn clipboard_text_config(&self) -> ClipboardTextConfig {
@@ -2972,10 +3008,7 @@ impl ChatWidget {
                 self.request_redraw();
             }
             TranscriptMouseOutcome::SelectionCompleted(text) => {
-                if let Some(text) = text.filter(|text| !text.is_empty()) {
-                    self.write_selection_to_clipboard(&text);
-                }
-                self.request_redraw();
+                self.copy_completed_transcript_selection(text);
             }
         }
     }
