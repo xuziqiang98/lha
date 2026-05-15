@@ -40,6 +40,10 @@ pub(crate) enum ProjectTrustModalAction {
 impl ProjectTrustModal {
     pub(crate) fn new(cwd: PathBuf) -> Self {
         let is_git_repo = get_git_repo_root(&cwd).is_some();
+        Self::new_with_git_status(cwd, is_git_repo)
+    }
+
+    fn new_with_git_status(cwd: PathBuf, is_git_repo: bool) -> Self {
         let selected = if is_git_repo {
             TrustLevel::Trusted
         } else {
@@ -241,9 +245,8 @@ mod tests {
     #[test]
     fn defaults_to_trusted_inside_git_repo() {
         let repo = tempfile::tempdir().expect("tempdir");
-        std::fs::create_dir(repo.path().join(".git")).expect("create git marker");
 
-        let modal = ProjectTrustModal::new(repo.path().to_path_buf());
+        let modal = ProjectTrustModal::new_with_git_status(repo.path().to_path_buf(), true);
 
         assert_eq!(modal.selected(), TrustLevel::Trusted);
     }
@@ -252,7 +255,7 @@ mod tests {
     fn defaults_to_untrusted_outside_git_repo() {
         let cwd = tempfile::tempdir().expect("tempdir");
 
-        let modal = ProjectTrustModal::new(cwd.path().to_path_buf());
+        let modal = ProjectTrustModal::new_with_git_status(cwd.path().to_path_buf(), false);
 
         assert_eq!(modal.selected(), TrustLevel::Untrusted);
     }
@@ -260,7 +263,7 @@ mod tests {
     #[test]
     fn navigation_and_selection_actions() {
         let cwd = tempfile::tempdir().expect("tempdir");
-        let mut modal = ProjectTrustModal::new(cwd.path().to_path_buf());
+        let mut modal = ProjectTrustModal::new_with_git_status(cwd.path().to_path_buf(), false);
 
         assert_eq!(
             modal.handle_key_event(key(KeyCode::Up)),
@@ -289,7 +292,7 @@ mod tests {
     #[test]
     fn escape_and_ctrl_c_exit() {
         let cwd = tempfile::tempdir().expect("tempdir");
-        let mut modal = ProjectTrustModal::new(cwd.path().to_path_buf());
+        let mut modal = ProjectTrustModal::new_with_git_status(cwd.path().to_path_buf(), false);
 
         assert_eq!(
             modal.handle_key_event(key(KeyCode::Esc)),
@@ -304,7 +307,7 @@ mod tests {
     #[test]
     fn render_is_centered_modal_not_bottom_pane() {
         let cwd = tempfile::tempdir().expect("tempdir");
-        let modal = ProjectTrustModal::new(cwd.path().to_path_buf());
+        let modal = ProjectTrustModal::new_with_git_status(cwd.path().to_path_buf(), false);
         let rendered = render_to_string(&modal, Rect::new(0, 0, 100, 30));
 
         assert!(
