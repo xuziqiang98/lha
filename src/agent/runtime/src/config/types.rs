@@ -446,6 +446,19 @@ impl fmt::Display for NotificationMethod {
     }
 }
 
+/// OSC52 sequence style to use when the TUI copies text from inside tmux.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Osc52TmuxMode {
+    /// Let Adam choose the tmux OSC52 strategy.
+    #[default]
+    Auto,
+    /// Send a bare OSC52 sequence and let tmux forward it via `set-clipboard`.
+    Bare,
+    /// Wrap the OSC52 sequence in tmux passthrough DCS escape sequences.
+    Passthrough,
+}
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -475,6 +488,11 @@ pub struct Tui {
     /// Defaults to `true`.
     #[serde(default = "default_true")]
     pub mouse_capture: bool,
+
+    /// OSC52 mode to use when copying text from inside tmux.
+    /// Defaults to `auto`.
+    #[serde(default)]
+    pub osc52_tmux_mode: Osc52TmuxMode,
 
     /// Tiny companion rendered next to the TUI composer.
     #[serde(default)]

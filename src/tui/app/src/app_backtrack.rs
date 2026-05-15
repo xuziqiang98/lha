@@ -219,7 +219,10 @@ impl App {
 
     /// Open transcript overlay and show the full transcript inside the main fullscreen TUI.
     pub(crate) fn open_transcript_overlay(&mut self, tui: &mut tui::Tui) {
-        self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
+        self.overlay = Some(Overlay::new_transcript(
+            self.transcript_cells.clone(),
+            self.chat_widget.clipboard_text_config(),
+        ));
         tui.frame_requester().schedule_frame();
     }
 

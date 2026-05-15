@@ -1,5 +1,15 @@
+use adam_agent::config::types::Osc52TmuxMode;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ClipboardTextConfig {
+    pub(crate) osc52_tmux_mode: Osc52TmuxMode,
+}
+
 #[cfg(any(target_os = "macos", target_os = "emscripten", not(unix)))]
-pub(crate) fn write_text_to_clipboard(text: &str) -> Result<(), String> {
+pub(crate) fn write_text_to_clipboard(
+    text: &str,
+    _config: ClipboardTextConfig,
+) -> Result<(), String> {
     write_text_to_clipboard_immediate(text)
 }
 
@@ -7,8 +17,11 @@ pub(crate) fn write_text_to_clipboard(text: &str) -> Result<(), String> {
     unix,
     not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
 ))]
-pub(crate) fn write_text_to_clipboard(text: &str) -> Result<(), String> {
-    write_text_to_linux_clipboard(text)
+pub(crate) fn write_text_to_clipboard(
+    text: &str,
+    config: ClipboardTextConfig,
+) -> Result<(), String> {
+    write_text_to_linux_clipboard(text, config)
 }
 
 #[cfg(any(target_os = "macos", target_os = "emscripten", not(unix)))]
@@ -23,12 +36,12 @@ fn write_text_to_clipboard_immediate(text: &str) -> Result<(), String> {
     unix,
     not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
 ))]
-fn write_text_to_linux_clipboard(text: &str) -> Result<(), String> {
+fn write_text_to_linux_clipboard(text: &str, config: ClipboardTextConfig) -> Result<(), String> {
     write_text_to_linux_clipboard_with(
         text,
         is_remote_terminal_session(),
         write_text_to_linux_system_clipboard,
-        write_text_with_osc52,
+        |text| write_text_with_osc52(text, config.osc52_tmux_mode),
     )
 }
 
@@ -108,7 +121,7 @@ fn write_text_to_linux_system_clipboard(text: &str) -> Result<(), String> {
 const OSC52_MAX_BYTES: usize = 100 * 1024;
 
 #[cfg(not(target_os = "android"))]
-fn write_text_with_osc52(text: &str) -> Result<(), String> {
+fn write_text_with_osc52(text: &str, tmux_mode: Osc52TmuxMode) -> Result<(), String> {
     use std::io;
     use std::io::IsTerminal;
     use std::io::Write;
@@ -118,7 +131,10 @@ fn write_text_with_osc52(text: &str) -> Result<(), String> {
         return Err("stdout is not a terminal".to_string());
     }
 
-    let sequence = osc52_sequence(text, std::env::var_os("TMUX").is_some())?;
+    let sequence = osc52_sequence(
+        text,
+        resolve_osc52_tmux_mode(std::env::var_os("TMUX").is_some(), tmux_mode),
+    )?;
     stdout
         .write_all(sequence.as_bytes())
         .and_then(|()| stdout.flush())
@@ -126,7 +142,27 @@ fn write_text_with_osc52(text: &str) -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "android"))]
-fn osc52_sequence(text: &str, in_tmux: bool) -> Result<String, String> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResolvedOsc52TmuxMode {
+    NotTmux,
+    Bare,
+    Passthrough,
+}
+
+#[cfg(not(target_os = "android"))]
+fn resolve_osc52_tmux_mode(in_tmux: bool, tmux_mode: Osc52TmuxMode) -> ResolvedOsc52TmuxMode {
+    if !in_tmux {
+        return ResolvedOsc52TmuxMode::NotTmux;
+    }
+
+    match tmux_mode {
+        Osc52TmuxMode::Auto | Osc52TmuxMode::Bare => ResolvedOsc52TmuxMode::Bare,
+        Osc52TmuxMode::Passthrough => ResolvedOsc52TmuxMode::Passthrough,
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn osc52_sequence(text: &str, tmux_mode: ResolvedOsc52TmuxMode) -> Result<String, String> {
     use base64::Engine as _;
 
     if text.len() > OSC52_MAX_BYTES {
@@ -138,10 +174,9 @@ fn osc52_sequence(text: &str, in_tmux: bool) -> Result<String, String> {
 
     let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
     let sequence = format!("\x1b]52;c;{encoded}\x07");
-    if in_tmux {
-        Ok(format!("\x1bPtmux;\x1b{sequence}\x1b\\"))
-    } else {
-        Ok(sequence)
+    match tmux_mode {
+        ResolvedOsc52TmuxMode::NotTmux | ResolvedOsc52TmuxMode::Bare => Ok(sequence),
+        ResolvedOsc52TmuxMode::Passthrough => Ok(format!("\x1bPtmux;\x1b{sequence}\x1b\\")),
     }
 }
 
@@ -170,7 +205,10 @@ fn is_remote_terminal_session_with(has_var: impl FnMut(&str) -> bool) -> bool {
 }
 
 #[cfg(target_os = "android")]
-pub(crate) fn write_text_to_clipboard(_text: &str) -> Result<(), String> {
+pub(crate) fn write_text_to_clipboard(
+    _text: &str,
+    _config: ClipboardTextConfig,
+) -> Result<(), String> {
     Err("clipboard text copy is unsupported on Android".to_string())
 }
 
@@ -183,23 +221,63 @@ mod tests {
     #[test]
     fn osc52_sequence_encodes_text_clipboard_write() {
         assert_eq!(
-            osc52_sequence("hello", false).unwrap(),
+            osc52_sequence("hello", ResolvedOsc52TmuxMode::NotTmux).unwrap(),
             "\x1b]52;c;aGVsbG8=\x07"
+        );
+    }
+
+    #[test]
+    fn osc52_sequence_uses_bare_sequence_in_tmux_bare_mode() {
+        assert_eq!(
+            osc52_sequence("copy", ResolvedOsc52TmuxMode::Bare).unwrap(),
+            "\x1b]52;c;Y29weQ==\x07"
         );
     }
 
     #[test]
     fn osc52_sequence_wraps_for_tmux_passthrough() {
         assert_eq!(
-            osc52_sequence("copy", true).unwrap(),
+            osc52_sequence("copy", ResolvedOsc52TmuxMode::Passthrough).unwrap(),
             "\x1bPtmux;\x1b\x1b]52;c;Y29weQ==\x07\x1b\\"
+        );
+    }
+
+    #[test]
+    fn auto_resolves_to_bare_sequence_in_tmux() {
+        assert_eq!(
+            resolve_osc52_tmux_mode(true, Osc52TmuxMode::Auto),
+            ResolvedOsc52TmuxMode::Bare
+        );
+    }
+
+    #[test]
+    fn explicit_bare_resolves_to_bare_sequence_in_tmux() {
+        assert_eq!(
+            resolve_osc52_tmux_mode(true, Osc52TmuxMode::Bare),
+            ResolvedOsc52TmuxMode::Bare
+        );
+    }
+
+    #[test]
+    fn explicit_passthrough_resolves_to_passthrough_sequence_in_tmux() {
+        assert_eq!(
+            resolve_osc52_tmux_mode(true, Osc52TmuxMode::Passthrough),
+            ResolvedOsc52TmuxMode::Passthrough
+        );
+    }
+
+    #[test]
+    fn configured_tmux_mode_is_ignored_outside_tmux() {
+        assert_eq!(
+            resolve_osc52_tmux_mode(false, Osc52TmuxMode::Passthrough),
+            ResolvedOsc52TmuxMode::NotTmux
         );
     }
 
     #[test]
     fn osc52_sequence_rejects_oversized_selection() {
         let text = "x".repeat(OSC52_MAX_BYTES + 1);
-        let err = osc52_sequence(&text, false).unwrap_err();
+        let err = osc52_sequence(&text, ResolvedOsc52TmuxMode::NotTmux).unwrap_err();
 
         assert!(err.contains("selection is too large"));
     }

@@ -10,6 +10,7 @@ use crate::config::types::McpServerTransportConfig;
 use crate::config::types::Notice;
 use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
+use crate::config::types::Osc52TmuxMode;
 use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
 use crate::config::types::OtelExporterKind;
@@ -337,6 +338,9 @@ pub struct Config {
 
     /// Capture mouse input for internal scrolling and transcript selection.
     pub tui_mouse_capture: bool,
+
+    /// OSC52 sequence style to use when copying text from inside tmux.
+    pub tui_osc52_tmux_mode: Osc52TmuxMode,
 
     /// Last identity selected by the user in the TUI or app-server.
     pub last_selected_identity: Option<IdentityKind>,
@@ -1856,6 +1860,11 @@ impl Config {
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
             tui_mouse_capture: cfg.tui.as_ref().map(|t| t.mouse_capture).unwrap_or(true),
+            tui_osc52_tmux_mode: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.osc52_tmux_mode)
+                .unwrap_or_default(),
             last_selected_identity: state_json.last_selected_identity,
             tui_buddy: cfg
                 .tui
@@ -2171,6 +2180,7 @@ job_max_runtime_seconds = 0
                 animations: true,
                 show_tooltips: true,
                 mouse_capture: true,
+                osc52_tmux_mode: Osc52TmuxMode::Auto,
                 buddy: TuiBuddy::default(),
             }
         );
@@ -4482,6 +4492,7 @@ mod notifications_tests {
     use crate::config::types::BuddySpecies;
     use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
+    use crate::config::types::Osc52TmuxMode;
     use crate::config::types::TuiBuddy;
     use assert_matches::assert_matches;
     use serde::Deserialize;
@@ -4494,6 +4505,8 @@ mod notifications_tests {
         notification_method: NotificationMethod,
         #[serde(default = "default_true_for_test")]
         mouse_capture: bool,
+        #[serde(default)]
+        osc52_tmux_mode: Osc52TmuxMode,
         #[serde(default)]
         buddy: TuiBuddy,
     }
@@ -4559,6 +4572,48 @@ mod notifications_tests {
         "#;
         let parsed: RootTomlTest = toml::from_str(toml).expect("deserialize mouse_capture=false");
         assert!(!parsed.tui.mouse_capture);
+    }
+
+    #[test]
+    fn test_tui_osc52_tmux_mode_defaults_to_auto() {
+        let toml = r#"
+            [tui]
+        "#;
+        let parsed: RootTomlTest = toml::from_str(toml).expect("deserialize tui defaults");
+        assert_eq!(parsed.tui.osc52_tmux_mode, Osc52TmuxMode::Auto);
+    }
+
+    #[test]
+    fn test_tui_osc52_tmux_mode_can_be_bare() {
+        let toml = r#"
+            [tui]
+            osc52_tmux_mode = "bare"
+        "#;
+        let parsed: RootTomlTest =
+            toml::from_str(toml).expect("deserialize osc52_tmux_mode=\"bare\"");
+        assert_eq!(parsed.tui.osc52_tmux_mode, Osc52TmuxMode::Bare);
+    }
+
+    #[test]
+    fn test_tui_osc52_tmux_mode_can_be_passthrough() {
+        let toml = r#"
+            [tui]
+            osc52_tmux_mode = "passthrough"
+        "#;
+        let parsed: RootTomlTest =
+            toml::from_str(toml).expect("deserialize osc52_tmux_mode=\"passthrough\"");
+        assert_eq!(parsed.tui.osc52_tmux_mode, Osc52TmuxMode::Passthrough);
+    }
+
+    #[test]
+    fn test_tui_osc52_tmux_mode_rejects_invalid_value() {
+        let toml = r#"
+            [tui]
+            osc52_tmux_mode = "banana"
+        "#;
+        let err =
+            toml::from_str::<RootTomlTest>(toml).expect_err("invalid osc52_tmux_mode should fail");
+        assert!(err.to_string().contains("unknown variant"));
     }
 
     #[test]

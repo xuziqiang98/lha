@@ -19,6 +19,7 @@ use std::io::Result;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::clipboard_text::ClipboardTextConfig;
 use crate::clipboard_text::write_text_to_clipboard;
 use crate::history_cell::HistoryCell;
 use crate::key_hint;
@@ -57,8 +58,14 @@ pub(crate) enum Overlay {
 }
 
 impl Overlay {
-    pub(crate) fn new_transcript(cells: Vec<Arc<dyn HistoryCell>>) -> Self {
-        Self::Transcript(Box::new(TranscriptOverlay::new(cells)))
+    pub(crate) fn new_transcript(
+        cells: Vec<Arc<dyn HistoryCell>>,
+        clipboard_config: ClipboardTextConfig,
+    ) -> Self {
+        Self::Transcript(Box::new(TranscriptOverlay::new_with_clipboard_config(
+            cells,
+            clipboard_config,
+        )))
     }
 
     pub(crate) fn new_static_with_lines(lines: Vec<Line<'static>>, title: String) -> Self {
@@ -448,6 +455,7 @@ pub(crate) struct TranscriptOverlay {
     highlight_cell: Option<usize>,
     selection_snapshot: Option<String>,
     is_done: bool,
+    clipboard_config: ClipboardTextConfig,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -461,13 +469,22 @@ impl TranscriptOverlay {
     ///
     /// This overlay does not own the "active cell"; callers may optionally append a live tail via
     /// `sync_live_tail` during draws to reflect in-flight activity.
+    #[cfg(test)]
     pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>) -> Self {
+        Self::new_with_clipboard_config(transcript_cells, ClipboardTextConfig::default())
+    }
+
+    pub(crate) fn new_with_clipboard_config(
+        transcript_cells: Vec<Arc<dyn HistoryCell>>,
+        clipboard_config: ClipboardTextConfig,
+    ) -> Self {
         Self {
             view: TranscriptView::new(transcript_cells, TranscriptRenderMode::Transcript),
             mouse_scroll: MouseScrollState::default(),
             highlight_cell: None,
             selection_snapshot: None,
             is_done: false,
+            clipboard_config,
         }
     }
 
@@ -580,7 +597,8 @@ impl TranscriptOverlay {
                 e if KEY_CTRL_C.is_press(e) => {
                     match self.ctrl_c_action() {
                         TranscriptCtrlCAction::Copy(text) => {
-                            if let Err(err) = write_text_to_clipboard(&text) {
+                            if let Err(err) = write_text_to_clipboard(&text, self.clipboard_config)
+                            {
                                 tracing::warn!(
                                     "failed to copy transcript overlay selection: {err}"
                                 );
@@ -622,8 +640,9 @@ impl TranscriptOverlay {
                             .schedule_frame_in(Duration::from_millis(16));
                     }
                     TranscriptMouseOutcome::SelectionCompleted(text) => {
+                        let clipboard_config = self.clipboard_config;
                         if let Some(text) = self.set_selection_snapshot(text)
-                            && let Err(err) = write_text_to_clipboard(text)
+                            && let Err(err) = write_text_to_clipboard(text, clipboard_config)
                         {
                             tracing::warn!("failed to copy transcript overlay selection: {err}");
                         }

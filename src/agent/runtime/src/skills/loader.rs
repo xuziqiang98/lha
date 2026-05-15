@@ -779,6 +779,14 @@ mod tests {
     }
 
     async fn make_config_for_cwd(adam_home: &TempDir, cwd: PathBuf) -> Config {
+        make_config_for_cwd_with_project_root_markers(adam_home, cwd, None).await
+    }
+
+    async fn make_config_for_cwd_with_project_root_markers(
+        adam_home: &TempDir,
+        cwd: PathBuf,
+        project_root_markers: Option<Vec<String>>,
+    ) -> Config {
         let trust_root = cwd
             .ancestors()
             .find(|ancestor| ancestor.join(".git").exists())
@@ -794,6 +802,7 @@ mod tests {
                         trust_level: Some(TrustLevel::Trusted),
                     },
                 )])),
+                project_root_markers,
                 ..Default::default()
             })
             .expect("serialize config"),
@@ -2086,7 +2095,12 @@ interface:
             "from outer",
         );
 
-        let cfg = make_config_for_cwd(&adam_home, nested_dir).await;
+        let cfg = make_config_for_cwd_with_project_root_markers(
+            &adam_home,
+            nested_dir,
+            Some(vec![".adam-test-never".to_string()]),
+        )
+        .await;
 
         let outcome = load_skills(&cfg);
         assert!(

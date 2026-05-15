@@ -164,6 +164,7 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
+use crate::clipboard_text::ClipboardTextConfig;
 use crate::clipboard_text::write_text_to_clipboard;
 use crate::collab;
 use crate::diff_render::display_path_for;
@@ -2931,9 +2932,15 @@ impl ChatWidget {
     }
 
     fn write_selection_to_clipboard(&mut self, text: &str) {
-        match write_text_to_clipboard(text) {
+        match write_text_to_clipboard(text, self.clipboard_text_config()) {
             Ok(()) => self.set_status_header("Selection copied".to_string()),
             Err(err) => self.set_status_header(format!("Copy failed: {err}")),
+        }
+    }
+
+    pub(crate) fn clipboard_text_config(&self) -> ClipboardTextConfig {
+        ClipboardTextConfig {
+            osc52_tmux_mode: self.config.tui_osc52_tmux_mode,
         }
     }
 

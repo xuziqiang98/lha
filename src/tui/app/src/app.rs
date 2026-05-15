@@ -3931,7 +3931,10 @@ impl App {
                 kind: KeyEventKind::Press,
                 ..
             } => {
-                self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
+                self.overlay = Some(Overlay::new_transcript(
+                    self.transcript_cells.clone(),
+                    self.chat_widget.clipboard_text_config(),
+                ));
                 tui.frame_requester().schedule_frame();
             }
             KeyEvent {
