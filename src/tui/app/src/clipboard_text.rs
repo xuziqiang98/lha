@@ -88,9 +88,10 @@ fn write_text_to_linux_system_clipboard(text: &str) -> Result<(), String> {
 
             match result {
                 Ok(clipboard) => {
-                    let _ = tx.send(Ok(()));
                     std::thread::sleep(CLIPBOARD_KEEPALIVE);
+                    // On X11, dropping the final Clipboard performs the clipboard-manager handoff.
                     drop(clipboard);
+                    let _ = tx.send(Ok(()));
                 }
                 Err(err) => {
                     let _ = tx.send(Err(err));
