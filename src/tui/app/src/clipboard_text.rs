@@ -24,32 +24,37 @@ fn write_text_to_clipboard_immediate(text: &str) -> Result<(), String> {
     not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
 ))]
 fn write_text_to_linux_clipboard(text: &str) -> Result<(), String> {
-    use arboard::SetExtLinux;
+    use std::sync::mpsc;
     use std::time::Duration;
-    use std::time::Instant;
 
     const CLIPBOARD_KEEPALIVE: Duration = Duration::from_secs(2);
 
     let text = text.to_string();
+    let (tx, rx) = mpsc::sync_channel(1);
     std::thread::Builder::new()
         .name("adam-clipboard-text".to_string())
         .spawn(move || {
-            let result = (|| -> Result<(), String> {
+            let result = (|| -> Result<arboard::Clipboard, String> {
                 let mut clipboard = arboard::Clipboard::new().map_err(|err| err.to_string())?;
-                clipboard
-                    .set()
-                    .wait_until(Instant::now() + CLIPBOARD_KEEPALIVE)
-                    .text(text)
-                    .map_err(|err| err.to_string())
+                clipboard.set_text(text).map_err(|err| err.to_string())?;
+                Ok(clipboard)
             })();
 
-            if let Err(err) = result {
-                tracing::warn!("failed to keep Linux clipboard text alive: {err}");
+            match result {
+                Ok(clipboard) => {
+                    let _ = tx.send(Ok(()));
+                    std::thread::sleep(CLIPBOARD_KEEPALIVE);
+                    drop(clipboard);
+                }
+                Err(err) => {
+                    let _ = tx.send(Err(err));
+                }
             }
         })
         .map_err(|err| err.to_string())?;
 
-    Ok(())
+    rx.recv()
+        .map_err(|err| format!("clipboard helper exited before reporting status: {err}"))?
 }
 
 #[cfg(target_os = "android")]
