@@ -24,23 +24,39 @@ fn write_text_to_clipboard_immediate(text: &str) -> Result<(), String> {
     not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
 ))]
 fn write_text_to_linux_clipboard(text: &str) -> Result<(), String> {
-    let system_clipboard_result = write_text_to_linux_system_clipboard(text);
+    write_text_to_linux_clipboard_with(
+        text,
+        is_remote_terminal_session(),
+        write_text_to_linux_system_clipboard,
+        write_text_with_osc52,
+    )
+}
 
-    if is_remote_terminal_session() {
-        return match write_text_with_osc52(text) {
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+))]
+fn write_text_to_linux_clipboard_with(
+    text: &str,
+    is_remote: bool,
+    mut write_system_clipboard: impl FnMut(&str) -> Result<(), String>,
+    mut write_osc52: impl FnMut(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    if is_remote {
+        return match write_osc52(text) {
             Ok(()) => Ok(()),
-            Err(osc52_err) => match system_clipboard_result {
+            Err(osc52_err) => match write_system_clipboard(text) {
                 Ok(()) => Ok(()),
                 Err(system_err) => Err(format!(
-                    "system clipboard failed: {system_err}; OSC52 failed: {osc52_err}"
+                    "OSC52 failed: {osc52_err}; system clipboard failed: {system_err}"
                 )),
             },
         };
     }
 
-    match system_clipboard_result {
+    match write_system_clipboard(text) {
         Ok(()) => Ok(()),
-        Err(system_err) => match write_text_with_osc52(text) {
+        Err(system_err) => match write_osc52(text) {
             Ok(()) => Ok(()),
             Err(osc52_err) => Err(format!(
                 "system clipboard failed: {system_err}; OSC52 failed: {osc52_err}"
@@ -161,6 +177,7 @@ pub(crate) fn write_text_to_clipboard(_text: &str) -> Result<(), String> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::cell::RefCell;
 
     #[test]
     fn osc52_sequence_encodes_text_clipboard_write() {
@@ -184,6 +201,144 @@ mod tests {
         let err = osc52_sequence(&text, false).unwrap_err();
 
         assert!(err.contains("selection is too large"));
+    }
+
+    #[cfg(all(
+        unix,
+        not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+    ))]
+    #[test]
+    fn remote_linux_clipboard_uses_osc52_before_system_clipboard() {
+        let calls = RefCell::new(Vec::new());
+
+        let result = write_text_to_linux_clipboard_with(
+            "copy",
+            true,
+            |_| {
+                calls.borrow_mut().push("system");
+                Ok(())
+            },
+            |_| {
+                calls.borrow_mut().push("osc52");
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(calls.into_inner(), vec!["osc52"]);
+    }
+
+    #[cfg(all(
+        unix,
+        not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+    ))]
+    #[test]
+    fn remote_linux_clipboard_falls_back_to_system_after_osc52_failure() {
+        let calls = RefCell::new(Vec::new());
+
+        let result = write_text_to_linux_clipboard_with(
+            "copy",
+            true,
+            |_| {
+                calls.borrow_mut().push("system");
+                Ok(())
+            },
+            |_| {
+                calls.borrow_mut().push("osc52");
+                Err("osc52 unavailable".to_string())
+            },
+        );
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(calls.into_inner(), vec!["osc52", "system"]);
+    }
+
+    #[cfg(all(
+        unix,
+        not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+    ))]
+    #[test]
+    fn local_linux_clipboard_uses_system_clipboard_before_osc52() {
+        let calls = RefCell::new(Vec::new());
+
+        let result = write_text_to_linux_clipboard_with(
+            "copy",
+            false,
+            |_| {
+                calls.borrow_mut().push("system");
+                Ok(())
+            },
+            |_| {
+                calls.borrow_mut().push("osc52");
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(calls.into_inner(), vec!["system"]);
+    }
+
+    #[cfg(all(
+        unix,
+        not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+    ))]
+    #[test]
+    fn local_linux_clipboard_falls_back_to_osc52_after_system_failure() {
+        let calls = RefCell::new(Vec::new());
+
+        let result = write_text_to_linux_clipboard_with(
+            "copy",
+            false,
+            |_| {
+                calls.borrow_mut().push("system");
+                Err("system unavailable".to_string())
+            },
+            |_| {
+                calls.borrow_mut().push("osc52");
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(calls.into_inner(), vec!["system", "osc52"]);
+    }
+
+    #[cfg(all(
+        unix,
+        not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+    ))]
+    #[test]
+    fn remote_linux_clipboard_reports_failures_in_attempt_order() {
+        let result = write_text_to_linux_clipboard_with(
+            "copy",
+            true,
+            |_| Err("system unavailable".to_string()),
+            |_| Err("osc52 unavailable".to_string()),
+        );
+
+        assert_eq!(
+            result.unwrap_err(),
+            "OSC52 failed: osc52 unavailable; system clipboard failed: system unavailable"
+        );
+    }
+
+    #[cfg(all(
+        unix,
+        not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+    ))]
+    #[test]
+    fn local_linux_clipboard_reports_failures_in_attempt_order() {
+        let result = write_text_to_linux_clipboard_with(
+            "copy",
+            false,
+            |_| Err("system unavailable".to_string()),
+            |_| Err("osc52 unavailable".to_string()),
+        );
+
+        assert_eq!(
+            result.unwrap_err(),
+            "system clipboard failed: system unavailable; OSC52 failed: osc52 unavailable"
+        );
     }
 
     #[cfg(all(
