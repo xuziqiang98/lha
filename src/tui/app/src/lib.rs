@@ -42,6 +42,7 @@ use tracing_subscriber::prelude::*;
 use uuid::Uuid;
 
 mod additional_dirs;
+mod agent_selection_modal;
 mod app;
 mod app_backtrack;
 mod app_event;

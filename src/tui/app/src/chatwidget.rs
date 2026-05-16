@@ -3053,11 +3053,6 @@ impl ChatWidget {
         self.bottom_pane.set_footer_hint_override(items);
     }
 
-    pub(crate) fn show_selection_view(&mut self, params: SelectionViewParams) {
-        self.bottom_pane.show_selection_view(params);
-        self.request_redraw();
-    }
-
     pub(crate) fn can_launch_external_editor(&self) -> bool {
         self.bottom_pane.can_launch_external_editor()
     }

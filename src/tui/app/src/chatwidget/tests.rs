@@ -3918,6 +3918,16 @@ async fn experimental_command_opens_experimental_features_modal() {
 }
 
 #[tokio::test]
+async fn agent_command_requests_centered_agent_selection_modal() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Agent);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenAgentPicker));
+    assert!(!render_bottom_popup(&chat, 80).contains("Multi-agents"));
+}
+
+#[tokio::test]
 async fn slash_init_skips_when_project_doc_exists() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     let tempdir = tempdir().unwrap();

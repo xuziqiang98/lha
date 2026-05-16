@@ -1,3 +1,6 @@
+use crate::agent_selection_modal::AgentSelectionModal;
+use crate::agent_selection_modal::AgentSelectionModalAction;
+use crate::agent_selection_modal::AgentSelectionModalItem;
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event::BuddyConfigEdit;
@@ -8,9 +11,6 @@ use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
-use crate::bottom_pane::SelectionItem;
-use crate::bottom_pane::SelectionViewParams;
-use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::changelog::ChangelogOutput;
 use crate::changelog::DirectorySnapshot;
 use crate::changelog::get_git_changelog;
@@ -614,6 +614,7 @@ pub(crate) struct App {
     identity_modal: Option<IdentityModal>,
     model_selection_modal: Option<ModelSelectionModal>,
     experimental_features_modal: Option<ExperimentalFeaturesModal>,
+    agent_selection_modal: Option<AgentSelectionModal>,
     review_modal: Option<ReviewModal>,
     pending_startup_trust_prompt: bool,
     deferred_initial_user_message: Option<UserMessage>,
@@ -1748,49 +1749,34 @@ impl App {
             .collect();
         sort_agent_picker_threads(&mut agent_threads);
 
+        self.chat_widget.dismiss_active_view();
+
         let mut initial_selected_idx = None;
-        let items: Vec<SelectionItem> = agent_threads
+        let items: Vec<AgentSelectionModalItem> = agent_threads
             .iter()
             .enumerate()
             .map(|(idx, (thread_id, entry))| {
                 if self.active_thread_id == Some(*thread_id) {
                     initial_selected_idx = Some(idx);
                 }
-                let id = *thread_id;
                 let is_primary = self.primary_thread_id == Some(*thread_id);
                 let name = format_agent_picker_item_name(
                     entry.agent_nickname.as_deref(),
                     entry.agent_role.as_deref(),
                     is_primary,
                 );
-                let display_name = if entry.is_closed {
-                    format!("○ {name}")
-                } else {
-                    format!("● {name}")
-                };
-                let uuid = thread_id.to_string();
-                SelectionItem {
-                    name: display_name,
-                    description: Some(uuid.clone()),
+                AgentSelectionModalItem {
+                    thread_id: *thread_id,
+                    name,
+                    status: entry.status.clone(),
                     is_current: self.active_thread_id == Some(*thread_id),
-                    actions: vec![Box::new(move |tx| {
-                        tx.send(AppEvent::SelectAgentThread(id));
-                    })],
-                    dismiss_on_select: true,
-                    search_value: Some(format!("{name} {uuid}")),
-                    ..Default::default()
+                    is_closed: entry.is_closed,
                 }
             })
             .collect();
 
-        self.chat_widget.show_selection_view(SelectionViewParams {
-            title: Some("Multi-agents".to_string()),
-            subtitle: Some("Select an agent to watch".to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            initial_selected_idx,
-            ..Default::default()
-        });
+        self.agent_selection_modal = AgentSelectionModal::new(items, initial_selected_idx);
+        self.chat_widget.request_redraw_for_ui();
     }
 
     fn upsert_agent_picker_thread(
@@ -2338,6 +2324,7 @@ impl App {
             identity_modal: None,
             model_selection_modal: None,
             experimental_features_modal: None,
+            agent_selection_modal: None,
             review_modal: None,
             pending_startup_trust_prompt: show_trust_popup_on_startup,
             deferred_initial_user_message,
@@ -2536,6 +2523,18 @@ impl App {
                 }
                 TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
             }
+        } else if self.agent_selection_modal.is_some() {
+            match event {
+                TuiEvent::Key(key_event) => {
+                    return self
+                        .handle_agent_selection_modal_key_event(tui, key_event)
+                        .await;
+                }
+                TuiEvent::Draw => {
+                    self.draw_main_ui(tui)?;
+                }
+                TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
+            }
         } else if self.review_modal.is_some() {
             match event {
                 TuiEvent::Key(key_event) => {
@@ -2609,6 +2608,8 @@ impl App {
             } else if let Some(modal) = &self.model_selection_modal {
                 modal.render(frame.area(), frame.buffer);
             } else if let Some(modal) = &self.experimental_features_modal {
+                modal.render(frame.area(), frame.buffer);
+            } else if let Some(modal) = &self.agent_selection_modal {
                 modal.render(frame.area(), frame.buffer);
             } else if let Some(modal) = &self.review_modal {
                 modal.render(frame.area(), frame.buffer);
@@ -2803,6 +2804,35 @@ impl App {
                     self.handle_event(tui, AppEvent::UpdateFeatureFlags { updates })
                         .await
                 }
+            }
+        }
+    }
+
+    async fn handle_agent_selection_modal_key_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        key_event: KeyEvent,
+    ) -> Result<AppRunControl> {
+        let action = self
+            .agent_selection_modal
+            .as_mut()
+            .map(|modal| modal.handle_key_event(key_event))
+            .unwrap_or(AgentSelectionModalAction::None);
+        match action {
+            AgentSelectionModalAction::None => {
+                tui.frame_requester().schedule_frame();
+                Ok(AppRunControl::Continue)
+            }
+            AgentSelectionModalAction::Exit => {
+                self.agent_selection_modal = None;
+                tui.frame_requester().schedule_frame();
+                Ok(AppRunControl::Continue)
+            }
+            AgentSelectionModalAction::SelectThread(thread_id) => {
+                self.agent_selection_modal = None;
+                tui.frame_requester().schedule_frame();
+                self.handle_event(tui, AppEvent::SelectAgentThread(thread_id))
+                    .await
             }
         }
     }
@@ -4735,6 +4765,7 @@ mod tests {
 
         app.open_agent_picker().await;
 
+        assert!(app.agent_selection_modal.is_none());
         assert!(app.chat_widget.no_modal_or_popup_active());
         while let Ok(event) = app_event_rx.try_recv() {
             assert!(
@@ -4753,13 +4784,32 @@ mod tests {
             .insert(thread_id, ThreadEventChannel::new(4));
 
         app.open_agent_picker().await;
-        app.chat_widget
+
+        let action = app
+            .agent_selection_modal
+            .as_mut()
+            .expect("agent selection modal")
             .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-        match app_event_rx.try_recv() {
-            Ok(AppEvent::SelectAgentThread(id)) => assert_eq!(id, thread_id),
-            other => panic!("expected SelectAgentThread event, got {other:?}"),
-        }
+        assert_eq!(action, AgentSelectionModalAction::SelectThread(thread_id));
+        assert!(app_event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn open_agent_picker_sets_centered_modal() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        let thread_id = ThreadId::new();
+        app.thread_event_channels
+            .insert(thread_id, ThreadEventChannel::new(4));
+
+        app.open_agent_picker().await;
+
+        assert!(
+            app.agent_selection_modal.is_some(),
+            "expected App to own the /agent modal"
+        );
+        assert!(app.chat_widget.no_modal_or_popup_active());
     }
 
     #[tokio::test]
@@ -5478,6 +5528,7 @@ mod tests {
             identity_modal: None,
             model_selection_modal: None,
             experimental_features_modal: None,
+            agent_selection_modal: None,
             review_modal: None,
             pending_startup_trust_prompt: false,
             deferred_initial_user_message: None,
@@ -5544,6 +5595,7 @@ mod tests {
                 identity_modal: None,
                 model_selection_modal: None,
                 experimental_features_modal: None,
+                agent_selection_modal: None,
                 review_modal: None,
                 pending_startup_trust_prompt: false,
                 deferred_initial_user_message: None,
@@ -5679,6 +5731,7 @@ show_raw_agent_reasoning = true
             identity_modal: None,
             model_selection_modal: None,
             experimental_features_modal: None,
+            agent_selection_modal: None,
             review_modal: None,
             pending_startup_trust_prompt: true,
             deferred_initial_user_message: None,
