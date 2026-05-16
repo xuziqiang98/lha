@@ -385,24 +385,30 @@ impl ReviewListScreen {
         match key_event {
             KeyEvent {
                 code: KeyCode::Up, ..
+            } => {
+                self.move_up();
+                ReviewScreenAction::None
             }
-            | KeyEvent {
+            KeyEvent {
                 code: KeyCode::Char('k'),
                 modifiers: KeyModifiers::NONE,
                 ..
-            } => {
+            } if self.search.is_none() => {
                 self.move_up();
                 ReviewScreenAction::None
             }
             KeyEvent {
                 code: KeyCode::Down,
                 ..
+            } => {
+                self.move_down();
+                ReviewScreenAction::None
             }
-            | KeyEvent {
+            KeyEvent {
                 code: KeyCode::Char('j'),
                 modifiers: KeyModifiers::NONE,
                 ..
-            } => {
+            } if self.search.is_none() => {
                 self.move_down();
                 ReviewScreenAction::None
             }
@@ -563,7 +569,7 @@ impl ReviewListScreen {
                 " select   ".dim(),
                 "type".cyan(),
                 " search   ".dim(),
-                "↑↓/jk".cyan(),
+                "↑↓".cyan(),
                 " move   ".dim(),
                 "Esc".cyan(),
                 format!(" {back_label}").dim(),
@@ -1019,6 +1025,70 @@ mod tests {
         let rendered = terminal.backend().to_string();
         assert!(rendered.contains("Fix bug Y"));
         assert!(!rendered.contains("Add new feature X"));
+    }
+
+    #[test]
+    fn searchable_branch_picker_accepts_lowercase_j_and_k() {
+        let (mut modal, _rx) = make_modal();
+        modal.push_branch_picker_with_entries(
+            "main".to_string(),
+            vec!["jz/fix-login".to_string(), "z/fix-login".to_string()],
+        );
+        modal.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        modal.handle_key_event(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
+
+        let mut terminal = Terminal::new(VT100Backend::new(80, 24)).expect("terminal");
+        terminal
+            .draw(|frame| modal.render(frame.area(), frame.buffer_mut()))
+            .expect("draw");
+
+        let rendered = terminal.backend().to_string();
+        assert!(rendered.contains("main -> jz/fix-login"));
+        assert!(!rendered.contains("main -> z/fix-login"));
+
+        let (mut modal, _rx) = make_modal();
+        modal.push_branch_picker_with_entries(
+            "main".to_string(),
+            vec!["tk/fix-login".to_string(), "t/fix-login".to_string()],
+        );
+        modal.handle_key_event(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+        modal.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+
+        let mut terminal = Terminal::new(VT100Backend::new(80, 24)).expect("terminal");
+        terminal
+            .draw(|frame| modal.render(frame.area(), frame.buffer_mut()))
+            .expect("draw");
+
+        let rendered = terminal.backend().to_string();
+        assert!(rendered.contains("main -> tk/fix-login"));
+        assert!(!rendered.contains("main -> t/fix-login"));
+    }
+
+    #[test]
+    fn root_preset_keeps_j_navigation() {
+        let (mut modal, mut rx) = make_modal();
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)),
+            ReviewModalAction::None
+        );
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            ReviewModalAction::Exit
+        );
+
+        match rx.try_recv() {
+            Ok(AppEvent::StartReview { review_request }) => {
+                assert_eq!(
+                    review_request,
+                    ReviewRequest {
+                        target: ReviewTarget::UncommittedChanges,
+                        user_facing_hint: None,
+                    }
+                );
+            }
+            other => panic!("unexpected app event: {other:?}"),
+        }
     }
 
     #[test]
