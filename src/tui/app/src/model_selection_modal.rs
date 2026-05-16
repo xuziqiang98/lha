@@ -50,6 +50,8 @@ enum ModelSelectionStage {
         choices: Vec<EffortChoice>,
         default_choice: Option<ReasoningEffort>,
         highlight_choice: Option<ReasoningEffort>,
+        previous_presets: Vec<ModelPreset>,
+        previous_selected_idx: usize,
     },
 }
 
@@ -118,8 +120,20 @@ impl ModelSelectionModal {
         }
 
         match key_event {
+            // Some terminals send Ctrl-P/N as C0 control characters without
+            // reporting the CONTROL modifier.
             KeyEvent {
                 code: KeyCode::Up, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('\u{0010}'),
+                modifiers: KeyModifiers::NONE,
+                ..
             }
             | KeyEvent {
                 code: KeyCode::Char('k'),
@@ -131,6 +145,16 @@ impl ModelSelectionModal {
             }
             KeyEvent {
                 code: KeyCode::Down,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('\u{000e}'),
+                modifiers: KeyModifiers::NONE,
                 ..
             }
             | KeyEvent {
@@ -164,8 +188,8 @@ impl ModelSelectionModal {
             } => self.selected_action(),
             KeyEvent {
                 code: KeyCode::Esc, ..
-            }
-            | KeyEvent {
+            } => self.handle_escape(),
+            KeyEvent {
                 code: KeyCode::Char('c') | KeyCode::Char('d'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
@@ -386,6 +410,11 @@ impl ModelSelectionModal {
     }
 
     fn footer_lines(&self) -> Vec<Line<'static>> {
+        let esc_action = match &self.stage {
+            ModelSelectionStage::Reasoning { .. } => " back",
+            ModelSelectionStage::Quick { .. } | ModelSelectionStage::All { .. } => " exit",
+        };
+
         vec![
             "".into(),
             vec![
@@ -394,7 +423,7 @@ impl ModelSelectionModal {
                 "↑↓/jk".cyan(),
                 " move   ".dim(),
                 "Esc".cyan(),
-                " exit".dim(),
+                esc_action.dim(),
             ]
             .into(),
         ]
@@ -448,6 +477,7 @@ impl ModelSelectionModal {
                 choices,
                 default_choice,
                 highlight_choice,
+                ..
             } => {
                 let warning_effort = Self::warning_effort(choices);
                 let warn_for_model = Self::warn_for_model(preset.model.as_str());
@@ -471,12 +501,16 @@ impl ModelSelectionModal {
                                     .map(|option| option.description.as_str())
                             })
                             .filter(|text| !text.is_empty());
-                        let warning = (warn_for_model && warning_effort == Some(effort)).then(|| {
-                            let effort_label = Self::reasoning_effort_label(effort);
-                            format!(
-                                "⚠ {effort_label} reasoning effort can quickly consume Plus plan rate limits."
-                            )
-                        });
+                        let warning =
+                            (self.selected_idx == idx
+                                && warn_for_model
+                                && warning_effort == Some(effort))
+                            .then(|| {
+                                let effort_label = Self::reasoning_effort_label(effort);
+                                format!(
+                                    "⚠ {effort_label} reasoning effort can quickly consume Plus plan rate limits."
+                                )
+                            });
                         let combined_description = match (description, warning.as_deref()) {
                             (Some(description), Some(warning)) => {
                                 Some(format!("{description}\n{warning}"))
@@ -613,6 +647,8 @@ impl ModelSelectionModal {
                     default_choice
                 };
                 let selection_choice = highlight_choice.or(default_choice);
+                let previous_presets = presets.clone();
+                let previous_selected_idx = self.selected_idx;
                 self.selected_idx =
                     Self::initial_reasoning_idx(&choices, selection_choice).unwrap_or_default();
                 self.stage = ModelSelectionStage::Reasoning {
@@ -620,6 +656,8 @@ impl ModelSelectionModal {
                     choices,
                     default_choice,
                     highlight_choice,
+                    previous_presets,
+                    previous_selected_idx,
                 };
                 ModelSelectionModalAction::None
             }
@@ -631,6 +669,25 @@ impl ModelSelectionModal {
                 };
                 Self::persist_action((**preset).clone(), choice.stored)
             }
+        }
+    }
+
+    fn handle_escape(&mut self) -> ModelSelectionModalAction {
+        let previous_state = match &self.stage {
+            ModelSelectionStage::Reasoning {
+                previous_presets,
+                previous_selected_idx,
+                ..
+            } => Some((previous_presets.clone(), *previous_selected_idx)),
+            ModelSelectionStage::Quick { .. } | ModelSelectionStage::All { .. } => None,
+        };
+
+        if let Some((presets, previous_selected_idx)) = previous_state {
+            self.stage = ModelSelectionStage::All { presets };
+            self.selected_idx = previous_selected_idx.min(self.item_count().saturating_sub(1));
+            ModelSelectionModalAction::None
+        } else {
+            ModelSelectionModalAction::Exit
         }
     }
 
@@ -1051,6 +1108,150 @@ mod tests {
                 provider_id: Some("openai".to_string()),
                 effort: Some(ReasoningEffort::High),
             }
+        );
+    }
+
+    #[test]
+    fn esc_from_reasoning_returns_to_all_models_and_preserves_selection() {
+        let mut modal = ModelSelectionModal::new(
+            vec![
+                preset("model-a", "Model A", vec![ReasoningEffort::Medium]),
+                preset(
+                    "gpt-5.2",
+                    "GPT 5.2",
+                    vec![ReasoningEffort::Medium, ReasoningEffort::High],
+                ),
+            ],
+            context("model-a"),
+        )
+        .expect("modal");
+
+        modal.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            ModelSelectionModalAction::None
+        );
+
+        assert!(matches!(modal.stage, ModelSelectionStage::Reasoning { .. }));
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            ModelSelectionModalAction::None
+        );
+        assert!(matches!(modal.stage, ModelSelectionStage::All { .. }));
+        assert_eq!(modal.selected_idx, 1);
+
+        let mut terminal = Terminal::new(VT100Backend::new(100, 32)).expect("terminal");
+        terminal
+            .draw(|frame| modal.render(frame.area(), frame.buffer_mut()))
+            .expect("draw");
+        let rendered = terminal.backend().to_string();
+        assert!(rendered.contains("Select Model and Effort"));
+        assert!(!rendered.contains("Select Reasoning Level"));
+    }
+
+    #[test]
+    fn footer_shows_esc_back_in_reasoning_stage() {
+        let mut modal = ModelSelectionModal::new(
+            vec![preset(
+                "gpt-5.2",
+                "GPT 5.2",
+                vec![ReasoningEffort::Medium, ReasoningEffort::High],
+            )],
+            context("model-a"),
+        )
+        .expect("modal");
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            ModelSelectionModalAction::None
+        );
+
+        let mut terminal = Terminal::new(VT100Backend::new(100, 32)).expect("terminal");
+        terminal
+            .draw(|frame| modal.render(frame.area(), frame.buffer_mut()))
+            .expect("draw");
+        let rendered = terminal.backend().to_string();
+        assert!(rendered.contains("Esc"));
+        assert!(rendered.contains("back"));
+        assert!(!rendered.contains("exit"));
+    }
+
+    #[test]
+    fn footer_shows_esc_exit_outside_reasoning_stage() {
+        let modal = ModelSelectionModal::new(
+            vec![
+                preset("codex-auto-fast", "Fast", vec![ReasoningEffort::Low]),
+                preset("gpt-5.2", "GPT 5.2", vec![ReasoningEffort::Medium]),
+            ],
+            context("codex-auto-fast"),
+        )
+        .expect("modal");
+
+        let mut terminal = Terminal::new(VT100Backend::new(100, 32)).expect("terminal");
+        terminal
+            .draw(|frame| modal.render(frame.area(), frame.buffer_mut()))
+            .expect("draw");
+        let rendered = terminal.backend().to_string();
+        assert!(rendered.contains("Esc"));
+        assert!(rendered.contains("exit"));
+        assert!(!rendered.contains("back"));
+    }
+
+    #[test]
+    fn ctrl_p_ctrl_n_and_c0_fallbacks_move_selection() {
+        let mut modal =
+            ModelSelectionModal::new(many_model_presets(3), context("model-0")).expect("modal");
+
+        assert_eq!(modal.selected_idx, 0);
+        modal.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        assert_eq!(modal.selected_idx, 1);
+        modal.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        assert_eq!(modal.selected_idx, 0);
+        modal.handle_key_event(KeyEvent::new(KeyCode::Char('\u{000e}'), KeyModifiers::NONE));
+        assert_eq!(modal.selected_idx, 1);
+        modal.handle_key_event(KeyEvent::new(KeyCode::Char('\u{0010}'), KeyModifiers::NONE));
+        assert_eq!(modal.selected_idx, 0);
+        modal.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        assert_eq!(modal.selected_idx, 2);
+    }
+
+    #[test]
+    fn reasoning_rate_limit_warning_only_renders_for_selected_effort() {
+        let mut modal = ModelSelectionModal::new(
+            vec![preset(
+                "gpt-5.2",
+                "GPT 5.2",
+                vec![ReasoningEffort::Medium, ReasoningEffort::High],
+            )],
+            context("model-a"),
+        )
+        .expect("modal");
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            ModelSelectionModalAction::None
+        );
+
+        let mut terminal = Terminal::new(VT100Backend::new(100, 32)).expect("terminal");
+        terminal
+            .draw(|frame| modal.render(frame.area(), frame.buffer_mut()))
+            .expect("draw");
+        assert!(
+            !terminal
+                .backend()
+                .to_string()
+                .contains("Plus plan rate limits")
+        );
+
+        modal.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        terminal
+            .draw(|frame| modal.render(frame.area(), frame.buffer_mut()))
+            .expect("draw");
+        assert!(
+            terminal
+                .backend()
+                .to_string()
+                .contains("High reasoning effort can quickly consume Plus plan rate limits")
         );
     }
 
