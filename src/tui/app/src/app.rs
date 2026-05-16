@@ -48,6 +48,8 @@ use crate::provider_config_modal::ProviderConfigModalAction;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
+use crate::review_modal::ReviewModal;
+use crate::review_modal::ReviewModalAction;
 use crate::sidebar::AgentPanelEntry;
 use crate::tui;
 use crate::tui::TuiEvent;
@@ -603,6 +605,7 @@ pub(crate) struct App {
     provider_config_modal: Option<ProviderConfigModalState>,
     project_trust_modal: Option<ProjectTrustModal>,
     identity_modal: Option<IdentityModal>,
+    review_modal: Option<ReviewModal>,
     pending_startup_trust_prompt: bool,
     deferred_initial_user_message: Option<UserMessage>,
     deferred_startup_continuation: Option<DeferredStartupContinuation>,
@@ -1618,6 +1621,7 @@ impl App {
     }
 
     async fn start_review(&mut self, review_request: ReviewRequest) -> Result<()> {
+        self.review_modal = None;
         if !self.config.features.enabled(Feature::DetachedReview) {
             self.chat_widget.submit_op(Op::Review { review_request });
             return Ok(());
@@ -2323,6 +2327,7 @@ impl App {
             provider_config_modal,
             project_trust_modal,
             identity_modal: None,
+            review_modal: None,
             pending_startup_trust_prompt: show_trust_popup_on_startup,
             deferred_initial_user_message,
             deferred_startup_continuation,
@@ -2496,6 +2501,22 @@ impl App {
                 }
                 TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
             }
+        } else if self.review_modal.is_some() {
+            match event {
+                TuiEvent::Key(key_event) => {
+                    self.handle_review_modal_key(tui, key_event);
+                }
+                TuiEvent::Paste(pasted) => {
+                    if let Some(modal) = self.review_modal.as_mut() {
+                        modal.handle_paste(pasted.replace("\r", "\n"));
+                        tui.frame_requester().schedule_frame();
+                    }
+                }
+                TuiEvent::Draw => {
+                    self.draw_main_ui(tui)?;
+                }
+                TuiEvent::Mouse(_) => {}
+            }
         } else if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
@@ -2550,6 +2571,11 @@ impl App {
                 modal.render(frame.area(), frame.buffer);
             } else if let Some(modal) = &self.identity_modal {
                 modal.render(frame.area(), frame.buffer);
+            } else if let Some(modal) = &self.review_modal {
+                modal.render(frame.area(), frame.buffer);
+                if let Some((x, y)) = modal.cursor_pos(frame.area()) {
+                    frame.set_cursor_position((x, y));
+                }
             } else if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
                 frame.set_cursor_position((x, y));
             }
@@ -2613,6 +2639,18 @@ impl App {
             ProviderConfigModalMode::Startup => Some(self.provider_config_exit_mode()),
             ProviderConfigModalMode::InSession => None,
         }
+    }
+
+    fn handle_review_modal_key(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
+        let action = self
+            .review_modal
+            .as_mut()
+            .map(|modal| modal.handle_key_event(key_event))
+            .unwrap_or(ReviewModalAction::None);
+        if action == ReviewModalAction::Exit {
+            self.review_modal = None;
+        }
+        tui.frame_requester().schedule_frame();
     }
 
     async fn handle_project_trust_modal_key(
@@ -2993,6 +3031,7 @@ impl App {
                 self.chat_widget.submit_op(op);
             }
             AppEvent::StartReview { review_request } => {
+                self.review_modal = None;
                 self.start_review(review_request).await?;
             }
             AppEvent::RequestChangelog => {
@@ -3070,6 +3109,9 @@ impl App {
             AppEvent::OpenIdentityModal => self.open_identity_modal(),
             AppEvent::OpenProviderConfigModal => {
                 self.open_provider_config_modal(ProviderConfigModalMode::InSession);
+            }
+            AppEvent::OpenReviewModal => {
+                self.open_review_modal();
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
@@ -3628,13 +3670,27 @@ impl App {
                 self.chat_widget.open_permissions_popup();
             }
             AppEvent::OpenReviewBranchPicker(cwd) => {
-                self.chat_widget.show_review_branch_picker(&cwd).await;
+                self.ensure_review_modal();
+                if let Some(mut modal) = self.review_modal.take() {
+                    modal.show_branch_picker(&cwd).await;
+                    self.review_modal = Some(modal);
+                }
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenReviewCommitPicker(cwd) => {
-                self.chat_widget.show_review_commit_picker(&cwd).await;
+                self.ensure_review_modal();
+                if let Some(mut modal) = self.review_modal.take() {
+                    modal.show_commit_picker(&cwd).await;
+                    self.review_modal = Some(modal);
+                }
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenReviewCustomPrompt => {
-                self.chat_widget.show_review_custom_prompt();
+                self.ensure_review_modal();
+                if let Some(modal) = self.review_modal.as_mut() {
+                    modal.show_custom_prompt();
+                }
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::SubmitUserMessageWithMode { text, identity } => {
                 self.chat_widget
@@ -3851,6 +3907,21 @@ impl App {
             ),
         });
         self.chat_widget.request_redraw_for_ui();
+    }
+
+    fn open_review_modal(&mut self) {
+        self.chat_widget.dismiss_active_view();
+        self.review_modal = Some(ReviewModal::new(
+            self.config.cwd.clone(),
+            self.app_event_tx.clone(),
+        ));
+        self.chat_widget.request_redraw_for_ui();
+    }
+
+    fn ensure_review_modal(&mut self) {
+        if self.review_modal.is_none() {
+            self.open_review_modal();
+        }
     }
 
     fn personality_label(personality: Personality) -> &'static str {
@@ -4269,6 +4340,39 @@ mod tests {
             app.provider_config_modal.as_ref().map(|state| state.mode),
             Some(ProviderConfigModalMode::InSession)
         );
+    }
+
+    #[tokio::test]
+    async fn open_review_modal_creates_centered_modal() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        app.open_review_modal();
+
+        assert!(app.review_modal.is_some());
+    }
+
+    #[tokio::test]
+    async fn start_review_closes_open_review_modal() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let review_request = ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        };
+        app.open_review_modal();
+
+        app.start_review(review_request.clone())
+            .await
+            .expect("start review");
+
+        assert!(app.review_modal.is_none());
+        match op_rx.try_recv() {
+            Ok(Op::Review {
+                review_request: got,
+            }) => {
+                assert_eq!(got, review_request);
+            }
+            other => panic!("expected inline review op, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -5228,6 +5332,7 @@ mod tests {
             provider_config_modal: None,
             project_trust_modal: None,
             identity_modal: None,
+            review_modal: None,
             pending_startup_trust_prompt: false,
             deferred_initial_user_message: None,
             deferred_startup_continuation: None,
@@ -5291,6 +5396,7 @@ mod tests {
                 provider_config_modal: None,
                 project_trust_modal: None,
                 identity_modal: None,
+                review_modal: None,
                 pending_startup_trust_prompt: false,
                 deferred_initial_user_message: None,
                 deferred_startup_continuation: None,
@@ -5423,6 +5529,7 @@ show_raw_agent_reasoning = true
             provider_config_modal: None,
             project_trust_modal: None,
             identity_modal: None,
+            review_modal: None,
             pending_startup_trust_prompt: true,
             deferred_initial_user_message: None,
             deferred_startup_continuation: Some(DeferredStartupContinuation::StartFresh),

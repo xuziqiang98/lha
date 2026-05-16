@@ -3896,31 +3896,15 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
     assert_snapshot!("unified_exec_non_empty_then_empty_after", combined);
 }
 
-/// Selecting the custom prompt option from the review popup sends
-/// OpenReviewCustomPrompt to the app event channel.
+/// /review opens the centered App-owned review modal.
 #[tokio::test]
-async fn review_popup_custom_prompt_action_sends_event() {
+async fn review_command_opens_review_modal() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    // Open the preset selection popup
-    chat.open_review_popup();
+    chat.dispatch_command(SlashCommand::Review);
 
-    // Move selection down to the fourth item: "Custom review instructions"
-    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    // Activate
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    // Drain events and ensure we saw the OpenReviewCustomPrompt request
-    let mut found = false;
-    while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::OpenReviewCustomPrompt = ev {
-            found = true;
-            break;
-        }
-    }
-    assert!(found, "expected OpenReviewCustomPrompt event to be sent");
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenReviewModal));
+    assert!(!render_bottom_popup(&chat, 80).contains("Select a review preset"));
 }
 
 #[tokio::test]
@@ -4705,108 +4689,6 @@ async fn undo_started_hides_interrupt_hint() {
     );
 }
 
-/// The commit picker shows only commit subjects (no timestamps).
-#[tokio::test]
-async fn review_commit_picker_shows_subjects_without_timestamps() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    // Open the Review presets parent popup.
-    chat.open_review_popup();
-
-    // Show commit picker with synthetic entries.
-    let entries = vec![
-        adam_agent::git_info::CommitLogEntry {
-            sha: "1111111deadbeef".to_string(),
-            timestamp: 0,
-            subject: "Add new feature X".to_string(),
-        },
-        adam_agent::git_info::CommitLogEntry {
-            sha: "2222222cafebabe".to_string(),
-            timestamp: 0,
-            subject: "Fix bug Y".to_string(),
-        },
-    ];
-    super::show_review_commit_picker_with_entries(&mut chat, entries);
-
-    // Render the bottom pane and inspect the lines for subjects and absence of time words.
-    let width = 72;
-    let height = chat.desired_height(width);
-    let area = ratatui::layout::Rect::new(0, 0, width, height);
-    let mut buf = ratatui::buffer::Buffer::empty(area);
-    chat.render(area, &mut buf);
-
-    let mut blob = String::new();
-    for y in 0..area.height {
-        for x in 0..area.width {
-            let s = buf[(x, y)].symbol();
-            if s.is_empty() {
-                blob.push(' ');
-            } else {
-                blob.push_str(s);
-            }
-        }
-        blob.push('\n');
-    }
-
-    assert!(
-        blob.contains("Add new feature X"),
-        "expected subject in output"
-    );
-    assert!(blob.contains("Fix bug Y"), "expected subject in output");
-
-    // Ensure no relative-time phrasing is present.
-    let lowered = blob.to_lowercase();
-    assert!(
-        !lowered.contains("ago")
-            && !lowered.contains(" second")
-            && !lowered.contains(" minute")
-            && !lowered.contains(" hour")
-            && !lowered.contains(" day"),
-        "expected no relative time in commit picker output: {blob:?}"
-    );
-}
-
-/// Submitting the custom prompt view starts a review with the typed prompt.
-#[tokio::test]
-async fn custom_prompt_submit_sends_review_op() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    chat.show_review_custom_prompt();
-    // Paste prompt text via ChatWidget handler, then submit
-    chat.handle_paste("  please audit dependencies  ".to_string());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    // Expect AppEvent::StartReview with trimmed prompt
-    let evt = rx.try_recv().expect("expected one app event");
-    match evt {
-        AppEvent::StartReview { review_request } => {
-            assert_eq!(
-                review_request,
-                ReviewRequest {
-                    target: ReviewTarget::Custom {
-                        instructions: "please audit dependencies".to_string(),
-                    },
-                    user_facing_hint: None,
-                }
-            );
-        }
-        other => panic!("unexpected app event: {other:?}"),
-    }
-}
-
-/// Hitting Enter on an empty custom prompt view does not submit.
-#[tokio::test]
-async fn custom_prompt_enter_empty_does_not_send() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    chat.show_review_custom_prompt();
-    // Enter without any text
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    // No review event should be sent
-    assert!(rx.try_recv().is_err(), "no app event should be sent");
-}
-
 #[tokio::test]
 async fn view_image_tool_call_adds_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -4885,99 +4767,6 @@ async fn interrupted_turn_error_message_snapshot() {
     );
     let last = lines_to_single_string(cells.last().unwrap());
     assert_snapshot!("interrupted_turn_error_message", last);
-}
-
-/// Opening custom prompt from the review popup, pressing Esc returns to the
-/// parent popup, pressing Esc again dismisses all panels (back to normal mode).
-#[tokio::test]
-async fn review_custom_prompt_escape_navigates_back_then_dismisses() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    // Open the Review presets parent popup.
-    chat.open_review_popup();
-
-    // Open the custom prompt submenu (child view) directly.
-    chat.show_review_custom_prompt();
-
-    // Verify child view is on top.
-    let header = render_bottom_first_row(&chat, 60);
-    assert!(
-        header.contains("Custom review instructions"),
-        "expected custom prompt view header: {header:?}"
-    );
-
-    // Esc once: child view closes, parent (review presets) remains.
-    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    let header = render_bottom_first_row(&chat, 60);
-    assert!(
-        header.contains("Select a review preset"),
-        "expected to return to parent review popup: {header:?}"
-    );
-
-    // Esc again: parent closes; back to normal composer state.
-    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(
-        chat.is_normal_backtrack_mode(),
-        "expected to be back in normal composer mode"
-    );
-}
-
-/// Opening base-branch picker from the review popup, pressing Esc returns to the
-/// parent popup, pressing Esc again dismisses all panels (back to normal mode).
-#[tokio::test]
-async fn review_branch_picker_escape_navigates_back_then_dismisses() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    // Open the Review presets parent popup.
-    chat.open_review_popup();
-
-    // Open the branch picker submenu (child view). Using a temp cwd with no git repo is fine.
-    let cwd = std::env::temp_dir();
-    chat.show_review_branch_picker(&cwd).await;
-
-    // Verify child view header.
-    let header = render_bottom_first_row(&chat, 60);
-    assert!(
-        header.contains("Select a base branch"),
-        "expected branch picker header: {header:?}"
-    );
-
-    // Esc once: child view closes, parent remains.
-    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    let header = render_bottom_first_row(&chat, 60);
-    assert!(
-        header.contains("Select a review preset"),
-        "expected to return to parent review popup: {header:?}"
-    );
-
-    // Esc again: parent closes; back to normal composer state.
-    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(
-        chat.is_normal_backtrack_mode(),
-        "expected to be back in normal composer mode"
-    );
-}
-
-fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
-    let height = chat.desired_height(width);
-    let area = Rect::new(0, 0, width, height);
-    let mut buf = Buffer::empty(area);
-    chat.render(area, &mut buf);
-    for y in 0..area.height {
-        let mut row = String::new();
-        for x in 0..area.width {
-            let s = buf[(x, y)].symbol();
-            if s.is_empty() {
-                row.push(' ');
-            } else {
-                row.push_str(s);
-            }
-        }
-        if !row.trim().is_empty() {
-            return row;
-        }
-    }
-    String::new()
 }
 
 fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {

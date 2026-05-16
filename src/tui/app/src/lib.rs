@@ -86,6 +86,7 @@ mod provider_config_modal;
 pub mod public_widgets;
 mod render;
 mod resume_picker;
+mod review_modal;
 mod selection_list;
 mod session_log;
 mod shimmer;

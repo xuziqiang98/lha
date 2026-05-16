@@ -149,6 +149,9 @@ pub(crate) enum AppEvent {
     /// Open the centered provider configuration modal.
     OpenProviderConfigModal,
 
+    /// Open the centered review preset modal.
+    OpenReviewModal,
+
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),
 
