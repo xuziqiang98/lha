@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -11,28 +12,30 @@ use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
+use ratatui::text::Line;
 use ratatui::widgets::Block;
 use ratatui::widgets::BorderType;
 use ratatui::widgets::Borders;
 use ratatui::widgets::Clear;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
+use textwrap::Options;
+use textwrap::wrap;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use crate::bottom_pane::BottomPaneView;
-use crate::bottom_pane::CancellationEvent;
-use crate::bottom_pane::ListSelectionView;
-use crate::bottom_pane::SelectionItem;
-use crate::bottom_pane::SelectionViewParams;
-use crate::bottom_pane::custom_prompt_view::CustomPromptView;
-use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use crate::bottom_pane::TextArea;
+use crate::bottom_pane::TextAreaState;
+use crate::bottom_pane::popup_consts::MAX_POPUP_ROWS;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 
 pub(crate) struct ReviewModal {
-    view_stack: Vec<Box<dyn BottomPaneView>>,
+    view_stack: Vec<ReviewModalScreen>,
     app_event_tx: AppEventSender,
 }
 
@@ -70,36 +73,21 @@ impl ReviewModal {
         }
 
         if key_event.code == KeyCode::Esc {
-            if self.view_stack.len() <= 1 {
-                return ReviewModalAction::Exit;
-            }
-            if let Some(view) = self.view_stack.last_mut() {
-                match view.on_ctrl_c() {
-                    CancellationEvent::Handled if view.is_complete() => {
-                        self.view_stack.pop();
-                    }
-                    CancellationEvent::Handled => {}
-                    CancellationEvent::NotHandled => view.handle_key_event(key_event),
-                }
-            }
-            return ReviewModalAction::None;
+            return self.handle_escape();
         }
 
-        let Some(view) = self.view_stack.last_mut() else {
+        let Some(screen) = self.view_stack.last_mut() else {
             return ReviewModalAction::Exit;
         };
-        view.handle_key_event(key_event);
-        if view.is_complete() {
-            self.view_stack.clear();
-            ReviewModalAction::Exit
-        } else {
-            ReviewModalAction::None
+        match screen.handle_key_event(key_event) {
+            ReviewScreenAction::None => ReviewModalAction::None,
+            ReviewScreenAction::Activate(action) => self.activate(action),
         }
     }
 
     pub(crate) fn handle_paste(&mut self, pasted: String) {
-        if let Some(view) = self.view_stack.last_mut() {
-            view.handle_paste(pasted);
+        if let Some(screen) = self.view_stack.last_mut() {
+            screen.handle_paste(pasted);
         }
     }
 
@@ -108,15 +96,7 @@ impl ReviewModal {
         let current_branch = current_branch_name(cwd)
             .await
             .unwrap_or_else(|| "(detached HEAD)".to_string());
-        let items = branch_items(current_branch, branches);
-        self.push_selection_view(SelectionViewParams {
-            title: Some("Select a base branch".to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            is_searchable: true,
-            search_placeholder: Some("Type to search branches".to_string()),
-            ..Default::default()
-        });
+        self.push_branch_picker_with_entries(current_branch, branches);
     }
 
     pub(crate) async fn show_commit_picker(&mut self, cwd: &Path) {
@@ -125,27 +105,8 @@ impl ReviewModal {
     }
 
     pub(crate) fn show_custom_prompt(&mut self) {
-        let tx = self.app_event_tx.clone();
-        let view = CustomPromptView::new(
-            "Custom review instructions".to_string(),
-            "Type instructions and press Enter".to_string(),
-            None,
-            Box::new(move |prompt: String| {
-                let trimmed = prompt.trim().to_string();
-                if trimmed.is_empty() {
-                    return;
-                }
-                tx.send(AppEvent::StartReview {
-                    review_request: ReviewRequest {
-                        target: ReviewTarget::Custom {
-                            instructions: trimmed,
-                        },
-                        user_facing_hint: None,
-                    },
-                });
-            }),
-        );
-        self.view_stack.push(Box::new(view));
+        self.view_stack
+            .push(ReviewModalScreen::CustomPrompt(ReviewPromptScreen::new()));
     }
 
     pub(crate) fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -168,8 +129,8 @@ impl ReviewModal {
             return;
         }
 
-        if let Some(view) = self.view_stack.last() {
-            view.render(content_area, buf);
+        if let Some(screen) = self.view_stack.last() {
+            screen.render(content_area, buf);
         }
     }
 
@@ -179,84 +140,61 @@ impl ReviewModal {
         let content_area = inner_area.inset(Insets::vh(1, 2));
         self.view_stack
             .last()
-            .and_then(|view| view.cursor_pos(content_area))
+            .and_then(|screen| screen.cursor_pos(content_area))
+    }
+
+    fn handle_escape(&mut self) -> ReviewModalAction {
+        if self.view_stack.len() <= 1 {
+            ReviewModalAction::Exit
+        } else {
+            self.view_stack.pop();
+            ReviewModalAction::None
+        }
+    }
+
+    fn activate(&mut self, action: ReviewListAction) -> ReviewModalAction {
+        match action {
+            ReviewListAction::OpenBranchPicker(cwd) => {
+                self.app_event_tx
+                    .send(AppEvent::OpenReviewBranchPicker(cwd));
+                ReviewModalAction::None
+            }
+            ReviewListAction::OpenCommitPicker(cwd) => {
+                self.app_event_tx
+                    .send(AppEvent::OpenReviewCommitPicker(cwd));
+                ReviewModalAction::None
+            }
+            ReviewListAction::OpenCustomPrompt => {
+                self.app_event_tx.send(AppEvent::OpenReviewCustomPrompt);
+                ReviewModalAction::None
+            }
+            ReviewListAction::StartReview(review_request) => {
+                self.app_event_tx
+                    .send(AppEvent::StartReview { review_request });
+                ReviewModalAction::Exit
+            }
+        }
     }
 
     fn push_review_preset_view(&mut self, cwd: PathBuf) {
-        let mut items: Vec<SelectionItem> = Vec::new();
-
-        items.push(SelectionItem {
-            name: "Review against a base branch".to_string(),
-            description: Some("(PR Style)".into()),
-            actions: vec![Box::new({
-                let cwd = cwd.clone();
-                move |tx| {
-                    tx.send(AppEvent::OpenReviewBranchPicker(cwd.clone()));
-                }
-            })],
-            dismiss_on_select: false,
-            ..Default::default()
-        });
-
-        items.push(SelectionItem {
-            name: "Review uncommitted changes".to_string(),
-            actions: vec![Box::new(move |tx: &AppEventSender| {
-                tx.send(AppEvent::StartReview {
-                    review_request: ReviewRequest {
-                        target: ReviewTarget::UncommittedChanges,
-                        user_facing_hint: None,
-                    },
-                });
-            })],
-            dismiss_on_select: true,
-            ..Default::default()
-        });
-
-        items.push(SelectionItem {
-            name: "Review a commit".to_string(),
-            actions: vec![Box::new(move |tx| {
-                tx.send(AppEvent::OpenReviewCommitPicker(cwd.clone()));
-            })],
-            dismiss_on_select: false,
-            ..Default::default()
-        });
-
-        items.push(SelectionItem {
-            name: "Custom review instructions".to_string(),
-            actions: vec![Box::new(move |tx| {
-                tx.send(AppEvent::OpenReviewCustomPrompt);
-            })],
-            dismiss_on_select: false,
-            ..Default::default()
-        });
-
-        self.push_selection_view(SelectionViewParams {
-            title: Some("Select a review preset".into()),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            ..Default::default()
-        });
+        self.view_stack
+            .push(ReviewModalScreen::List(ReviewListScreen::presets(cwd)));
     }
 
-    fn push_selection_view(&mut self, params: SelectionViewParams) {
-        self.view_stack.push(Box::new(ListSelectionView::new(
-            params,
-            self.app_event_tx.clone(),
-        )));
+    fn push_branch_picker_with_entries(&mut self, current_branch: String, branches: Vec<String>) {
+        self.view_stack
+            .push(ReviewModalScreen::List(ReviewListScreen::branches(
+                current_branch,
+                branches,
+            )));
     }
 
     fn push_commit_picker_with_entries(
         &mut self,
         entries: Vec<adam_agent::git_info::CommitLogEntry>,
     ) {
-        self.push_selection_view(SelectionViewParams {
-            title: Some("Select a commit to review".to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
-            items: commit_items(entries),
-            is_searchable: true,
-            search_placeholder: Some("Type to search commits".to_string()),
-            ..Default::default()
-        });
+        self.view_stack
+            .push(ReviewModalScreen::List(ReviewListScreen::commits(entries)));
     }
 
     fn modal_area(&self, area: Rect) -> Rect {
@@ -271,7 +209,7 @@ impl ReviewModal {
         let desired_content_height = self
             .view_stack
             .last()
-            .map(|view| view.desired_height(content_width))
+            .map(|screen| screen.desired_height(content_width))
             .unwrap_or(0);
         let height = desired_content_height
             .saturating_add(4)
@@ -287,56 +225,607 @@ impl ReviewModal {
     }
 }
 
-fn branch_items(current_branch: String, branches: Vec<String>) -> Vec<SelectionItem> {
-    let mut items: Vec<SelectionItem> = Vec::with_capacity(branches.len());
-    for option in branches {
-        let branch = option.clone();
-        items.push(SelectionItem {
-            name: format!("{current_branch} -> {branch}"),
-            actions: vec![Box::new(move |tx: &AppEventSender| {
-                tx.send(AppEvent::StartReview {
-                    review_request: ReviewRequest {
-                        target: ReviewTarget::BaseBranch {
-                            branch: branch.clone(),
-                        },
-                        user_facing_hint: None,
-                    },
-                });
-            })],
-            dismiss_on_select: true,
-            search_value: Some(option),
-            ..Default::default()
-        });
-    }
-    items
+enum ReviewModalScreen {
+    List(ReviewListScreen),
+    CustomPrompt(ReviewPromptScreen),
 }
 
-fn commit_items(entries: Vec<adam_agent::git_info::CommitLogEntry>) -> Vec<SelectionItem> {
-    let mut items: Vec<SelectionItem> = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let subject = entry.subject.clone();
-        let sha = entry.sha.clone();
-        let search_val = format!("{subject} {sha}");
+impl ReviewModalScreen {
+    fn handle_key_event(&mut self, key_event: KeyEvent) -> ReviewScreenAction {
+        match self {
+            Self::List(screen) => screen.handle_key_event(key_event),
+            Self::CustomPrompt(screen) => screen.handle_key_event(key_event),
+        }
+    }
 
-        items.push(SelectionItem {
-            name: subject.clone(),
-            actions: vec![Box::new(move |tx: &AppEventSender| {
-                tx.send(AppEvent::StartReview {
-                    review_request: ReviewRequest {
+    fn handle_paste(&mut self, pasted: String) {
+        match self {
+            Self::List(screen) => screen.handle_paste(pasted),
+            Self::CustomPrompt(screen) => screen.handle_paste(pasted),
+        }
+    }
+
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        match self {
+            Self::List(screen) => screen.render(area, buf),
+            Self::CustomPrompt(screen) => screen.render(area, buf),
+        }
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        match self {
+            Self::List(screen) => screen.desired_height(width),
+            Self::CustomPrompt(screen) => screen.desired_height(width),
+        }
+    }
+
+    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        match self {
+            Self::List(_) => None,
+            Self::CustomPrompt(screen) => screen.cursor_pos(area),
+        }
+    }
+}
+
+enum ReviewScreenAction {
+    None,
+    Activate(ReviewListAction),
+}
+
+struct ReviewListScreen {
+    title: String,
+    subtitle: Option<String>,
+    items: Vec<ReviewListItem>,
+    selected_idx: usize,
+    scroll_top: usize,
+    search: Option<ReviewSearchState>,
+}
+
+impl ReviewListScreen {
+    fn presets(cwd: PathBuf) -> Self {
+        let items = vec![
+            ReviewListItem {
+                name: "Review against a base branch".to_string(),
+                description: Some("(PR Style)".to_string()),
+                search_value: None,
+                action: ReviewListAction::OpenBranchPicker(cwd.clone()),
+            },
+            ReviewListItem {
+                name: "Review uncommitted changes".to_string(),
+                description: None,
+                search_value: None,
+                action: ReviewListAction::StartReview(ReviewRequest {
+                    target: ReviewTarget::UncommittedChanges,
+                    user_facing_hint: None,
+                }),
+            },
+            ReviewListItem {
+                name: "Review a commit".to_string(),
+                description: None,
+                search_value: None,
+                action: ReviewListAction::OpenCommitPicker(cwd),
+            },
+            ReviewListItem {
+                name: "Custom review instructions".to_string(),
+                description: None,
+                search_value: None,
+                action: ReviewListAction::OpenCustomPrompt,
+            },
+        ];
+        Self {
+            title: "Select a review preset".to_string(),
+            subtitle: None,
+            items,
+            selected_idx: 0,
+            scroll_top: 0,
+            search: None,
+        }
+    }
+
+    fn branches(current_branch: String, branches: Vec<String>) -> Self {
+        let items = branches
+            .into_iter()
+            .map(|branch| ReviewListItem {
+                name: format!("{current_branch} -> {branch}"),
+                description: None,
+                search_value: Some(branch.clone()),
+                action: ReviewListAction::StartReview(ReviewRequest {
+                    target: ReviewTarget::BaseBranch { branch },
+                    user_facing_hint: None,
+                }),
+            })
+            .collect();
+        Self {
+            title: "Select a base branch".to_string(),
+            subtitle: None,
+            items,
+            selected_idx: 0,
+            scroll_top: 0,
+            search: Some(ReviewSearchState {
+                query: String::new(),
+                placeholder: "Type to search branches".to_string(),
+            }),
+        }
+    }
+
+    fn commits(entries: Vec<adam_agent::git_info::CommitLogEntry>) -> Self {
+        let items = entries
+            .into_iter()
+            .map(|entry| {
+                let subject = entry.subject;
+                let sha = entry.sha;
+                ReviewListItem {
+                    name: subject.clone(),
+                    description: None,
+                    search_value: Some(format!("{subject} {sha}")),
+                    action: ReviewListAction::StartReview(ReviewRequest {
                         target: ReviewTarget::Commit {
-                            sha: sha.clone(),
-                            title: Some(subject.clone()),
+                            sha,
+                            title: Some(subject),
                         },
                         user_facing_hint: None,
-                    },
-                });
-            })],
-            dismiss_on_select: true,
-            search_value: Some(search_val),
-            ..Default::default()
-        });
+                    }),
+                }
+            })
+            .collect();
+        Self {
+            title: "Select a commit to review".to_string(),
+            subtitle: None,
+            items,
+            selected_idx: 0,
+            scroll_top: 0,
+            search: Some(ReviewSearchState {
+                query: String::new(),
+                placeholder: "Type to search commits".to_string(),
+            }),
+        }
     }
-    items
+
+    fn handle_key_event(&mut self, key_event: KeyEvent) -> ReviewScreenAction {
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Up, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('k'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.move_up();
+                ReviewScreenAction::None
+            }
+            KeyEvent {
+                code: KeyCode::Down,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('j'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.move_down();
+                ReviewScreenAction::None
+            }
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self
+                .selected_action()
+                .map(ReviewScreenAction::Activate)
+                .unwrap_or(ReviewScreenAction::None),
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if self.search.is_none() && c.is_ascii_digit() => {
+                let Some(idx) = c.to_digit(10).and_then(|digit| {
+                    usize::try_from(digit)
+                        .ok()
+                        .and_then(|digit| digit.checked_sub(1))
+                }) else {
+                    return ReviewScreenAction::None;
+                };
+                if idx >= self.items.len() {
+                    return ReviewScreenAction::None;
+                }
+                self.selected_idx = idx;
+                self.ensure_visible();
+                self.selected_action()
+                    .map(ReviewScreenAction::Activate)
+                    .unwrap_or(ReviewScreenAction::None)
+            }
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+                ..
+            } if self.search.is_some() => {
+                if let Some(search) = &mut self.search {
+                    search.query.push(c);
+                }
+                self.reset_search_selection();
+                ReviewScreenAction::None
+            }
+            KeyEvent {
+                code: KeyCode::Backspace,
+                ..
+            } if self.search.is_some() => {
+                if let Some(search) = &mut self.search {
+                    search.query.pop();
+                }
+                self.reset_search_selection();
+                ReviewScreenAction::None
+            }
+            _ => ReviewScreenAction::None,
+        }
+    }
+
+    fn handle_paste(&mut self, pasted: String) {
+        if let Some(search) = &mut self.search
+            && !pasted.is_empty()
+        {
+            search.query.push_str(&pasted);
+            self.reset_search_selection();
+        }
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        let header_height = 1u16
+            .saturating_add(u16::from(self.subtitle.is_some() || self.search.is_some()))
+            .saturating_add(1);
+        let rows_height = self.visible_indices().iter().fold(0u16, |height, idx| {
+            height.saturating_add(self.item_height(width, &self.items[*idx]))
+        });
+        header_height
+            .saturating_add(rows_height.max(1))
+            .saturating_add(2)
+    }
+
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        let mut lines: Vec<Line<'static>> = vec![self.title.clone().bold().into()];
+        if let Some(search) = &self.search {
+            let text = if search.query.is_empty() {
+                search.placeholder.clone()
+            } else {
+                format!("Search: {}", search.query)
+            };
+            let line = if search.query.is_empty() {
+                text.dim()
+            } else {
+                text.cyan()
+            };
+            lines.push(line.into());
+        } else if let Some(subtitle) = &self.subtitle {
+            lines.push(subtitle.clone().dim().into());
+        }
+        lines.push("".into());
+
+        let visible_indices = self.visible_indices();
+        if visible_indices.is_empty() {
+            lines.push("no matches".dim().italic().into());
+        } else {
+            let width = area.width.max(1) as usize;
+            for (visible_idx, item_idx) in visible_indices.into_iter().enumerate() {
+                let actual_visible_idx = self.scroll_top + visible_idx;
+                self.push_item_lines(&mut lines, width, actual_visible_idx, &self.items[item_idx]);
+            }
+        }
+
+        lines.push("".into());
+        lines.push(self.footer_line());
+
+        Paragraph::new(lines).render(area, buf);
+    }
+
+    fn push_item_lines(
+        &self,
+        lines: &mut Vec<Line<'static>>,
+        width: usize,
+        visible_idx: usize,
+        item: &ReviewListItem,
+    ) {
+        let selected = self.selected_idx == visible_idx;
+        let marker = if selected { "›".cyan() } else { " ".into() };
+        let label = if selected {
+            item.name.clone().bold()
+        } else {
+            item.name.clone().into()
+        };
+        if self.search.is_some() {
+            lines.push(vec![marker, " ".into(), label].into());
+        } else {
+            let number = format!("{}. ", visible_idx + 1);
+            lines.push(vec![marker, " ".into(), number.into(), label].into());
+        }
+
+        if let Some(description) = &item.description {
+            let wrapped = wrap(
+                description,
+                Options::new(width)
+                    .initial_indent("   ")
+                    .subsequent_indent("   "),
+            );
+            for line in wrapped {
+                lines.push(line.into_owned().dim().into());
+            }
+        }
+    }
+
+    fn footer_line(&self) -> Line<'static> {
+        let back_label = if self.search.is_some() {
+            "back"
+        } else {
+            "exit"
+        };
+        if self.search.is_some() {
+            vec![
+                "Enter".cyan(),
+                " select   ".dim(),
+                "type".cyan(),
+                " search   ".dim(),
+                "↑↓/jk".cyan(),
+                " move   ".dim(),
+                "Esc".cyan(),
+                format!(" {back_label}").dim(),
+            ]
+            .into()
+        } else {
+            vec![
+                "Enter".cyan(),
+                " select   ".dim(),
+                "↑↓/jk".cyan(),
+                " move   ".dim(),
+                "Esc".cyan(),
+                format!(" {back_label}").dim(),
+            ]
+            .into()
+        }
+    }
+
+    fn item_height(&self, width: u16, item: &ReviewListItem) -> u16 {
+        let description_height = item.description.as_ref().map_or(0, |description| {
+            wrap(
+                description,
+                Options::new(width.max(1) as usize)
+                    .initial_indent("   ")
+                    .subsequent_indent("   "),
+            )
+            .len() as u16
+        });
+        1u16.saturating_add(description_height)
+    }
+
+    fn move_up(&mut self) {
+        let len = self.filtered_indices().len();
+        if len == 0 {
+            self.selected_idx = 0;
+            self.scroll_top = 0;
+            return;
+        }
+        if self.selected_idx == 0 {
+            self.selected_idx = len.saturating_sub(1);
+        } else {
+            self.selected_idx -= 1;
+        }
+        self.ensure_visible();
+    }
+
+    fn move_down(&mut self) {
+        let len = self.filtered_indices().len();
+        if len == 0 {
+            self.selected_idx = 0;
+            self.scroll_top = 0;
+            return;
+        }
+        self.selected_idx = (self.selected_idx + 1) % len;
+        self.ensure_visible();
+    }
+
+    fn selected_action(&self) -> Option<ReviewListAction> {
+        self.filtered_indices()
+            .get(self.selected_idx)
+            .and_then(|idx| self.items.get(*idx))
+            .map(|item| item.action.clone())
+    }
+
+    fn visible_indices(&self) -> Vec<usize> {
+        self.filtered_indices()
+            .into_iter()
+            .skip(self.scroll_top)
+            .take(MAX_POPUP_ROWS)
+            .collect()
+    }
+
+    fn filtered_indices(&self) -> Vec<usize> {
+        let Some(search) = &self.search else {
+            return (0..self.items.len()).collect();
+        };
+        let query = search.query.trim().to_lowercase();
+        if query.is_empty() {
+            return (0..self.items.len()).collect();
+        }
+        self.items
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, item)| {
+                let haystack = item.search_value.as_ref().unwrap_or(&item.name);
+                haystack.to_lowercase().contains(&query).then_some(idx)
+            })
+            .collect()
+    }
+
+    fn reset_search_selection(&mut self) {
+        self.selected_idx = 0;
+        self.scroll_top = 0;
+    }
+
+    fn ensure_visible(&mut self) {
+        let len = self.filtered_indices().len();
+        if len == 0 {
+            self.selected_idx = 0;
+            self.scroll_top = 0;
+            return;
+        }
+        self.selected_idx = self.selected_idx.min(len.saturating_sub(1));
+        if self.selected_idx < self.scroll_top {
+            self.scroll_top = self.selected_idx;
+        } else if self.selected_idx >= self.scroll_top.saturating_add(MAX_POPUP_ROWS) {
+            self.scroll_top = self
+                .selected_idx
+                .saturating_add(1)
+                .saturating_sub(MAX_POPUP_ROWS);
+        }
+    }
+}
+
+struct ReviewSearchState {
+    query: String,
+    placeholder: String,
+}
+
+struct ReviewListItem {
+    name: String,
+    description: Option<String>,
+    search_value: Option<String>,
+    action: ReviewListAction,
+}
+
+#[derive(Clone)]
+enum ReviewListAction {
+    OpenBranchPicker(PathBuf),
+    OpenCommitPicker(PathBuf),
+    OpenCustomPrompt,
+    StartReview(ReviewRequest),
+}
+
+struct ReviewPromptScreen {
+    textarea: TextArea,
+    textarea_state: RefCell<TextAreaState>,
+}
+
+impl ReviewPromptScreen {
+    fn new() -> Self {
+        Self {
+            textarea: TextArea::new(),
+            textarea_state: RefCell::new(TextAreaState::default()),
+        }
+    }
+
+    fn handle_key_event(&mut self, key_event: KeyEvent) -> ReviewScreenAction {
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                let instructions = self.textarea.text().trim().to_string();
+                if instructions.is_empty() {
+                    ReviewScreenAction::None
+                } else {
+                    ReviewScreenAction::Activate(ReviewListAction::StartReview(ReviewRequest {
+                        target: ReviewTarget::Custom { instructions },
+                        user_facing_hint: None,
+                    }))
+                }
+            }
+            other => {
+                self.textarea.input(other);
+                ReviewScreenAction::None
+            }
+        }
+    }
+
+    fn handle_paste(&mut self, pasted: String) {
+        self.textarea.insert_str(&pasted);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        5u16.saturating_add(self.input_height(width))
+    }
+
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        let input_height = self.input_height(area.width);
+        let lines: Vec<Line<'static>> = vec![
+            "Custom review instructions".bold().into(),
+            "Type instructions and press Enter".dim().into(),
+            "".into(),
+        ];
+        Paragraph::new(lines).render(
+            Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: 3,
+            },
+            buf,
+        );
+
+        let input_area = self.input_area(area, input_height);
+        Block::default()
+            .title("Instructions")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::Cyan))
+            .render(input_area, buf);
+        let textarea_rect = input_area.inset(Insets::vh(1, 1));
+        StatefulWidgetRef::render_ref(
+            &(&self.textarea),
+            textarea_rect,
+            buf,
+            &mut self.textarea_state.borrow_mut(),
+        );
+        if self.textarea.text().is_empty() {
+            Paragraph::new("Type instructions and press Enter".dim()).render(textarea_rect, buf);
+        }
+
+        let footer_y = input_area
+            .y
+            .saturating_add(input_area.height)
+            .saturating_add(1);
+        if footer_y < area.y.saturating_add(area.height) {
+            Paragraph::new(Line::from(vec![
+                "Enter".cyan(),
+                " submit   ".dim(),
+                "Shift+Enter".cyan(),
+                " newline   ".dim(),
+                "Esc".cyan(),
+                " back".dim(),
+            ]))
+            .render(
+                Rect {
+                    x: area.x,
+                    y: footer_y,
+                    width: area.width,
+                    height: 1,
+                },
+                buf,
+            );
+        }
+    }
+
+    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        let input_area = self.input_area(area, self.input_height(area.width));
+        let textarea_rect = input_area.inset(Insets::vh(1, 1));
+        let state = *self.textarea_state.borrow();
+        self.textarea.cursor_pos_with_state(textarea_rect, state)
+    }
+
+    fn input_height(&self, width: u16) -> u16 {
+        let textarea_width = width.saturating_sub(2).max(1);
+        self.textarea
+            .desired_height(textarea_width)
+            .saturating_add(2)
+            .clamp(3, 10)
+    }
+
+    fn input_area(&self, area: Rect, input_height: u16) -> Rect {
+        Rect {
+            x: area.x,
+            y: area.y.saturating_add(3),
+            width: area.width,
+            height: input_height,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -371,6 +860,7 @@ mod tests {
         assert!(rendered.contains("Review uncommitted changes"));
         assert!(rendered.contains("Review a commit"));
         assert!(rendered.contains("Custom review instructions"));
+        assert!(rendered.contains("↑↓/jk"));
     }
 
     #[test]
@@ -379,6 +869,16 @@ mod tests {
 
         assert_eq!(
             modal.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            ReviewModalAction::Exit
+        );
+    }
+
+    #[test]
+    fn ctrl_d_exits_modal() {
+        let (mut modal, _rx) = make_modal();
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL)),
             ReviewModalAction::Exit
         );
     }
@@ -436,6 +936,29 @@ mod tests {
     }
 
     #[test]
+    fn digit_shortcut_selects_root_preset_item() {
+        let (mut modal, mut rx) = make_modal();
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE)),
+            ReviewModalAction::Exit
+        );
+
+        match rx.try_recv() {
+            Ok(AppEvent::StartReview { review_request }) => {
+                assert_eq!(
+                    review_request,
+                    ReviewRequest {
+                        target: ReviewTarget::UncommittedChanges,
+                        user_facing_hint: None,
+                    }
+                );
+            }
+            other => panic!("unexpected app event: {other:?}"),
+        }
+    }
+
+    #[test]
     fn commit_picker_shows_subjects_without_timestamps() {
         let (mut modal, _rx) = make_modal();
         modal.push_commit_picker_with_entries(vec![
@@ -471,16 +994,36 @@ mod tests {
     }
 
     #[test]
+    fn commit_picker_typing_filters_results() {
+        let (mut modal, _rx) = make_modal();
+        modal.push_commit_picker_with_entries(vec![
+            adam_agent::git_info::CommitLogEntry {
+                sha: "1111111deadbeef".to_string(),
+                timestamp: 0,
+                subject: "Add new feature X".to_string(),
+            },
+            adam_agent::git_info::CommitLogEntry {
+                sha: "2222222cafebabe".to_string(),
+                timestamp: 0,
+                subject: "Fix bug Y".to_string(),
+            },
+        ]);
+        modal.handle_key_event(KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::SHIFT));
+
+        let mut terminal = Terminal::new(VT100Backend::new(80, 24)).expect("terminal");
+        terminal
+            .draw(|frame| modal.render(frame.area(), frame.buffer_mut()))
+            .expect("draw");
+
+        let rendered = terminal.backend().to_string();
+        assert!(rendered.contains("Fix bug Y"));
+        assert!(!rendered.contains("Add new feature X"));
+    }
+
+    #[test]
     fn branch_picker_formats_current_to_target_branch() {
         let (mut modal, _rx) = make_modal();
-        modal.push_selection_view(SelectionViewParams {
-            title: Some("Select a base branch".to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
-            items: branch_items("main".to_string(), vec!["feature/x".to_string()]),
-            is_searchable: true,
-            search_placeholder: Some("Type to search branches".to_string()),
-            ..Default::default()
-        });
+        modal.push_branch_picker_with_entries("main".to_string(), vec!["feature/x".to_string()]);
 
         let mut terminal = Terminal::new(VT100Backend::new(80, 24)).expect("terminal");
         terminal
@@ -488,5 +1031,24 @@ mod tests {
             .expect("draw");
 
         assert!(terminal.backend().to_string().contains("main -> feature/x"));
+    }
+
+    #[test]
+    fn searchable_paste_updates_query() {
+        let (mut modal, _rx) = make_modal();
+        modal.push_branch_picker_with_entries(
+            "main".to_string(),
+            vec!["feature/x".to_string(), "release/y".to_string()],
+        );
+        modal.handle_paste("release".to_string());
+
+        let mut terminal = Terminal::new(VT100Backend::new(80, 24)).expect("terminal");
+        terminal
+            .draw(|frame| modal.render(frame.area(), frame.buffer_mut()))
+            .expect("draw");
+
+        let rendered = terminal.backend().to_string();
+        assert!(rendered.contains("main -> release/y"));
+        assert!(!rendered.contains("main -> feature/x"));
     }
 }

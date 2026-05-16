@@ -83,6 +83,8 @@ mod selection_popup_common;
 mod textarea;
 mod unified_exec_footer;
 pub(crate) use feedback_view::FeedbackNoteView;
+pub(crate) use textarea::TextArea;
+pub(crate) use textarea::TextAreaState;
 
 /// How long the "press again to quit" hint stays visible.
 ///
@@ -120,7 +122,6 @@ use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
-pub(crate) use list_selection_view::ListSelectionView;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
 
