@@ -33,6 +33,9 @@ use crate::bottom_pane::TextAreaState;
 use crate::bottom_pane::popup_consts::MAX_POPUP_ROWS;
 use crate::render::Insets;
 use crate::render::RectExt as _;
+use crate::render::line_utils::push_owned_lines;
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_line;
 
 pub(crate) struct ReviewModal {
     view_stack: Vec<ReviewModalScreen>,
@@ -385,6 +388,16 @@ impl ReviewListScreen {
         match key_event {
             KeyEvent {
                 code: KeyCode::Up, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('\u{0010}'),
+                modifiers: KeyModifiers::NONE,
+                ..
             } => {
                 self.move_up();
                 ReviewScreenAction::None
@@ -399,6 +412,16 @@ impl ReviewListScreen {
             }
             KeyEvent {
                 code: KeyCode::Down,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('\u{000e}'),
+                modifiers: KeyModifiers::NONE,
                 ..
             } => {
                 self.move_down();
@@ -443,23 +466,22 @@ impl ReviewListScreen {
             }
             KeyEvent {
                 code: KeyCode::Char(c),
-                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+                modifiers,
                 ..
-            } if self.search.is_some() => {
-                if let Some(search) = &mut self.search {
-                    search.query.push(c);
-                }
-                self.reset_search_selection();
+            } if self.search.is_some()
+                && !modifiers.contains(KeyModifiers::CONTROL)
+                && !modifiers.contains(KeyModifiers::ALT) =>
+            {
+                self.update_search_query(|query| query.push(c));
                 ReviewScreenAction::None
             }
             KeyEvent {
                 code: KeyCode::Backspace,
                 ..
             } if self.search.is_some() => {
-                if let Some(search) = &mut self.search {
-                    search.query.pop();
-                }
-                self.reset_search_selection();
+                self.update_search_query(|query| {
+                    query.pop();
+                });
                 ReviewScreenAction::None
             }
             _ => ReviewScreenAction::None,
@@ -467,11 +489,8 @@ impl ReviewListScreen {
     }
 
     fn handle_paste(&mut self, pasted: String) {
-        if let Some(search) = &mut self.search
-            && !pasted.is_empty()
-        {
-            search.query.push_str(&pasted);
-            self.reset_search_selection();
+        if self.search.is_some() && !pasted.is_empty() {
+            self.update_search_query(|query| query.push_str(&pasted));
         }
     }
 
@@ -479,9 +498,17 @@ impl ReviewListScreen {
         let header_height = 1u16
             .saturating_add(u16::from(self.subtitle.is_some() || self.search.is_some()))
             .saturating_add(1);
-        let rows_height = self.visible_indices().iter().fold(0u16, |height, idx| {
-            height.saturating_add(self.item_height(width, &self.items[*idx]))
-        });
+        let rows_height =
+            self.visible_indices()
+                .iter()
+                .enumerate()
+                .fold(0u16, |height, (visible_idx, idx)| {
+                    height.saturating_add(self.item_height(
+                        width,
+                        self.scroll_top + visible_idx,
+                        &self.items[*idx],
+                    ))
+                });
         header_height
             .saturating_add(rows_height.max(1))
             .saturating_add(2)
@@ -530,19 +557,7 @@ impl ReviewListScreen {
         visible_idx: usize,
         item: &ReviewListItem,
     ) {
-        let selected = self.selected_idx == visible_idx;
-        let marker = if selected { "›".cyan() } else { " ".into() };
-        let label = if selected {
-            item.name.clone().bold()
-        } else {
-            item.name.clone().into()
-        };
-        if self.search.is_some() {
-            lines.push(vec![marker, " ".into(), label].into());
-        } else {
-            let number = format!("{}. ", visible_idx + 1);
-            lines.push(vec![marker, " ".into(), number.into(), label].into());
-        }
+        lines.extend(self.item_label_lines(width, visible_idx, item));
 
         if let Some(description) = &item.description {
             let wrapped = wrap(
@@ -555,6 +570,37 @@ impl ReviewListScreen {
                 lines.push(line.into_owned().dim().into());
             }
         }
+    }
+
+    fn item_label_lines(
+        &self,
+        width: usize,
+        visible_idx: usize,
+        item: &ReviewListItem,
+    ) -> Vec<Line<'static>> {
+        let selected = self.selected_idx == visible_idx;
+        let marker = if selected { "›".cyan() } else { " ".into() };
+        let mut prefix_spans = vec![marker, " ".into()];
+        if self.search.is_none() {
+            prefix_spans.push(format!("{}. ", visible_idx + 1).into());
+        }
+        let initial_indent: Line<'static> = prefix_spans.into();
+        let prefix_width = initial_indent.width();
+        let subsequent_indent: Line<'static> = " ".repeat(prefix_width).into();
+        let label: Line<'static> = if selected {
+            item.name.clone().bold().into()
+        } else {
+            item.name.clone().into()
+        };
+        let wrapped = word_wrap_line(
+            &label,
+            RtOptions::new(width.max(1))
+                .initial_indent(initial_indent)
+                .subsequent_indent(subsequent_indent),
+        );
+        let mut out = Vec::new();
+        push_owned_lines(&wrapped, &mut out);
+        out
     }
 
     fn footer_line(&self) -> Line<'static> {
@@ -588,7 +634,7 @@ impl ReviewListScreen {
         }
     }
 
-    fn item_height(&self, width: u16, item: &ReviewListItem) -> u16 {
+    fn item_height(&self, width: u16, visible_idx: usize, item: &ReviewListItem) -> u16 {
         let description_height = item.description.as_ref().map_or(0, |description| {
             wrap(
                 description,
@@ -598,7 +644,10 @@ impl ReviewListScreen {
             )
             .len() as u16
         });
-        1u16.saturating_add(description_height)
+        (self
+            .item_label_lines(width.max(1) as usize, visible_idx, item)
+            .len() as u16)
+            .saturating_add(description_height)
     }
 
     fn move_up(&mut self) {
@@ -660,9 +709,21 @@ impl ReviewListScreen {
             .collect()
     }
 
-    fn reset_search_selection(&mut self) {
-        self.selected_idx = 0;
-        self.scroll_top = 0;
+    fn update_search_query(&mut self, update: impl FnOnce(&mut String)) {
+        let previously_selected_actual_idx =
+            self.filtered_indices().get(self.selected_idx).copied();
+        if let Some(search) = &mut self.search {
+            update(&mut search.query);
+        }
+        self.reselect_after_filter_change(previously_selected_actual_idx);
+    }
+
+    fn reselect_after_filter_change(&mut self, previously_selected_actual_idx: Option<usize>) {
+        let filtered = self.filtered_indices();
+        self.selected_idx = previously_selected_actual_idx
+            .and_then(|actual_idx| filtered.iter().position(|idx| *idx == actual_idx))
+            .unwrap_or(0);
+        self.ensure_visible();
     }
 
     fn ensure_visible(&mut self) {
@@ -850,6 +911,34 @@ mod tests {
             ReviewModal::new(PathBuf::from("/tmp"), AppEventSender::new(tx)),
             rx,
         )
+    }
+
+    fn assert_next_branch_review(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+        branch: &str,
+    ) {
+        match rx.try_recv() {
+            Ok(AppEvent::StartReview { review_request }) => {
+                assert_eq!(
+                    review_request,
+                    ReviewRequest {
+                        target: ReviewTarget::BaseBranch {
+                            branch: branch.to_string(),
+                        },
+                        user_facing_hint: None,
+                    }
+                );
+            }
+            other => panic!("unexpected app event: {other:?}"),
+        }
+    }
+
+    fn line_text(lines: &[Line<'_>]) -> String {
+        lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect()
     }
 
     #[test]
@@ -1065,6 +1154,137 @@ mod tests {
     }
 
     #[test]
+    fn searchable_branch_picker_supports_ctrl_p_ctrl_n_navigation() {
+        let (mut modal, mut rx) = make_modal();
+        modal.push_branch_picker_with_entries(
+            "main".to_string(),
+            vec![
+                "feature/a".to_string(),
+                "feature/b".to_string(),
+                "feature/c".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL)),
+            ReviewModalAction::None
+        );
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            ReviewModalAction::Exit
+        );
+        assert_next_branch_review(&mut rx, "feature/b");
+
+        let (mut modal, mut rx) = make_modal();
+        modal.push_branch_picker_with_entries(
+            "main".to_string(),
+            vec![
+                "feature/a".to_string(),
+                "feature/b".to_string(),
+                "feature/c".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL)),
+            ReviewModalAction::None
+        );
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            ReviewModalAction::Exit
+        );
+        assert_next_branch_review(&mut rx, "feature/c");
+    }
+
+    #[test]
+    fn searchable_branch_picker_supports_ctrl_p_ctrl_n_fallback_chars() {
+        let (mut modal, mut rx) = make_modal();
+        modal.push_branch_picker_with_entries(
+            "main".to_string(),
+            vec![
+                "feature/a".to_string(),
+                "feature/b".to_string(),
+                "feature/c".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Char('\u{000e}'), KeyModifiers::NONE)),
+            ReviewModalAction::None
+        );
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            ReviewModalAction::Exit
+        );
+        assert_next_branch_review(&mut rx, "feature/b");
+
+        let (mut modal, mut rx) = make_modal();
+        modal.push_branch_picker_with_entries(
+            "main".to_string(),
+            vec![
+                "feature/a".to_string(),
+                "feature/b".to_string(),
+                "feature/c".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Char('\u{0010}'), KeyModifiers::NONE)),
+            ReviewModalAction::None
+        );
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            ReviewModalAction::Exit
+        );
+        assert_next_branch_review(&mut rx, "feature/c");
+    }
+
+    #[test]
+    fn search_refinement_preserves_selected_matching_branch() {
+        let (mut modal, mut rx) = make_modal();
+        modal.push_branch_picker_with_entries(
+            "main".to_string(),
+            vec![
+                "feature/api-first".to_string(),
+                "feature/api-second".to_string(),
+                "feature/ui".to_string(),
+            ],
+        );
+        modal.handle_paste("feature".to_string());
+        modal.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        modal.handle_paste("/api".to_string());
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            ReviewModalAction::Exit
+        );
+        assert_next_branch_review(&mut rx, "feature/api-second");
+    }
+
+    #[test]
+    fn search_refinement_falls_back_to_first_match_when_selection_drops_out() {
+        let (mut modal, mut rx) = make_modal();
+        modal.push_branch_picker_with_entries(
+            "main".to_string(),
+            vec![
+                "feature/api-first".to_string(),
+                "feature/api-second".to_string(),
+                "feature/ui".to_string(),
+            ],
+        );
+        modal.handle_paste("feature".to_string());
+        modal.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        modal.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        modal.handle_paste("/api".to_string());
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            ReviewModalAction::Exit
+        );
+        assert_next_branch_review(&mut rx, "feature/api-first");
+    }
+
+    #[test]
     fn root_preset_keeps_j_navigation() {
         let (mut modal, mut rx) = make_modal();
 
@@ -1102,6 +1322,45 @@ mod tests {
             .expect("draw");
 
         assert!(terminal.backend().to_string().contains("main -> feature/x"));
+    }
+
+    #[test]
+    fn branch_picker_wraps_long_branch_labels() {
+        let screen = ReviewListScreen::branches(
+            "main".to_string(),
+            vec!["feature/really-long-review-modal-branch-name-with-distinct-suffix".to_string()],
+        );
+
+        let lines = screen.item_label_lines(24, 0, &screen.items[0]);
+
+        assert!(lines.len() > 1);
+        assert!(line_text(&lines).contains("distinct-suffix"));
+    }
+
+    #[test]
+    fn commit_picker_wraps_long_commit_subjects() {
+        let screen = ReviewListScreen::commits(vec![adam_agent::git_info::CommitLogEntry {
+            sha: "1111111deadbeef".to_string(),
+            timestamp: 0,
+            subject: "Implement really long review modal commit subject with distinct suffix"
+                .to_string(),
+        }]);
+
+        let lines = screen.item_label_lines(24, 0, &screen.items[0]);
+
+        assert!(lines.len() > 1);
+        assert!(line_text(&lines).contains("suffix"));
+    }
+
+    #[test]
+    fn desired_height_accounts_for_wrapped_review_items() {
+        let short = ReviewListScreen::branches("main".to_string(), vec!["feature/x".to_string()]);
+        let long = ReviewListScreen::branches(
+            "main".to_string(),
+            vec!["feature/really-long-review-modal-branch-name-with-distinct-suffix".to_string()],
+        );
+
+        assert!(long.desired_height(24) > short.desired_height(24));
     }
 
     #[test]
