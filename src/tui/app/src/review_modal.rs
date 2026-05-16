@@ -285,8 +285,8 @@ impl ReviewListScreen {
     fn presets(cwd: PathBuf) -> Self {
         let items = vec![
             ReviewListItem {
-                name: "Review against a base branch".to_string(),
-                description: Some("(PR Style)".to_string()),
+                name: "Review against a base branch (PR Style)".to_string(),
+                description: None,
                 search_value: None,
                 action: ReviewListAction::OpenBranchPicker(cwd.clone()),
             },
@@ -856,7 +856,8 @@ mod tests {
 
         let rendered = terminal.backend().to_string();
         assert!(rendered.contains("Select a review preset"));
-        assert!(rendered.contains("Review against a base branch"));
+        assert!(rendered.contains("Review against a base branch (PR Style)"));
+        assert!(!rendered.contains("   (PR Style)"));
         assert!(rendered.contains("Review uncommitted changes"));
         assert!(rendered.contains("Review a commit"));
         assert!(rendered.contains("Custom review instructions"));
