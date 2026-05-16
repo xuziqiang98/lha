@@ -4935,13 +4935,23 @@ async fn experimental_features_toggle_saves_on_exit() {
 }
 
 #[tokio::test]
-async fn model_selection_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
+async fn model_command_requests_centered_model_selection_modal() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.open_model_popup();
 
-    let popup = render_bottom_popup(&chat, 80);
-    assert_snapshot!("model_selection_popup", popup);
+    let events = drain_events(&mut rx);
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::OpenModelSelectionModal { presets } if !presets.is_empty()
+        )),
+        "expected /model to request centered model selection modal: {events:?}"
+    );
+    assert!(
+        !render_bottom_popup(&chat, 80).contains("Select Model"),
+        "model picker should be owned by App modal, not the bottom pane"
+    );
 }
 
 #[tokio::test]
@@ -4994,7 +5004,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
 
 #[tokio::test]
 async fn model_picker_without_auth_shows_only_configured_custom_model() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("mock-model")).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("mock-model")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.auth_manager = Arc::new(AuthManager::new(
         chat.config.adam_home.clone(),
@@ -5023,20 +5033,27 @@ async fn model_picker_without_auth_shows_only_configured_custom_model() {
 
     chat.open_model_popup();
 
-    let popup = render_bottom_popup(&chat, 80);
+    let events = drain_events(&mut rx);
+    let presets = events
+        .iter()
+        .find_map(|event| match event {
+            AppEvent::OpenModelSelectionModal { presets } => Some(presets),
+            _ => None,
+        })
+        .expect("model selection event");
     assert!(
-        popup.contains("mock-model"),
-        "expected configured custom model to appear in picker:\n{popup}"
+        presets.iter().any(|preset| preset.model == "mock-model"),
+        "expected configured custom model to appear in picker: {presets:?}"
     );
     assert!(
-        !popup.contains("gpt-5.2-codex"),
-        "expected built-in picker models to be hidden without auth:\n{popup}"
+        !presets.iter().any(|preset| preset.model == "gpt-5.2-codex"),
+        "expected built-in picker models to be hidden without auth: {presets:?}"
     );
 }
 
 #[tokio::test]
 async fn model_picker_without_auth_shows_all_models_saved_in_config_toml() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("mock-model")).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("mock-model")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.auth_manager = Arc::new(AuthManager::new(
         chat.config.adam_home.clone(),
@@ -5084,28 +5101,35 @@ async fn model_picker_without_auth_shows_all_models_saved_in_config_toml() {
 
     chat.open_model_popup();
 
-    let popup = render_bottom_popup(&chat, 80);
+    let events = drain_events(&mut rx);
+    let presets = events
+        .iter()
+        .find_map(|event| match event {
+            AppEvent::OpenModelSelectionModal { presets } => Some(presets),
+            _ => None,
+        })
+        .expect("model selection event");
     assert!(
-        popup.contains("mock-model"),
-        "expected configured custom model to appear in picker:\n{popup}"
+        presets.iter().any(|preset| preset.model == "mock-model"),
+        "expected configured custom model to appear in picker: {presets:?}"
     );
     assert!(
-        popup.contains("deepseek-r1"),
-        "expected saved model to appear in picker:\n{popup}"
+        presets.iter().any(|preset| preset.model == "deepseek-r1"),
+        "expected saved model to appear in picker: {presets:?}"
     );
     assert!(
-        popup.contains("claude-sonnet"),
-        "expected models from other providers in config.toml to appear in picker:\n{popup}"
+        presets.iter().any(|preset| preset.model == "claude-sonnet"),
+        "expected models from other providers in config.toml to appear in picker: {presets:?}"
     );
     assert!(
-        !popup.contains("gpt-5.2-codex"),
-        "expected built-in picker models to be hidden without auth:\n{popup}"
+        !presets.iter().any(|preset| preset.model == "gpt-5.2-codex"),
+        "expected built-in picker models to be hidden without auth: {presets:?}"
     );
 }
 
 #[tokio::test]
 async fn model_picker_without_auth_shows_same_model_for_different_custom_providers() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("glm-5")).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("glm-5")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.auth_manager = Arc::new(AuthManager::new(
         chat.config.adam_home.clone(),
@@ -5145,28 +5169,31 @@ async fn model_picker_without_auth_shows_same_model_for_different_custom_provide
 
     chat.open_model_popup();
 
-    let popup = render_bottom_popup(&chat, 110);
+    let events = drain_events(&mut rx);
+    let presets = events
+        .iter()
+        .find_map(|event| match event {
+            AppEvent::OpenModelSelectionModal { presets } => Some(presets),
+            _ => None,
+        })
+        .expect("model selection event");
     assert_eq!(
-        popup.matches("glm-5").count(),
+        presets
+            .iter()
+            .filter(|preset| preset.model == "glm-5")
+            .count(),
         2,
-        "expected two glm-5 entries:\n{popup}"
+        "expected two glm-5 entries: {presets:?}"
     );
     assert!(
-        popup.contains("User-defined model from provider_a (responses) provider."),
-        "expected provider_a description in picker:\n{popup}"
+        presets.iter().any(|preset| preset.description
+            == "User-defined model from provider_a (responses) provider."),
+        "expected provider_a description in picker: {presets:?}"
     );
     assert!(
-        popup.contains("User-defined model from provider_b (responses) provider."),
-        "expected provider_b description in picker:\n{popup}"
-    );
-    assert_eq!(
-        popup.matches("(current)").count(),
-        1,
-        "expected only one current entry:\n{popup}"
-    );
-    assert!(
-        popup.contains("glm-5 (current)  User-defined model from provider_b (responses) provider."),
-        "expected current entry to match active provider:\n{popup}"
+        presets.iter().any(|preset| preset.description
+            == "User-defined model from provider_b (responses) provider."),
+        "expected provider_b description in picker: {presets:?}"
     );
 }
 #[tokio::test]
@@ -5620,10 +5647,9 @@ async fn feedback_upload_consent_popup_snapshot() {
 }
 
 #[tokio::test]
-async fn reasoning_popup_escape_returns_to_model_popup() {
+async fn reasoning_popup_escape_dismisses_popup() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.open_model_popup();
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
     chat.open_reasoning_popup(preset);
@@ -5634,7 +5660,6 @@ async fn reasoning_popup_escape_returns_to_model_popup() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
     let after_escape = render_bottom_popup(&chat, 80);
-    assert!(after_escape.contains("Select Model"));
     assert!(!after_escape.contains("Select Reasoning Level"));
 }
 

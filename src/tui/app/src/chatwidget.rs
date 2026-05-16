@@ -4229,7 +4229,9 @@ impl ChatWidget {
                 return;
             }
         };
-        self.open_model_popup_with_presets(presets);
+        self.app_event_tx
+            .send(AppEvent::OpenModelSelectionModal { presets });
+        self.request_redraw();
     }
 
     pub(crate) fn open_provider_popup(&mut self) {
@@ -4354,6 +4356,18 @@ impl ChatWidget {
         Some(trimmed.to_string())
     }
 
+    pub(crate) fn model_selection_context(
+        &self,
+    ) -> crate::model_selection_modal::ModelSelectionModalContext {
+        crate::model_selection_modal::ModelSelectionModalContext {
+            current_model: self.current_model().to_string(),
+            current_provider_id: self.config.model_provider_id.clone(),
+            effective_reasoning_effort: self.effective_reasoning_effort(),
+            custom_openai_base_url: self.custom_openai_base_url(),
+        }
+    }
+
+    #[allow(dead_code)]
     pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
         let presets: Vec<ModelPreset> = presets
             .into_iter()
@@ -4444,10 +4458,12 @@ impl ChatWidget {
         });
     }
 
+    #[allow(dead_code)]
     fn is_auto_model(model: &str) -> bool {
         model.starts_with("codex-auto-")
     }
 
+    #[allow(dead_code)]
     fn auto_model_order(model: &str) -> usize {
         match model {
             "codex-auto-fast" => 0,

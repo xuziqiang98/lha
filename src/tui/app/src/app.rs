@@ -34,6 +34,9 @@ use crate::identity_modal::IdentityModalAction;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
+use crate::model_selection_modal::ModelSelectionModal;
+use crate::model_selection_modal::ModelSelectionModalAction;
+use crate::model_selection_modal::ModelSelectionModalContext;
 use crate::multi_agents::AgentPickerThreadEntry;
 use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::sort_agent_picker_threads;
@@ -605,6 +608,7 @@ pub(crate) struct App {
     provider_config_modal: Option<ProviderConfigModalState>,
     project_trust_modal: Option<ProjectTrustModal>,
     identity_modal: Option<IdentityModal>,
+    model_selection_modal: Option<ModelSelectionModal>,
     review_modal: Option<ReviewModal>,
     pending_startup_trust_prompt: bool,
     deferred_initial_user_message: Option<UserMessage>,
@@ -2327,6 +2331,7 @@ impl App {
             provider_config_modal,
             project_trust_modal,
             identity_modal: None,
+            model_selection_modal: None,
             review_modal: None,
             pending_startup_trust_prompt: show_trust_popup_on_startup,
             deferred_initial_user_message,
@@ -2501,6 +2506,18 @@ impl App {
                 }
                 TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
             }
+        } else if self.model_selection_modal.is_some() {
+            match event {
+                TuiEvent::Key(key_event) => {
+                    return self
+                        .handle_model_selection_modal_key_event(tui, key_event)
+                        .await;
+                }
+                TuiEvent::Draw => {
+                    self.draw_main_ui(tui)?;
+                }
+                TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
+            }
         } else if self.review_modal.is_some() {
             match event {
                 TuiEvent::Key(key_event) => {
@@ -2570,6 +2587,8 @@ impl App {
             } else if let Some(modal) = &self.project_trust_modal {
                 modal.render(frame.area(), frame.buffer);
             } else if let Some(modal) = &self.identity_modal {
+                modal.render(frame.area(), frame.buffer);
+            } else if let Some(modal) = &self.model_selection_modal {
                 modal.render(frame.area(), frame.buffer);
             } else if let Some(modal) = &self.review_modal {
                 modal.render(frame.area(), frame.buffer);
@@ -2696,6 +2715,46 @@ impl App {
             }
             IdentityModalAction::Exit => {
                 self.identity_modal = None;
+            }
+        }
+    }
+
+    async fn handle_model_selection_modal_key_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        key_event: KeyEvent,
+    ) -> Result<AppRunControl> {
+        let action = self
+            .model_selection_modal
+            .as_mut()
+            .map(|modal| modal.handle_key_event(key_event))
+            .unwrap_or(ModelSelectionModalAction::None);
+        match action {
+            ModelSelectionModalAction::None => {
+                tui.frame_requester().schedule_frame();
+                Ok(AppRunControl::Continue)
+            }
+            ModelSelectionModalAction::Exit => {
+                self.model_selection_modal = None;
+                tui.frame_requester().schedule_frame();
+                Ok(AppRunControl::Continue)
+            }
+            ModelSelectionModalAction::PersistModelSelection {
+                model,
+                provider_id,
+                effort,
+            } => {
+                self.model_selection_modal = None;
+                tui.frame_requester().schedule_frame();
+                self.handle_event(
+                    tui,
+                    AppEvent::PersistModelSelection {
+                        model,
+                        provider_id,
+                        effort,
+                    },
+                )
+                .await
             }
         }
     }
@@ -3112,6 +3171,9 @@ impl App {
             }
             AppEvent::OpenReviewModal => {
                 self.open_review_modal();
+            }
+            AppEvent::OpenModelSelectionModal { presets } => {
+                self.open_model_selection_modal(presets);
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
@@ -3893,6 +3955,18 @@ impl App {
             return;
         };
         self.identity_modal = Some(modal);
+        self.chat_widget.request_redraw_for_ui();
+    }
+
+    fn open_model_selection_modal(&mut self, presets: Vec<ModelPreset>) {
+        self.chat_widget.dismiss_active_view();
+        let context: ModelSelectionModalContext = self.chat_widget.model_selection_context();
+        let Some(modal) = ModelSelectionModal::new(presets, context) else {
+            self.chat_widget
+                .add_info_message("No models are available right now.".to_string(), None);
+            return;
+        };
+        self.model_selection_modal = Some(modal);
         self.chat_widget.request_redraw_for_ui();
     }
 
@@ -5332,6 +5406,7 @@ mod tests {
             provider_config_modal: None,
             project_trust_modal: None,
             identity_modal: None,
+            model_selection_modal: None,
             review_modal: None,
             pending_startup_trust_prompt: false,
             deferred_initial_user_message: None,
@@ -5396,6 +5471,7 @@ mod tests {
                 provider_config_modal: None,
                 project_trust_modal: None,
                 identity_modal: None,
+                model_selection_modal: None,
                 review_modal: None,
                 pending_startup_trust_prompt: false,
                 deferred_initial_user_message: None,
@@ -5529,6 +5605,7 @@ show_raw_agent_reasoning = true
             provider_config_modal: None,
             project_trust_modal: None,
             identity_modal: None,
+            model_selection_modal: None,
             review_modal: None,
             pending_startup_trust_prompt: true,
             deferred_initial_user_message: None,
@@ -5759,6 +5836,18 @@ show_raw_agent_reasoning = true
 
     fn all_model_presets() -> Vec<ModelPreset> {
         adam_agent::models_manager::model_presets::all_model_presets().clone()
+    }
+
+    #[tokio::test]
+    async fn open_model_selection_modal_sets_centered_modal() {
+        let mut app = make_test_app().await;
+        app.open_model_selection_modal(all_model_presets());
+
+        assert!(
+            app.model_selection_modal.is_some(),
+            "expected App to own the /model modal"
+        );
+        assert!(app.chat_widget.no_modal_or_popup_active());
     }
 
     fn model_migration_copy_to_plain_text(

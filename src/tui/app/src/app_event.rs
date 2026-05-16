@@ -152,6 +152,11 @@ pub(crate) enum AppEvent {
     /// Open the centered review preset modal.
     OpenReviewModal,
 
+    /// Open the centered model selection modal.
+    OpenModelSelectionModal {
+        presets: Vec<ModelPreset>,
+    },
+
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),
 
@@ -181,6 +186,7 @@ pub(crate) enum AppEvent {
     },
 
     /// Open the full model picker (non-auto models).
+    #[allow(dead_code)]
     OpenAllModelsPopup {
         models: Vec<ModelPreset>,
     },

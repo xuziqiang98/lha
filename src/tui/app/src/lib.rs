@@ -74,6 +74,7 @@ mod markdown;
 mod markdown_render;
 mod markdown_stream;
 mod model_migration;
+mod model_selection_modal;
 mod mouse;
 mod multi_agents;
 mod notifications;
