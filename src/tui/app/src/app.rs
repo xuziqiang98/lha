@@ -22,6 +22,9 @@ use crate::chatwidget::UserMessage;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::experimental_features_modal::ExperimentalFeatureItem;
+use crate::experimental_features_modal::ExperimentalFeaturesModal;
+use crate::experimental_features_modal::ExperimentalFeaturesModalAction;
 use crate::external_editor;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
@@ -71,6 +74,7 @@ use adam_agent::config::set_project_trust_level;
 use adam_agent::config::state_json::AdamStateStore;
 use adam_agent::config::types::TuiBuddy;
 use adam_agent::config_loader::ConfigLayerStackOrdering;
+use adam_agent::features::FEATURES;
 use adam_agent::features::Feature;
 use adam_agent::git_info::resolve_root_git_project_for_trust;
 use adam_agent::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
@@ -609,6 +613,7 @@ pub(crate) struct App {
     project_trust_modal: Option<ProjectTrustModal>,
     identity_modal: Option<IdentityModal>,
     model_selection_modal: Option<ModelSelectionModal>,
+    experimental_features_modal: Option<ExperimentalFeaturesModal>,
     review_modal: Option<ReviewModal>,
     pending_startup_trust_prompt: bool,
     deferred_initial_user_message: Option<UserMessage>,
@@ -2332,6 +2337,7 @@ impl App {
             project_trust_modal,
             identity_modal: None,
             model_selection_modal: None,
+            experimental_features_modal: None,
             review_modal: None,
             pending_startup_trust_prompt: show_trust_popup_on_startup,
             deferred_initial_user_message,
@@ -2518,6 +2524,18 @@ impl App {
                 }
                 TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
             }
+        } else if self.experimental_features_modal.is_some() {
+            match event {
+                TuiEvent::Key(key_event) => {
+                    return self
+                        .handle_experimental_features_modal_key_event(tui, key_event)
+                        .await;
+                }
+                TuiEvent::Draw => {
+                    self.draw_main_ui(tui)?;
+                }
+                TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
+            }
         } else if self.review_modal.is_some() {
             match event {
                 TuiEvent::Key(key_event) => {
@@ -2589,6 +2607,8 @@ impl App {
             } else if let Some(modal) = &self.identity_modal {
                 modal.render(frame.area(), frame.buffer);
             } else if let Some(modal) = &self.model_selection_modal {
+                modal.render(frame.area(), frame.buffer);
+            } else if let Some(modal) = &self.experimental_features_modal {
                 modal.render(frame.area(), frame.buffer);
             } else if let Some(modal) = &self.review_modal {
                 modal.render(frame.area(), frame.buffer);
@@ -2755,6 +2775,34 @@ impl App {
                     },
                 )
                 .await
+            }
+        }
+    }
+
+    async fn handle_experimental_features_modal_key_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        key_event: KeyEvent,
+    ) -> Result<AppRunControl> {
+        let action = self
+            .experimental_features_modal
+            .as_mut()
+            .map(|modal| modal.handle_key_event(key_event))
+            .unwrap_or(ExperimentalFeaturesModalAction::None);
+        match action {
+            ExperimentalFeaturesModalAction::None => {
+                tui.frame_requester().schedule_frame();
+                Ok(AppRunControl::Continue)
+            }
+            ExperimentalFeaturesModalAction::SaveAndClose { updates } => {
+                self.experimental_features_modal = None;
+                tui.frame_requester().schedule_frame();
+                if updates.is_empty() {
+                    Ok(AppRunControl::Continue)
+                } else {
+                    self.handle_event(tui, AppEvent::UpdateFeatureFlags { updates })
+                        .await
+                }
             }
         }
     }
@@ -3174,6 +3222,9 @@ impl App {
             }
             AppEvent::OpenModelSelectionModal { presets } => {
                 self.open_model_selection_modal(presets);
+            }
+            AppEvent::OpenExperimentalFeaturesModal => {
+                self.open_experimental_features_modal();
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
@@ -3967,6 +4018,25 @@ impl App {
             return;
         };
         self.model_selection_modal = Some(modal);
+        self.chat_widget.request_redraw_for_ui();
+    }
+
+    fn open_experimental_features_modal(&mut self) {
+        self.chat_widget.dismiss_active_view();
+        let features = FEATURES
+            .iter()
+            .filter_map(|spec| {
+                let name = spec.stage.experimental_menu_name()?;
+                let description = spec.stage.experimental_menu_description()?;
+                Some(ExperimentalFeatureItem {
+                    feature: spec.id,
+                    name: name.to_string(),
+                    description: description.to_string(),
+                    enabled: self.config.features.enabled(spec.id),
+                })
+            })
+            .collect();
+        self.experimental_features_modal = Some(ExperimentalFeaturesModal::new(features));
         self.chat_widget.request_redraw_for_ui();
     }
 
@@ -5407,6 +5477,7 @@ mod tests {
             project_trust_modal: None,
             identity_modal: None,
             model_selection_modal: None,
+            experimental_features_modal: None,
             review_modal: None,
             pending_startup_trust_prompt: false,
             deferred_initial_user_message: None,
@@ -5472,6 +5543,7 @@ mod tests {
                 project_trust_modal: None,
                 identity_modal: None,
                 model_selection_modal: None,
+                experimental_features_modal: None,
                 review_modal: None,
                 pending_startup_trust_prompt: false,
                 deferred_initial_user_message: None,
@@ -5606,6 +5678,7 @@ show_raw_agent_reasoning = true
             project_trust_modal: None,
             identity_modal: None,
             model_selection_modal: None,
+            experimental_features_modal: None,
             review_modal: None,
             pending_startup_trust_prompt: true,
             deferred_initial_user_message: None,
@@ -5846,6 +5919,18 @@ show_raw_agent_reasoning = true
         assert!(
             app.model_selection_modal.is_some(),
             "expected App to own the /model modal"
+        );
+        assert!(app.chat_widget.no_modal_or_popup_active());
+    }
+
+    #[tokio::test]
+    async fn open_experimental_features_modal_sets_centered_modal() {
+        let mut app = make_test_app().await;
+        app.open_experimental_features_modal();
+
+        assert!(
+            app.experimental_features_modal.is_some(),
+            "expected App to own the /experimental modal"
         );
         assert!(app.chat_widget.no_modal_or_popup_active());
     }

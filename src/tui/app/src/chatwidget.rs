@@ -35,7 +35,6 @@ use adam_agent::config::ConstraintResult;
 use adam_agent::config::types::Notifications;
 use adam_agent::config::types::TuiBuddy;
 use adam_agent::connectors;
-use adam_agent::features::FEATURES;
 use adam_agent::features::Feature;
 use adam_agent::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use adam_agent::protocol::AgentMessageDeltaEvent;
@@ -149,8 +148,6 @@ use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
-use crate::bottom_pane::ExperimentalFeatureItem;
-use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::IdentityIndicator;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
@@ -3195,7 +3192,9 @@ impl ChatWidget {
                 };
             }
             SlashCommand::Experimental => {
-                self.open_experimental_popup();
+                self.app_event_tx
+                    .send(AppEvent::OpenExperimentalFeaturesModal);
+                self.request_redraw();
             }
             SlashCommand::Buddy => {
                 self.show_buddy_status();
@@ -4898,25 +4897,6 @@ impl ChatWidget {
             header: Box::new(()),
             ..Default::default()
         });
-    }
-
-    pub(crate) fn open_experimental_popup(&mut self) {
-        let features: Vec<ExperimentalFeatureItem> = FEATURES
-            .iter()
-            .filter_map(|spec| {
-                let name = spec.stage.experimental_menu_name()?;
-                let description = spec.stage.experimental_menu_description()?;
-                Some(ExperimentalFeatureItem {
-                    feature: spec.id,
-                    name: name.to_string(),
-                    description: description.to_string(),
-                    enabled: self.config.features.enabled(spec.id),
-                })
-            })
-            .collect();
-
-        let view = ExperimentalFeaturesView::new(features, self.app_event_tx.clone());
-        self.bottom_pane.show_view(Box::new(view));
     }
 
     fn approval_preset_actions(

@@ -3908,6 +3908,16 @@ async fn review_command_opens_review_modal() {
 }
 
 #[tokio::test]
+async fn experimental_command_opens_experimental_features_modal() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Experimental);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenExperimentalFeaturesModal));
+    assert!(!render_bottom_popup(&chat, 80).contains("Experimental features"));
+}
+
+#[tokio::test]
 async fn slash_init_skips_when_project_doc_exists() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     let tempdir = tempdir().unwrap();
@@ -4798,140 +4808,6 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     }
 
     lines.join("\n")
-}
-
-#[tokio::test]
-async fn experimental_features_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    let features = vec![
-        ExperimentalFeatureItem {
-            feature: Feature::GhostCommit,
-            name: "Ghost snapshots".to_string(),
-            description: "Capture undo snapshots each turn.".to_string(),
-            enabled: false,
-        },
-        ExperimentalFeatureItem {
-            feature: Feature::ShellTool,
-            name: "Shell tool".to_string(),
-            description: "Allow the model to run shell commands.".to_string(),
-            enabled: true,
-        },
-    ];
-    let view = ExperimentalFeaturesView::new(features, chat.app_event_tx.clone());
-    chat.bottom_pane.show_view(Box::new(view));
-
-    let popup = render_bottom_popup(&chat, 80);
-    assert_snapshot!("experimental_features_popup", popup);
-}
-
-#[tokio::test]
-async fn experimental_features_popup_hides_apps() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    chat.open_experimental_popup();
-
-    let popup = render_bottom_popup(&chat, 80);
-    assert!(
-        !popup.contains("Apps"),
-        "expected Apps to be hidden, got {popup}"
-    );
-    assert!(
-        !popup.contains("Multi-agents"),
-        "expected Multi-agents to be hidden, got {popup}"
-    );
-    assert!(
-        popup.contains("Shell snapshot"),
-        "expected other experimental features to remain visible, got {popup}"
-    );
-}
-
-#[tokio::test]
-async fn experimental_features_exit_without_changes_emits_no_updates() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    let view = ExperimentalFeaturesView::new(
-        vec![ExperimentalFeatureItem {
-            feature: Feature::GhostCommit,
-            name: "Ghost snapshots".to_string(),
-            description: "Capture undo snapshots each turn.".to_string(),
-            enabled: false,
-        }],
-        chat.app_event_tx.clone(),
-    );
-    chat.bottom_pane.show_view(Box::new(view));
-
-    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-
-    assert!(
-        rx.try_recv().is_err(),
-        "expected no updates when closing without changes"
-    );
-}
-
-#[tokio::test]
-async fn experimental_features_reverting_changes_emits_no_updates() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    let view = ExperimentalFeaturesView::new(
-        vec![ExperimentalFeatureItem {
-            feature: Feature::GhostCommit,
-            name: "Ghost snapshots".to_string(),
-            description: "Capture undo snapshots each turn.".to_string(),
-            enabled: false,
-        }],
-        chat.app_event_tx.clone(),
-    );
-    chat.bottom_pane.show_view(Box::new(view));
-
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-
-    assert!(
-        rx.try_recv().is_err(),
-        "expected no updates when toggles are reverted before closing"
-    );
-}
-
-#[tokio::test]
-async fn experimental_features_toggle_saves_on_exit() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    let expected_feature = Feature::GhostCommit;
-    let view = ExperimentalFeaturesView::new(
-        vec![ExperimentalFeatureItem {
-            feature: expected_feature,
-            name: "Ghost snapshots".to_string(),
-            description: "Capture undo snapshots each turn.".to_string(),
-            enabled: false,
-        }],
-        chat.app_event_tx.clone(),
-    );
-    chat.bottom_pane.show_view(Box::new(view));
-
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    assert!(
-        rx.try_recv().is_err(),
-        "expected no updates until exiting the popup"
-    );
-
-    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-
-    let mut updates = None;
-    while let Ok(event) = rx.try_recv() {
-        if let AppEvent::UpdateFeatureFlags {
-            updates: event_updates,
-        } = event
-        {
-            updates = Some(event_updates);
-            break;
-        }
-    }
-
-    let updates = updates.expect("expected UpdateFeatureFlags event");
-    assert_eq!(updates, vec![(expected_feature, true)]);
 }
 
 #[tokio::test]

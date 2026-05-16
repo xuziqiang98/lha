@@ -157,6 +157,9 @@ pub(crate) enum AppEvent {
         presets: Vec<ModelPreset>,
     },
 
+    /// Open the centered experimental features modal.
+    OpenExperimentalFeaturesModal,
+
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),
 

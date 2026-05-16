@@ -60,6 +60,7 @@ mod cwd_prompt;
 mod diff_render;
 mod exec_cell;
 mod exec_command;
+mod experimental_features_modal;
 mod external_editor;
 mod file_search;
 mod get_git_diff;
