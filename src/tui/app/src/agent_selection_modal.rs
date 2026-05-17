@@ -22,6 +22,8 @@ use textwrap::wrap;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::text_formatting::truncate_text;
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_lines;
 
 const AGENT_ERROR_PREVIEW_GRAPHEMES: usize = 160;
 const AGENT_RESPONSE_PREVIEW_GRAPHEMES: usize = 240;
@@ -315,27 +317,12 @@ impl AgentSelectionModal {
     }
 
     fn wrap_status_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
-        let plain_text = line
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
-        let wrapped = wrap(
-            plain_text.as_str(),
-            Options::new(width)
-                .initial_indent("   ")
-                .subsequent_indent("   "),
-        );
-        if wrapped.len() <= 1 {
-            let mut spans = vec!["   ".dim()];
-            spans.extend(line.spans);
-            return vec![spans.into()];
-        }
-
-        wrapped
-            .into_iter()
-            .map(|text| format!("   {text}").dim().into())
-            .collect()
+        word_wrap_lines(
+            [line],
+            RtOptions::new(width)
+                .initial_indent(vec!["   ".dim()].into())
+                .subsequent_indent(vec!["   ".dim()].into()),
+        )
     }
 
     fn status_summary_line(status: &AgentStatus) -> Line<'static> {
@@ -474,6 +461,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Color;
 
     fn thread_id(suffix: u128) -> ThreadId {
         ThreadId::from_string(&format!("00000000-0000-0000-0000-{suffix:012}"))
@@ -525,6 +513,30 @@ mod tests {
             .expect("draw");
 
         assert_snapshot!("agent_selection_modal", terminal.backend());
+    }
+
+    #[test]
+    fn wraps_status_line_once_and_preserves_status_style() {
+        let line = AgentSelectionModal::status_summary_line(&AgentStatus::Completed(Some(
+            "mapped the full repository structure and summarized every important subsystem"
+                .to_string(),
+        )));
+        let lines = AgentSelectionModal::wrap_status_line(line, 24);
+
+        assert!(lines.len() > 1);
+        for line in &lines {
+            let text = line
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>();
+            assert!(text.starts_with("   "));
+            assert!(!text.starts_with("      "));
+            assert!(line.width() <= 24);
+        }
+
+        assert_eq!(lines[0].spans[1].content.as_ref(), "Completed");
+        assert_eq!(lines[0].spans[1].style.fg, Some(Color::Green));
     }
 
     #[test]
