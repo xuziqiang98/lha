@@ -21,6 +21,8 @@ use textwrap::wrap;
 
 use crate::render::Insets;
 use crate::render::RectExt as _;
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_lines;
 
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
@@ -113,7 +115,7 @@ impl Eq for ApprovalModeAction {}
 
 impl ApprovalModeModal {
     pub(crate) fn new(header: Vec<Line<'static>>, items: Vec<ApprovalModeItem>) -> Self {
-        let selected_idx = (!items.is_empty()).then_some(0);
+        let selected_idx = Self::initial_selected_idx(&items);
         Self {
             header,
             items,
@@ -208,9 +210,19 @@ impl ApprovalModeModal {
 
         let width = content_area.width.max(1) as usize;
         let lines = self.render_lines(width);
-        let footer_height = (lines.footer.len() as u16).min(content_area.height);
-        let header_height =
-            (lines.header.len() as u16).min(content_area.height.saturating_sub(footer_height));
+        let reserved_list_height = if lines.item_groups.is_empty() {
+            0
+        } else {
+            1.min(content_area.height)
+        };
+        let footer_height = (lines.footer.len() as u16)
+            .min(content_area.height.saturating_sub(reserved_list_height));
+        let header_height = (lines.header.len() as u16).min(
+            content_area
+                .height
+                .saturating_sub(footer_height)
+                .saturating_sub(reserved_list_height),
+        );
         let list_height = content_area
             .height
             .saturating_sub(header_height)
@@ -282,7 +294,7 @@ impl ApprovalModeModal {
 
     fn render_lines(&self, width: usize) -> ModalRenderLines {
         ModalRenderLines {
-            header: self.header.clone(),
+            header: self.header_lines(width),
             item_groups: self.item_groups(width),
             footer: vec![
                 "".into(),
@@ -297,6 +309,21 @@ impl ApprovalModeModal {
                 .into(),
             ],
         }
+    }
+
+    fn initial_selected_idx(items: &[ApprovalModeItem]) -> Option<usize> {
+        items
+            .iter()
+            .position(|item| item.is_current && Self::item_is_enabled(item))
+            .or_else(|| items.iter().position(Self::item_is_enabled))
+    }
+
+    fn item_is_enabled(item: &ApprovalModeItem) -> bool {
+        item.disabled_reason.is_none()
+    }
+
+    fn header_lines(&self, width: usize) -> Vec<Line<'static>> {
+        word_wrap_lines(self.header.iter(), RtOptions::new(width))
     }
 
     fn item_groups(&self, width: usize) -> Vec<Vec<Line<'static>>> {
@@ -371,23 +398,47 @@ impl ApprovalModeModal {
     }
 
     fn move_up(&mut self) {
-        let len = self.items.len();
-        if len == 0 {
-            self.selected_idx = None;
-            return;
-        }
-        let selected = self.selected_idx.unwrap_or(0);
-        self.selected_idx = Some(if selected == 0 { len - 1 } else { selected - 1 });
+        self.selected_idx = match self.selected_idx {
+            Some(selected) => self.previous_enabled_idx(selected),
+            None => self.last_enabled_idx(),
+        };
     }
 
     fn move_down(&mut self) {
+        self.selected_idx = match self.selected_idx {
+            Some(selected) => self.next_enabled_idx(selected),
+            None => self.first_enabled_idx(),
+        };
+    }
+
+    fn first_enabled_idx(&self) -> Option<usize> {
+        self.items.iter().position(Self::item_is_enabled)
+    }
+
+    fn last_enabled_idx(&self) -> Option<usize> {
+        self.items.iter().rposition(Self::item_is_enabled)
+    }
+
+    fn next_enabled_idx(&self, selected: usize) -> Option<usize> {
         let len = self.items.len();
         if len == 0 {
-            self.selected_idx = None;
-            return;
+            return None;
         }
-        let selected = self.selected_idx.unwrap_or(0);
-        self.selected_idx = Some((selected + 1) % len);
+        let selected = selected % len;
+        (1..=len)
+            .map(|offset| (selected + offset) % len)
+            .find(|idx| Self::item_is_enabled(&self.items[*idx]))
+    }
+
+    fn previous_enabled_idx(&self, selected: usize) -> Option<usize> {
+        let len = self.items.len();
+        if len == 0 {
+            return None;
+        }
+        let selected = selected % len;
+        (1..=len)
+            .map(|offset| (selected + len - offset) % len)
+            .find(|idx| Self::item_is_enabled(&self.items[*idx]))
     }
 
     fn content_height(&self, width: usize) -> usize {
@@ -422,7 +473,9 @@ impl ApprovalModeModal {
         let total_lines = item_groups.iter().map(Vec::len).sum::<usize>();
         let max_scroll = total_lines.saturating_sub(visible_height);
 
-        if selected_bottom > visible_height {
+        if selected_height >= visible_height {
+            selected_top.min(max_scroll)
+        } else if selected_bottom > visible_height {
             selected_bottom
                 .saturating_sub(visible_height)
                 .min(max_scroll)
@@ -474,6 +527,180 @@ mod tests {
                 sandbox: SandboxPolicy::ReadOnly,
             },
         }
+    }
+
+    fn disabled_item(name: &str, is_current: bool) -> ApprovalModeItem {
+        ApprovalModeItem {
+            disabled_reason: Some("Policy cannot be changed here".to_string()),
+            ..item(name, is_current)
+        }
+    }
+
+    #[test]
+    fn new_selects_current_enabled_item() {
+        let modal = ApprovalModeModal::new(
+            vec!["Update Model Permissions".bold().into(), "".into()],
+            vec![
+                item("Read Only", false),
+                item("Default", true),
+                item("Full Access", false),
+            ],
+        );
+
+        assert_eq!(modal.selected_idx, Some(1));
+    }
+
+    #[test]
+    fn new_falls_back_to_first_enabled_item_when_current_is_disabled() {
+        let modal = ApprovalModeModal::new(
+            vec!["Update Model Permissions".bold().into(), "".into()],
+            vec![
+                disabled_item("Read Only", true),
+                item("Default", false),
+                item("Full Access", false),
+            ],
+        );
+
+        assert_eq!(modal.selected_idx, Some(1));
+    }
+
+    #[test]
+    fn new_has_no_selection_when_all_items_are_disabled() {
+        let mut modal = ApprovalModeModal::new(
+            vec!["Update Model Permissions".bold().into(), "".into()],
+            vec![
+                disabled_item("Read Only", true),
+                disabled_item("Default", false),
+            ],
+        );
+
+        assert_eq!(modal.selected_idx, None);
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::from(KeyCode::Enter)),
+            ApprovalModeModalAction::None
+        );
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::from(KeyCode::Down)),
+            ApprovalModeModalAction::None
+        );
+        assert_eq!(modal.selected_idx, None);
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::from(KeyCode::Up)),
+            ApprovalModeModalAction::None
+        );
+        assert_eq!(modal.selected_idx, None);
+    }
+
+    #[test]
+    fn navigation_skips_disabled_items() {
+        let mut modal = ApprovalModeModal::new(
+            vec!["Update Model Permissions".bold().into(), "".into()],
+            vec![
+                item("Read Only", true),
+                disabled_item("Default", false),
+                item("Full Access", false),
+            ],
+        );
+
+        assert_eq!(modal.selected_idx, Some(0));
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::from(KeyCode::Down)),
+            ApprovalModeModalAction::None
+        );
+        assert_eq!(modal.selected_idx, Some(2));
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::from(KeyCode::Down)),
+            ApprovalModeModalAction::None
+        );
+        assert_eq!(modal.selected_idx, Some(0));
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::from(KeyCode::Up)),
+            ApprovalModeModalAction::None
+        );
+        assert_eq!(modal.selected_idx, Some(2));
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::from(KeyCode::Up)),
+            ApprovalModeModalAction::None
+        );
+        assert_eq!(modal.selected_idx, Some(0));
+    }
+
+    #[test]
+    fn render_lines_wraps_header_content() {
+        let modal = ApprovalModeModal::new(
+            vec![
+                "Enable full access?".bold().into(),
+                vec![
+                    "When Adam runs with full access, it can edit any file on your computer and run commands with network, without your approval. ".into(),
+                    "Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior.".red(),
+                ]
+                .into(),
+                "".into(),
+            ],
+            vec![item("Cancel", false)],
+        );
+
+        let lines = modal.render_lines(32);
+        let header_text = lines
+            .header
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(lines.header.len() > modal.header.len());
+        assert!(lines.header.iter().all(|line| line.width() <= 32));
+        assert!(header_text.contains("When Adam runs with full access"));
+        assert!(header_text.contains("Exercise caution"));
+        assert!(header_text.contains("unexpected behavior"));
+    }
+
+    #[test]
+    fn render_keeps_list_visible_when_wrapped_header_is_tall() {
+        let modal = ApprovalModeModal::new(
+            vec![
+                "Enable full access?".bold().into(),
+                vec![
+                    "When Adam runs with full access, it can edit any file on your computer and run commands with network, without your approval. ".into(),
+                    "Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior.".red(),
+                ]
+                .into(),
+                "".into(),
+            ],
+            vec![
+                ApprovalModeItem {
+                    name: "Yes, continue anyway".to_string(),
+                    description: Some("Apply full access for this session".to_string()),
+                    is_current: false,
+                    disabled_reason: None,
+                    action: ApprovalModeAction::ConfirmFullAccess {
+                        approval: AskForApproval::Never,
+                        sandbox: SandboxPolicy::DangerFullAccess,
+                        remember: false,
+                    },
+                },
+                ApprovalModeItem {
+                    name: "Cancel".to_string(),
+                    description: Some("Go back without enabling full access".to_string()),
+                    is_current: false,
+                    disabled_reason: None,
+                    action: ApprovalModeAction::OpenApprovals,
+                },
+            ],
+        );
+        let mut terminal = Terminal::new(VT100Backend::new(80, 12)).expect("terminal");
+
+        terminal
+            .draw(|frame| modal.render(frame.area(), frame.buffer_mut()))
+            .expect("draw");
+        let rendered = terminal.backend().to_string();
+
+        assert!(rendered.contains("Enable full access?"));
+        assert!(rendered.contains("Yes, continue anyway"));
     }
 
     #[test]
