@@ -624,6 +624,7 @@ pub(crate) struct App {
     model_selection_modal: Option<ModelSelectionModal>,
     experimental_features_modal: Option<ExperimentalFeaturesModal>,
     skills_modal: Option<SkillsModal>,
+    pending_skills_modal_open: bool,
     approval_mode_modal: Option<ApprovalModeModal>,
     agent_selection_modal: Option<AgentSelectionModal>,
     review_modal: Option<ReviewModal>,
@@ -2334,6 +2335,7 @@ impl App {
             model_selection_modal: None,
             experimental_features_modal: None,
             skills_modal: None,
+            pending_skills_modal_open: false,
             approval_mode_modal: None,
             agent_selection_modal: None,
             review_modal: None,
@@ -3959,6 +3961,7 @@ impl App {
             self.suppress_shutdown_complete = false;
             return;
         }
+        let is_list_skills_response = matches!(&event.msg, EventMsg::ListSkillsResponse(_));
         if let EventMsg::ListSkillsResponse(response) = &event.msg {
             let cwd = self.chat_widget.config_ref().cwd.clone();
             let errors = errors_for_cwd(&cwd, response);
@@ -3967,6 +3970,13 @@ impl App {
         self.sync_agent_picker_thread_from_event(&event.msg);
         self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event(event);
+        if is_list_skills_response && self.pending_skills_modal_open {
+            if !self.can_auto_open_skills_modal() {
+                self.pending_skills_modal_open = false;
+            } else if !self.chat_widget.skills_request_in_flight() {
+                self.open_skills_modal();
+            }
+        }
     }
 
     fn handle_codex_event_replay(&mut self, event: Event) {
@@ -4149,17 +4159,23 @@ impl App {
         self.chat_widget.dismiss_active_view();
         match self.chat_widget.skills_modal_items() {
             SkillsModalItems::Loading => {
-                self.chat_widget.request_skills_refresh(true);
-                self.chat_widget.add_info_message(
-                    "Skills are still loading.".to_string(),
-                    Some("Try again in a moment.".to_string()),
-                );
+                let was_pending = self.pending_skills_modal_open;
+                self.pending_skills_modal_open = true;
+                self.chat_widget.request_skills_refresh_if_idle(true);
+                if !was_pending {
+                    self.chat_widget.add_info_message(
+                        "Skills are still loading.".to_string(),
+                        Some("The skills manager will open when loading finishes.".to_string()),
+                    );
+                }
             }
             SkillsModalItems::Empty => {
+                self.pending_skills_modal_open = false;
                 self.chat_widget
                     .add_info_message("No skills available.".to_string(), None);
             }
             SkillsModalItems::Ready(items) => {
+                self.pending_skills_modal_open = false;
                 let Some(modal) = SkillsModal::new(items) else {
                     self.chat_widget
                         .add_info_message("No skills available.".to_string(), None);
@@ -4169,6 +4185,20 @@ impl App {
                 self.chat_widget.request_redraw_for_ui();
             }
         }
+    }
+
+    fn can_auto_open_skills_modal(&self) -> bool {
+        self.overlay.is_none()
+            && self.provider_config_modal.is_none()
+            && self.project_trust_modal.is_none()
+            && self.identity_modal.is_none()
+            && self.model_selection_modal.is_none()
+            && self.experimental_features_modal.is_none()
+            && self.skills_modal.is_none()
+            && self.approval_mode_modal.is_none()
+            && self.agent_selection_modal.is_none()
+            && self.review_modal.is_none()
+            && self.chat_widget.no_modal_or_popup_active()
     }
 
     async fn set_skill_enabled(&mut self, path: PathBuf, enabled: bool) {
@@ -6221,6 +6251,7 @@ mod tests {
             model_selection_modal: None,
             experimental_features_modal: None,
             skills_modal: None,
+            pending_skills_modal_open: false,
             approval_mode_modal: None,
             agent_selection_modal: None,
             review_modal: None,
@@ -6290,6 +6321,7 @@ mod tests {
                 model_selection_modal: None,
                 experimental_features_modal: None,
                 skills_modal: None,
+                pending_skills_modal_open: false,
                 approval_mode_modal: None,
                 agent_selection_modal: None,
                 review_modal: None,
@@ -6428,6 +6460,7 @@ show_raw_agent_reasoning = true
             model_selection_modal: None,
             experimental_features_modal: None,
             skills_modal: None,
+            pending_skills_modal_open: false,
             approval_mode_modal: None,
             agent_selection_modal: None,
             review_modal: None,
@@ -6686,6 +6719,32 @@ show_raw_agent_reasoning = true
         assert!(app.chat_widget.no_modal_or_popup_active());
     }
 
+    fn test_skill(name: &str) -> adam_agent::protocol::SkillMetadata {
+        adam_agent::protocol::SkillMetadata {
+            name: name.to_string(),
+            description: format!("Description for {name}"),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            path: PathBuf::from(format!("/tmp/skills/{name}.toml")),
+            scope: adam_agent::protocol::SkillScope::User,
+            enabled: true,
+        }
+    }
+
+    fn list_skills_event(cwd: PathBuf, skills: Vec<adam_agent::protocol::SkillMetadata>) -> Event {
+        Event {
+            id: String::new(),
+            msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent {
+                skills: vec![adam_agent::protocol::SkillsListEntry {
+                    cwd,
+                    skills,
+                    errors: Vec::new(),
+                }],
+            }),
+        }
+    }
+
     #[tokio::test]
     async fn open_skills_modal_sets_centered_modal() {
         let mut app = make_test_app().await;
@@ -6733,6 +6792,170 @@ show_raw_agent_reasoning = true
             }
             other => panic!("expected skills refresh op, got {other:?}"),
         }
+        assert!(app.pending_skills_modal_open);
+    }
+
+    #[tokio::test]
+    async fn open_skills_modal_while_initial_request_in_flight_opens_after_response() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        app.chat_widget.request_skills_refresh(true);
+        match op_rx.try_recv() {
+            Ok(Op::ListSkills { cwds, force_reload }) => {
+                assert!(cwds.is_empty());
+                assert!(force_reload);
+            }
+            other => panic!("expected initial skills refresh op, got {other:?}"),
+        }
+
+        app.open_skills_modal();
+
+        assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+        assert!(app.pending_skills_modal_open);
+
+        app.handle_codex_event_now(Event {
+            id: String::new(),
+            msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent {
+                skills: vec![adam_agent::protocol::SkillsListEntry {
+                    cwd: app.config.cwd.clone(),
+                    skills: vec![adam_agent::protocol::SkillMetadata {
+                        name: "repo_scout".to_string(),
+                        description: "Summarize the repo layout".to_string(),
+                        short_description: None,
+                        interface: None,
+                        dependencies: None,
+                        path: PathBuf::from("/tmp/skills/repo_scout.toml"),
+                        scope: adam_agent::protocol::SkillScope::User,
+                        enabled: true,
+                    }],
+                    errors: Vec::new(),
+                }],
+            }),
+        });
+
+        assert!(
+            app.skills_modal.is_some(),
+            "expected pending /skills intent to open the modal"
+        );
+        assert!(!app.pending_skills_modal_open);
+        assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[tokio::test]
+    async fn pending_skills_modal_does_not_steal_approval_modal() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        app.chat_widget.request_skills_refresh(true);
+        assert!(matches!(op_rx.try_recv(), Ok(Op::ListSkills { .. })));
+        app.open_skills_modal();
+        assert!(app.pending_skills_modal_open);
+
+        app.open_approvals_modal();
+        app.handle_codex_event_now(list_skills_event(
+            app.config.cwd.clone(),
+            vec![test_skill("repo_scout")],
+        ));
+
+        assert!(
+            app.approval_mode_modal.is_some(),
+            "expected approvals modal to keep focus"
+        );
+        assert!(
+            app.skills_modal.is_none(),
+            "expected pending /skills not to steal focus"
+        );
+        assert!(!app.pending_skills_modal_open);
+    }
+
+    #[tokio::test]
+    async fn pending_skills_modal_does_not_steal_review_modal() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        app.chat_widget.request_skills_refresh(true);
+        assert!(matches!(op_rx.try_recv(), Ok(Op::ListSkills { .. })));
+        app.open_skills_modal();
+        assert!(app.pending_skills_modal_open);
+
+        app.open_review_modal();
+        app.handle_codex_event_now(list_skills_event(
+            app.config.cwd.clone(),
+            vec![test_skill("repo_scout")],
+        ));
+
+        assert!(
+            app.review_modal.is_some(),
+            "expected review modal to keep focus"
+        );
+        assert!(
+            app.skills_modal.is_none(),
+            "expected pending /skills not to steal focus"
+        );
+        assert!(!app.pending_skills_modal_open);
+    }
+
+    #[tokio::test]
+    async fn pending_skills_modal_does_not_steal_overlay() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        app.chat_widget.request_skills_refresh(true);
+        assert!(matches!(op_rx.try_recv(), Ok(Op::ListSkills { .. })));
+        app.open_skills_modal();
+        assert!(app.pending_skills_modal_open);
+
+        app.overlay = Some(Overlay::new_static_with_lines(
+            vec![Line::from("Pending approval")],
+            "T E S T".to_string(),
+        ));
+        app.handle_codex_event_now(list_skills_event(
+            app.config.cwd.clone(),
+            vec![test_skill("repo_scout")],
+        ));
+
+        assert!(app.overlay.is_some(), "expected overlay to stay visible");
+        assert!(
+            app.skills_modal.is_none(),
+            "expected pending /skills not to steal focus"
+        );
+        assert!(!app.pending_skills_modal_open);
+    }
+
+    #[tokio::test]
+    async fn pending_skills_modal_waits_for_queued_refresh() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        app.chat_widget.request_skills_refresh(true);
+        assert!(matches!(op_rx.try_recv(), Ok(Op::ListSkills { .. })));
+        app.open_skills_modal();
+        assert!(app.pending_skills_modal_open);
+
+        app.chat_widget.request_skills_refresh(true);
+        assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+
+        app.handle_codex_event_now(list_skills_event(
+            app.config.cwd.clone(),
+            vec![test_skill("old_skill")],
+        ));
+
+        assert!(
+            app.skills_modal.is_none(),
+            "expected stale response not to open skills modal"
+        );
+        assert!(app.pending_skills_modal_open);
+        assert!(app.chat_widget.skills_request_in_flight());
+        match op_rx.try_recv() {
+            Ok(Op::ListSkills { cwds, force_reload }) => {
+                assert!(cwds.is_empty());
+                assert!(force_reload);
+            }
+            other => panic!("expected queued skills refresh op, got {other:?}"),
+        }
+
+        app.handle_codex_event_now(list_skills_event(
+            app.config.cwd.clone(),
+            vec![test_skill("fresh_skill")],
+        ));
+
+        assert!(
+            app.skills_modal.is_some(),
+            "expected fresh response to open skills modal"
+        );
+        assert!(!app.pending_skills_modal_open);
+        assert!(!app.chat_widget.skills_request_in_flight());
     }
 
     #[tokio::test]
@@ -6753,6 +6976,38 @@ show_raw_agent_reasoning = true
             app.skills_modal.is_none(),
             "expected empty skills response to avoid opening the modal"
         );
+        assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[tokio::test]
+    async fn pending_skills_modal_open_clears_after_empty_response() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        app.chat_widget.request_skills_refresh(true);
+        match op_rx.try_recv() {
+            Ok(Op::ListSkills { cwds, force_reload }) => {
+                assert!(cwds.is_empty());
+                assert!(force_reload);
+            }
+            other => panic!("expected initial skills refresh op, got {other:?}"),
+        }
+        app.open_skills_modal();
+
+        app.handle_codex_event_now(Event {
+            id: String::new(),
+            msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent {
+                skills: vec![adam_agent::protocol::SkillsListEntry {
+                    cwd: app.config.cwd.clone(),
+                    skills: Vec::new(),
+                    errors: Vec::new(),
+                }],
+            }),
+        });
+
+        assert!(
+            app.skills_modal.is_none(),
+            "expected empty skills response to avoid opening the modal"
+        );
+        assert!(!app.pending_skills_modal_open);
         assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
     }
 

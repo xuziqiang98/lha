@@ -5671,7 +5671,6 @@ impl ChatWidget {
         self.effective_reasoning_effort()
     }
 
-    #[cfg(test)]
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
         self.bottom_pane.no_modal_or_popup_active()
     }
@@ -6736,7 +6735,7 @@ const PLACEHOLDERS: [&str; 8] = [
     "Write tests for @filename",
     "Improve documentation in @filename",
     "Run /review on my current changes",
-    "Use /skills to list available skills",
+    "Use /skills to manage skills",
 ];
 
 // Extract the first bold (Markdown) element in the form **...** from `s`.

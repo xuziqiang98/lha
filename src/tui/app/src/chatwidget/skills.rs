@@ -75,6 +75,16 @@ impl ChatWidget {
         });
     }
 
+    pub(crate) fn request_skills_refresh_if_idle(&mut self, force_reload: bool) {
+        if !self.skills_request_in_flight {
+            self.request_skills_refresh(force_reload);
+        }
+    }
+
+    pub(crate) fn skills_request_in_flight(&self) -> bool {
+        self.skills_request_in_flight
+    }
+
     pub(crate) fn update_skill_enabled(&mut self, path: PathBuf, enabled: bool) {
         let target = normalize_skill_config_path(&path);
         for skill in &mut self.skills_all {

@@ -3993,6 +3993,53 @@ async fn skills_refresh_queues_while_request_in_flight() {
 }
 
 #[tokio::test]
+async fn skills_refresh_if_idle_skips_when_request_in_flight() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.skills_request_in_flight = true;
+
+    chat.request_skills_refresh_if_idle(true);
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert_eq!(chat.skills_refresh_pending, None);
+}
+
+#[tokio::test]
+async fn skills_refresh_if_idle_requests_when_idle() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.request_skills_refresh_if_idle(true);
+
+    match op_rx.try_recv() {
+        Ok(Op::ListSkills { cwds, force_reload }) => {
+            assert!(cwds.is_empty());
+            assert!(force_reload);
+        }
+        other => panic!("expected skills refresh op, got {other:?}"),
+    }
+    assert!(chat.skills_request_in_flight);
+    assert_eq!(chat.skills_refresh_pending, None);
+}
+
+#[tokio::test]
+async fn skills_request_in_flight_accessor_tracks_refresh_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    assert!(!chat.skills_request_in_flight());
+
+    chat.request_skills_refresh(true);
+    assert!(chat.skills_request_in_flight());
+
+    chat.set_skills_from_response(&adam_agent::protocol::ListSkillsResponseEvent {
+        skills: vec![adam_agent::protocol::SkillsListEntry {
+            cwd: chat.config.cwd.clone(),
+            skills: Vec::new(),
+            errors: Vec::new(),
+        }],
+    });
+    assert!(!chat.skills_request_in_flight());
+}
+
+#[tokio::test]
 async fn skills_response_sends_pending_refresh() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.skills_request_in_flight = true;
@@ -4026,6 +4073,12 @@ async fn skills_refresh_pending_preserves_force_reload() {
     chat.request_skills_refresh(true);
 
     assert_eq!(chat.skills_refresh_pending, Some(true));
+}
+
+#[test]
+fn skills_placeholder_copy_describes_management_flow() {
+    assert!(PLACEHOLDERS.contains(&"Use /skills to manage skills"));
+    assert!(!PLACEHOLDERS.contains(&"Use /skills to list available skills"));
 }
 
 #[tokio::test]
