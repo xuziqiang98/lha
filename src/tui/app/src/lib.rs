@@ -96,6 +96,7 @@ mod session_log;
 mod shimmer;
 mod sidebar;
 mod skills_helpers;
+mod skills_modal;
 mod slash_command;
 mod status;
 mod status_indicator_widget;

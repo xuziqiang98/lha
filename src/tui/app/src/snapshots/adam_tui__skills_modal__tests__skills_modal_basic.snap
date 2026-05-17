@@ -1,0 +1,28 @@
+---
+source: src/tui/app/src/skills_modal.rs
+expression: rendered
+---
+
+
+
+
+
+
+
+
+      ╭──────────────────────────────────────────────────────────────────────────────────────╮
+      │                                                                                      │
+      │  Skills                                                                              │
+      │  Turn skills on or off. Changes are saved automatically.                             │
+      │                                                                                      │
+      │  Search skills                                                                       │
+      │  >                                                                                   │
+      │                                                                                      │
+      │  › [x] Repo Scout                                                                    │
+      │     Summarize the repo layout                                                        │
+      │    [ ] Changelog Writer                                                              │
+      │     Draft release notes                                                              │
+      │                                                                                      │
+      │  Space/Enter toggle   ↑↓/jk move   Esc close                                         │
+      │                                                                                      │
+      ╰──────────────────────────────────────────────────────────────────────────────────────╯

@@ -3229,7 +3229,8 @@ impl ChatWidget {
                 self.insert_str("@");
             }
             SlashCommand::Skills => {
-                self.open_skills_menu();
+                self.app_event_tx.send(AppEvent::OpenSkillsModal);
+                self.request_redraw();
             }
             SlashCommand::Status => {
                 self.add_status_output();

@@ -4,14 +4,9 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use super::ChatWidget;
-use crate::app_event::AppEvent;
-use crate::bottom_pane::SelectionItem;
-use crate::bottom_pane::SelectionViewParams;
-use crate::bottom_pane::SkillsToggleItem;
-use crate::bottom_pane::SkillsToggleView;
-use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::skills_helpers::skill_description;
 use crate::skills_helpers::skill_display_name;
+use crate::skills_modal::SkillsModalItem;
 use adam_agent::connectors::AppInfo;
 use adam_agent::connectors::connector_mention_slug;
 use adam_agent::protocol::ListSkillsResponseEvent;
@@ -23,45 +18,9 @@ use adam_agent::skills::model::SkillMetadata;
 use adam_agent::skills::model::SkillToolDependency;
 
 impl ChatWidget {
-    pub(crate) fn open_skills_list(&mut self) {
-        self.insert_str("$");
-    }
-
-    pub(crate) fn open_skills_menu(&mut self) {
-        let items = vec![
-            SelectionItem {
-                name: "List skills".to_string(),
-                description: Some("Tip: press $ to open this list directly.".to_string()),
-                actions: vec![Box::new(|tx| {
-                    tx.send(AppEvent::OpenSkillsList);
-                })],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: "Enable/Disable Skills".to_string(),
-                description: Some("Enable or disable skills.".to_string()),
-                actions: vec![Box::new(|tx| {
-                    tx.send(AppEvent::OpenManageSkillsPopup);
-                })],
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-        ];
-
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Skills".to_string()),
-            subtitle: Some("Choose an action".to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            ..Default::default()
-        });
-    }
-
-    pub(crate) fn open_manage_skills_popup(&mut self) {
+    pub(crate) fn skills_modal_items(&mut self) -> Option<Vec<SkillsModalItem>> {
         if self.skills_all.is_empty() {
-            self.add_info_message("No skills available.".to_string(), None);
-            return;
+            return None;
         }
 
         let mut initial_state = HashMap::new();
@@ -70,27 +29,25 @@ impl ChatWidget {
         }
         self.skills_initial_state = Some(initial_state);
 
-        let items: Vec<SkillsToggleItem> = self
-            .skills_all
-            .iter()
-            .map(|skill| {
-                let core_skill = protocol_skill_to_core(skill);
-                let display_name = skill_display_name(&core_skill).to_string();
-                let description = skill_description(&core_skill).to_string();
-                let name = core_skill.name.clone();
-                let path = core_skill.path;
-                SkillsToggleItem {
-                    name: display_name,
-                    skill_name: name,
-                    description,
-                    enabled: skill.enabled,
-                    path,
-                }
-            })
-            .collect();
-
-        let view = SkillsToggleView::new(items, self.app_event_tx.clone());
-        self.bottom_pane.show_view(Box::new(view));
+        Some(
+            self.skills_all
+                .iter()
+                .map(|skill| {
+                    let core_skill = protocol_skill_to_core(skill);
+                    let display_name = skill_display_name(&core_skill).to_string();
+                    let description = skill_description(&core_skill).to_string();
+                    let name = core_skill.name.clone();
+                    let path = core_skill.path;
+                    SkillsModalItem {
+                        name: display_name,
+                        skill_name: name,
+                        description,
+                        enabled: skill.enabled,
+                        path,
+                    }
+                })
+                .collect(),
+        )
     }
 
     pub(crate) fn update_skill_enabled(&mut self, path: PathBuf, enabled: bool) {

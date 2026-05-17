@@ -1,10 +1,6 @@
 use adam_agent::skills::model::SkillMetadata;
 use adam_common::fuzzy_match::fuzzy_match;
 
-use crate::text_formatting::truncate_text;
-
-pub(crate) const SKILL_NAME_TRUNCATE_LEN: usize = 21;
-
 pub(crate) fn skill_display_name(skill: &SkillMetadata) -> &str {
     skill
         .interface
@@ -20,10 +16,6 @@ pub(crate) fn skill_description(skill: &SkillMetadata) -> &str {
         .and_then(|interface| interface.short_description.as_deref())
         .or(skill.short_description.as_deref())
         .unwrap_or(&skill.description)
-}
-
-pub(crate) fn truncate_skill_name(name: &str) -> String {
-    truncate_text(name, SKILL_NAME_TRUNCATE_LEN)
 }
 
 pub(crate) fn match_skill(

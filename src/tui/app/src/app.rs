@@ -61,6 +61,8 @@ use crate::resume_picker::SessionSelection;
 use crate::review_modal::ReviewModal;
 use crate::review_modal::ReviewModalAction;
 use crate::sidebar::AgentPanelEntry;
+use crate::skills_modal::SkillsModal;
+use crate::skills_modal::SkillsModalAction;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -620,6 +622,7 @@ pub(crate) struct App {
     identity_modal: Option<IdentityModal>,
     model_selection_modal: Option<ModelSelectionModal>,
     experimental_features_modal: Option<ExperimentalFeaturesModal>,
+    skills_modal: Option<SkillsModal>,
     approval_mode_modal: Option<ApprovalModeModal>,
     agent_selection_modal: Option<AgentSelectionModal>,
     review_modal: Option<ReviewModal>,
@@ -2329,6 +2332,7 @@ impl App {
             identity_modal: None,
             model_selection_modal: None,
             experimental_features_modal: None,
+            skills_modal: None,
             approval_mode_modal: None,
             agent_selection_modal: None,
             review_modal: None,
@@ -2531,6 +2535,16 @@ impl App {
                 }
                 TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
             }
+        } else if self.skills_modal.is_some() {
+            match event {
+                TuiEvent::Key(key_event) => {
+                    return self.handle_skills_modal_key_event(tui, key_event).await;
+                }
+                TuiEvent::Draw => {
+                    self.draw_main_ui(tui)?;
+                }
+                TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
+            }
         } else if self.approval_mode_modal.is_some() {
             match event {
                 TuiEvent::Key(key_event) => {
@@ -2628,6 +2642,8 @@ impl App {
             } else if let Some(modal) = &self.model_selection_modal {
                 modal.render(frame.area(), frame.buffer);
             } else if let Some(modal) = &self.experimental_features_modal {
+                modal.render(frame.area(), frame.buffer);
+            } else if let Some(modal) = &self.skills_modal {
                 modal.render(frame.area(), frame.buffer);
             } else if let Some(modal) = &self.approval_mode_modal {
                 modal.render(frame.area(), frame.buffer);
@@ -2826,6 +2842,39 @@ impl App {
                     self.handle_event(tui, AppEvent::UpdateFeatureFlags { updates })
                         .await
                 }
+            }
+        }
+    }
+
+    async fn handle_skills_modal_key_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        key_event: KeyEvent,
+    ) -> Result<AppRunControl> {
+        let action = self
+            .skills_modal
+            .as_mut()
+            .map(|modal| modal.handle_key_event(key_event))
+            .unwrap_or(SkillsModalAction::None);
+        match action {
+            SkillsModalAction::None => {
+                tui.frame_requester().schedule_frame();
+                Ok(AppRunControl::Continue)
+            }
+            SkillsModalAction::Exit => {
+                self.skills_modal = None;
+                self.chat_widget.handle_manage_skills_closed();
+                self.chat_widget.submit_op(Op::ListSkills {
+                    cwds: Vec::new(),
+                    force_reload: true,
+                });
+                tui.frame_requester().schedule_frame();
+                Ok(AppRunControl::Continue)
+            }
+            SkillsModalAction::Toggle { path, enabled } => {
+                self.set_skill_enabled(path, enabled).await;
+                tui.frame_requester().schedule_frame();
+                Ok(AppRunControl::Continue)
             }
         }
     }
@@ -3837,32 +3886,8 @@ impl App {
             AppEvent::SelectAgentThread(thread_id) => {
                 self.select_agent_thread(tui, thread_id).await?;
             }
-            AppEvent::OpenSkillsList => {
-                self.chat_widget.open_skills_list();
-            }
-            AppEvent::OpenManageSkillsPopup => {
-                self.chat_widget.open_manage_skills_popup();
-            }
-            AppEvent::SetSkillEnabled { path, enabled } => {
-                let edits = [ConfigEdit::SetSkillConfig {
-                    path: path.clone(),
-                    enabled,
-                }];
-                match ConfigEditsBuilder::new(&self.config.adam_home)
-                    .with_edits(edits)
-                    .apply()
-                    .await
-                {
-                    Ok(()) => {
-                        self.chat_widget.update_skill_enabled(path.clone(), enabled);
-                    }
-                    Err(err) => {
-                        let path_display = path.display();
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to update skill config for {path_display}: {err}"
-                        ));
-                    }
-                }
+            AppEvent::OpenSkillsModal => {
+                self.open_skills_modal();
             }
             AppEvent::OpenPermissionsPopup => {
                 self.open_permissions_modal();
@@ -3893,9 +3918,6 @@ impl App {
             AppEvent::SubmitUserMessageWithMode { text, identity } => {
                 self.chat_widget
                     .submit_user_message_with_mode(text, identity);
-            }
-            AppEvent::ManageSkillsClosed => {
-                self.chat_widget.handle_manage_skills_closed();
             }
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
@@ -4123,6 +4145,44 @@ impl App {
             .collect();
         self.experimental_features_modal = Some(ExperimentalFeaturesModal::new(features));
         self.chat_widget.request_redraw_for_ui();
+    }
+
+    fn open_skills_modal(&mut self) {
+        self.chat_widget.dismiss_active_view();
+        let Some(items) = self.chat_widget.skills_modal_items() else {
+            self.chat_widget
+                .add_info_message("No skills available.".to_string(), None);
+            return;
+        };
+        let Some(modal) = SkillsModal::new(items) else {
+            self.chat_widget
+                .add_info_message("No skills available.".to_string(), None);
+            return;
+        };
+        self.skills_modal = Some(modal);
+        self.chat_widget.request_redraw_for_ui();
+    }
+
+    async fn set_skill_enabled(&mut self, path: PathBuf, enabled: bool) {
+        let edits = [ConfigEdit::SetSkillConfig {
+            path: path.clone(),
+            enabled,
+        }];
+        match ConfigEditsBuilder::new(&self.config.adam_home)
+            .with_edits(edits)
+            .apply()
+            .await
+        {
+            Ok(()) => {
+                self.chat_widget.update_skill_enabled(path, enabled);
+            }
+            Err(err) => {
+                let path_display = path.display();
+                self.chat_widget.add_error_message(format!(
+                    "Failed to update skill config for {path_display}: {err}"
+                ));
+            }
+        }
     }
 
     fn open_approvals_modal(&mut self) {
@@ -6152,6 +6212,7 @@ mod tests {
             identity_modal: None,
             model_selection_modal: None,
             experimental_features_modal: None,
+            skills_modal: None,
             approval_mode_modal: None,
             agent_selection_modal: None,
             review_modal: None,
@@ -6220,6 +6281,7 @@ mod tests {
                 identity_modal: None,
                 model_selection_modal: None,
                 experimental_features_modal: None,
+                skills_modal: None,
                 approval_mode_modal: None,
                 agent_selection_modal: None,
                 review_modal: None,
@@ -6357,6 +6419,7 @@ show_raw_agent_reasoning = true
             identity_modal: None,
             model_selection_modal: None,
             experimental_features_modal: None,
+            skills_modal: None,
             approval_mode_modal: None,
             agent_selection_modal: None,
             review_modal: None,
@@ -6611,6 +6674,36 @@ show_raw_agent_reasoning = true
         assert!(
             app.experimental_features_modal.is_some(),
             "expected App to own the /experimental modal"
+        );
+        assert!(app.chat_widget.no_modal_or_popup_active());
+    }
+
+    #[tokio::test]
+    async fn open_skills_modal_sets_centered_modal() {
+        let mut app = make_test_app().await;
+        app.chat_widget
+            .set_skills_from_response(&ListSkillsResponseEvent {
+                skills: vec![adam_agent::protocol::SkillsListEntry {
+                    cwd: app.config.cwd.clone(),
+                    skills: vec![adam_agent::protocol::SkillMetadata {
+                        name: "repo_scout".to_string(),
+                        description: "Summarize the repo layout".to_string(),
+                        short_description: None,
+                        interface: None,
+                        dependencies: None,
+                        path: PathBuf::from("/tmp/skills/repo_scout.toml"),
+                        scope: adam_agent::protocol::SkillScope::User,
+                        enabled: true,
+                    }],
+                    errors: Vec::new(),
+                }],
+            });
+
+        app.open_skills_modal();
+
+        assert!(
+            app.skills_modal.is_some(),
+            "expected App to own the /skills modal"
         );
         assert!(app.chat_widget.no_modal_or_popup_active());
     }
