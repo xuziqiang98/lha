@@ -23,6 +23,6 @@ expression: rendered
       │    [ ] Changelog Writer                                                              │
       │     Draft release notes                                                              │
       │                                                                                      │
-      │  Space/Enter toggle   ↑↓/jk move   Esc close                                         │
+      │  Space/Enter toggle   ↑↓/Ctrl-N/P move   Esc close                                   │
       │                                                                                      │
       ╰──────────────────────────────────────────────────────────────────────────────────────╯

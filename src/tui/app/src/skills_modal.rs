@@ -87,11 +87,6 @@ impl SkillsModal {
                 code: KeyCode::Char('\u{0010}'),
                 modifiers: KeyModifiers::NONE,
                 ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('k'),
-                modifiers: KeyModifiers::NONE,
-                ..
             } => {
                 self.move_up();
                 SkillsModalAction::None
@@ -107,11 +102,6 @@ impl SkillsModal {
             }
             | KeyEvent {
                 code: KeyCode::Char('\u{000e}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('j'),
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
@@ -181,9 +171,19 @@ impl SkillsModal {
 
         let width = content_area.width.max(1) as usize;
         let lines = self.render_lines(width);
-        let footer_height = (lines.footer.len() as u16).min(content_area.height);
-        let header_height =
-            (lines.header.len() as u16).min(content_area.height.saturating_sub(footer_height));
+        let min_list_height = if lines.item_groups.is_empty() {
+            0
+        } else {
+            content_area.height.min(1)
+        };
+        let footer_height =
+            (lines.footer.len() as u16).min(content_area.height.saturating_sub(min_list_height));
+        let header_height = (lines.header.len() as u16).min(
+            content_area
+                .height
+                .saturating_sub(footer_height)
+                .saturating_sub(min_list_height),
+        );
         let list_height = content_area
             .height
             .saturating_sub(header_height)
@@ -353,7 +353,7 @@ impl SkillsModal {
                 vec![
                     "Space/Enter".cyan(),
                     " toggle   ".dim(),
-                    "↑↓/jk".cyan(),
+                    "↑↓/Ctrl-N/P".cyan(),
                     " move   ".dim(),
                     "Esc".cyan(),
                     " close".dim(),
@@ -441,15 +441,18 @@ impl SkillsModal {
             return 0;
         };
         let selected_idx = selected_idx.min(item_groups.len().saturating_sub(1));
-        let selected_top = item_groups
-            .iter()
-            .take(selected_idx)
-            .map(Vec::len)
-            .sum::<usize>();
+
+        let mut group_starts = Vec::with_capacity(item_groups.len());
+        let mut total_lines = 0usize;
+        for group in item_groups {
+            group_starts.push(total_lines);
+            total_lines = total_lines.saturating_add(group.len());
+        }
+
+        let max_scroll = total_lines.saturating_sub(visible_height);
+        let selected_top = group_starts[selected_idx];
         let selected_height = item_groups[selected_idx].len().max(1);
         let selected_bottom = selected_top.saturating_add(selected_height);
-        let total_lines = item_groups.iter().map(Vec::len).sum::<usize>();
-        let max_scroll = total_lines.saturating_sub(visible_height);
 
         if selected_height >= visible_height {
             return selected_top.min(max_scroll);
@@ -457,9 +460,15 @@ impl SkillsModal {
         if selected_bottom <= visible_height {
             0
         } else {
-            selected_bottom
-                .saturating_sub(visible_height)
-                .min(max_scroll)
+            let earliest_start = selected_bottom.saturating_sub(visible_height);
+            group_starts
+                .iter()
+                .copied()
+                .rev()
+                .find(|start| {
+                    *start >= earliest_start && *start <= selected_top && *start <= max_scroll
+                })
+                .unwrap_or_else(|| selected_top.min(max_scroll))
         }
     }
 
@@ -523,22 +532,41 @@ mod tests {
         .expect("modal")
     }
 
-    fn render_modal(modal: &SkillsModal) -> String {
-        let mut terminal = Terminal::new(VT100Backend::new(100, 32)).expect("terminal");
+    fn render_modal_with_size(modal: &SkillsModal, width: u16, height: u16) -> String {
+        let mut terminal = Terminal::new(VT100Backend::new(width, height)).expect("terminal");
         terminal
             .draw(|frame| modal.render(frame.area(), frame.buffer_mut()))
             .expect("draw");
         terminal.backend().to_string()
     }
 
+    fn render_modal(modal: &SkillsModal) -> String {
+        render_modal_with_size(modal, 100, 32)
+    }
+
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn key_with_modifiers(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, modifiers)
+    }
+
+    fn line_group(len: usize) -> Vec<Line<'static>> {
+        (0..len).map(|idx| format!("line {idx}").into()).collect()
     }
 
     #[test]
     fn renders_centered_skills_modal() {
         let rendered = render_modal(&modal());
         assert_snapshot!("skills_modal_basic", rendered);
+    }
+
+    #[test]
+    fn renders_at_least_one_skill_on_short_terminal() {
+        let rendered = render_modal_with_size(&modal(), 100, 14);
+
+        assert!(rendered.contains("Repo Scout"));
     }
 
     #[test]
@@ -563,6 +591,31 @@ mod tests {
 
         assert!(rendered.contains("Changelog Writer"));
         assert!(rendered.contains("Repo Scout"));
+    }
+
+    #[test]
+    fn lowercase_j_and_k_update_search_query() {
+        let mut modal = modal();
+        modal.handle_key_event(key(KeyCode::Char('j')));
+        modal.handle_key_event(key(KeyCode::Char('k')));
+
+        assert_eq!(modal.search_query, "jk");
+    }
+
+    #[test]
+    fn ctrl_n_and_ctrl_p_move_selection() {
+        let mut modal = modal();
+        modal.handle_key_event(key_with_modifiers(
+            KeyCode::Char('n'),
+            KeyModifiers::CONTROL,
+        ));
+        assert_eq!(modal.selected_idx, Some(1));
+
+        modal.handle_key_event(key_with_modifiers(
+            KeyCode::Char('p'),
+            KeyModifiers::CONTROL,
+        ));
+        assert_eq!(modal.selected_idx, Some(0));
     }
 
     #[test]
@@ -611,5 +664,43 @@ mod tests {
         assert!(rendered.contains("No matching skills"));
         assert!(!rendered.contains("Repo Scout"));
         assert!(!rendered.contains("Changelog Writer"));
+    }
+
+    #[test]
+    fn list_scroll_top_aligns_to_item_group_start() {
+        let item_groups = vec![line_group(4), line_group(3), line_group(1)];
+
+        assert_eq!(
+            SkillsModal::list_scroll_top_for_selected_item(&item_groups, Some(0), 3),
+            0
+        );
+        assert_eq!(
+            SkillsModal::list_scroll_top_for_selected_item(&item_groups, Some(1), 3),
+            4
+        );
+        assert_eq!(
+            SkillsModal::list_scroll_top_for_selected_item(&item_groups, Some(2), 3),
+            5
+        );
+    }
+
+    #[test]
+    fn list_scroll_top_clamps_tall_selected_item_to_max_scroll() {
+        let item_groups = vec![line_group(2), line_group(6)];
+
+        assert_eq!(
+            SkillsModal::list_scroll_top_for_selected_item(&item_groups, Some(1), 3),
+            2
+        );
+    }
+
+    #[test]
+    fn list_scroll_top_keeps_middle_selection_group_aligned() {
+        let item_groups = vec![line_group(4), line_group(3), line_group(3)];
+
+        assert_eq!(
+            SkillsModal::list_scroll_top_for_selected_item(&item_groups, Some(1), 3),
+            4
+        );
     }
 }

@@ -212,6 +212,7 @@ pub(crate) use self::agent::spawn_op_forwarder;
 mod session_header;
 use self::session_header::SessionHeader;
 mod skills;
+pub(crate) use self::skills::SkillsModalItems;
 use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
@@ -468,6 +469,9 @@ pub(crate) struct ChatWidget {
     suppressed_exec_calls: HashSet<String>,
     pending_collab_spawn_requests: HashMap<String, collab::SpawnRequestSummary>,
     skills_all: Vec<ProtocolSkillMetadata>,
+    skills_have_loaded: bool,
+    skills_request_in_flight: bool,
+    skills_refresh_pending: Option<bool>,
     skills_initial_state: Option<HashMap<PathBuf, bool>>,
     loaded_skills: Vec<LoadedSkillSummary>,
     last_unified_wait: Option<UnifiedExecWaitState>,
@@ -886,10 +890,7 @@ impl ChatWidget {
         }
         // Ask adam-agent to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
-        self.submit_op(Op::ListSkills {
-            cwds: Vec::new(),
-            force_reload: true,
-        });
+        self.request_skills_refresh(true);
         if self.connectors_enabled() {
             self.prefetch_connectors();
         }
@@ -2371,6 +2372,9 @@ impl ChatWidget {
             active_cell_revision: 0,
             config,
             skills_all: Vec::new(),
+            skills_have_loaded: false,
+            skills_request_in_flight: false,
+            skills_refresh_pending: None,
             skills_initial_state: None,
             reasoning_effort_overrides: HashMap::new(),
             current_identity,
@@ -2530,6 +2534,9 @@ impl ChatWidget {
             active_cell_revision: 0,
             config,
             skills_all: Vec::new(),
+            skills_have_loaded: false,
+            skills_request_in_flight: false,
+            skills_refresh_pending: None,
             skills_initial_state: None,
             reasoning_effort_overrides: HashMap::new(),
             current_identity,
@@ -2676,6 +2683,9 @@ impl ChatWidget {
             active_cell_revision: 0,
             config,
             skills_all: Vec::new(),
+            skills_have_loaded: false,
+            skills_request_in_flight: false,
+            skills_refresh_pending: None,
             skills_initial_state: None,
             reasoning_effort_overrides: HashMap::new(),
             current_identity,
@@ -3846,10 +3856,7 @@ impl ChatWidget {
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
             EventMsg::SkillsUpdateAvailable => {
-                self.submit_op(Op::ListSkills {
-                    cwds: Vec::new(),
-                    force_reload: true,
-                });
+                self.request_skills_refresh(true);
             }
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),

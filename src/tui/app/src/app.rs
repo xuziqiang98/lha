@@ -22,6 +22,7 @@ use crate::changelog::get_non_git_changelog;
 use crate::changelog::git_repo_root;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
+use crate::chatwidget::SkillsModalItems;
 use crate::chatwidget::UserMessage;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
@@ -2864,10 +2865,7 @@ impl App {
             SkillsModalAction::Exit => {
                 self.skills_modal = None;
                 self.chat_widget.handle_manage_skills_closed();
-                self.chat_widget.submit_op(Op::ListSkills {
-                    cwds: Vec::new(),
-                    force_reload: true,
-                });
+                self.chat_widget.request_skills_refresh(true);
                 tui.frame_requester().schedule_frame();
                 Ok(AppRunControl::Continue)
             }
@@ -4149,18 +4147,28 @@ impl App {
 
     fn open_skills_modal(&mut self) {
         self.chat_widget.dismiss_active_view();
-        let Some(items) = self.chat_widget.skills_modal_items() else {
-            self.chat_widget
-                .add_info_message("No skills available.".to_string(), None);
-            return;
-        };
-        let Some(modal) = SkillsModal::new(items) else {
-            self.chat_widget
-                .add_info_message("No skills available.".to_string(), None);
-            return;
-        };
-        self.skills_modal = Some(modal);
-        self.chat_widget.request_redraw_for_ui();
+        match self.chat_widget.skills_modal_items() {
+            SkillsModalItems::Loading => {
+                self.chat_widget.request_skills_refresh(true);
+                self.chat_widget.add_info_message(
+                    "Skills are still loading.".to_string(),
+                    Some("Try again in a moment.".to_string()),
+                );
+            }
+            SkillsModalItems::Empty => {
+                self.chat_widget
+                    .add_info_message("No skills available.".to_string(), None);
+            }
+            SkillsModalItems::Ready(items) => {
+                let Some(modal) = SkillsModal::new(items) else {
+                    self.chat_widget
+                        .add_info_message("No skills available.".to_string(), None);
+                    return;
+                };
+                self.skills_modal = Some(modal);
+                self.chat_widget.request_redraw_for_ui();
+            }
+        }
     }
 
     async fn set_skill_enabled(&mut self, path: PathBuf, enabled: bool) {
@@ -6706,6 +6714,46 @@ show_raw_agent_reasoning = true
             "expected App to own the /skills modal"
         );
         assert!(app.chat_widget.no_modal_or_popup_active());
+    }
+
+    #[tokio::test]
+    async fn open_skills_modal_before_skills_response_requests_loading_refresh() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        app.open_skills_modal();
+
+        assert!(
+            app.skills_modal.is_none(),
+            "expected /skills to wait for the first skills response"
+        );
+        match op_rx.try_recv() {
+            Ok(Op::ListSkills { cwds, force_reload }) => {
+                assert!(cwds.is_empty());
+                assert!(force_reload);
+            }
+            other => panic!("expected skills refresh op, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn open_skills_modal_after_empty_response_does_not_refresh_again() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        app.chat_widget
+            .set_skills_from_response(&ListSkillsResponseEvent {
+                skills: vec![adam_agent::protocol::SkillsListEntry {
+                    cwd: app.config.cwd.clone(),
+                    skills: Vec::new(),
+                    errors: Vec::new(),
+                }],
+            });
+
+        app.open_skills_modal();
+
+        assert!(
+            app.skills_modal.is_none(),
+            "expected empty skills response to avoid opening the modal"
+        );
+        assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
     }
 
     #[tokio::test]

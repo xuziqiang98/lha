@@ -1905,6 +1905,9 @@ async fn make_chatwidget_manual_inner(
         suppressed_exec_calls: HashSet::new(),
         pending_collab_spawn_requests: HashMap::new(),
         skills_all: Vec::new(),
+        skills_have_loaded: false,
+        skills_request_in_flight: false,
+        skills_refresh_pending: None,
         skills_initial_state: None,
         loaded_skills: Vec::new(),
         last_unified_wait: None,
@@ -2072,6 +2075,9 @@ async fn make_chatwidget_manual_with_frame_requester(
         suppressed_exec_calls: HashSet::new(),
         pending_collab_spawn_requests: HashMap::new(),
         skills_all: Vec::new(),
+        skills_have_loaded: false,
+        skills_request_in_flight: false,
+        skills_refresh_pending: None,
         skills_initial_state: None,
         loaded_skills: Vec::new(),
         last_unified_wait: None,
@@ -3925,6 +3931,101 @@ async fn skills_command_opens_centered_skills_modal() {
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::OpenSkillsModal));
     assert!(!render_bottom_popup(&chat, 80).contains("Skills"));
+}
+
+#[tokio::test]
+async fn skills_modal_items_reports_loading_before_first_response() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    assert_matches!(chat.skills_modal_items(), SkillsModalItems::Loading);
+}
+
+#[tokio::test]
+async fn skills_modal_items_reports_empty_after_empty_response() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_skills_from_response(&adam_agent::protocol::ListSkillsResponseEvent {
+        skills: vec![adam_agent::protocol::SkillsListEntry {
+            cwd: chat.config.cwd.clone(),
+            skills: Vec::new(),
+            errors: Vec::new(),
+        }],
+    });
+
+    assert_matches!(chat.skills_modal_items(), SkillsModalItems::Empty);
+}
+
+#[tokio::test]
+async fn skills_modal_items_returns_cached_items_while_refreshing() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_skills_from_response(&adam_agent::protocol::ListSkillsResponseEvent {
+        skills: vec![adam_agent::protocol::SkillsListEntry {
+            cwd: chat.config.cwd.clone(),
+            skills: vec![adam_agent::protocol::SkillMetadata {
+                name: "repo_scout".to_string(),
+                description: "Summarize the repo layout".to_string(),
+                short_description: None,
+                interface: None,
+                dependencies: None,
+                path: PathBuf::from("/tmp/skills/repo_scout.toml"),
+                scope: adam_agent::protocol::SkillScope::User,
+                enabled: true,
+            }],
+            errors: Vec::new(),
+        }],
+    });
+    chat.skills_request_in_flight = true;
+
+    assert_matches!(
+        chat.skills_modal_items(),
+        SkillsModalItems::Ready(items) if items.len() == 1
+    );
+}
+
+#[tokio::test]
+async fn skills_refresh_queues_while_request_in_flight() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.skills_request_in_flight = true;
+
+    chat.request_skills_refresh(true);
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert_eq!(chat.skills_refresh_pending, Some(true));
+}
+
+#[tokio::test]
+async fn skills_response_sends_pending_refresh() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.skills_request_in_flight = true;
+
+    chat.request_skills_refresh(true);
+    chat.set_skills_from_response(&adam_agent::protocol::ListSkillsResponseEvent {
+        skills: vec![adam_agent::protocol::SkillsListEntry {
+            cwd: chat.config.cwd.clone(),
+            skills: Vec::new(),
+            errors: Vec::new(),
+        }],
+    });
+
+    match op_rx.try_recv() {
+        Ok(Op::ListSkills { cwds, force_reload }) => {
+            assert!(cwds.is_empty());
+            assert!(force_reload);
+        }
+        other => panic!("expected queued skills refresh, got {other:?}"),
+    }
+    assert!(chat.skills_request_in_flight);
+    assert_eq!(chat.skills_refresh_pending, None);
+}
+
+#[tokio::test]
+async fn skills_refresh_pending_preserves_force_reload() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.skills_request_in_flight = true;
+
+    chat.request_skills_refresh(false);
+    chat.request_skills_refresh(true);
+
+    assert_eq!(chat.skills_refresh_pending, Some(true));
 }
 
 #[tokio::test]

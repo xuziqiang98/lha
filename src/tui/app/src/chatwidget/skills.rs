@@ -10,6 +10,7 @@ use crate::skills_modal::SkillsModalItem;
 use adam_agent::connectors::AppInfo;
 use adam_agent::connectors::connector_mention_slug;
 use adam_agent::protocol::ListSkillsResponseEvent;
+use adam_agent::protocol::Op;
 use adam_agent::protocol::SkillMetadata as ProtocolSkillMetadata;
 use adam_agent::protocol::SkillsListEntry;
 use adam_agent::skills::model::SkillDependencies;
@@ -17,10 +18,21 @@ use adam_agent::skills::model::SkillInterface;
 use adam_agent::skills::model::SkillMetadata;
 use adam_agent::skills::model::SkillToolDependency;
 
+#[derive(Debug)]
+pub(crate) enum SkillsModalItems {
+    Loading,
+    Empty,
+    Ready(Vec<SkillsModalItem>),
+}
+
 impl ChatWidget {
-    pub(crate) fn skills_modal_items(&mut self) -> Option<Vec<SkillsModalItem>> {
+    pub(crate) fn skills_modal_items(&mut self) -> SkillsModalItems {
         if self.skills_all.is_empty() {
-            return None;
+            return if self.skills_request_in_flight || !self.skills_have_loaded {
+                SkillsModalItems::Loading
+            } else {
+                SkillsModalItems::Empty
+            };
         }
 
         let mut initial_state = HashMap::new();
@@ -29,7 +41,7 @@ impl ChatWidget {
         }
         self.skills_initial_state = Some(initial_state);
 
-        Some(
+        SkillsModalItems::Ready(
             self.skills_all
                 .iter()
                 .map(|skill| {
@@ -48,6 +60,19 @@ impl ChatWidget {
                 })
                 .collect(),
         )
+    }
+
+    pub(crate) fn request_skills_refresh(&mut self, force_reload: bool) {
+        if self.skills_request_in_flight {
+            self.skills_refresh_pending =
+                Some(self.skills_refresh_pending.unwrap_or(false) || force_reload);
+            return;
+        }
+        self.skills_request_in_flight = true;
+        self.submit_op(Op::ListSkills {
+            cwds: Vec::new(),
+            force_reload,
+        });
     }
 
     pub(crate) fn update_skill_enabled(&mut self, path: PathBuf, enabled: bool) {
@@ -96,7 +121,12 @@ impl ChatWidget {
     pub(crate) fn set_skills_from_response(&mut self, response: &ListSkillsResponseEvent) {
         let skills = skills_for_cwd(&self.config.cwd, &response.skills);
         self.skills_all = skills;
+        self.skills_have_loaded = true;
+        self.skills_request_in_flight = false;
         self.set_skills(Some(enabled_skills_for_mentions(&self.skills_all)));
+        if let Some(force_reload) = self.skills_refresh_pending.take() {
+            self.request_skills_refresh(force_reload);
+        }
     }
 }
 
