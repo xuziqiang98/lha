@@ -10,6 +10,10 @@ use crate::app_event::WindowsSandboxEnableMode;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
+use crate::approval_mode_modal::ApprovalModeAction;
+use crate::approval_mode_modal::ApprovalModeItem;
+use crate::approval_mode_modal::ApprovalModeModal;
+use crate::approval_mode_modal::ApprovalModeModalAction;
 use crate::bottom_pane::ApprovalRequest;
 use crate::changelog::ChangelogOutput;
 use crate::changelog::DirectorySnapshot;
@@ -97,6 +101,8 @@ use adam_agent::protocol::TurnAbortReason;
 use adam_agent::windows_sandbox::WindowsSandboxLevelExt;
 use adam_ansi_escape::ansi_escape_line;
 use adam_app_server_protocol::ConfigLayerSource;
+use adam_common::approval_presets::ApprovalPreset;
+use adam_common::approval_presets::builtin_approval_presets;
 use adam_llm::CatalogRefreshStrategy;
 use adam_llm::RuntimeEndpoint;
 use adam_otel::OtelManager;
@@ -614,6 +620,7 @@ pub(crate) struct App {
     identity_modal: Option<IdentityModal>,
     model_selection_modal: Option<ModelSelectionModal>,
     experimental_features_modal: Option<ExperimentalFeaturesModal>,
+    approval_mode_modal: Option<ApprovalModeModal>,
     agent_selection_modal: Option<AgentSelectionModal>,
     review_modal: Option<ReviewModal>,
     pending_startup_trust_prompt: bool,
@@ -2166,7 +2173,7 @@ impl App {
         } else {
             initial_user_message.clone()
         };
-        let mut chat_widget = match session_selection {
+        let chat_widget = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
@@ -2266,8 +2273,6 @@ impl App {
                 ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
             }
         };
-        chat_widget.maybe_prompt_windows_sandbox_enable();
-
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
@@ -2324,12 +2329,15 @@ impl App {
             identity_modal: None,
             model_selection_modal: None,
             experimental_features_modal: None,
+            approval_mode_modal: None,
             agent_selection_modal: None,
             review_modal: None,
             pending_startup_trust_prompt: show_trust_popup_on_startup,
             deferred_initial_user_message,
             deferred_startup_continuation,
         };
+        #[cfg(target_os = "windows")]
+        app.maybe_prompt_windows_sandbox_enable_modal();
 
         if let Err(err) = app
             .ensure_non_git_changelog_baseline(app.config.cwd.clone())
@@ -2523,6 +2531,18 @@ impl App {
                 }
                 TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
             }
+        } else if self.approval_mode_modal.is_some() {
+            match event {
+                TuiEvent::Key(key_event) => {
+                    return self
+                        .handle_approval_mode_modal_key_event(tui, key_event)
+                        .await;
+                }
+                TuiEvent::Draw => {
+                    self.draw_main_ui(tui)?;
+                }
+                TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
+            }
         } else if self.agent_selection_modal.is_some() {
             match event {
                 TuiEvent::Key(key_event) => {
@@ -2608,6 +2628,8 @@ impl App {
             } else if let Some(modal) = &self.model_selection_modal {
                 modal.render(frame.area(), frame.buffer);
             } else if let Some(modal) = &self.experimental_features_modal {
+                modal.render(frame.area(), frame.buffer);
+            } else if let Some(modal) = &self.approval_mode_modal {
                 modal.render(frame.area(), frame.buffer);
             } else if let Some(modal) = &self.agent_selection_modal {
                 modal.render(frame.area(), frame.buffer);
@@ -2804,6 +2826,35 @@ impl App {
                     self.handle_event(tui, AppEvent::UpdateFeatureFlags { updates })
                         .await
                 }
+            }
+        }
+    }
+
+    async fn handle_approval_mode_modal_key_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        key_event: KeyEvent,
+    ) -> Result<AppRunControl> {
+        let action = self
+            .approval_mode_modal
+            .as_mut()
+            .map(|modal| modal.handle_key_event(key_event))
+            .unwrap_or(ApprovalModeModalAction::None);
+        match action {
+            ApprovalModeModalAction::None => {
+                tui.frame_requester().schedule_frame();
+                Ok(AppRunControl::Continue)
+            }
+            ApprovalModeModalAction::Exit => {
+                self.approval_mode_modal = None;
+                tui.frame_requester().schedule_frame();
+                Ok(AppRunControl::Continue)
+            }
+            ApprovalModeModalAction::Selected(action) => {
+                self.approval_mode_modal = None;
+                tui.frame_requester().schedule_frame();
+                self.handle_approval_mode_action(action);
+                Ok(AppRunControl::Continue)
             }
         }
     }
@@ -3274,8 +3325,7 @@ impl App {
                 preset,
                 return_to_permissions,
             } => {
-                self.chat_widget
-                    .open_full_access_confirmation(preset, return_to_permissions);
+                self.open_full_access_confirmation_modal(preset, return_to_permissions);
             }
             AppEvent::OpenWorldWritableWarningConfirmation {
                 preset,
@@ -3283,7 +3333,7 @@ impl App {
                 extra_count,
                 failed_scan,
             } => {
-                self.chat_widget.open_world_writable_warning_confirmation(
+                self.open_world_writable_warning_confirmation_modal(
                     preset,
                     sample_paths,
                     extra_count,
@@ -3305,7 +3355,10 @@ impl App {
                 }
             }
             AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
-                self.chat_widget.open_windows_sandbox_enable_prompt(preset);
+                #[cfg(target_os = "windows")]
+                self.open_windows_sandbox_enable_prompt_modal(preset);
+                #[cfg(not(target_os = "windows"))]
+                let _ = preset;
             }
             AppEvent::OpenWindowsSandboxFallbackPrompt { preset, reason } => {
                 self.otel_manager
@@ -3318,8 +3371,10 @@ impl App {
                         &[("result", "failure")],
                     );
                 }
-                self.chat_widget
-                    .open_windows_sandbox_fallback_prompt(preset, reason);
+                #[cfg(target_os = "windows")]
+                self.open_windows_sandbox_fallback_prompt_modal(preset, reason);
+                #[cfg(not(target_os = "windows"))]
+                let _ = (preset, reason);
             }
             AppEvent::BeginWindowsSandboxElevatedSetup { preset } => {
                 #[cfg(target_os = "windows")]
@@ -3774,7 +3829,7 @@ impl App {
                 }
             }
             AppEvent::OpenApprovalsPopup => {
-                self.chat_widget.open_approvals_popup();
+                self.open_approvals_modal();
             }
             AppEvent::OpenAgentPicker => {
                 self.open_agent_picker().await;
@@ -3810,7 +3865,7 @@ impl App {
                 }
             }
             AppEvent::OpenPermissionsPopup => {
-                self.chat_widget.open_permissions_popup();
+                self.open_permissions_modal();
             }
             AppEvent::OpenReviewBranchPicker(cwd) => {
                 self.ensure_review_modal();
@@ -4068,6 +4123,575 @@ impl App {
             .collect();
         self.experimental_features_modal = Some(ExperimentalFeaturesModal::new(features));
         self.chat_widget.request_redraw_for_ui();
+    }
+
+    fn open_approvals_modal(&mut self) {
+        self.open_approval_mode_modal(true);
+    }
+
+    fn open_permissions_modal(&mut self) {
+        let include_read_only = cfg!(target_os = "windows");
+        self.open_approval_mode_modal(include_read_only);
+    }
+
+    fn open_approval_mode_modal(&mut self, include_read_only: bool) {
+        self.chat_widget.dismiss_active_view();
+        let current_approval = self.config.approval_policy.value();
+        let current_sandbox = self.config.sandbox_policy.get();
+        let presets = builtin_approval_presets();
+        let mut items = Vec::new();
+
+        #[cfg(target_os = "windows")]
+        let windows_degraded_sandbox_enabled = {
+            let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+            matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken)
+        };
+        #[cfg(not(target_os = "windows"))]
+        let windows_degraded_sandbox_enabled = false;
+
+        let show_elevate_sandbox_hint = adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+            && windows_degraded_sandbox_enabled
+            && presets.iter().any(|preset| preset.id == "auto");
+
+        for preset in presets {
+            if !include_read_only && preset.id == "read-only" {
+                continue;
+            }
+            let is_current =
+                ChatWidget::preset_matches_current(current_approval, current_sandbox, &preset);
+            let name = if preset.id == "auto" && windows_degraded_sandbox_enabled {
+                "Default (non-elevated sandbox)".to_string()
+            } else {
+                preset.label.to_string()
+            };
+            let disabled_reason = match self.config.approval_policy.can_set(&preset.approval) {
+                Ok(()) => None,
+                Err(err) => Some(err.to_string()),
+            };
+            let action = self.approval_preset_action(&preset, include_read_only);
+            items.push(ApprovalModeItem {
+                name,
+                description: Some(preset.description.to_string()),
+                is_current,
+                disabled_reason,
+                action,
+            });
+        }
+
+        let mut header = vec![
+            "Update Model Permissions".bold().into(),
+            "Choose what Adam can do without approval.".dim().into(),
+        ];
+        if show_elevate_sandbox_hint {
+            header.push("".into());
+            header.push(
+                vec![
+                    "Tip: run ".dim(),
+                    "/setup-elevated-sandbox".cyan(),
+                    " to upgrade the Windows sandbox.".dim(),
+                ]
+                .into(),
+            );
+        }
+        header.push("".into());
+
+        self.approval_mode_modal = Some(ApprovalModeModal::new(header, items));
+        self.chat_widget.request_redraw_for_ui();
+    }
+
+    fn approval_preset_action(
+        &self,
+        preset: &ApprovalPreset,
+        include_read_only: bool,
+    ) -> ApprovalModeAction {
+        let requires_confirmation = preset.id == "full-access"
+            && !self
+                .config
+                .notices
+                .hide_full_access_warning
+                .unwrap_or(false);
+        if requires_confirmation {
+            return ApprovalModeAction::OpenFullAccessConfirmation {
+                preset: preset.clone(),
+                return_to_permissions: !include_read_only,
+            };
+        }
+
+        if preset.id == "auto" {
+            #[cfg(target_os = "windows")]
+            {
+                if WindowsSandboxLevel::from_config(&self.config) == WindowsSandboxLevel::Disabled {
+                    if adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                        && adam_agent::windows_sandbox::sandbox_setup_is_complete(
+                            self.config.adam_home.as_path(),
+                        )
+                    {
+                        return ApprovalModeAction::EnableWindowsSandboxForAgentMode {
+                            preset: preset.clone(),
+                            mode: WindowsSandboxEnableMode::Elevated,
+                            counter: None,
+                        };
+                    }
+                    return ApprovalModeAction::OpenWindowsSandboxEnablePrompt {
+                        preset: preset.clone(),
+                    };
+                }
+                if let Some((sample_paths, extra_count, failed_scan)) =
+                    self.chat_widget.world_writable_warning_details()
+                {
+                    return ApprovalModeAction::OpenWorldWritableWarningConfirmation {
+                        preset: Some(preset.clone()),
+                        sample_paths,
+                        extra_count,
+                        failed_scan,
+                    };
+                }
+            }
+        }
+
+        ApprovalModeAction::ApplyPreset {
+            approval: preset.approval,
+            sandbox: preset.sandbox.clone(),
+        }
+    }
+
+    fn open_full_access_confirmation_modal(
+        &mut self,
+        preset: ApprovalPreset,
+        return_to_permissions: bool,
+    ) {
+        self.chat_widget.dismiss_active_view();
+        let approval = preset.approval;
+        let sandbox = preset.sandbox;
+        let header = vec![
+            "Enable full access?".bold().into(),
+            vec![
+                "When Adam runs with full access, it can edit any file on your computer and run commands with network, without your approval. ".into(),
+                "Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior.".red(),
+            ]
+            .into(),
+            "".into(),
+        ];
+        let items = vec![
+            ApprovalModeItem {
+                name: "Yes, continue anyway".to_string(),
+                description: Some("Apply full access for this session".to_string()),
+                is_current: false,
+                disabled_reason: None,
+                action: ApprovalModeAction::ConfirmFullAccess {
+                    approval,
+                    sandbox: sandbox.clone(),
+                    remember: false,
+                },
+            },
+            ApprovalModeItem {
+                name: "Yes, and don't ask again".to_string(),
+                description: Some("Enable full access and remember this choice".to_string()),
+                is_current: false,
+                disabled_reason: None,
+                action: ApprovalModeAction::ConfirmFullAccess {
+                    approval,
+                    sandbox,
+                    remember: true,
+                },
+            },
+            ApprovalModeItem {
+                name: "Cancel".to_string(),
+                description: Some("Go back without enabling full access".to_string()),
+                is_current: false,
+                disabled_reason: None,
+                action: if return_to_permissions {
+                    ApprovalModeAction::OpenPermissions
+                } else {
+                    ApprovalModeAction::OpenApprovals
+                },
+            },
+        ];
+        self.approval_mode_modal = Some(ApprovalModeModal::new(header, items));
+        self.chat_widget.request_redraw_for_ui();
+    }
+
+    fn open_world_writable_warning_confirmation_modal(
+        &mut self,
+        preset: Option<ApprovalPreset>,
+        sample_paths: Vec<String>,
+        extra_count: usize,
+        failed_scan: bool,
+    ) {
+        self.chat_widget.dismiss_active_view();
+        let describe_policy = |policy: &SandboxPolicy| match policy {
+            SandboxPolicy::WorkspaceWrite { .. } => "Agent mode",
+            SandboxPolicy::ReadOnly => "Read-Only mode",
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => "Agent mode",
+        };
+        let mode_label = preset
+            .as_ref()
+            .map(|preset| describe_policy(&preset.sandbox))
+            .unwrap_or_else(|| describe_policy(self.config.sandbox_policy.get()));
+        let mut header = if failed_scan {
+            vec![
+                "Windows sandbox warning".bold().into(),
+                vec![
+                    "We couldn't complete the world-writable scan, so protections cannot be verified. ".into(),
+                    format!(
+                        "The Windows sandbox cannot guarantee protection in {mode_label}."
+                    )
+                    .red(),
+                ]
+                .into(),
+            ]
+        } else {
+            vec![
+                "Windows sandbox warning".bold().into(),
+                "The Windows sandbox cannot protect writes to folders that are writable by Everyone."
+                    .dim()
+                    .into(),
+                "Consider removing write access for Everyone from these folders:"
+                    .dim()
+                    .into(),
+            ]
+        };
+        if !sample_paths.is_empty() {
+            header.push("".into());
+            for path in sample_paths {
+                header.push(format!("  - {path}").into());
+            }
+            if extra_count > 0 {
+                header.push(format!("and {extra_count} more").into());
+            }
+        }
+        header.push("".into());
+
+        let items = vec![
+            ApprovalModeItem {
+                name: "Continue".to_string(),
+                description: Some(format!("Apply {mode_label} for this session")),
+                is_current: false,
+                disabled_reason: None,
+                action: ApprovalModeAction::ConfirmWorldWritable {
+                    preset: preset.clone(),
+                    remember: false,
+                },
+            },
+            ApprovalModeItem {
+                name: "Continue and don't warn again".to_string(),
+                description: Some(format!("Enable {mode_label} and remember this choice")),
+                is_current: false,
+                disabled_reason: None,
+                action: ApprovalModeAction::ConfirmWorldWritable {
+                    preset,
+                    remember: true,
+                },
+            },
+        ];
+        self.approval_mode_modal = Some(ApprovalModeModal::new(header, items));
+        self.chat_widget.request_redraw_for_ui();
+    }
+
+    #[cfg(target_os = "windows")]
+    fn open_windows_sandbox_enable_prompt_modal(&mut self, preset: ApprovalPreset) {
+        self.chat_widget.dismiss_active_view();
+        if !adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED {
+            let header = vec![
+                "Agent mode on Windows uses an experimental sandbox to limit network and filesystem access."
+                    .bold()
+                    .into(),
+                "Learn more: https://developers.openai.com/codex/windows"
+                    .dim()
+                    .into(),
+                "".into(),
+            ];
+            let items = vec![
+                ApprovalModeItem {
+                    name: "Enable experimental sandbox".to_string(),
+                    description: None,
+                    is_current: false,
+                    disabled_reason: None,
+                    action: ApprovalModeAction::EnableWindowsSandboxForAgentMode {
+                        preset,
+                        mode: WindowsSandboxEnableMode::Legacy,
+                        counter: None,
+                    },
+                },
+                ApprovalModeItem {
+                    name: "Go back".to_string(),
+                    description: None,
+                    is_current: false,
+                    disabled_reason: None,
+                    action: ApprovalModeAction::OpenApprovals,
+                },
+            ];
+            self.approval_mode_modal = Some(ApprovalModeModal::new(header, items));
+            self.chat_widget.request_redraw_for_ui();
+            return;
+        }
+
+        let current_approval = self.config.approval_policy.value();
+        let current_sandbox = self.config.sandbox_policy.get();
+        let presets = builtin_approval_presets();
+        let stay_full_access = presets
+            .iter()
+            .find(|preset| preset.id == "full-access")
+            .is_some_and(|preset| {
+                ChatWidget::preset_matches_current(current_approval, current_sandbox, preset)
+            });
+        self.otel_manager
+            .counter("adam.windows_sandbox.elevated_prompt_shown", 1, &[]);
+
+        let stay_label = if stay_full_access {
+            "Stay in Agent Full Access".to_string()
+        } else {
+            "Stay in Read-Only".to_string()
+        };
+        let read_only_preset = (!stay_full_access)
+            .then(|| {
+                presets
+                    .iter()
+                    .find(|preset| preset.id == "read-only")
+                    .cloned()
+            })
+            .flatten();
+
+        let header = vec![
+            "Set Up Agent Sandbox".bold().into(),
+            "".into(),
+            "Agent mode uses an experimental Windows sandbox that protects your files and prevents network access by default."
+                .into(),
+            "Learn more: https://developers.openai.com/codex/windows"
+                .dim()
+                .into(),
+            "".into(),
+        ];
+        let items = vec![
+            ApprovalModeItem {
+                name: "Set up agent sandbox (requires elevation)".to_string(),
+                description: None,
+                is_current: false,
+                disabled_reason: None,
+                action: ApprovalModeAction::BeginWindowsSandboxElevatedSetup {
+                    preset,
+                    counter: Some("adam.windows_sandbox.elevated_prompt_accept"),
+                },
+            },
+            ApprovalModeItem {
+                name: stay_label,
+                description: None,
+                is_current: false,
+                disabled_reason: None,
+                action: ApprovalModeAction::StayInCurrentWindowsMode {
+                    read_only_preset,
+                    counter: "adam.windows_sandbox.elevated_prompt_decline",
+                },
+            },
+        ];
+        self.approval_mode_modal = Some(ApprovalModeModal::new(header, items));
+        self.chat_widget.request_redraw_for_ui();
+    }
+
+    #[cfg(target_os = "windows")]
+    fn open_windows_sandbox_fallback_prompt_modal(
+        &mut self,
+        preset: ApprovalPreset,
+        reason: WindowsSandboxFallbackReason,
+    ) {
+        let _ = reason;
+        self.chat_widget.dismiss_active_view();
+        let current_approval = self.config.approval_policy.value();
+        let current_sandbox = self.config.sandbox_policy.get();
+        let presets = builtin_approval_presets();
+        let stay_full_access = presets
+            .iter()
+            .find(|preset| preset.id == "full-access")
+            .is_some_and(|preset| {
+                ChatWidget::preset_matches_current(current_approval, current_sandbox, preset)
+            });
+        let stay_label = if stay_full_access {
+            "Stay in Agent Full Access".to_string()
+        } else {
+            "Stay in Read-Only".to_string()
+        };
+        let read_only_preset = (!stay_full_access)
+            .then(|| {
+                presets
+                    .iter()
+                    .find(|preset| preset.id == "read-only")
+                    .cloned()
+            })
+            .flatten();
+        let header = vec![
+            "Use Non-Elevated Sandbox?".bold().into(),
+            "".into(),
+            "Elevation failed. You can also use a non-elevated sandbox, which protects your files and prevents network access under most circumstances. However, it carries greater risk if prompt injected."
+                .into(),
+            "Learn more: https://developers.openai.com/codex/windows"
+                .dim()
+                .into(),
+            "".into(),
+        ];
+        let items = vec![
+            ApprovalModeItem {
+                name: "Try elevated agent sandbox setup again".to_string(),
+                description: None,
+                is_current: false,
+                disabled_reason: None,
+                action: ApprovalModeAction::BeginWindowsSandboxElevatedSetup {
+                    preset: preset.clone(),
+                    counter: Some("adam.windows_sandbox.fallback_retry_elevated"),
+                },
+            },
+            ApprovalModeItem {
+                name: "Use non-elevated agent sandbox".to_string(),
+                description: None,
+                is_current: false,
+                disabled_reason: None,
+                action: ApprovalModeAction::EnableWindowsSandboxForAgentMode {
+                    preset,
+                    mode: WindowsSandboxEnableMode::Legacy,
+                    counter: Some("adam.windows_sandbox.fallback_use_legacy"),
+                },
+            },
+            ApprovalModeItem {
+                name: stay_label,
+                description: None,
+                is_current: false,
+                disabled_reason: None,
+                action: ApprovalModeAction::StayInCurrentWindowsMode {
+                    read_only_preset,
+                    counter: "adam.windows_sandbox.fallback_stay_current",
+                },
+            },
+        ];
+        self.approval_mode_modal = Some(ApprovalModeModal::new(header, items));
+        self.chat_widget.request_redraw_for_ui();
+    }
+
+    #[cfg(target_os = "windows")]
+    fn maybe_prompt_windows_sandbox_enable_modal(&mut self) {
+        if self.config.forced_auto_mode_downgraded_on_windows
+            && WindowsSandboxLevel::from_config(&self.config) == WindowsSandboxLevel::Disabled
+            && let Some(preset) = builtin_approval_presets()
+                .into_iter()
+                .find(|preset| preset.id == "auto")
+        {
+            self.open_windows_sandbox_enable_prompt_modal(preset);
+        }
+    }
+
+    fn handle_approval_mode_action(&mut self, action: ApprovalModeAction) {
+        match action {
+            ApprovalModeAction::ApplyPreset { approval, sandbox } => {
+                self.send_approval_preset_events(approval, sandbox);
+            }
+            ApprovalModeAction::OpenApprovals => self.open_approvals_modal(),
+            ApprovalModeAction::OpenPermissions => self.open_permissions_modal(),
+            ApprovalModeAction::OpenFullAccessConfirmation {
+                preset,
+                return_to_permissions,
+            } => {
+                self.open_full_access_confirmation_modal(preset, return_to_permissions);
+            }
+            ApprovalModeAction::OpenWorldWritableWarningConfirmation {
+                preset,
+                sample_paths,
+                extra_count,
+                failed_scan,
+            } => {
+                self.open_world_writable_warning_confirmation_modal(
+                    preset,
+                    sample_paths,
+                    extra_count,
+                    failed_scan,
+                );
+            }
+            #[cfg(target_os = "windows")]
+            ApprovalModeAction::OpenWindowsSandboxEnablePrompt { preset } => {
+                self.open_windows_sandbox_enable_prompt_modal(preset);
+            }
+            ApprovalModeAction::ConfirmFullAccess {
+                approval,
+                sandbox,
+                remember,
+            } => {
+                self.send_approval_preset_events(approval, sandbox);
+                self.app_event_tx
+                    .send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
+                if remember {
+                    self.app_event_tx
+                        .send(AppEvent::PersistFullAccessWarningAcknowledged);
+                }
+            }
+            ApprovalModeAction::ConfirmWorldWritable { preset, remember } => {
+                self.handle_world_writable_confirmation_action(preset, remember);
+            }
+            #[cfg(target_os = "windows")]
+            ApprovalModeAction::BeginWindowsSandboxElevatedSetup { preset, counter } => {
+                if let Some(counter) = counter {
+                    self.otel_manager.counter(counter, 1, &[]);
+                }
+                self.app_event_tx
+                    .send(AppEvent::BeginWindowsSandboxElevatedSetup { preset });
+            }
+            #[cfg(target_os = "windows")]
+            ApprovalModeAction::EnableWindowsSandboxForAgentMode {
+                preset,
+                mode,
+                counter,
+            } => {
+                if let Some(counter) = counter {
+                    self.otel_manager.counter(counter, 1, &[]);
+                }
+                self.app_event_tx
+                    .send(AppEvent::EnableWindowsSandboxForAgentMode { preset, mode });
+            }
+            #[cfg(target_os = "windows")]
+            ApprovalModeAction::StayInCurrentWindowsMode {
+                read_only_preset,
+                counter,
+            } => {
+                self.otel_manager.counter(counter, 1, &[]);
+                if let Some(preset) = read_only_preset {
+                    self.send_approval_preset_events(preset.approval, preset.sandbox);
+                }
+            }
+        }
+    }
+
+    fn handle_world_writable_confirmation_action(
+        &mut self,
+        preset: Option<ApprovalPreset>,
+        remember: bool,
+    ) {
+        if remember {
+            self.app_event_tx
+                .send(AppEvent::UpdateWorldWritableWarningAcknowledged(true));
+            self.app_event_tx
+                .send(AppEvent::PersistWorldWritableWarningAcknowledged);
+        } else if preset.is_some() {
+            self.app_event_tx.send(AppEvent::SkipNextWorldWritableScan);
+        }
+
+        if let Some(preset) = preset {
+            self.send_approval_preset_events(preset.approval, preset.sandbox);
+        }
+    }
+
+    fn send_approval_preset_events(&self, approval: AskForApproval, sandbox: SandboxPolicy) {
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: Some(approval),
+                sandbox_policy: Some(sandbox.clone()),
+                windows_sandbox_level: None,
+                model: None,
+                effort: None,
+                summary: None,
+                identity: None,
+                personality: None,
+            }));
+        self.app_event_tx
+            .send(AppEvent::UpdateAskForApprovalPolicy(approval));
+        self.app_event_tx
+            .send(AppEvent::UpdateSandboxPolicy(sandbox));
     }
 
     fn open_provider_config_modal(&mut self, mode: ProviderConfigModalMode) {
@@ -5528,6 +6152,7 @@ mod tests {
             identity_modal: None,
             model_selection_modal: None,
             experimental_features_modal: None,
+            approval_mode_modal: None,
             agent_selection_modal: None,
             review_modal: None,
             pending_startup_trust_prompt: false,
@@ -5595,6 +6220,7 @@ mod tests {
                 identity_modal: None,
                 model_selection_modal: None,
                 experimental_features_modal: None,
+                approval_mode_modal: None,
                 agent_selection_modal: None,
                 review_modal: None,
                 pending_startup_trust_prompt: false,
@@ -5731,6 +6357,7 @@ show_raw_agent_reasoning = true
             identity_modal: None,
             model_selection_modal: None,
             experimental_features_modal: None,
+            approval_mode_modal: None,
             agent_selection_modal: None,
             review_modal: None,
             pending_startup_trust_prompt: true,
@@ -5984,6 +6611,30 @@ show_raw_agent_reasoning = true
         assert!(
             app.experimental_features_modal.is_some(),
             "expected App to own the /experimental modal"
+        );
+        assert!(app.chat_widget.no_modal_or_popup_active());
+    }
+
+    #[tokio::test]
+    async fn open_approvals_modal_sets_centered_modal() {
+        let mut app = make_test_app().await;
+        app.open_approvals_modal();
+
+        assert!(
+            app.approval_mode_modal.is_some(),
+            "expected App to own the /approvals modal"
+        );
+        assert!(app.chat_widget.no_modal_or_popup_active());
+    }
+
+    #[tokio::test]
+    async fn open_permissions_modal_sets_centered_modal() {
+        let mut app = make_test_app().await;
+        app.open_permissions_modal();
+
+        assert!(
+            app.approval_mode_modal.is_some(),
+            "expected App to own the /permissions modal"
         );
         assert!(app.chat_widget.no_modal_or_popup_active());
     }

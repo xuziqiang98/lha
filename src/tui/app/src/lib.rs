@@ -47,6 +47,7 @@ mod app;
 mod app_backtrack;
 mod app_event;
 mod app_event_sender;
+mod approval_mode_modal;
 mod bottom_pane;
 mod buddy;
 mod changelog;

@@ -195,6 +195,7 @@ pub(crate) enum AppEvent {
     },
 
     /// Open the confirmation prompt before enabling full access mode.
+    #[allow(dead_code)]
     OpenFullAccessConfirmation {
         preset: ApprovalPreset,
         return_to_permissions: bool,

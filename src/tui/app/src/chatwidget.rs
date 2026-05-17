@@ -3136,10 +3136,12 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
             SlashCommand::Approvals => {
-                self.open_approvals_popup();
+                self.app_event_tx.send(AppEvent::OpenApprovalsPopup);
+                self.request_redraw();
             }
             SlashCommand::Permissions => {
-                self.open_permissions_popup();
+                self.app_event_tx.send(AppEvent::OpenPermissionsPopup);
+                self.request_redraw();
             }
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
@@ -4758,16 +4760,19 @@ impl ChatWidget {
     }
 
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
+    #[allow(dead_code)]
     pub(crate) fn open_approvals_popup(&mut self) {
         self.open_approval_mode_popup(true);
     }
 
     /// Open a popup to choose the permissions mode (approval policy + sandbox policy).
+    #[allow(dead_code)]
     pub(crate) fn open_permissions_popup(&mut self) {
         let include_read_only = cfg!(target_os = "windows");
         self.open_approval_mode_popup(include_read_only);
     }
 
+    #[allow(dead_code)]
     fn open_approval_mode_popup(&mut self, include_read_only: bool) {
         let current_approval = self.config.approval_policy.value();
         let current_sandbox = self.config.sandbox_policy.get();
@@ -4894,6 +4899,7 @@ impl ChatWidget {
         });
     }
 
+    #[allow(dead_code)]
     fn approval_preset_actions(
         approval: AskForApproval,
         sandbox: SandboxPolicy,
@@ -4916,7 +4922,7 @@ impl ChatWidget {
         })]
     }
 
-    fn preset_matches_current(
+    pub(crate) fn preset_matches_current(
         current_approval: AskForApproval,
         current_sandbox: &SandboxPolicy,
         preset: &ApprovalPreset,
@@ -4968,6 +4974,7 @@ impl ChatWidget {
         None
     }
 
+    #[allow(dead_code)]
     pub(crate) fn open_full_access_confirmation(
         &mut self,
         preset: ApprovalPreset,
@@ -5041,6 +5048,7 @@ impl ChatWidget {
     }
 
     #[cfg(target_os = "windows")]
+    #[allow(dead_code)]
     pub(crate) fn open_world_writable_warning_confirmation(
         &mut self,
         preset: Option<ApprovalPreset>,
@@ -5142,6 +5150,7 @@ impl ChatWidget {
     }
 
     #[cfg(not(target_os = "windows"))]
+    #[allow(dead_code)]
     pub(crate) fn open_world_writable_warning_confirmation(
         &mut self,
         _preset: Option<ApprovalPreset>,
@@ -5152,6 +5161,7 @@ impl ChatWidget {
     }
 
     #[cfg(target_os = "windows")]
+    #[allow(dead_code)]
     pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, preset: ApprovalPreset) {
         use ratatui_macros::line;
 
@@ -5284,9 +5294,11 @@ impl ChatWidget {
     }
 
     #[cfg(not(target_os = "windows"))]
+    #[allow(dead_code)]
     pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, _preset: ApprovalPreset) {}
 
     #[cfg(target_os = "windows")]
+    #[allow(dead_code)]
     pub(crate) fn open_windows_sandbox_fallback_prompt(
         &mut self,
         preset: ApprovalPreset,
@@ -5398,6 +5410,7 @@ impl ChatWidget {
     }
 
     #[cfg(not(target_os = "windows"))]
+    #[allow(dead_code)]
     pub(crate) fn open_windows_sandbox_fallback_prompt(
         &mut self,
         _preset: ApprovalPreset,
@@ -5406,6 +5419,7 @@ impl ChatWidget {
     }
 
     #[cfg(target_os = "windows")]
+    #[allow(dead_code)]
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {
         if self.config.forced_auto_mode_downgraded_on_windows
             && WindowsSandboxLevel::from_config(&self.config) == WindowsSandboxLevel::Disabled
@@ -5418,6 +5432,7 @@ impl ChatWidget {
     }
 
     #[cfg(not(target_os = "windows"))]
+    #[allow(dead_code)]
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {}
 
     #[cfg(target_os = "windows")]
