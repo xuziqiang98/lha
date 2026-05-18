@@ -3251,6 +3251,21 @@ impl ChatWidget {
                 self.prepare_slash_command_transcript_output();
                 self.add_status_output();
             }
+            SlashCommand::Plan => {
+                if self
+                    .transcript
+                    .borrow_mut()
+                    .scroll_to_latest_proposed_plan()
+                {
+                    self.request_redraw();
+                } else {
+                    self.scroll_transcript_to_bottom();
+                    self.add_info_message(
+                        "No proposed plan found in this session.".to_string(),
+                        Some("Ask Adam to create a plan first.".to_string()),
+                    );
+                }
+            }
             SlashCommand::Bottom => {
                 self.scroll_transcript_to_bottom();
             }

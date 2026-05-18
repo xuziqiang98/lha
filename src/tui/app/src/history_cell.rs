@@ -2165,6 +2165,10 @@ pub(crate) fn new_proposed_plan_stream(
     }
 }
 
+pub(crate) fn is_proposed_plan_cell(cell: &dyn HistoryCell) -> bool {
+    cell.as_any().is::<ProposedPlanCell>() || cell.as_any().is::<ProposedPlanStreamCell>()
+}
+
 pub(crate) fn style_proposed_plan_body_lines(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
     let plan_style = proposed_plan_style();
     lines

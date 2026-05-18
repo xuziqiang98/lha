@@ -2237,6 +2237,17 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
     s
 }
 
+fn buffer_to_string(buf: &Buffer) -> String {
+    (0..buf.area.height)
+        .map(|y| {
+            (0..buf.area.width)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn live_tail_text(tail: Option<crate::transcript_view::TranscriptLiveTail>) -> String {
     tail.map(|tail| lines_to_single_string(&tail.lines))
         .unwrap_or_default()
@@ -2490,6 +2501,89 @@ async fn slash_status_scrolls_transcript_to_bottom() {
     chat.render(area, &mut buf);
 
     assert_eq!(chat.transcript_scroll_offset(), at_tail);
+}
+
+#[tokio::test]
+async fn slash_plan_scrolls_to_latest_proposed_plan() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.replace_transcript_cells(vec![
+        Arc::new(TallTranscriptCell(30)) as Arc<dyn HistoryCell>,
+        Arc::new(crate::history_cell::new_proposed_plan(
+            "unique slash plan body".to_string(),
+        )),
+        Arc::new(TallTranscriptCell(30)),
+    ]);
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let at_tail = chat.transcript_scroll_offset();
+
+    chat.bottom_pane
+        .set_composer_text("/plan".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let rendered = buffer_to_string(&buf);
+
+    assert!(chat.transcript_scroll_offset() < at_tail);
+    assert!(
+        rendered.contains("unique slash plan body"),
+        "expected latest proposed plan to be visible, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_plan_available_during_task() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.bottom_pane.set_task_running(true);
+    chat.replace_transcript_cells(vec![
+        Arc::new(TallTranscriptCell(30)) as Arc<dyn HistoryCell>,
+        Arc::new(crate::history_cell::new_proposed_plan(
+            "task running plan body".to_string(),
+        )),
+        Arc::new(TallTranscriptCell(30)),
+    ]);
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+
+    chat.bottom_pane
+        .set_composer_text("/plan".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let rendered = buffer_to_string(&buf);
+    let inserted = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+
+    assert!(
+        rendered.contains("task running plan body"),
+        "expected proposed plan to be visible while task is running, got {rendered:?}"
+    );
+    assert!(
+        !inserted.contains("disabled while a task is in progress"),
+        "expected /plan to stay available during tasks, got {inserted:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_plan_without_plan_inserts_info_message() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(20))]);
+
+    chat.bottom_pane
+        .set_composer_text("/plan".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one info message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("No proposed plan found in this session."),
+        "info message should explain that no plan exists: {rendered:?}"
+    );
 }
 
 #[tokio::test]

@@ -36,6 +36,7 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    Plan,
     Bottom,
     Mcp,
     Logout,
@@ -68,6 +69,7 @@ impl SlashCommand {
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Adam performs specific tasks",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Plan => "jump to the latest proposed plan",
             SlashCommand::Bottom => "scroll transcript to the bottom",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Stop => "stop all background terminals",
@@ -120,6 +122,7 @@ impl SlashCommand {
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Status
+            | SlashCommand::Plan
             | SlashCommand::Bottom
             | SlashCommand::Ps
             | SlashCommand::Stop
@@ -199,12 +202,30 @@ mod tests {
     }
 
     #[test]
+    fn plan_command_is_available_during_task() {
+        assert_eq!(SlashCommand::from_str("plan"), Ok(SlashCommand::Plan));
+        assert_eq!(SlashCommand::Plan.command(), "plan");
+        assert!(SlashCommand::Plan.available_during_task());
+    }
+
+    #[test]
     fn built_in_commands_include_bottom() {
         assert!(
             built_in_slash_commands()
                 .into_iter()
                 .any(|(command, slash_command)| {
                     command == "bottom" && slash_command == SlashCommand::Bottom
+                })
+        );
+    }
+
+    #[test]
+    fn built_in_commands_include_plan() {
+        assert!(
+            built_in_slash_commands()
+                .into_iter()
+                .any(|(command, slash_command)| {
+                    command == "plan" && slash_command == SlashCommand::Plan
                 })
         );
     }

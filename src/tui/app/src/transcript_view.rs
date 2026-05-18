@@ -3,7 +3,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::history_cell::HistoryCell;
+use crate::history_cell::ProposedPlanStreamCell;
 use crate::history_cell::UserHistoryCell;
+use crate::history_cell::is_proposed_plan_cell;
 #[cfg(test)]
 use crate::history_cell::new_plan_update;
 #[cfg(test)]
@@ -570,6 +572,44 @@ impl TranscriptView {
         self.scroll_offset != old
             || self.stick_to_bottom != old_stick_to_bottom
             || self.user_scrolled_during_stream != old_user_scrolled_during_stream
+    }
+
+    pub(crate) fn scroll_to_latest_proposed_plan(&mut self) -> bool {
+        let Some(mut target_idx) = self
+            .cells
+            .iter()
+            .rposition(|cell| is_proposed_plan_cell(cell.as_ref()))
+        else {
+            return false;
+        };
+
+        while target_idx > 0
+            && self.cells[target_idx]
+                .as_any()
+                .is::<ProposedPlanStreamCell>()
+            && self.cells[target_idx].is_stream_continuation()
+            && self.cells[target_idx - 1]
+                .as_any()
+                .is::<ProposedPlanStreamCell>()
+        {
+            target_idx -= 1;
+        }
+
+        let width = self.last_width.unwrap_or(80).max(1);
+        let target_offset = self
+            .renderables
+            .iter()
+            .take(target_idx)
+            .map(|renderable| renderable.desired_height(width) as usize)
+            .sum::<usize>();
+        let max_scroll = self
+            .last_rendered_height
+            .unwrap_or_else(|| self.content_height(width))
+            .saturating_sub(self.last_content_height.unwrap_or(1));
+        self.scroll_offset = target_offset.min(max_scroll);
+        self.stick_to_bottom = false;
+        self.user_scrolled_during_stream = true;
+        true
     }
 
     pub(crate) fn is_scrolled_to_bottom(&self) -> bool {
@@ -2830,6 +2870,101 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("newest")),
             "expected newest inserted cell to remain visible"
+        );
+    }
+
+    #[test]
+    fn scroll_to_latest_proposed_plan_returns_false_without_plan() {
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(TestCell("not a plan"))]);
+
+        assert!(!view.scroll_to_latest_proposed_plan());
+    }
+
+    #[test]
+    fn scroll_to_latest_proposed_plan_scrolls_to_completed_plan() {
+        let mut view = TranscriptView::new_transcript(vec![
+            Arc::new(FixedHeightCell(20)) as Arc<dyn HistoryCell>,
+            Arc::new(new_proposed_plan("unique completed plan body".to_string())),
+            Arc::new(FixedHeightCell(20)),
+        ]);
+        let area = Rect::new(0, 0, 40, 6);
+        let mut buf = Buffer::empty(area);
+        view.render_inline(area, &mut buf);
+        view.scroll_to_bottom();
+
+        assert!(view.scroll_to_latest_proposed_plan());
+
+        let mut buf = Buffer::empty(area);
+        view.render_inline(area, &mut buf);
+        let rendered = area_lines(&buf, area).join("\n");
+        assert!(
+            rendered.contains("unique completed plan body"),
+            "expected completed plan body to be visible, got {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn scroll_to_latest_proposed_plan_uses_latest_plan() {
+        let mut view = TranscriptView::new_transcript(vec![
+            Arc::new(new_proposed_plan("older plan body".to_string())) as Arc<dyn HistoryCell>,
+            Arc::new(FixedHeightCell(20)),
+            Arc::new(new_proposed_plan("newer plan body".to_string())),
+            Arc::new(FixedHeightCell(20)),
+        ]);
+        let area = Rect::new(0, 0, 40, 6);
+        let mut buf = Buffer::empty(area);
+        view.render_inline(area, &mut buf);
+        view.scroll_to_bottom();
+
+        assert!(view.scroll_to_latest_proposed_plan());
+
+        let mut buf = Buffer::empty(area);
+        view.render_inline(area, &mut buf);
+        let rendered = area_lines(&buf, area).join("\n");
+        assert!(
+            rendered.contains("newer plan body"),
+            "expected newest plan body to be visible, got {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("older plan body"),
+            "expected older plan body to remain hidden, got {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn scroll_to_latest_proposed_plan_starts_streamed_plan_group() {
+        let mut view = TranscriptView::new_transcript(vec![
+            Arc::new(FixedHeightCell(20)) as Arc<dyn HistoryCell>,
+            Arc::new(new_proposed_plan_stream(
+                vec![
+                    vec!["• ".dim(), "Proposed Plan".bold()].into(),
+                    Line::from("  first streamed chunk").style(proposed_plan_style()),
+                ],
+                false,
+            )),
+            Arc::new(new_proposed_plan_stream(
+                vec![Line::from("  second streamed chunk").style(proposed_plan_style())],
+                true,
+            )),
+            Arc::new(new_proposed_plan_stream(
+                vec![Line::from("  third streamed chunk").style(proposed_plan_style())],
+                true,
+            )),
+            Arc::new(FixedHeightCell(20)),
+        ]);
+        let area = Rect::new(0, 0, 40, 4);
+        let mut buf = Buffer::empty(area);
+        view.render_inline(area, &mut buf);
+        view.scroll_to_bottom();
+
+        assert!(view.scroll_to_latest_proposed_plan());
+
+        let mut buf = Buffer::empty(area);
+        view.render_inline(area, &mut buf);
+        let rendered = area_lines(&buf, area).join("\n");
+        assert!(
+            rendered.contains("first streamed chunk"),
+            "expected first streamed plan chunk to be visible, got {rendered:?}"
         );
     }
 
