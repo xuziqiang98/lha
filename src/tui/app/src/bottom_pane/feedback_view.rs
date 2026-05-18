@@ -117,6 +117,10 @@ impl FeedbackNoteView {
 }
 
 impl BottomPaneView for FeedbackNoteView {
+    fn allow_background_transcript_interaction(&self) -> bool {
+        true
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
@@ -348,6 +352,7 @@ pub(crate) fn feedback_selection_params(
                 FeedbackCategory::Other,
             ),
         ],
+        allow_background_transcript_interaction: true,
         ..Default::default()
     }
 }
@@ -363,6 +368,7 @@ pub(crate) fn feedback_disabled_params() -> super::SelectionViewParams {
             dismiss_on_select: true,
             ..Default::default()
         }],
+        allow_background_transcript_interaction: true,
         ..Default::default()
     }
 }
@@ -450,6 +456,7 @@ pub(crate) fn feedback_upload_consent_params(
         header: Box::new(crate::render::renderable::ColumnRenderable::with(
             header_lines,
         )),
+        allow_background_transcript_interaction: true,
         ..Default::default()
     }
 }

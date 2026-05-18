@@ -5899,6 +5899,62 @@ async fn feedback_selection_popup_snapshot() {
 }
 
 #[tokio::test]
+async fn feedback_selection_popup_allows_transcript_mouse_selection() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    chat.dispatch_command(SlashCommand::Feedback);
+
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let transcript_area = chat
+        .cached_transcript_area()
+        .expect("transcript area cached");
+
+    chat.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: transcript_area.x,
+        row: transcript_area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    chat.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: transcript_area.x.saturating_add(5),
+        row: transcript_area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert!(chat.transcript.borrow().selection_active_for_test());
+}
+
+#[tokio::test]
+async fn feedback_selection_popup_ignores_mouse_selection_in_bottom_pane() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    chat.dispatch_command(SlashCommand::Feedback);
+
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let bottom_area = chat.cached_bottom_area().expect("bottom area cached");
+
+    chat.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: bottom_area.x,
+        row: bottom_area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    chat.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: bottom_area.x.saturating_add(5),
+        row: bottom_area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert!(!chat.transcript.borrow().selection_active_for_test());
+}
+
+#[tokio::test]
 async fn feedback_upload_consent_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
@@ -5907,6 +5963,94 @@ async fn feedback_upload_consent_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("feedback_upload_consent_popup", popup);
+}
+
+#[tokio::test]
+async fn feedback_upload_consent_popup_allows_transcript_page_scroll() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let at_tail = chat.transcript_scroll_offset();
+
+    chat.open_feedback_consent(crate::app_event::FeedbackCategory::Bug);
+    chat.handle_key_event(KeyEvent::from(KeyCode::PageUp));
+
+    assert!(chat.transcript_scroll_offset() < at_tail);
+}
+
+#[tokio::test]
+async fn feedback_upload_consent_popup_keeps_arrow_keys_for_selection() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let at_tail = chat.transcript_scroll_offset();
+
+    chat.open_feedback_consent(crate::app_event::FeedbackCategory::Bug);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+
+    assert_eq!(chat.transcript_scroll_offset(), at_tail);
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(popup.contains("› 2. No"));
+}
+
+#[tokio::test]
+async fn feedback_note_view_allows_transcript_mouse_selection() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    chat.open_feedback_note(crate::app_event::FeedbackCategory::Bug, true);
+
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let transcript_area = chat
+        .cached_transcript_area()
+        .expect("transcript area cached");
+
+    chat.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: transcript_area.x,
+        row: transcript_area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    chat.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: transcript_area.x.saturating_add(5),
+        row: transcript_area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert!(chat.transcript.borrow().selection_active_for_test());
+}
+
+#[tokio::test]
+async fn feedback_note_view_ignores_mouse_selection_in_bottom_pane() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    chat.open_feedback_note(crate::app_event::FeedbackCategory::Bug, true);
+
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let bottom_area = chat.cached_bottom_area().expect("bottom area cached");
+
+    chat.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: bottom_area.x,
+        row: bottom_area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    chat.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: bottom_area.x.saturating_add(5),
+        row: bottom_area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert!(!chat.transcript.borrow().selection_active_for_test());
 }
 
 #[tokio::test]
