@@ -3069,6 +3069,7 @@ impl ChatWidget {
 
     fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+            self.prepare_slash_command_transcript_output();
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
                 cmd.command()
@@ -3101,6 +3102,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
             }
             SlashCommand::Init => {
+                self.prepare_slash_command_transcript_output();
                 let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
                 if init_target.exists() {
                     let message = format!(
@@ -3113,6 +3115,7 @@ impl ChatWidget {
                 self.submit_user_message(INIT_PROMPT.to_string().into());
             }
             SlashCommand::Compact => {
+                self.prepare_slash_command_transcript_output();
                 self.clear_token_usage();
                 self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
             }
@@ -3204,6 +3207,7 @@ impl ChatWidget {
                 self.request_redraw();
             }
             SlashCommand::Buddy => {
+                self.prepare_slash_command_transcript_output();
                 self.show_buddy_status();
             }
             SlashCommand::Quit | SlashCommand::Exit => {
@@ -3233,6 +3237,7 @@ impl ChatWidget {
                 });
             }
             SlashCommand::Changelog => {
+                self.prepare_slash_command_transcript_output();
                 self.app_event_tx.send(AppEvent::RequestChangelog);
             }
             SlashCommand::Mention => {
@@ -3243,15 +3248,18 @@ impl ChatWidget {
                 self.request_redraw();
             }
             SlashCommand::Status => {
+                self.prepare_slash_command_transcript_output();
                 self.add_status_output();
             }
             SlashCommand::Bottom => {
                 self.scroll_transcript_to_bottom();
             }
             SlashCommand::Ps => {
+                self.prepare_slash_command_transcript_output();
                 self.add_ps_output();
             }
             SlashCommand::Stop => {
+                self.prepare_slash_command_transcript_output();
                 self.clean_background_terminals();
             }
             SlashCommand::Mcp => {
@@ -3259,6 +3267,7 @@ impl ChatWidget {
                 self.request_redraw();
             }
             SlashCommand::Rollout => {
+                self.prepare_slash_command_transcript_output();
                 if let Some(path) = self.rollout_path() {
                     self.add_info_message(
                         format!("Current rollout path: {}", path.display()),
@@ -3311,6 +3320,7 @@ impl ChatWidget {
 
     fn dispatch_command_with_args(&mut self, cmd: SlashCommand, args: String) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+            self.prepare_slash_command_transcript_output();
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
                 cmd.command()
@@ -3323,6 +3333,7 @@ impl ChatWidget {
         let trimmed = args.trim();
         match cmd {
             SlashCommand::Rename if !trimmed.is_empty() => {
+                self.prepare_slash_command_transcript_output();
                 let Some(name) = adam_agent::util::normalize_thread_name(trimmed) else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
                     return;
@@ -3338,9 +3349,11 @@ impl ChatWidget {
                 self.dispatch_command(cmd);
             }
             SlashCommand::Buddy => {
+                self.prepare_slash_command_transcript_output();
                 self.dispatch_buddy_command(trimmed);
             }
             SlashCommand::Review if !trimmed.is_empty() => {
+                self.prepare_slash_command_transcript_output();
                 self.app_event_tx.send(AppEvent::StartReview {
                     review_request: ReviewRequest {
                         target: ReviewTarget::Custom {
@@ -3352,6 +3365,10 @@ impl ChatWidget {
             }
             _ => self.dispatch_command(cmd),
         }
+    }
+
+    fn prepare_slash_command_transcript_output(&mut self) {
+        self.scroll_transcript_to_bottom();
     }
 
     pub(crate) fn set_buddy_config(&mut self, config: TuiBuddy) {
@@ -6356,7 +6373,7 @@ impl ChatWidget {
         self.transcript.borrow().scroll_offset()
     }
 
-    fn scroll_transcript_to_bottom(&mut self) {
+    pub(crate) fn scroll_transcript_to_bottom(&mut self) {
         if self.transcript.borrow_mut().scroll_to_bottom() {
             self.request_redraw();
         }

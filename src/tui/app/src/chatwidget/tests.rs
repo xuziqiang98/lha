@@ -2472,6 +2472,100 @@ async fn replay_turn_complete_does_not_force_transcript_to_bottom() {
 }
 
 #[tokio::test]
+async fn slash_status_scrolls_transcript_to_bottom() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let at_tail = chat.transcript_scroll_offset();
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::PageUp));
+    assert!(chat.transcript_scroll_offset() < at_tail);
+
+    chat.bottom_pane
+        .set_composer_text("/status".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+
+    assert_eq!(chat.transcript_scroll_offset(), at_tail);
+}
+
+#[tokio::test]
+async fn slash_model_does_not_scroll_transcript_to_bottom() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let at_tail = chat.transcript_scroll_offset();
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::PageUp));
+    let scrolled_up = chat.transcript_scroll_offset();
+    assert!(scrolled_up < at_tail);
+
+    chat.bottom_pane
+        .set_composer_text("/model".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+
+    assert_eq!(chat.transcript_scroll_offset(), scrolled_up);
+}
+
+#[tokio::test]
+async fn slash_rename_with_args_scrolls_transcript_to_bottom() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let at_tail = chat.transcript_scroll_offset();
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::PageUp));
+    assert!(chat.transcript_scroll_offset() < at_tail);
+
+    chat.dispatch_command_with_args(SlashCommand::Rename, "new-name".to_string());
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+
+    assert_eq!(chat.transcript_scroll_offset(), at_tail);
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        !cells.is_empty(),
+        "expected rename command to insert a confirmation cell"
+    );
+}
+
+#[tokio::test]
+async fn disabled_slash_command_error_scrolls_transcript_to_bottom() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.bottom_pane.set_task_running(true);
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let at_tail = chat.transcript_scroll_offset();
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::PageUp));
+    assert!(chat.transcript_scroll_offset() < at_tail);
+
+    chat.bottom_pane
+        .set_composer_text("/model".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+
+    assert_eq!(chat.transcript_scroll_offset(), at_tail);
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        !cells.is_empty(),
+        "expected disabled slash command to insert an error cell"
+    );
+}
+
+#[tokio::test]
 async fn mouse_down_in_bottom_pane_does_not_start_transcript_selection() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);

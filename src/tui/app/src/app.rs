@@ -913,6 +913,32 @@ impl App {
         self.chat_widget.insert_transcript_cell(cell);
     }
 
+    fn insert_changelog_result(&mut self, result: Result<ChangelogOutput, String>) {
+        match result {
+            Ok(ChangelogOutput::Entries {
+                display_root,
+                entries,
+            }) => {
+                if entries.is_empty() {
+                    self.insert_history_cell_state(Arc::new(history_cell::new_info_event(
+                        "No changes detected.".to_string(),
+                        None,
+                    )));
+                } else {
+                    self.insert_history_cell_state(Arc::new(history_cell::new_changelog_output(
+                        entries,
+                        &self.config.cwd,
+                        &display_root,
+                    )));
+                }
+            }
+            Err(err) => self.insert_history_cell_state(Arc::new(history_cell::new_error_event(
+                format!("Failed to collect changelog: {err}"),
+            ))),
+        }
+        self.chat_widget.scroll_transcript_to_bottom();
+    }
+
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
         tui: &mut tui::Tui,
@@ -3425,37 +3451,10 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::ChangelogResult(result) => match result {
-                Ok(ChangelogOutput::Entries {
-                    display_root,
-                    entries,
-                }) => {
-                    if entries.is_empty() {
-                        self.insert_history_cell(
-                            Box::new(history_cell::new_info_event(
-                                "No changes detected.".to_string(),
-                                None,
-                            )),
-                            tui,
-                        );
-                    } else {
-                        self.insert_history_cell(
-                            Box::new(history_cell::new_changelog_output(
-                                entries,
-                                &self.config.cwd,
-                                &display_root,
-                            )),
-                            tui,
-                        );
-                    }
-                }
-                Err(err) => self.insert_history_cell(
-                    Box::new(history_cell::new_error_event(format!(
-                        "Failed to collect changelog: {err}"
-                    ))),
-                    tui,
-                ),
-            },
+            AppEvent::ChangelogResult(result) => {
+                self.insert_changelog_result(result);
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::OpenAppLink {
                 title,
                 description,
@@ -5255,6 +5254,7 @@ mod tests {
     use mcp_types::Tool;
     use mcp_types::ToolInputSchema;
     use pretty_assertions::assert_eq;
+    use ratatui::buffer::Buffer;
     use ratatui::prelude::Line;
     use std::path::Path;
     use std::path::PathBuf;
@@ -5684,6 +5684,39 @@ mod tests {
             }
             other => panic!("expected changelog error result, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn changelog_result_scrolls_transcript_to_bottom() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        app.chat_widget
+            .replace_transcript_cells(vec![Arc::new(PlainHistoryCell::new(
+                (0..40)
+                    .map(|idx| Line::from(format!("transcript line {idx}")))
+                    .collect(),
+            ))]);
+        let area = Rect::new(0, 0, 80, 18);
+        let mut buf = Buffer::empty(area);
+        app.chat_widget.render(area, &mut buf);
+        let at_tail = app.chat_widget.transcript_scroll_offset();
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::from(KeyCode::PageUp));
+        let scrolled_up = app.chat_widget.transcript_scroll_offset();
+        assert!(scrolled_up < at_tail);
+
+        app.insert_changelog_result(Ok(ChangelogOutput::Entries {
+            display_root: app.config.cwd.clone(),
+            entries: vec![crate::changelog::ChangelogEntry {
+                kind: crate::changelog::ChangelogKind::Modified,
+                path: app.config.cwd.join("changed.txt"),
+            }],
+        }));
+        let mut buf = Buffer::empty(area);
+        app.chat_widget.render(area, &mut buf);
+
+        assert!(app.chat_widget.transcript_scroll_offset() > scrolled_up);
+        assert_eq!(app.transcript_cells.len(), 1);
     }
 
     #[tokio::test]
