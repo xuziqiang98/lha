@@ -607,8 +607,13 @@ impl TranscriptView {
             .unwrap_or_else(|| self.content_height(width))
             .saturating_sub(self.last_content_height.unwrap_or(1));
         self.scroll_offset = target_offset.min(max_scroll);
-        self.stick_to_bottom = false;
-        self.user_scrolled_during_stream = true;
+        if self.scroll_offset >= max_scroll {
+            self.stick_to_bottom = true;
+            self.user_scrolled_during_stream = false;
+        } else {
+            self.stick_to_bottom = false;
+            self.user_scrolled_during_stream = true;
+        }
         true
     }
 
@@ -2901,6 +2906,7 @@ mod tests {
             rendered.contains("unique completed plan body"),
             "expected completed plan body to be visible, got {rendered:?}"
         );
+        assert!(!view.is_scrolled_to_bottom());
     }
 
     #[test]
@@ -2965,6 +2971,61 @@ mod tests {
         assert!(
             rendered.contains("first streamed chunk"),
             "expected first streamed plan chunk to be visible, got {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn scroll_to_latest_proposed_plan_keeps_follow_bottom_when_plan_is_at_bottom() {
+        let mut view = TranscriptView::new_transcript(vec![
+            Arc::new(FixedHeightCell(20)) as Arc<dyn HistoryCell>,
+            Arc::new(new_proposed_plan("bottom plan body".to_string())),
+        ]);
+        let area = Rect::new(0, 0, 40, 6);
+
+        view.render_inline(area, &mut Buffer::empty(area));
+        assert!(view.is_scrolled_to_bottom());
+
+        assert!(view.scroll_to_latest_proposed_plan());
+        assert!(view.is_scrolled_to_bottom());
+
+        view.insert_cell(Arc::new(TestCell("newest tail")));
+        let mut buf = Buffer::empty(area);
+        view.render_inline(area, &mut buf);
+
+        assert!(view.is_scrolled_to_bottom());
+        assert!(
+            area_lines(&buf, area)
+                .iter()
+                .any(|line| line.contains("newest tail")),
+            "expected newest inserted cell to remain visible after /plan at bottom"
+        );
+    }
+
+    #[test]
+    fn scroll_to_latest_proposed_plan_keeps_follow_bottom_when_transcript_is_short() {
+        let mut view = TranscriptView::new_transcript(vec![Arc::new(new_proposed_plan(
+            "short plan body".to_string(),
+        ))]);
+        let area = Rect::new(0, 0, 40, 12);
+
+        view.render_inline(area, &mut Buffer::empty(area));
+        assert!(view.is_scrolled_to_bottom());
+
+        assert!(view.scroll_to_latest_proposed_plan());
+        assert!(view.is_scrolled_to_bottom());
+
+        for i in 0..8 {
+            view.insert_cell(Arc::new(OwnedTestCell(format!("tail-{i}"))));
+        }
+        let mut buf = Buffer::empty(area);
+        view.render_inline(area, &mut buf);
+
+        assert!(view.is_scrolled_to_bottom());
+        assert!(
+            area_lines(&buf, area)
+                .iter()
+                .any(|line| line.contains("tail-7")),
+            "expected newest tail to remain visible after /plan on short transcript"
         );
     }
 
