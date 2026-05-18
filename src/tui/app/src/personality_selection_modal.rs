@@ -104,6 +104,22 @@ impl PersonalitySelectionModal {
                 PersonalitySelectionModalAction::None
             }
             KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if c.is_ascii_digit() => {
+                if let Some(idx) = c
+                    .to_digit(10)
+                    .map(|digit| digit as usize)
+                    .and_then(|digit| digit.checked_sub(1))
+                    && idx < Self::personalities().len()
+                {
+                    self.selected_idx = idx;
+                    return self.selected_action();
+                }
+                PersonalitySelectionModalAction::None
+            }
+            KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
                 ..
@@ -402,6 +418,42 @@ mod tests {
             PersonalitySelectionModalAction::Select {
                 personality: Personality::Friendly,
             }
+        );
+    }
+
+    #[test]
+    fn digit_selects_matching_personality() {
+        let mut modal = PersonalitySelectionModal::new(Personality::Friendly);
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE)),
+            PersonalitySelectionModalAction::Select {
+                personality: Personality::Pragmatic,
+            }
+        );
+
+        let mut modal = PersonalitySelectionModal::new(Personality::Pragmatic);
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE)),
+            PersonalitySelectionModalAction::Select {
+                personality: Personality::Friendly,
+            }
+        );
+    }
+
+    #[test]
+    fn invalid_digit_shortcut_does_not_select_personality() {
+        let mut modal = PersonalitySelectionModal::new(Personality::Friendly);
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Char('0'), KeyModifiers::NONE)),
+            PersonalitySelectionModalAction::None
+        );
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE)),
+            PersonalitySelectionModalAction::None
         );
     }
 
