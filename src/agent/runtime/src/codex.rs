@@ -2765,8 +2765,8 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 handlers::get_history_entry_request(&sess, &config, sub.id.clone(), offset, log_id)
                     .await;
             }
-            Op::ListMcpTools => {
-                handlers::list_mcp_tools(&sess, &config, sub.id.clone()).await;
+            Op::ListMcpTools { request_id } => {
+                handlers::list_mcp_tools(&sess, &config, sub.id.clone(), request_id).await;
             }
             Op::RefreshMcpServers { config } => {
                 handlers::refresh_mcp_servers(&sess, config).await;
@@ -3137,15 +3137,21 @@ mod handlers {
         *guard = Some(refresh_config);
     }
 
-    pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
+    pub async fn list_mcp_tools(
+        sess: &Session,
+        config: &Arc<Config>,
+        sub_id: String,
+        request_id: Option<u64>,
+    ) {
         let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
         let mcp_servers = effective_mcp_servers(config);
-        let snapshot = collect_mcp_snapshot_from_manager(
+        let mut snapshot = collect_mcp_snapshot_from_manager(
             &mcp_connection_manager,
             compute_auth_statuses(mcp_servers.iter(), config.mcp_oauth_credentials_store_mode)
                 .await,
         )
         .await;
+        snapshot.request_id = request_id;
         let event = Event {
             id: sub_id,
             msg: EventMsg::McpListToolsResponse(snapshot),

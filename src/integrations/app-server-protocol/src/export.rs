@@ -106,12 +106,7 @@ pub fn generate_ts_with_options(
     }
 
     // Ensure our header is present on all TS files (root + subdirs like v2/).
-    let mut ts_files = Vec::new();
-    let should_collect_ts_files =
-        options.ensure_headers || (options.run_prettier && prettier.is_some());
-    if should_collect_ts_files {
-        ts_files = ts_files_in_recursive(out_dir)?;
-    }
+    let ts_files = ts_files_in_recursive(out_dir)?;
 
     if options.ensure_headers {
         for file in &ts_files {
@@ -134,6 +129,10 @@ pub fn generate_ts_with_options(
         if !status.success() {
             return Err(anyhow!("Prettier failed with status {status}"));
         }
+    }
+
+    for file in &ts_files {
+        trim_trailing_whitespace(file)?;
     }
 
     Ok(())
@@ -658,6 +657,25 @@ fn prepend_header_if_missing(path: &Path) -> Result<()> {
         .with_context(|| format!("Failed to write header to {}", path.display()))?;
     f.write_all(content.as_bytes())
         .with_context(|| format!("Failed to write content to {}", path.display()))?;
+    Ok(())
+}
+
+fn trim_trailing_whitespace(path: &Path) -> Result<()> {
+    let content =
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
+    let mut trimmed = String::with_capacity(content.len());
+    for line in content.split_inclusive('\n') {
+        if let Some(line) = line.strip_suffix('\n') {
+            trimmed.push_str(line.trim_end());
+            trimmed.push('\n');
+        } else {
+            trimmed.push_str(line.trim_end());
+        }
+    }
+
+    if trimmed != content {
+        fs::write(path, trimmed).with_context(|| format!("Failed to write {}", path.display()))?;
+    }
     Ok(())
 }
 

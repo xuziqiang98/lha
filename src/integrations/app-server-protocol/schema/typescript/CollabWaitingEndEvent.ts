@@ -5,19 +5,19 @@ import type { AgentStatus } from "./AgentStatus";
 import type { CollabAgentStatusEntry } from "./CollabAgentStatusEntry";
 import type { ThreadId } from "./ThreadId";
 
-export type CollabWaitingEndEvent = { 
+export type CollabWaitingEndEvent = {
 /**
  * Thread ID of the sender.
  */
-sender_thread_id: ThreadId, 
+sender_thread_id: ThreadId,
 /**
  * ID of the waiting call.
  */
-call_id: string, 
+call_id: string,
 /**
  * Last known status of the receiver agents reported to the sender agent.
  */
-statuses: { [key in ThreadId]?: AgentStatus }, 
+statuses: { [key in ThreadId]?: AgentStatus },
 /**
  * Receiver metadata paired with statuses for richer UI rendering.
  */

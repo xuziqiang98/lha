@@ -6,19 +6,23 @@ import type { Resource } from "./Resource";
 import type { ResourceTemplate } from "./ResourceTemplate";
 import type { Tool } from "./Tool";
 
-export type McpListToolsResponseEvent = { 
+export type McpListToolsResponseEvent = {
+/**
+ * Optional client-generated id used to correlate modal-only requests.
+ */
+request_id?: bigint,
 /**
  * Fully qualified tool name -> tool definition.
  */
-tools: { [key in string]?: Tool }, 
+tools: { [key in string]?: Tool },
 /**
  * Known resources grouped by server name.
  */
-resources: { [key in string]?: Array<Resource> }, 
+resources: { [key in string]?: Array<Resource> },
 /**
  * Known resource templates grouped by server name.
  */
-resource_templates: { [key in string]?: Array<ResourceTemplate> }, 
+resource_templates: { [key in string]?: Array<ResourceTemplate> },
 /**
  * Authentication status for each configured MCP server.
  */

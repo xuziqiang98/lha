@@ -260,7 +260,11 @@ pub enum Op {
 
     /// Request the list of MCP tools available across all configured servers.
     /// Reply is delivered via `EventMsg::McpListToolsResponse`.
-    ListMcpTools,
+    ListMcpTools {
+        /// Optional client-generated id used to correlate modal-only requests.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<u64>,
+    },
 
     /// Request MCP servers to reinitialize and refresh cached tool lists.
     RefreshMcpServers { config: McpServerRefreshConfig },
@@ -2072,6 +2076,10 @@ pub struct GetHistoryEntryResponseEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct McpListToolsResponseEvent {
+    /// Optional client-generated id used to correlate modal-only requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub request_id: Option<u64>,
     /// Fully qualified tool name -> tool definition.
     pub tools: std::collections::HashMap<String, McpTool>,
     /// Known resources grouped by server name.
@@ -2589,6 +2597,39 @@ mod tests {
         };
         assert!(enabled.has_full_disk_write_access());
         assert!(enabled.has_full_network_access());
+    }
+
+    #[test]
+    fn list_mcp_tools_deserializes_without_request_id() -> Result<()> {
+        let value = json!({
+            "type": "list_mcp_tools"
+        });
+
+        assert_eq!(
+            serde_json::from_value::<Op>(value)?,
+            Op::ListMcpTools { request_id: None }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn list_mcp_tools_round_trips_request_id() -> Result<()> {
+        let op = Op::ListMcpTools {
+            request_id: Some(42),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&op)?,
+            json!({
+                "type": "list_mcp_tools",
+                "request_id": 42
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<Op>(serde_json::to_value(&op)?)?,
+            op
+        );
+        Ok(())
     }
 
     #[test]

@@ -93,10 +93,17 @@ impl McpToolsModal {
         self.scroll_top = 0;
     }
 
-    pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) -> McpToolsModalAction {
+    pub(crate) fn handle_key_event(
+        &mut self,
+        key_event: KeyEvent,
+        area: Rect,
+    ) -> McpToolsModalAction {
         if !matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
             return McpToolsModalAction::None;
         }
+
+        let max_scroll = self.max_scroll_for_area(area);
+        self.scroll_top = self.scroll_top.min(max_scroll);
 
         match key_event {
             KeyEvent {
@@ -147,7 +154,7 @@ impl McpToolsModal {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.scroll_top = self.scroll_top.saturating_add(1);
+                self.scroll_top = self.scroll_top.saturating_add(1).min(max_scroll);
                 McpToolsModalAction::None
             }
             KeyEvent {
@@ -161,7 +168,7 @@ impl McpToolsModal {
                 code: KeyCode::PageDown,
                 ..
             } => {
-                self.scroll_top = self.scroll_top.saturating_add(8);
+                self.scroll_top = self.scroll_top.saturating_add(8).min(max_scroll);
                 McpToolsModalAction::None
             }
             KeyEvent {
@@ -174,7 +181,7 @@ impl McpToolsModal {
             KeyEvent {
                 code: KeyCode::End, ..
             } => {
-                self.scroll_top = usize::MAX;
+                self.scroll_top = max_scroll;
                 McpToolsModalAction::None
             }
             _ => McpToolsModalAction::None,
@@ -334,6 +341,29 @@ impl McpToolsModal {
             width,
             height,
         }
+    }
+
+    fn max_scroll_for_area(&self, area: Rect) -> usize {
+        if area.is_empty() {
+            return 0;
+        }
+
+        let modal_area = self.modal_area(area);
+        let inner_area = Block::default().borders(Borders::ALL).inner(modal_area);
+        let content_area = inner_area.inset(Insets::vh(1, 2));
+        if content_area.is_empty() {
+            return 0;
+        }
+
+        let lines = self.render_lines(content_area.width.max(1) as usize);
+        let footer_height = (lines.footer.len() as u16).min(content_area.height);
+        let header_height =
+            (lines.header.len() as u16).min(content_area.height.saturating_sub(footer_height));
+        let body_height = content_area
+            .height
+            .saturating_sub(header_height)
+            .saturating_sub(footer_height);
+        lines.body.len().saturating_sub(body_height as usize)
     }
 }
 
@@ -855,6 +885,7 @@ mod tests {
         modal.set_snapshot(
             &config,
             McpListToolsResponseEvent {
+                request_id: None,
                 tools,
                 resources,
                 resource_templates,
@@ -879,18 +910,83 @@ mod tests {
     async fn escape_and_control_shortcuts_exit() {
         let config = test_config().await;
         let mut modal = McpToolsModal::new_empty(&config);
+        let area = Rect::new(0, 0, 100, 32);
 
         assert_eq!(
-            modal.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            modal.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), area),
             McpToolsModalAction::Exit
         );
         assert_eq!(
-            modal.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            modal.handle_key_event(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                area,
+            ),
             McpToolsModalAction::Exit
         );
         assert_eq!(
-            modal.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL)),
+            modal.handle_key_event(
+                KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+                area,
+            ),
             McpToolsModalAction::Exit
         );
+    }
+
+    async fn ready_modal_with_servers(count: usize) -> McpToolsModal {
+        let mut config = test_config().await;
+        let mut servers = config.mcp_servers.get().clone();
+        for idx in 0..count {
+            servers.insert(format!("docs-{idx:02}"), stdio_server(None));
+        }
+        config.mcp_servers.set(servers).expect("mcp servers");
+
+        let mut modal = McpToolsModal::new_loading(&config);
+        modal.set_snapshot(
+            &config,
+            McpListToolsResponseEvent {
+                request_id: None,
+                tools: HashMap::new(),
+                resources: HashMap::new(),
+                resource_templates: HashMap::new(),
+                auth_statuses: HashMap::new(),
+            },
+        );
+        modal
+    }
+
+    #[tokio::test]
+    async fn end_then_up_scrolls_above_bottom() {
+        let mut modal = ready_modal_with_servers(20).await;
+        let area = Rect::new(0, 0, 100, 16);
+        let max_scroll = modal.max_scroll_for_area(area);
+        assert!(max_scroll > 1);
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::End, KeyModifiers::NONE), area),
+            McpToolsModalAction::None
+        );
+        assert_eq!(modal.scroll_top, max_scroll);
+
+        assert_eq!(
+            modal.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), area),
+            McpToolsModalAction::None
+        );
+        assert_eq!(modal.scroll_top, max_scroll - 1);
+    }
+
+    #[tokio::test]
+    async fn page_down_clamps_before_scrolling_up() {
+        let mut modal = ready_modal_with_servers(20).await;
+        let area = Rect::new(0, 0, 100, 16);
+        let max_scroll = modal.max_scroll_for_area(area);
+        assert!(max_scroll > 1);
+
+        for _ in 0..40 {
+            modal.handle_key_event(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE), area);
+        }
+        assert_eq!(modal.scroll_top, max_scroll);
+
+        modal.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), area);
+        assert_eq!(modal.scroll_top, max_scroll - 1);
     }
 }

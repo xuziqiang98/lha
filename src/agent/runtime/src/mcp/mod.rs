@@ -31,6 +31,7 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
     let mcp_servers = effective_mcp_servers(config);
     if mcp_servers.is_empty() {
         return McpListToolsResponseEvent {
+            request_id: None,
             tools: HashMap::new(),
             resources: HashMap::new(),
             resource_templates: HashMap::new(),
@@ -117,6 +118,7 @@ pub(crate) async fn collect_mcp_snapshot_from_manager(
         .collect();
 
     McpListToolsResponseEvent {
+        request_id: None,
         tools: tools
             .into_iter()
             .map(|(name, tool)| (name, tool.tool))

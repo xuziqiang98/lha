@@ -7,7 +7,7 @@ import type { AskForApproval } from "./AskForApproval";
 import type { DynamicToolSpec } from "./DynamicToolSpec";
 import type { SandboxMode } from "./SandboxMode";
 
-export type ThreadStartParams = { model: string | null, modelProvider: string | null, cwd: string | null, approvalPolicy: AskForApproval | null, sandbox: SandboxMode | null, config: { [key in string]?: JsonValue } | null, baseInstructions: string | null, developerInstructions: string | null, personality: Personality | null, ephemeral: boolean | null, dynamicTools: Array<DynamicToolSpec> | null, 
+export type ThreadStartParams = { model: string | null, modelProvider: string | null, cwd: string | null, approvalPolicy: AskForApproval | null, sandbox: SandboxMode | null, config: { [key in string]?: JsonValue } | null, baseInstructions: string | null, developerInstructions: string | null, personality: Personality | null, ephemeral: boolean | null, dynamicTools: Array<DynamicToolSpec> | null,
 /**
  * If true, opt into emitting raw response items on the event stream.
  *

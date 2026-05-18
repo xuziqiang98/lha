@@ -130,6 +130,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use crossterm::event::MouseEvent;
+use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -626,7 +627,8 @@ pub(crate) struct App {
     model_selection_modal: Option<ModelSelectionModal>,
     experimental_features_modal: Option<ExperimentalFeaturesModal>,
     mcp_tools_modal: Option<McpToolsModal>,
-    pending_mcp_tools_modal_responses: usize,
+    next_mcp_tools_modal_request_id: u64,
+    pending_mcp_tools_modal_request_id: Option<u64>,
     skills_modal: Option<SkillsModal>,
     pending_skills_modal_open: bool,
     approval_mode_modal: Option<ApprovalModeModal>,
@@ -2338,7 +2340,8 @@ impl App {
             model_selection_modal: None,
             experimental_features_modal: None,
             mcp_tools_modal: None,
-            pending_mcp_tools_modal_responses: 0,
+            next_mcp_tools_modal_request_id: 1,
+            pending_mcp_tools_modal_request_id: None,
             skills_modal: None,
             pending_skills_modal_open: false,
             approval_mode_modal: None,
@@ -2878,10 +2881,15 @@ impl App {
     }
 
     fn handle_mcp_tools_modal_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
+        let area = tui
+            .terminal
+            .size()
+            .map(|size| Rect::new(0, 0, size.width, size.height))
+            .unwrap_or_default();
         let action = self
             .mcp_tools_modal
             .as_mut()
-            .map(|modal| modal.handle_key_event(key_event))
+            .map(|modal| modal.handle_key_event(key_event, area))
             .unwrap_or(McpToolsModalAction::None);
         match action {
             McpToolsModalAction::None => {
@@ -2889,6 +2897,7 @@ impl App {
             }
             McpToolsModalAction::Exit => {
                 self.mcp_tools_modal = None;
+                self.pending_mcp_tools_modal_request_id = None;
                 tui.frame_requester().schedule_frame();
             }
         }
@@ -4030,13 +4039,14 @@ impl App {
             return;
         }
         if let EventMsg::McpListToolsResponse(response) = &event.msg
-            && self.pending_mcp_tools_modal_responses > 0
+            && let Some(request_id) = response.request_id
         {
-            self.pending_mcp_tools_modal_responses =
-                self.pending_mcp_tools_modal_responses.saturating_sub(1);
-            if let Some(modal) = self.mcp_tools_modal.as_mut() {
-                modal.set_snapshot(&self.config, response.clone());
-                self.chat_widget.request_redraw_for_ui();
+            if self.pending_mcp_tools_modal_request_id == Some(request_id) {
+                self.pending_mcp_tools_modal_request_id = None;
+                if let Some(modal) = self.mcp_tools_modal.as_mut() {
+                    modal.set_snapshot(&self.config, response.clone());
+                    self.chat_widget.request_redraw_for_ui();
+                }
             }
             return;
         }
@@ -4233,12 +4243,17 @@ impl App {
     fn open_mcp_tools_modal(&mut self) {
         self.chat_widget.dismiss_active_view();
         if self.config.mcp_servers.is_empty() {
+            self.pending_mcp_tools_modal_request_id = None;
             self.mcp_tools_modal = Some(McpToolsModal::new_empty(&self.config));
         } else {
+            let request_id = self.next_mcp_tools_modal_request_id;
+            self.next_mcp_tools_modal_request_id =
+                self.next_mcp_tools_modal_request_id.saturating_add(1);
             self.mcp_tools_modal = Some(McpToolsModal::new_loading(&self.config));
-            self.pending_mcp_tools_modal_responses =
-                self.pending_mcp_tools_modal_responses.saturating_add(1);
-            self.chat_widget.submit_op(Op::ListMcpTools);
+            self.pending_mcp_tools_modal_request_id = Some(request_id);
+            self.chat_widget.submit_op(Op::ListMcpTools {
+                request_id: Some(request_id),
+            });
         }
         self.chat_widget.request_redraw_for_ui();
     }
@@ -4282,6 +4297,7 @@ impl App {
             && self.identity_modal.is_none()
             && self.model_selection_modal.is_none()
             && self.experimental_features_modal.is_none()
+            && self.mcp_tools_modal.is_none()
             && self.skills_modal.is_none()
             && self.approval_mode_modal.is_none()
             && self.agent_selection_modal.is_none()
@@ -6367,7 +6383,8 @@ mod tests {
             model_selection_modal: None,
             experimental_features_modal: None,
             mcp_tools_modal: None,
-            pending_mcp_tools_modal_responses: 0,
+            next_mcp_tools_modal_request_id: 1,
+            pending_mcp_tools_modal_request_id: None,
             skills_modal: None,
             pending_skills_modal_open: false,
             approval_mode_modal: None,
@@ -6439,7 +6456,8 @@ mod tests {
                 model_selection_modal: None,
                 experimental_features_modal: None,
                 mcp_tools_modal: None,
-                pending_mcp_tools_modal_responses: 0,
+                next_mcp_tools_modal_request_id: 1,
+                pending_mcp_tools_modal_request_id: None,
                 skills_modal: None,
                 pending_skills_modal_open: false,
                 approval_mode_modal: None,
@@ -6580,7 +6598,8 @@ show_raw_agent_reasoning = true
             model_selection_modal: None,
             experimental_features_modal: None,
             mcp_tools_modal: None,
-            pending_mcp_tools_modal_responses: 0,
+            next_mcp_tools_modal_request_id: 1,
+            pending_mcp_tools_modal_request_id: None,
             skills_modal: None,
             pending_skills_modal_open: false,
             approval_mode_modal: None,
@@ -6867,6 +6886,10 @@ show_raw_agent_reasoning = true
     }
 
     fn mcp_tools_event() -> Event {
+        mcp_tools_event_with_request_id(None)
+    }
+
+    fn mcp_tools_event_with_request_id(request_id: Option<u64>) -> Event {
         let mut tools = HashMap::new();
         tools.insert(
             "mcp__docs__list".to_string(),
@@ -6887,6 +6910,7 @@ show_raw_agent_reasoning = true
         Event {
             id: String::new(),
             msg: EventMsg::McpListToolsResponse(McpListToolsResponseEvent {
+                request_id,
                 tools,
                 resources: HashMap::new(),
                 resource_templates: HashMap::new(),
@@ -6904,7 +6928,7 @@ show_raw_agent_reasoning = true
             app.mcp_tools_modal.is_some(),
             "expected App to own the /mcp modal"
         );
-        assert_eq!(app.pending_mcp_tools_modal_responses, 0);
+        assert_eq!(app.pending_mcp_tools_modal_request_id, None);
         assert!(op_rx.try_recv().is_err());
         assert!(app.chat_widget.no_modal_or_popup_active());
     }
@@ -6920,8 +6944,13 @@ show_raw_agent_reasoning = true
             app.mcp_tools_modal.is_some(),
             "expected App to own the /mcp modal"
         );
-        assert_eq!(app.pending_mcp_tools_modal_responses, 1);
-        assert!(matches!(op_rx.try_recv(), Ok(Op::ListMcpTools)));
+        assert_eq!(app.pending_mcp_tools_modal_request_id, Some(1));
+        assert!(matches!(
+            op_rx.try_recv(),
+            Ok(Op::ListMcpTools {
+                request_id: Some(1)
+            })
+        ));
         assert!(app.chat_widget.no_modal_or_popup_active());
     }
 
@@ -6931,9 +6960,9 @@ show_raw_agent_reasoning = true
         add_test_mcp_server(&mut app);
         app.open_mcp_tools_modal();
 
-        app.handle_codex_event_now(mcp_tools_event());
+        app.handle_codex_event_now(mcp_tools_event_with_request_id(Some(1)));
 
-        assert_eq!(app.pending_mcp_tools_modal_responses, 0);
+        assert_eq!(app.pending_mcp_tools_modal_request_id, None);
         assert!(
             app.mcp_tools_modal.is_some(),
             "expected response to keep modal open"
@@ -6950,13 +6979,58 @@ show_raw_agent_reasoning = true
         add_test_mcp_server(&mut app);
         app.open_mcp_tools_modal();
         app.mcp_tools_modal = None;
+        app.pending_mcp_tools_modal_request_id = None;
 
-        app.handle_codex_event_now(mcp_tools_event());
+        app.handle_codex_event_now(mcp_tools_event_with_request_id(Some(1)));
 
-        assert_eq!(app.pending_mcp_tools_modal_responses, 0);
+        assert_eq!(app.pending_mcp_tools_modal_request_id, None);
         assert!(
             rx.try_recv().is_err(),
             "expected closed modal response to avoid writing history"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_mcp_list_tools_response_after_reopen_is_swallowed() {
+        let (mut app, mut rx, mut op_rx) = make_test_app_with_channels().await;
+        add_test_mcp_server(&mut app);
+        app.open_mcp_tools_modal();
+        assert!(matches!(
+            op_rx.try_recv(),
+            Ok(Op::ListMcpTools {
+                request_id: Some(1)
+            })
+        ));
+
+        app.mcp_tools_modal = None;
+        app.pending_mcp_tools_modal_request_id = None;
+        app.open_mcp_tools_modal();
+        assert_eq!(app.pending_mcp_tools_modal_request_id, Some(2));
+        assert!(matches!(
+            op_rx.try_recv(),
+            Ok(Op::ListMcpTools {
+                request_id: Some(2)
+            })
+        ));
+
+        app.handle_codex_event_now(mcp_tools_event_with_request_id(Some(1)));
+
+        assert_eq!(app.pending_mcp_tools_modal_request_id, Some(2));
+        assert!(
+            rx.try_recv().is_err(),
+            "expected stale modal response to avoid writing history"
+        );
+
+        app.handle_codex_event_now(mcp_tools_event_with_request_id(Some(2)));
+
+        assert_eq!(app.pending_mcp_tools_modal_request_id, None);
+        assert!(
+            app.mcp_tools_modal.is_some(),
+            "expected current response to keep modal open"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "expected current modal response to avoid writing history"
         );
     }
 
@@ -7155,6 +7229,40 @@ show_raw_agent_reasoning = true
         assert!(
             app.skills_modal.is_some(),
             "expected pending /skills to open after review closes"
+        );
+        assert!(!app.pending_skills_modal_open);
+    }
+
+    #[tokio::test]
+    async fn pending_skills_modal_does_not_steal_mcp_tools_modal() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        app.chat_widget.request_skills_refresh(true);
+        assert!(matches!(op_rx.try_recv(), Ok(Op::ListSkills { .. })));
+        app.open_skills_modal();
+        assert!(app.pending_skills_modal_open);
+
+        app.open_mcp_tools_modal();
+        app.handle_codex_event_now(list_skills_event(
+            app.config.cwd.clone(),
+            vec![test_skill("repo_scout")],
+        ));
+
+        assert!(
+            app.mcp_tools_modal.is_some(),
+            "expected MCP tools modal to keep focus"
+        );
+        assert!(
+            app.skills_modal.is_none(),
+            "expected pending /skills not to steal focus"
+        );
+        assert!(app.pending_skills_modal_open);
+
+        app.mcp_tools_modal = None;
+
+        assert!(app.maybe_open_pending_skills_modal());
+        assert!(
+            app.skills_modal.is_some(),
+            "expected pending /skills to open after MCP tools closes"
         );
         assert!(!app.pending_skills_modal_open);
     }

@@ -3690,6 +3690,15 @@
               "description": "Authentication status for each configured MCP server.",
               "type": "object"
             },
+            "request_id": {
+              "description": "Optional client-generated id used to correlate modal-only requests.",
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "resource_templates": {
               "additionalProperties": {
                 "items": {

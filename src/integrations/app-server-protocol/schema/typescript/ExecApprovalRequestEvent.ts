@@ -4,28 +4,28 @@
 import type { ExecPolicyAmendment } from "./ExecPolicyAmendment";
 import type { ParsedCommand } from "./ParsedCommand";
 
-export type ExecApprovalRequestEvent = { 
+export type ExecApprovalRequestEvent = {
 /**
  * Identifier for the associated exec call, if available.
  */
-call_id: string, 
+call_id: string,
 /**
  * Turn ID that this command belongs to.
  * Uses `#[serde(default)]` for backwards compatibility.
  */
-turn_id: string, 
+turn_id: string,
 /**
  * The command to be executed.
  */
-command: Array<string>, 
+command: Array<string>,
 /**
  * The command's working directory.
  */
-cwd: string, 
+cwd: string,
 /**
  * Optional human-readable reason for the approval (e.g. retry without sandbox).
  */
-reason: string | null, 
+reason: string | null,
 /**
  * Proposed execpolicy amendment that can be applied to allow future runs.
  */

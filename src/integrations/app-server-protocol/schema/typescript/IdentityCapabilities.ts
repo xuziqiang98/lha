@@ -5,7 +5,7 @@
 /**
  * Capabilities associated with an identity.
  */
-export type IdentityCapabilities = { 
+export type IdentityCapabilities = {
 /**
  * Whether this identity is intended to have write-capable tools.
  * This is currently metadata only; tool exposure is not filtered from this field yet.

@@ -4,23 +4,23 @@
 import type { CommandAction } from "./CommandAction";
 import type { ExecPolicyAmendment } from "./ExecPolicyAmendment";
 
-export type CommandExecutionRequestApprovalParams = { threadId: string, turnId: string, itemId: string, 
+export type CommandExecutionRequestApprovalParams = { threadId: string, turnId: string, itemId: string,
 /**
  * Optional explanatory reason (e.g. request for network access).
  */
-reason: string | null, 
+reason: string | null,
 /**
  * The command to be executed.
  */
-command?: string, 
+command?: string,
 /**
  * The command's working directory.
  */
-cwd?: string, 
+cwd?: string,
 /**
  * Best-effort parsed command actions for friendly display.
  */
-commandActions?: Array<CommandAction>, 
+commandActions?: Array<CommandAction>,
 /**
  * Optional proposed execpolicy amendment to allow similar commands without prompting.
  */

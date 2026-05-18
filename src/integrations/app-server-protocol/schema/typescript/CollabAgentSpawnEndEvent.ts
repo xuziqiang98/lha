@@ -5,40 +5,40 @@ import type { AgentStatus } from "./AgentStatus";
 import type { ReasoningEffort } from "./ReasoningEffort";
 import type { ThreadId } from "./ThreadId";
 
-export type CollabAgentSpawnEndEvent = { 
+export type CollabAgentSpawnEndEvent = {
 /**
  * Identifier for the collab tool call.
  */
-call_id: string, 
+call_id: string,
 /**
  * Thread ID of the sender.
  */
-sender_thread_id: ThreadId, 
+sender_thread_id: ThreadId,
 /**
  * Thread ID of the newly spawned agent, if it was created.
  */
-new_thread_id: ThreadId | null, 
+new_thread_id: ThreadId | null,
 /**
  * User-facing nickname of the newly spawned agent, if known.
  */
-new_agent_nickname: string | null, 
+new_agent_nickname: string | null,
 /**
  * Role label of the newly spawned agent, if known.
  */
-new_agent_role: string | null, 
+new_agent_role: string | null,
 /**
  * Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the
  * beginning.
  */
-prompt: string, 
+prompt: string,
 /**
  * Effective model used by the spawned agent after inheritance and role overrides.
  */
-model: string, 
+model: string,
 /**
  * Effective reasoning effort used by the spawned agent after inheritance and role overrides.
  */
-reasoning_effort: ReasoningEffort, 
+reasoning_effort: ReasoningEffort,
 /**
  * Last known status of the new agent reported to the sender agent.
  */

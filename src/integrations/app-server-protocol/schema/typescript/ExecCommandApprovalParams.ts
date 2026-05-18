@@ -4,7 +4,7 @@
 import type { ParsedCommand } from "./ParsedCommand";
 import type { ThreadId } from "./ThreadId";
 
-export type ExecCommandApprovalParams = { conversationId: ThreadId, 
+export type ExecCommandApprovalParams = { conversationId: ThreadId,
 /**
  * Use to correlate this with [adam_agent::protocol::ExecCommandBeginEvent]
  * and [adam_agent::protocol::ExecCommandEndEvent].
