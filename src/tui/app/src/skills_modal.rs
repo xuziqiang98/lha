@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::path::PathBuf;
 
 use crossterm::event::KeyCode;
@@ -38,6 +39,7 @@ pub(crate) struct SkillsModal {
     selected_idx: Option<usize>,
     search_query: String,
     filtered_indices: Vec<usize>,
+    error_message: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,9 +66,21 @@ impl SkillsModal {
             selected_idx: Some(0),
             search_query: String::new(),
             filtered_indices: Vec::new(),
+            error_message: None,
         };
         modal.apply_filter();
         Some(modal)
+    }
+
+    pub(crate) fn set_skill_enabled(&mut self, path: &Path, enabled: bool) {
+        if let Some(item) = self.items.iter_mut().find(|item| item.path == path) {
+            item.enabled = enabled;
+        }
+        self.error_message = None;
+    }
+
+    pub(crate) fn set_error_message(&mut self, message: String) {
+        self.error_message = Some(message);
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) -> SkillsModalAction {
@@ -328,14 +342,34 @@ impl SkillsModal {
             return SkillsModalAction::None;
         };
 
-        item.enabled = !item.enabled;
         SkillsModalAction::Toggle {
             path: item.path.clone(),
-            enabled: item.enabled,
+            enabled: !item.enabled,
         }
     }
 
     fn render_lines(&self, width: usize) -> ModalRenderLines {
+        let mut footer = Vec::new();
+        if let Some(message) = &self.error_message {
+            footer.push("".into());
+            let error = format!("Error: {message}");
+            for line in wrap(error.as_str(), Options::new(width)) {
+                footer.push(line.into_owned().red().into());
+            }
+        }
+        footer.push("".into());
+        footer.push(
+            vec![
+                "Space/Enter".cyan(),
+                " toggle   ".dim(),
+                "↑↓/Ctrl-N/P".cyan(),
+                " move   ".dim(),
+                "Esc".cyan(),
+                " close".dim(),
+            ]
+            .into(),
+        );
+
         ModalRenderLines {
             header: vec![
                 "Skills".bold().into(),
@@ -348,18 +382,7 @@ impl SkillsModal {
                 "".into(),
             ],
             item_groups: self.item_groups(width),
-            footer: vec![
-                "".into(),
-                vec![
-                    "Space/Enter".cyan(),
-                    " toggle   ".dim(),
-                    "↑↓/Ctrl-N/P".cyan(),
-                    " move   ".dim(),
-                    "Esc".cyan(),
-                    " close".dim(),
-                ]
-                .into(),
-            ],
+            footer,
         }
     }
 
@@ -630,6 +653,7 @@ mod tests {
                 enabled: false,
             }
         );
+        assert!(modal.items[0].enabled);
     }
 
     #[test]
@@ -644,6 +668,36 @@ mod tests {
                 enabled: false,
             }
         );
+        assert!(modal.items[0].enabled);
+    }
+
+    #[test]
+    fn set_skill_enabled_updates_checkbox_after_save() {
+        let mut modal = modal();
+        let path = PathBuf::from("/tmp/skills/repo_scout.toml");
+
+        modal.set_skill_enabled(&path, false);
+
+        assert_eq!(
+            modal.items[0],
+            SkillsModalItem {
+                name: "Repo Scout".to_string(),
+                skill_name: "repo_scout".to_string(),
+                description: "Summarize the repo layout".to_string(),
+                enabled: false,
+                path,
+            }
+        );
+    }
+
+    #[test]
+    fn error_message_renders_inside_modal() {
+        let mut modal = modal();
+        modal.set_error_message("could not save config".to_string());
+
+        let rendered = render_modal(&modal);
+
+        assert!(rendered.contains("Error: could not save config"));
     }
 
     #[test]

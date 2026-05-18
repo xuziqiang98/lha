@@ -1016,7 +1016,6 @@ impl App {
             self.chat_widget.add_error_message(err);
             self.project_trust_modal = Some(ProjectTrustModal::new(self.config.cwd.clone()));
         }
-
         Ok(AppRunControl::Continue)
     }
 
@@ -2611,6 +2610,7 @@ impl App {
                 }
             }
         }
+        self.maybe_open_pending_skills_modal_with_redraw(tui);
         Ok(AppRunControl::Continue)
     }
 
@@ -2691,6 +2691,7 @@ impl App {
                 {
                     self.handle_event(tui, AppEvent::Exit(exit_mode)).await
                 } else {
+                    self.maybe_open_pending_skills_modal_with_redraw(tui);
                     Ok(AppRunControl::Continue)
                 }
             }
@@ -2757,6 +2758,7 @@ impl App {
             ProjectTrustModalAction::Selected(trust_level) => {
                 self.project_trust_modal = None;
                 let control = self.apply_project_trust_selection(tui, trust_level).await;
+                self.maybe_open_pending_skills_modal_with_redraw(tui);
                 tui.frame_requester().schedule_frame();
                 Ok(control)
             }
@@ -2798,6 +2800,7 @@ impl App {
             }
             ModelSelectionModalAction::Exit => {
                 self.model_selection_modal = None;
+                self.maybe_open_pending_skills_modal_with_redraw(tui);
                 tui.frame_requester().schedule_frame();
                 Ok(AppRunControl::Continue)
             }
@@ -2808,15 +2811,18 @@ impl App {
             } => {
                 self.model_selection_modal = None;
                 tui.frame_requester().schedule_frame();
-                self.handle_event(
-                    tui,
-                    AppEvent::PersistModelSelection {
-                        model,
-                        provider_id,
-                        effort,
-                    },
-                )
-                .await
+                let control = self
+                    .handle_event(
+                        tui,
+                        AppEvent::PersistModelSelection {
+                            model,
+                            provider_id,
+                            effort,
+                        },
+                    )
+                    .await?;
+                self.maybe_open_pending_skills_modal_with_redraw(tui);
+                Ok(control)
             }
         }
     }
@@ -2840,10 +2846,14 @@ impl App {
                 self.experimental_features_modal = None;
                 tui.frame_requester().schedule_frame();
                 if updates.is_empty() {
+                    self.maybe_open_pending_skills_modal_with_redraw(tui);
                     Ok(AppRunControl::Continue)
                 } else {
-                    self.handle_event(tui, AppEvent::UpdateFeatureFlags { updates })
-                        .await
+                    let control = self
+                        .handle_event(tui, AppEvent::UpdateFeatureFlags { updates })
+                        .await?;
+                    self.maybe_open_pending_skills_modal_with_redraw(tui);
+                    Ok(control)
                 }
             }
         }
@@ -2868,11 +2878,25 @@ impl App {
                 self.skills_modal = None;
                 self.chat_widget.handle_manage_skills_closed();
                 self.chat_widget.request_skills_refresh(true);
+                self.maybe_open_pending_skills_modal_with_redraw(tui);
                 tui.frame_requester().schedule_frame();
                 Ok(AppRunControl::Continue)
             }
             SkillsModalAction::Toggle { path, enabled } => {
-                self.set_skill_enabled(path, enabled).await;
+                match self.set_skill_enabled(path.clone(), enabled).await {
+                    Ok(()) => {
+                        if let Some(modal) = self.skills_modal.as_mut() {
+                            modal.set_skill_enabled(&path, enabled);
+                        }
+                    }
+                    Err(message) => {
+                        if let Some(modal) = self.skills_modal.as_mut() {
+                            modal.set_error_message(message);
+                        } else {
+                            self.chat_widget.add_error_message(message);
+                        }
+                    }
+                }
                 tui.frame_requester().schedule_frame();
                 Ok(AppRunControl::Continue)
             }
@@ -2896,6 +2920,7 @@ impl App {
             }
             ApprovalModeModalAction::Exit => {
                 self.approval_mode_modal = None;
+                self.maybe_open_pending_skills_modal_with_redraw(tui);
                 tui.frame_requester().schedule_frame();
                 Ok(AppRunControl::Continue)
             }
@@ -2903,6 +2928,7 @@ impl App {
                 self.approval_mode_modal = None;
                 tui.frame_requester().schedule_frame();
                 self.handle_approval_mode_action(action);
+                self.maybe_open_pending_skills_modal_with_redraw(tui);
                 Ok(AppRunControl::Continue)
             }
         }
@@ -2925,14 +2951,18 @@ impl App {
             }
             AgentSelectionModalAction::Exit => {
                 self.agent_selection_modal = None;
+                self.maybe_open_pending_skills_modal_with_redraw(tui);
                 tui.frame_requester().schedule_frame();
                 Ok(AppRunControl::Continue)
             }
             AgentSelectionModalAction::SelectThread(thread_id) => {
                 self.agent_selection_modal = None;
                 tui.frame_requester().schedule_frame();
-                self.handle_event(tui, AppEvent::SelectAgentThread(thread_id))
-                    .await
+                let control = self
+                    .handle_event(tui, AppEvent::SelectAgentThread(thread_id))
+                    .await?;
+                self.maybe_open_pending_skills_modal_with_redraw(tui);
+                Ok(control)
             }
         }
     }
@@ -3970,12 +4000,8 @@ impl App {
         self.sync_agent_picker_thread_from_event(&event.msg);
         self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event(event);
-        if is_list_skills_response && self.pending_skills_modal_open {
-            if !self.can_auto_open_skills_modal() {
-                self.pending_skills_modal_open = false;
-            } else if !self.chat_widget.skills_request_in_flight() {
-                self.open_skills_modal();
-            }
+        if is_list_skills_response {
+            self.maybe_open_pending_skills_modal();
         }
     }
 
@@ -4201,7 +4227,29 @@ impl App {
             && self.chat_widget.no_modal_or_popup_active()
     }
 
-    async fn set_skill_enabled(&mut self, path: PathBuf, enabled: bool) {
+    fn maybe_open_pending_skills_modal(&mut self) -> bool {
+        if !self.pending_skills_modal_open
+            || self.chat_widget.skills_request_in_flight()
+            || !self.can_auto_open_skills_modal()
+        {
+            return false;
+        }
+
+        self.open_skills_modal();
+        true
+    }
+
+    fn maybe_open_pending_skills_modal_with_redraw(&mut self, tui: &mut tui::Tui) {
+        if self.maybe_open_pending_skills_modal() {
+            tui.frame_requester().schedule_frame();
+        }
+    }
+
+    async fn set_skill_enabled(
+        &mut self,
+        path: PathBuf,
+        enabled: bool,
+    ) -> std::result::Result<(), String> {
         let edits = [ConfigEdit::SetSkillConfig {
             path: path.clone(),
             enabled,
@@ -4213,12 +4261,13 @@ impl App {
         {
             Ok(()) => {
                 self.chat_widget.update_skill_enabled(path, enabled);
+                Ok(())
             }
             Err(err) => {
                 let path_display = path.display();
-                self.chat_widget.add_error_message(format!(
+                Err(format!(
                     "Failed to update skill config for {path_display}: {err}"
-                ));
+                ))
             }
         }
     }
@@ -6862,6 +6911,15 @@ show_raw_agent_reasoning = true
             app.skills_modal.is_none(),
             "expected pending /skills not to steal focus"
         );
+        assert!(app.pending_skills_modal_open);
+
+        app.approval_mode_modal = None;
+
+        assert!(app.maybe_open_pending_skills_modal());
+        assert!(
+            app.skills_modal.is_some(),
+            "expected pending /skills to open after approvals closes"
+        );
         assert!(!app.pending_skills_modal_open);
     }
 
@@ -6887,6 +6945,15 @@ show_raw_agent_reasoning = true
             app.skills_modal.is_none(),
             "expected pending /skills not to steal focus"
         );
+        assert!(app.pending_skills_modal_open);
+
+        app.review_modal = None;
+
+        assert!(app.maybe_open_pending_skills_modal());
+        assert!(
+            app.skills_modal.is_some(),
+            "expected pending /skills to open after review closes"
+        );
         assert!(!app.pending_skills_modal_open);
     }
 
@@ -6911,6 +6978,15 @@ show_raw_agent_reasoning = true
         assert!(
             app.skills_modal.is_none(),
             "expected pending /skills not to steal focus"
+        );
+        assert!(app.pending_skills_modal_open);
+
+        app.overlay = None;
+
+        assert!(app.maybe_open_pending_skills_modal());
+        assert!(
+            app.skills_modal.is_some(),
+            "expected pending /skills to open after overlay closes"
         );
         assert!(!app.pending_skills_modal_open);
     }
@@ -7009,6 +7085,43 @@ show_raw_agent_reasoning = true
         );
         assert!(!app.pending_skills_modal_open);
         assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[tokio::test]
+    async fn set_skill_enabled_failure_leaves_cached_skill_unchanged() {
+        let mut app = make_test_app().await;
+        app.chat_widget
+            .set_skills_from_response(&ListSkillsResponseEvent {
+                skills: vec![adam_agent::protocol::SkillsListEntry {
+                    cwd: app.config.cwd.clone(),
+                    skills: vec![test_skill("repo_scout")],
+                    errors: Vec::new(),
+                }],
+            });
+        let adam_home = tempdir().expect("temp adam home");
+        let not_a_dir = adam_home.path().join("not-a-dir");
+        std::fs::write(&not_a_dir, "not a directory").expect("write file");
+        app.config.adam_home = not_a_dir;
+
+        let result = app
+            .set_skill_enabled(PathBuf::from("/tmp/skills/repo_scout.toml"), false)
+            .await;
+
+        assert!(result.is_err());
+        let items = match app.chat_widget.skills_modal_items() {
+            SkillsModalItems::Ready(items) => items,
+            other => panic!("expected ready skills, got {other:?}"),
+        };
+        assert_eq!(
+            items,
+            vec![crate::skills_modal::SkillsModalItem {
+                name: "repo_scout".to_string(),
+                skill_name: "repo_scout".to_string(),
+                description: "Description for repo_scout".to_string(),
+                enabled: true,
+                path: PathBuf::from("/tmp/skills/repo_scout.toml"),
+            }]
+        );
     }
 
     #[tokio::test]
