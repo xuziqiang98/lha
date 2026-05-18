@@ -190,6 +190,7 @@ use crate::sidebar::TaskPanelSnapshot;
 use crate::sidebar::TodoPanelItem;
 use crate::sidebar::TodoPanelSnapshot;
 use crate::slash_command::SlashCommand;
+use crate::status::cache_hit_percent;
 use crate::status::format_directory_display;
 use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
@@ -6494,6 +6495,10 @@ impl ChatWidget {
                 .as_ref()
                 .map(|info| info.total_token_usage.blended_total())
                 .unwrap_or_default(),
+            cache_hit_percent: self
+                .token_info
+                .as_ref()
+                .and_then(|info| cache_hit_percent(&info.total_token_usage)),
         });
 
         SidebarSnapshot {

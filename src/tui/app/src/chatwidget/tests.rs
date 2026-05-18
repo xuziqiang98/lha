@@ -1797,6 +1797,7 @@ async fn sidebar_status_uses_status_token_semantics() {
             identity: format!("{:?}", chat.active_identity_kind()),
             left_context_tokens: Some(19_800),
             total_usage_tokens: 17_000,
+            cache_hit_percent: Some(25),
         }
     );
 }

@@ -22,6 +22,7 @@ use super::format::FieldFormatter;
 use super::format::line_display_width;
 use super::format::push_label;
 use super::format::truncate_line_to_width;
+use super::helpers::cache_hit_percent;
 use super::helpers::compose_agents_summary;
 use super::helpers::compose_model_display;
 use super::helpers::format_directory_display;
@@ -39,7 +40,9 @@ struct StatusContextWindowData {
 pub(crate) struct StatusTokenUsageData {
     total: i64,
     input: i64,
+    cached_input: i64,
     output: i64,
+    cache_hit_percent: Option<i64>,
     context_window: Option<StatusContextWindowData>,
 }
 
@@ -167,7 +170,9 @@ impl StatusHistoryCell {
         let token_usage = StatusTokenUsageData {
             total: total_usage.blended_total(),
             input: total_usage.non_cached_input(),
+            cached_input: total_usage.cached_input(),
             output: total_usage.output_tokens,
+            cache_hit_percent: cache_hit_percent(total_usage),
             context_window,
         };
         Self {
@@ -190,19 +195,30 @@ impl StatusHistoryCell {
     fn token_usage_spans(&self) -> Vec<Span<'static>> {
         let total_fmt = format_tokens_compact(self.token_usage.total);
         let input_fmt = format_tokens_compact(self.token_usage.input);
+        let cached_input_fmt = format_tokens_compact(self.token_usage.cached_input);
         let output_fmt = format_tokens_compact(self.token_usage.output);
 
-        vec![
+        let mut spans = vec![
             Span::from(total_fmt),
-            Span::from(" total "),
+            Span::from(" total"),
             Span::from(" (").dim(),
             Span::from(input_fmt).dim(),
             Span::from(" input").dim(),
             Span::from(" + ").dim(),
             Span::from(output_fmt).dim(),
             Span::from(" output").dim(),
-            Span::from(")").dim(),
-        ]
+        ];
+        if let Some(cache_hit_percent) = self.token_usage.cache_hit_percent {
+            spans.extend([
+                Span::from(", ").dim(),
+                Span::from(cached_input_fmt).dim(),
+                Span::from(" cached").dim(),
+                Span::from(" · ").dim(),
+                Span::from(format!("{cache_hit_percent}% hit")).dim(),
+            ]);
+        }
+        spans.push(Span::from(")").dim());
+        spans
     }
 
     fn context_window_spans(&self) -> Option<Vec<Span<'static>>> {
@@ -368,4 +384,71 @@ fn sanitize_base_url(raw: &str) -> Option<String> {
     url.set_query(None);
     url.set_fragment(None);
     Some(url.to_string().trim_end_matches('/').to_string()).filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn cell_for_usage(token_usage: StatusTokenUsageData) -> StatusHistoryCell {
+        StatusHistoryCell {
+            model_name: "gpt-5".to_string(),
+            model_details: Vec::new(),
+            directory: PathBuf::from("/tmp"),
+            approval: "never".to_string(),
+            sandbox: "read-only".to_string(),
+            agents_summary: "<none>".to_string(),
+            identity: None,
+            model_provider: None,
+            thread_name: None,
+            session_id: None,
+            forked_from: None,
+            context_compact_count: 0,
+            token_usage,
+        }
+    }
+
+    #[test]
+    fn token_usage_spans_include_cached_tokens_and_hit_rate() {
+        let cell = cell_for_usage(StatusTokenUsageData {
+            total: 17_000,
+            input: 15_000,
+            cached_input: 5_000,
+            output: 2_000,
+            cache_hit_percent: Some(25),
+            context_window: None,
+        });
+
+        let rendered = cell
+            .token_usage_spans()
+            .into_iter()
+            .map(|span| span.content.to_string())
+            .collect::<String>();
+
+        assert_eq!(
+            rendered,
+            "17K total (15K input + 2K output, 5K cached · 25% hit)"
+        );
+    }
+
+    #[test]
+    fn token_usage_spans_omit_cached_when_hit_rate_unknown() {
+        let cell = cell_for_usage(StatusTokenUsageData {
+            total: 17_000,
+            input: 15_000,
+            cached_input: 0,
+            output: 2_000,
+            cache_hit_percent: None,
+            context_window: None,
+        });
+
+        let rendered = cell
+            .token_usage_spans()
+            .into_iter()
+            .map(|span| span.content.to_string())
+            .collect::<String>();
+
+        assert_eq!(rendered, "17K total (15K input + 2K output)");
+    }
 }

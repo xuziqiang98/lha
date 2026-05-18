@@ -81,6 +81,7 @@ pub(crate) struct StatusPanelSnapshot {
     pub(crate) identity: String,
     pub(crate) left_context_tokens: Option<i64>,
     pub(crate) total_usage_tokens: i64,
+    pub(crate) cache_hit_percent: Option<i64>,
 }
 
 pub(crate) fn sidebar_width(total_width: u16) -> Option<u16> {
@@ -293,6 +294,12 @@ fn push_status(lines: &mut Vec<Line<'static>>, status: Option<&StatusPanelSnapsh
         "  total ".dim(),
         format_tokens_compact(context.total_usage_tokens).into(),
     ]));
+    if let Some(cache_hit_percent) = context.cache_hit_percent {
+        lines.push(Line::from(vec![
+            "  cached ".dim(),
+            format!("{cache_hit_percent}%").into(),
+        ]));
+    }
 }
 
 fn agent_status_label(status: &AgentStatus) -> Span<'static> {
@@ -436,6 +443,7 @@ mod tests {
                 identity: "Planner".to_string(),
                 left_context_tokens: Some(55),
                 total_usage_tokens: 45,
+                cache_hit_percent: Some(25),
             }),
         };
 
@@ -469,6 +477,7 @@ mod tests {
         assert!(rendered.contains("model gpt-5"));
         assert!(rendered.contains("left 55"));
         assert!(rendered.contains("total 45"));
+        assert!(rendered.contains("cached 25%"));
         assert!(!rendered.contains("used"));
         assert!(!rendered.contains("tokens"));
         assert!(!rendered.contains("Context"));
@@ -482,6 +491,7 @@ mod tests {
                 identity: "Planner".to_string(),
                 left_context_tokens: Some(19_800),
                 total_usage_tokens: 12_345,
+                cache_hit_percent: Some(25),
             }),
             ..Default::default()
         };
@@ -490,16 +500,19 @@ mod tests {
 
         assert!(rendered.contains("left 19.8K"));
         assert!(rendered.contains("total 12.3K"));
+        assert!(rendered.contains("cached 25%"));
+        assert!(!rendered.contains("5K"));
     }
 
     #[test]
-    fn status_omits_left_when_context_window_unknown() {
+    fn status_omits_left_and_cached_when_context_window_and_cache_unknown() {
         let snapshot = SidebarSnapshot {
             status: Some(StatusPanelSnapshot {
                 model: "gpt-5".to_string(),
                 identity: "Planner".to_string(),
                 left_context_tokens: None,
                 total_usage_tokens: 12_345,
+                cache_hit_percent: None,
             }),
             ..Default::default()
         };
@@ -507,6 +520,7 @@ mod tests {
         let rendered = render_sidebar(&snapshot);
 
         assert!(!rendered.contains("left"));
+        assert!(!rendered.contains("cached"));
         assert!(rendered.contains("total 12.3K"));
     }
 

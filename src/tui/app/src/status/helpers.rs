@@ -2,6 +2,7 @@ use crate::exec_command::relativize_to_home;
 use crate::text_formatting;
 use adam_agent::config::Config;
 use adam_agent::project_doc::discover_project_doc_paths;
+use adam_agent::protocol::TokenUsage;
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
@@ -116,6 +117,16 @@ pub(crate) fn format_tokens_compact(value: i64) -> String {
     }
 
     format!("{formatted}{suffix}")
+}
+
+pub(crate) fn cache_hit_percent(usage: &TokenUsage) -> Option<i64> {
+    let input = usage.input_tokens.max(0);
+    if input == 0 {
+        return None;
+    }
+
+    let cached = usage.cached_input().min(input);
+    Some((cached.saturating_mul(100).saturating_add(input / 2)) / input)
 }
 
 pub(crate) fn format_directory_display(directory: &Path, max_width: Option<usize>) -> String {
