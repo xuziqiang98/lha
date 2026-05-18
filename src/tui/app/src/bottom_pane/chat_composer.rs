@@ -4598,6 +4598,56 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn bare_bottom_dispatches_command_and_clears_composer() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Adam to do anything".to_string(),
+            false,
+        );
+
+        composer.textarea.set_text_clearing_elements("/bottom");
+        composer.textarea.set_cursor("/bottom".len());
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::Command(SlashCommand::Bottom)));
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn bottom_with_trailing_space_dispatches_command() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Adam to do anything".to_string(),
+            false,
+        );
+
+        composer.textarea.set_text_clearing_elements("/bottom ");
+        composer.textarea.set_cursor("/bottom ".len());
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::Command(SlashCommand::Bottom)));
+        assert!(composer.textarea.is_empty());
+    }
+
     /// Behavior: if a burst is buffering text and the user presses a non-char key, flush the
     /// buffered burst *before* applying that key so the buffer cannot get stuck.
     #[test]

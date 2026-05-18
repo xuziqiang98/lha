@@ -3245,6 +3245,9 @@ impl ChatWidget {
             SlashCommand::Status => {
                 self.add_status_output();
             }
+            SlashCommand::Bottom => {
+                self.scroll_transcript_to_bottom();
+            }
             SlashCommand::Ps => {
                 self.add_ps_output();
             }
