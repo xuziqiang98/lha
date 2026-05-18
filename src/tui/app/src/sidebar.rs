@@ -1,5 +1,6 @@
 use crate::buddy;
 use crate::buddy::state::BuddyState;
+use crate::status::format_tokens_compact;
 use adam_agent::protocol::AgentStatus;
 use adam_protocol::ThreadId;
 use adam_protocol::plan_tool::StepStatus;
@@ -78,8 +79,8 @@ pub(crate) struct McpPanelSnapshot {
 pub(crate) struct StatusPanelSnapshot {
     pub(crate) model: String,
     pub(crate) identity: String,
-    pub(crate) used_tokens: i64,
-    pub(crate) context_window: Option<i64>,
+    pub(crate) left_context_tokens: Option<i64>,
+    pub(crate) total_usage_tokens: i64,
 }
 
 pub(crate) fn sidebar_width(total_width: u16) -> Option<u16> {
@@ -282,26 +283,16 @@ fn push_status(lines: &mut Vec<Line<'static>>, status: Option<&StatusPanelSnapsh
         "  identity ".dim(),
         context.identity.clone().into(),
     ]));
-    if let Some(window) = context.context_window {
-        let percent = if window > 0 {
-            (context.used_tokens.saturating_mul(100) / window).clamp(0, 100)
-        } else {
-            0
-        };
-        let percent_span: Span<'static> = if percent >= 90 {
-            format!("{percent}%").red()
-        } else if percent >= 75 {
-            format!("{percent}%").magenta()
-        } else {
-            format!("{percent}%").green()
-        };
-        lines.push(Line::from(vec!["  used ".dim(), percent_span]));
-    } else {
+    if let Some(left_context_tokens) = context.left_context_tokens {
         lines.push(Line::from(vec![
-            "  tokens ".dim(),
-            context.used_tokens.to_string().into(),
+            "  left ".dim(),
+            format_tokens_compact(left_context_tokens).into(),
         ]));
     }
+    lines.push(Line::from(vec![
+        "  total ".dim(),
+        format_tokens_compact(context.total_usage_tokens).into(),
+    ]));
 }
 
 fn agent_status_label(status: &AgentStatus) -> Span<'static> {
@@ -443,8 +434,8 @@ mod tests {
             status: Some(StatusPanelSnapshot {
                 model: "gpt-5".to_string(),
                 identity: "Planner".to_string(),
-                used_tokens: 45,
-                context_window: Some(100),
+                left_context_tokens: Some(55),
+                total_usage_tokens: 45,
             }),
         };
 
@@ -476,7 +467,47 @@ mod tests {
         assert!(!agent_line.contains("●"));
         assert!(rendered.contains("skill-creator"));
         assert!(rendered.contains("model gpt-5"));
+        assert!(rendered.contains("left 55"));
+        assert!(rendered.contains("total 45"));
+        assert!(!rendered.contains("used"));
+        assert!(!rendered.contains("tokens"));
         assert!(!rendered.contains("Context"));
+    }
+
+    #[test]
+    fn status_renders_left_and_total_when_context_window_known() {
+        let snapshot = SidebarSnapshot {
+            status: Some(StatusPanelSnapshot {
+                model: "gpt-5".to_string(),
+                identity: "Planner".to_string(),
+                left_context_tokens: Some(19_800),
+                total_usage_tokens: 12_345,
+            }),
+            ..Default::default()
+        };
+
+        let rendered = render_sidebar(&snapshot);
+
+        assert!(rendered.contains("left 19.8K"));
+        assert!(rendered.contains("total 12.3K"));
+    }
+
+    #[test]
+    fn status_omits_left_when_context_window_unknown() {
+        let snapshot = SidebarSnapshot {
+            status: Some(StatusPanelSnapshot {
+                model: "gpt-5".to_string(),
+                identity: "Planner".to_string(),
+                left_context_tokens: None,
+                total_usage_tokens: 12_345,
+            }),
+            ..Default::default()
+        };
+
+        let rendered = render_sidebar(&snapshot);
+
+        assert!(!rendered.contains("left"));
+        assert!(rendered.contains("total 12.3K"));
     }
 
     #[test]

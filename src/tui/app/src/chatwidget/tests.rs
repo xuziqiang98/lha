@@ -1765,6 +1765,42 @@ async fn context_indicator_uses_real_remaining_percentage() {
     assert_eq!(chat.bottom_pane.context_window_percent(), Some(65));
 }
 
+#[tokio::test]
+async fn sidebar_status_uses_status_token_semantics() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+    let total_usage = TokenUsage {
+        input_tokens: 20_000,
+        cached_input_tokens: 5_000,
+        output_tokens: 2_000,
+        total_tokens: 30_000,
+        ..TokenUsage::default()
+    };
+    let last_usage = TokenUsage {
+        total_tokens: 10_600,
+        ..TokenUsage::default()
+    };
+    chat.set_token_info(Some(TokenUsageInfo {
+        total_token_usage: total_usage,
+        last_token_usage: last_usage,
+        model_context_window: Some(30_400),
+    }));
+
+    let status = chat
+        .sidebar_snapshot()
+        .status
+        .expect("sidebar status should be present");
+
+    assert_eq!(
+        status,
+        crate::sidebar::StatusPanelSnapshot {
+            model: chat.current_model().to_string(),
+            identity: format!("{:?}", chat.active_identity_kind()),
+            left_context_tokens: Some(19_800),
+            total_usage_tokens: 17_000,
+        }
+    );
+}
+
 #[cfg_attr(
     target_os = "macos",
     ignore = "system configuration APIs are blocked under macOS seatbelt"

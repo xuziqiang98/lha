@@ -6484,15 +6484,16 @@ impl ChatWidget {
         let status = Some(StatusPanelSnapshot {
             model: self.current_model().to_string(),
             identity: format!("{:?}", self.active_identity_kind()),
-            used_tokens: self
+            left_context_tokens: self.token_info.as_ref().and_then(|info| {
+                info.model_context_window.map(|window| {
+                    window.saturating_sub(info.last_token_usage.tokens_in_context_window().max(0))
+                })
+            }),
+            total_usage_tokens: self
                 .token_info
                 .as_ref()
-                .map(|info| info.total_token_usage.tokens_in_context_window())
+                .map(|info| info.total_token_usage.blended_total())
                 .unwrap_or_default(),
-            context_window: self
-                .token_info
-                .as_ref()
-                .and_then(|info| info.model_context_window),
         });
 
         SidebarSnapshot {
