@@ -3934,6 +3934,19 @@ async fn skills_command_opens_centered_skills_modal() {
 }
 
 #[tokio::test]
+async fn mcp_command_opens_centered_mcp_modal() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Mcp);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenMcpToolsModal));
+    assert!(
+        rx.try_recv().is_err(),
+        "expected /mcp to avoid writing history directly"
+    );
+}
+
+#[tokio::test]
 async fn skills_modal_items_reports_loading_before_first_response() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 

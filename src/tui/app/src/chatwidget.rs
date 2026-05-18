@@ -3252,7 +3252,8 @@ impl ChatWidget {
                 self.clean_background_terminals();
             }
             SlashCommand::Mcp => {
-                self.add_mcp_output();
+                self.app_event_tx.send(AppEvent::OpenMcpToolsModal);
+                self.request_redraw();
             }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
@@ -5967,14 +5968,6 @@ impl ChatWidget {
             resume_cmd.cyan(),
         ];
         PlainHistoryCell::new(vec![line.into()])
-    }
-
-    pub(crate) fn add_mcp_output(&mut self) {
-        if self.config.mcp_servers.is_empty() {
-            self.add_to_history(history_cell::empty_mcp_output());
-        } else {
-            self.submit_op(Op::ListMcpTools);
-        }
     }
 
     #[allow(dead_code)]

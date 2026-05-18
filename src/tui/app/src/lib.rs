@@ -76,6 +76,7 @@ pub mod live_wrap;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
+mod mcp_tools_modal;
 mod model_migration;
 mod model_selection_modal;
 mod mouse;

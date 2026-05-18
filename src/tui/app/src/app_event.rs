@@ -160,6 +160,9 @@ pub(crate) enum AppEvent {
     /// Open the centered experimental features modal.
     OpenExperimentalFeaturesModal,
 
+    /// Open the centered MCP tools modal.
+    OpenMcpToolsModal,
+
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),
 

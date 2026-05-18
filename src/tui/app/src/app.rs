@@ -39,6 +39,8 @@ use crate::history_cell::UpdateAvailableHistoryCell;
 use crate::identities;
 use crate::identity_modal::IdentityModal;
 use crate::identity_modal::IdentityModalAction;
+use crate::mcp_tools_modal::McpToolsModal;
+use crate::mcp_tools_modal::McpToolsModalAction;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
@@ -623,6 +625,8 @@ pub(crate) struct App {
     identity_modal: Option<IdentityModal>,
     model_selection_modal: Option<ModelSelectionModal>,
     experimental_features_modal: Option<ExperimentalFeaturesModal>,
+    mcp_tools_modal: Option<McpToolsModal>,
+    pending_mcp_tools_modal_responses: usize,
     skills_modal: Option<SkillsModal>,
     pending_skills_modal_open: bool,
     approval_mode_modal: Option<ApprovalModeModal>,
@@ -2333,6 +2337,8 @@ impl App {
             identity_modal: None,
             model_selection_modal: None,
             experimental_features_modal: None,
+            mcp_tools_modal: None,
+            pending_mcp_tools_modal_responses: 0,
             skills_modal: None,
             pending_skills_modal_open: false,
             approval_mode_modal: None,
@@ -2537,6 +2543,16 @@ impl App {
                 }
                 TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
             }
+        } else if self.mcp_tools_modal.is_some() {
+            match event {
+                TuiEvent::Key(key_event) => {
+                    self.handle_mcp_tools_modal_key_event(tui, key_event);
+                }
+                TuiEvent::Draw => {
+                    self.draw_main_ui(tui)?;
+                }
+                TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
+            }
         } else if self.skills_modal.is_some() {
             match event {
                 TuiEvent::Key(key_event) => {
@@ -2645,6 +2661,8 @@ impl App {
             } else if let Some(modal) = &self.model_selection_modal {
                 modal.render(frame.area(), frame.buffer);
             } else if let Some(modal) = &self.experimental_features_modal {
+                modal.render(frame.area(), frame.buffer);
+            } else if let Some(modal) = &self.mcp_tools_modal {
                 modal.render(frame.area(), frame.buffer);
             } else if let Some(modal) = &self.skills_modal {
                 modal.render(frame.area(), frame.buffer);
@@ -2855,6 +2873,23 @@ impl App {
                     self.maybe_open_pending_skills_modal_with_redraw(tui);
                     Ok(control)
                 }
+            }
+        }
+    }
+
+    fn handle_mcp_tools_modal_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
+        let action = self
+            .mcp_tools_modal
+            .as_mut()
+            .map(|modal| modal.handle_key_event(key_event))
+            .unwrap_or(McpToolsModalAction::None);
+        match action {
+            McpToolsModalAction::None => {
+                tui.frame_requester().schedule_frame();
+            }
+            McpToolsModalAction::Exit => {
+                self.mcp_tools_modal = None;
+                tui.frame_requester().schedule_frame();
             }
         }
     }
@@ -3385,6 +3420,9 @@ impl App {
             }
             AppEvent::OpenExperimentalFeaturesModal => {
                 self.open_experimental_features_modal();
+            }
+            AppEvent::OpenMcpToolsModal => {
+                self.open_mcp_tools_modal();
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
@@ -3991,6 +4029,17 @@ impl App {
             self.suppress_shutdown_complete = false;
             return;
         }
+        if let EventMsg::McpListToolsResponse(response) = &event.msg
+            && self.pending_mcp_tools_modal_responses > 0
+        {
+            self.pending_mcp_tools_modal_responses =
+                self.pending_mcp_tools_modal_responses.saturating_sub(1);
+            if let Some(modal) = self.mcp_tools_modal.as_mut() {
+                modal.set_snapshot(&self.config, response.clone());
+                self.chat_widget.request_redraw_for_ui();
+            }
+            return;
+        }
         let is_list_skills_response = matches!(&event.msg, EventMsg::ListSkillsResponse(_));
         if let EventMsg::ListSkillsResponse(response) = &event.msg {
             let cwd = self.chat_widget.config_ref().cwd.clone();
@@ -4178,6 +4227,19 @@ impl App {
             })
             .collect();
         self.experimental_features_modal = Some(ExperimentalFeaturesModal::new(features));
+        self.chat_widget.request_redraw_for_ui();
+    }
+
+    fn open_mcp_tools_modal(&mut self) {
+        self.chat_widget.dismiss_active_view();
+        if self.config.mcp_servers.is_empty() {
+            self.mcp_tools_modal = Some(McpToolsModal::new_empty(&self.config));
+        } else {
+            self.mcp_tools_modal = Some(McpToolsModal::new_loading(&self.config));
+            self.pending_mcp_tools_modal_responses =
+                self.pending_mcp_tools_modal_responses.saturating_add(1);
+            self.chat_widget.submit_op(Op::ListMcpTools);
+        }
         self.chat_widget.request_redraw_for_ui();
     }
 
@@ -5071,6 +5133,8 @@ mod tests {
     use adam_agent::config::models_json::ModelsDialect;
     use adam_agent::config::models_json::ModelsEndpoint;
     use adam_agent::config::models_json::ModelsJson;
+    use adam_agent::config::types::McpServerConfig;
+    use adam_agent::config::types::McpServerTransportConfig;
 
     use adam_agent::features::Feature;
     use adam_agent::models_manager::manager::ModelsManager;
@@ -5082,6 +5146,7 @@ mod tests {
     use adam_agent::protocol::ErrorEvent;
     use adam_agent::protocol::Event;
     use adam_agent::protocol::EventMsg;
+    use adam_agent::protocol::McpListToolsResponseEvent;
     use adam_agent::protocol::ReviewRequest;
     use adam_agent::protocol::ReviewTarget;
     use adam_agent::protocol::SandboxPolicy;
@@ -5098,6 +5163,8 @@ mod tests {
     use adam_protocol::user_input::TextElement;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
+    use mcp_types::Tool;
+    use mcp_types::ToolInputSchema;
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
     use std::path::Path;
@@ -6299,6 +6366,8 @@ mod tests {
             identity_modal: None,
             model_selection_modal: None,
             experimental_features_modal: None,
+            mcp_tools_modal: None,
+            pending_mcp_tools_modal_responses: 0,
             skills_modal: None,
             pending_skills_modal_open: false,
             approval_mode_modal: None,
@@ -6369,6 +6438,8 @@ mod tests {
                 identity_modal: None,
                 model_selection_modal: None,
                 experimental_features_modal: None,
+                mcp_tools_modal: None,
+                pending_mcp_tools_modal_responses: 0,
                 skills_modal: None,
                 pending_skills_modal_open: false,
                 approval_mode_modal: None,
@@ -6508,6 +6579,8 @@ show_raw_agent_reasoning = true
             identity_modal: None,
             model_selection_modal: None,
             experimental_features_modal: None,
+            mcp_tools_modal: None,
+            pending_mcp_tools_modal_responses: 0,
             skills_modal: None,
             pending_skills_modal_open: false,
             approval_mode_modal: None,
@@ -6766,6 +6839,135 @@ show_raw_agent_reasoning = true
             "expected App to own the /experimental modal"
         );
         assert!(app.chat_widget.no_modal_or_popup_active());
+    }
+
+    fn test_mcp_server() -> McpServerConfig {
+        McpServerConfig {
+            transport: McpServerTransportConfig::Stdio {
+                command: "docs-server".to_string(),
+                args: Vec::new(),
+                env: None,
+                env_vars: Vec::new(),
+                cwd: None,
+            },
+            enabled: true,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            scopes: None,
+        }
+    }
+
+    fn add_test_mcp_server(app: &mut App) {
+        let mut servers = app.config.mcp_servers.get().clone();
+        servers.insert("docs".to_string(), test_mcp_server());
+        app.config.mcp_servers.set(servers).expect("mcp servers");
+    }
+
+    fn mcp_tools_event() -> Event {
+        let mut tools = HashMap::new();
+        tools.insert(
+            "mcp__docs__list".to_string(),
+            Tool {
+                annotations: None,
+                description: None,
+                input_schema: ToolInputSchema {
+                    properties: None,
+                    required: None,
+                    r#type: "object".to_string(),
+                },
+                name: "list".to_string(),
+                output_schema: None,
+                title: None,
+            },
+        );
+
+        Event {
+            id: String::new(),
+            msg: EventMsg::McpListToolsResponse(McpListToolsResponseEvent {
+                tools,
+                resources: HashMap::new(),
+                resource_templates: HashMap::new(),
+                auth_statuses: HashMap::new(),
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn open_mcp_tools_modal_sets_centered_modal_for_empty_config() {
+        let (mut app, _rx, mut op_rx) = make_test_app_with_channels().await;
+        app.open_mcp_tools_modal();
+
+        assert!(
+            app.mcp_tools_modal.is_some(),
+            "expected App to own the /mcp modal"
+        );
+        assert_eq!(app.pending_mcp_tools_modal_responses, 0);
+        assert!(op_rx.try_recv().is_err());
+        assert!(app.chat_widget.no_modal_or_popup_active());
+    }
+
+    #[tokio::test]
+    async fn open_mcp_tools_modal_submits_list_op_for_configured_servers() {
+        let (mut app, _rx, mut op_rx) = make_test_app_with_channels().await;
+        add_test_mcp_server(&mut app);
+
+        app.open_mcp_tools_modal();
+
+        assert!(
+            app.mcp_tools_modal.is_some(),
+            "expected App to own the /mcp modal"
+        );
+        assert_eq!(app.pending_mcp_tools_modal_responses, 1);
+        assert!(matches!(op_rx.try_recv(), Ok(Op::ListMcpTools)));
+        assert!(app.chat_widget.no_modal_or_popup_active());
+    }
+
+    #[tokio::test]
+    async fn mcp_list_tools_response_updates_open_modal_without_history() {
+        let (mut app, mut rx, _op_rx) = make_test_app_with_channels().await;
+        add_test_mcp_server(&mut app);
+        app.open_mcp_tools_modal();
+
+        app.handle_codex_event_now(mcp_tools_event());
+
+        assert_eq!(app.pending_mcp_tools_modal_responses, 0);
+        assert!(
+            app.mcp_tools_modal.is_some(),
+            "expected response to keep modal open"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "expected modal response to avoid writing history"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_list_tools_response_after_modal_closed_is_swallowed() {
+        let (mut app, mut rx, _op_rx) = make_test_app_with_channels().await;
+        add_test_mcp_server(&mut app);
+        app.open_mcp_tools_modal();
+        app.mcp_tools_modal = None;
+
+        app.handle_codex_event_now(mcp_tools_event());
+
+        assert_eq!(app.pending_mcp_tools_modal_responses, 0);
+        assert!(
+            rx.try_recv().is_err(),
+            "expected closed modal response to avoid writing history"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_list_tools_response_without_pending_modal_uses_history_fallback() {
+        let (mut app, mut rx, _op_rx) = make_test_app_with_channels().await;
+        add_test_mcp_server(&mut app);
+
+        app.handle_codex_event_now(mcp_tools_event());
+
+        assert!(matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_))));
     }
 
     fn test_skill(name: &str) -> adam_agent::protocol::SkillMetadata {
