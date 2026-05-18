@@ -18,8 +18,8 @@ use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 #[cfg(target_os = "macos")]
 use crate::seatbelt::create_seatbelt_command_args;
 #[cfg(target_os = "macos")]
-use crate::spawn::CODEX_SANDBOX_ENV_VAR;
-use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use crate::spawn::ADAM_SANDBOX_ENV_VAR;
+use crate::spawn::ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use crate::tools::sandboxing::SandboxablePreference;
 use adam_protocol::config_types::WindowsSandboxLevel;
 pub use adam_protocol::models::SandboxPermissions;
@@ -114,7 +114,7 @@ impl SandboxManager {
         let mut env = spec.env;
         if !policy.has_full_network_access() {
             env.insert(
-                CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR.to_string(),
+                ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR.to_string(),
                 "1".to_string(),
             );
         }
@@ -128,7 +128,7 @@ impl SandboxManager {
             #[cfg(target_os = "macos")]
             SandboxType::MacosSeatbelt => {
                 let mut seatbelt_env = HashMap::new();
-                seatbelt_env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
+                seatbelt_env.insert(ADAM_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
                 let mut args =
                     create_seatbelt_command_args(command.clone(), policy, sandbox_policy_cwd);
                 let mut full_command = Vec::with_capacity(1 + args.len());

@@ -223,11 +223,11 @@ where
 }
 
 pub fn sandbox_env_var() -> &'static str {
-    adam_agent::spawn::CODEX_SANDBOX_ENV_VAR
+    adam_agent::spawn::ADAM_SANDBOX_ENV_VAR
 }
 
 pub fn sandbox_network_env_var() -> &'static str {
-    adam_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
+    adam_agent::spawn::ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR
 }
 
 pub fn format_with_current_shell(command: &str) -> Vec<String> {

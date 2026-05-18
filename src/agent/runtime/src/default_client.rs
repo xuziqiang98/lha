@@ -1,5 +1,5 @@
 use crate::config_loader::ResidencyRequirement;
-use crate::spawn::CODEX_SANDBOX_ENV_VAR;
+use crate::spawn::ADAM_SANDBOX_ENV_VAR;
 use adam_client::CodexHttpClient;
 pub use adam_client::CodexRequestBuilder;
 use reqwest::header::HeaderMap;
@@ -216,7 +216,7 @@ pub fn build_reqwest_client_with_options(options: ReqwestClientOptions) -> reqwe
 }
 
 fn is_sandboxed() -> bool {
-    std::env::var(CODEX_SANDBOX_ENV_VAR).as_deref() == Ok("seatbelt")
+    std::env::var(ADAM_SANDBOX_ENV_VAR).as_deref() == Ok("seatbelt")
 }
 
 #[cfg(test)]

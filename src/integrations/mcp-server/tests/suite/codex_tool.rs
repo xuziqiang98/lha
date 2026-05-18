@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use adam_agent::parse_command;
 use adam_agent::protocol::FileChange;
 use adam_agent::protocol::ReviewDecision;
-use adam_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use adam_agent::spawn::ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use adam_mcp_server::CodexToolCallParam;
 use adam_mcp_server::ExecApprovalElicitRequestParams;
 use adam_mcp_server::ExecApprovalResponse;
@@ -41,7 +41,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// command, as expected.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_shell_command_approval_triggers_elicitation() {
-    if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+    if env::var(ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
             "Skipping test because it cannot execute when network is disabled in a Adam sandbox."
         );
@@ -215,7 +215,7 @@ fn create_expected_elicitation_request(
 /// sending the approval applies the patch, as expected.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_patch_approval_triggers_elicitation() {
-    if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+    if env::var(ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
             "Skipping test because it cannot execute when network is disabled in a Adam sandbox."
         );

@@ -17,7 +17,7 @@ use adam_agent::config::Config;
 use adam_agent::protocol::EventMsg;
 use adam_agent::protocol::Op;
 use adam_agent::protocol::WarningEvent;
-use adam_agent::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use adam_agent::spawn::ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use adam_protocol::config_types::Identity;
 use adam_protocol::config_types::IdentityKind;
 use adam_protocol::config_types::ReasoningSummary;
@@ -41,7 +41,7 @@ use wiremock::MockServer;
 const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
 
 fn network_disabled() -> bool {
-    std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
+    std::env::var(ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
 }
 
 fn body_contains_text(body: &str, text: &str) -> bool {

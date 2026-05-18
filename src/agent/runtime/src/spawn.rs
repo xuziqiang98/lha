@@ -15,12 +15,12 @@ use crate::protocol::SandboxPolicy;
 ///
 /// We may try to have just one environment variable for all sandboxing
 /// attributes, so this may change in the future.
-pub const CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR: &str = "CODEX_SANDBOX_NETWORK_DISABLED";
+pub const ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR: &str = "ADAM_SANDBOX_NETWORK_DISABLED";
 
 /// Should be set when the process is spawned under a sandbox. Currently, the
 /// value is "seatbelt" for macOS, but it may change in the future to
 /// accommodate sandboxing configuration and other sandboxing mechanisms.
-pub const CODEX_SANDBOX_ENV_VAR: &str = "CODEX_SANDBOX";
+pub const ADAM_SANDBOX_ENV_VAR: &str = "ADAM_SANDBOX";
 
 #[derive(Debug, Clone, Copy)]
 pub enum StdioPolicy {
@@ -34,7 +34,7 @@ pub enum StdioPolicy {
 ///
 /// For now, we take `SandboxPolicy` as a parameter to spawn_child() because
 /// we need to determine whether to set the
-/// `CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR` environment variable.
+/// `ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR` environment variable.
 pub(crate) async fn spawn_child_async(
     program: PathBuf,
     args: Vec<String>,
@@ -57,7 +57,7 @@ pub(crate) async fn spawn_child_async(
     cmd.envs(env);
 
     if !sandbox_policy.has_full_network_access() {
-        cmd.env(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR, "1");
+        cmd.env(ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR, "1");
     }
 
     // If this Adam process dies (including being killed via SIGKILL), we want

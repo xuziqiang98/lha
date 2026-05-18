@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use tokio::process::Child;
 
 use crate::protocol::SandboxPolicy;
-use crate::spawn::CODEX_SANDBOX_ENV_VAR;
+use crate::spawn::ADAM_SANDBOX_ENV_VAR;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 
@@ -30,7 +30,7 @@ pub async fn spawn_command_under_seatbelt(
 ) -> std::io::Result<Child> {
     let args = create_seatbelt_command_args(command, sandbox_policy, sandbox_policy_cwd);
     let arg0 = None;
-    env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
+    env.insert(ADAM_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
     spawn_child_async(
         PathBuf::from(MACOS_PATH_TO_SEATBELT_EXECUTABLE),
         args,

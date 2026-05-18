@@ -9,7 +9,7 @@ use adam_agent::exec::SandboxType;
 use adam_agent::exec::process_exec_tool_call;
 use adam_agent::protocol::SandboxPolicy;
 use adam_agent::sandboxing::SandboxPermissions;
-use adam_agent::spawn::CODEX_SANDBOX_ENV_VAR;
+use adam_agent::spawn::ADAM_SANDBOX_ENV_VAR;
 use adam_protocol::config_types::WindowsSandboxLevel;
 use tempfile::TempDir;
 
@@ -18,8 +18,8 @@ use adam_agent::error::Result;
 use adam_agent::get_platform_sandbox;
 
 fn skip_test() -> bool {
-    if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
-        eprintln!("{CODEX_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
+    if std::env::var(ADAM_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
+        eprintln!("{ADAM_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
         return true;
     }
 
