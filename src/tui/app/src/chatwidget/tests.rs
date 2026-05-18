@@ -5018,13 +5018,25 @@ async fn model_command_requests_centered_model_selection_modal() {
 }
 
 #[tokio::test]
-async fn personality_selection_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
+async fn personality_command_requests_centered_personality_selection_modal() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.open_personality_popup();
 
-    let popup = render_bottom_popup(&chat, 80);
-    assert_snapshot!("personality_selection_popup", popup);
+    let events = drain_events(&mut rx);
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::OpenPersonalitySelectionModal {
+                current_personality: Personality::Friendly,
+            }
+        )),
+        "expected /personality to request centered personality selection modal: {events:?}"
+    );
+    assert!(
+        !render_bottom_popup(&chat, 80).contains("Select Personality"),
+        "personality picker should be owned by App modal, not the bottom pane"
+    );
 }
 
 #[tokio::test]

@@ -85,6 +85,7 @@ mod notifications;
 #[allow(dead_code)]
 pub mod onboarding;
 mod pager_overlay;
+mod personality_selection_modal;
 mod project_trust_modal;
 mod provider_config;
 mod provider_config_modal;

@@ -51,6 +51,8 @@ use crate::multi_agents::AgentPickerThreadEntry;
 use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::sort_agent_picker_threads;
 use crate::pager_overlay::Overlay;
+use crate::personality_selection_modal::PersonalitySelectionModal;
+use crate::personality_selection_modal::PersonalitySelectionModalAction;
 use crate::project_trust_modal::ProjectTrustModal;
 use crate::project_trust_modal::ProjectTrustModalAction;
 use crate::provider_config::CustomProviderConfig;
@@ -626,6 +628,7 @@ pub(crate) struct App {
     identity_modal: Option<IdentityModal>,
     model_selection_modal: Option<ModelSelectionModal>,
     experimental_features_modal: Option<ExperimentalFeaturesModal>,
+    personality_selection_modal: Option<PersonalitySelectionModal>,
     mcp_tools_modal: Option<McpToolsModal>,
     next_mcp_tools_modal_request_id: u64,
     pending_mcp_tools_modal_request_id: Option<u64>,
@@ -2339,6 +2342,7 @@ impl App {
             identity_modal: None,
             model_selection_modal: None,
             experimental_features_modal: None,
+            personality_selection_modal: None,
             mcp_tools_modal: None,
             next_mcp_tools_modal_request_id: 1,
             pending_mcp_tools_modal_request_id: None,
@@ -2546,6 +2550,18 @@ impl App {
                 }
                 TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
             }
+        } else if self.personality_selection_modal.is_some() {
+            match event {
+                TuiEvent::Key(key_event) => {
+                    return self
+                        .handle_personality_selection_modal_key_event(tui, key_event)
+                        .await;
+                }
+                TuiEvent::Draw => {
+                    self.draw_main_ui(tui)?;
+                }
+                TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
+            }
         } else if self.mcp_tools_modal.is_some() {
             match event {
                 TuiEvent::Key(key_event) => {
@@ -2664,6 +2680,8 @@ impl App {
             } else if let Some(modal) = &self.model_selection_modal {
                 modal.render(frame.area(), frame.buffer);
             } else if let Some(modal) = &self.experimental_features_modal {
+                modal.render(frame.area(), frame.buffer);
+            } else if let Some(modal) = &self.personality_selection_modal {
                 modal.render(frame.area(), frame.buffer);
             } else if let Some(modal) = &self.mcp_tools_modal {
                 modal.render(frame.area(), frame.buffer);
@@ -2876,6 +2894,51 @@ impl App {
                     self.maybe_open_pending_skills_modal_with_redraw(tui);
                     Ok(control)
                 }
+            }
+        }
+    }
+
+    async fn handle_personality_selection_modal_key_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        key_event: KeyEvent,
+    ) -> Result<AppRunControl> {
+        let action = self
+            .personality_selection_modal
+            .as_mut()
+            .map(|modal| modal.handle_key_event(key_event))
+            .unwrap_or(PersonalitySelectionModalAction::None);
+        match action {
+            PersonalitySelectionModalAction::None => {
+                tui.frame_requester().schedule_frame();
+                Ok(AppRunControl::Continue)
+            }
+            PersonalitySelectionModalAction::Exit => {
+                self.personality_selection_modal = None;
+                self.maybe_open_pending_skills_modal_with_redraw(tui);
+                tui.frame_requester().schedule_frame();
+                Ok(AppRunControl::Continue)
+            }
+            PersonalitySelectionModalAction::Select { personality } => {
+                self.personality_selection_modal = None;
+                tui.frame_requester().schedule_frame();
+                self.chat_widget.submit_op(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    windows_sandbox_level: None,
+                    model: None,
+                    effort: None,
+                    summary: None,
+                    identity: None,
+                    personality: Some(personality),
+                });
+                self.on_update_personality(personality);
+                let control = self
+                    .handle_event(tui, AppEvent::PersistPersonalitySelection { personality })
+                    .await?;
+                self.maybe_open_pending_skills_modal_with_redraw(tui);
+                Ok(control)
             }
         }
     }
@@ -3430,11 +3493,13 @@ impl App {
             AppEvent::OpenExperimentalFeaturesModal => {
                 self.open_experimental_features_modal();
             }
+            AppEvent::OpenPersonalitySelectionModal {
+                current_personality,
+            } => {
+                self.open_personality_selection_modal(current_personality);
+            }
             AppEvent::OpenMcpToolsModal => {
                 self.open_mcp_tools_modal();
-            }
-            AppEvent::UpdatePersonality(personality) => {
-                self.on_update_personality(personality);
             }
             AppEvent::CustomProviderConfigured(config) => {
                 return Ok(self
@@ -4240,6 +4305,13 @@ impl App {
         self.chat_widget.request_redraw_for_ui();
     }
 
+    fn open_personality_selection_modal(&mut self, current_personality: Personality) {
+        self.chat_widget.dismiss_active_view();
+        self.personality_selection_modal =
+            Some(PersonalitySelectionModal::new(current_personality));
+        self.chat_widget.request_redraw_for_ui();
+    }
+
     fn open_mcp_tools_modal(&mut self) {
         self.chat_widget.dismiss_active_view();
         if self.config.mcp_servers.is_empty() {
@@ -4297,6 +4369,7 @@ impl App {
             && self.identity_modal.is_none()
             && self.model_selection_modal.is_none()
             && self.experimental_features_modal.is_none()
+            && self.personality_selection_modal.is_none()
             && self.mcp_tools_modal.is_none()
             && self.skills_modal.is_none()
             && self.approval_mode_modal.is_none()
@@ -6382,6 +6455,7 @@ mod tests {
             identity_modal: None,
             model_selection_modal: None,
             experimental_features_modal: None,
+            personality_selection_modal: None,
             mcp_tools_modal: None,
             next_mcp_tools_modal_request_id: 1,
             pending_mcp_tools_modal_request_id: None,
@@ -6455,6 +6529,7 @@ mod tests {
                 identity_modal: None,
                 model_selection_modal: None,
                 experimental_features_modal: None,
+                personality_selection_modal: None,
                 mcp_tools_modal: None,
                 next_mcp_tools_modal_request_id: 1,
                 pending_mcp_tools_modal_request_id: None,
@@ -6597,6 +6672,7 @@ show_raw_agent_reasoning = true
             identity_modal: None,
             model_selection_modal: None,
             experimental_features_modal: None,
+            personality_selection_modal: None,
             mcp_tools_modal: None,
             next_mcp_tools_modal_request_id: 1,
             pending_mcp_tools_modal_request_id: None,
@@ -6856,6 +6932,18 @@ show_raw_agent_reasoning = true
         assert!(
             app.experimental_features_modal.is_some(),
             "expected App to own the /experimental modal"
+        );
+        assert!(app.chat_widget.no_modal_or_popup_active());
+    }
+
+    #[tokio::test]
+    async fn open_personality_selection_modal_sets_centered_modal() {
+        let mut app = make_test_app().await;
+        app.open_personality_selection_modal(Personality::Friendly);
+
+        assert!(
+            app.personality_selection_modal.is_some(),
+            "expected App to own the /personality modal"
         );
         assert!(app.chat_widget.no_modal_or_popup_active());
     }

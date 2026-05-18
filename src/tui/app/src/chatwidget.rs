@@ -4268,58 +4268,11 @@ impl ChatWidget {
             ));
             return;
         }
-        self.open_personality_popup_for_current_model();
-    }
-
-    fn open_personality_popup_for_current_model(&mut self) {
-        let current_personality = self.config.personality.unwrap_or(Personality::Friendly);
-        let personalities = [Personality::Friendly, Personality::Pragmatic];
-        let supports_personality = self.current_model_supports_personality();
-
-        let items: Vec<SelectionItem> = personalities
-            .into_iter()
-            .map(|personality| {
-                let name = Self::personality_label(personality).to_string();
-                let description = Some(Self::personality_description(personality).to_string());
-                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                        cwd: None,
-                        approval_policy: None,
-                        sandbox_policy: None,
-                        model: None,
-                        effort: None,
-                        summary: None,
-                        identity: None,
-                        windows_sandbox_level: None,
-                        personality: Some(personality),
-                    }));
-                    tx.send(AppEvent::UpdatePersonality(personality));
-                    tx.send(AppEvent::PersistPersonalitySelection { personality });
-                })];
-                SelectionItem {
-                    name,
-                    description,
-                    is_current: current_personality == personality,
-                    is_disabled: !supports_personality,
-                    actions,
-                    dismiss_on_select: true,
-                    ..Default::default()
-                }
-            })
-            .collect();
-
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from("Select Personality".bold()));
-        header.push(Line::from(
-            "Choose a communication style for Adam. Disable in /experimental.".dim(),
-        ));
-
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            header: Box::new(header),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            ..Default::default()
-        });
+        self.app_event_tx
+            .send(AppEvent::OpenPersonalitySelectionModal {
+                current_personality: self.config.personality.unwrap_or(Personality::Friendly),
+            });
+        self.request_redraw();
     }
 
     fn model_menu_header(&self, title: &str, subtitle: &str) -> Box<dyn Renderable> {
@@ -5838,20 +5791,6 @@ impl ChatWidget {
                 reasoning_effort,
                 format_directory_display(&self.config.cwd, None),
             );
-        }
-    }
-
-    fn personality_label(personality: Personality) -> &'static str {
-        match personality {
-            Personality::Friendly => "Friendly",
-            Personality::Pragmatic => "Pragmatic",
-        }
-    }
-
-    fn personality_description(personality: Personality) -> &'static str {
-        match personality {
-            Personality::Friendly => "Warm, collaborative, and helpful.",
-            Personality::Pragmatic => "Concise, task-focused, and direct.",
         }
     }
 
