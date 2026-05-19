@@ -27,6 +27,8 @@ use super::popup_consts::standard_popup_hint_line;
 use super::textarea::TextArea;
 use super::textarea::TextAreaState;
 
+const ADAM_ISSUE_REPO_URL: &str = "https://github.com/xuziqiang98/adam";
+
 /// Minimal input overlay to collect an optional feedback note, then persist
 /// logs and rollout locally with classification + metadata.
 pub(crate) struct FeedbackNoteView {
@@ -100,6 +102,10 @@ impl FeedbackNoteView {
                     Line::from(vec!["  Saved to: ".into(), saved_path.bold()]),
                     Line::from(vec!["  Thread ID: ".into(), persisted.thread_id.bold()]),
                     "".into(),
+                    Line::from(vec![
+                        "  You can also open an issue at ".into(),
+                        ADAM_ISSUE_REPO_URL.cyan().underlined(),
+                    ]),
                     Line::from("  Thanks for the feedback!"),
                 ];
                 self.app_event_tx
@@ -533,7 +539,7 @@ mod tests {
     }
 
     #[test]
-    fn submit_feedback_emits_local_save_details_without_follow_up_instructions() {
+    fn submit_feedback_emits_local_save_details_with_issue_prompt() {
         let adam_home = tempfile::TempDir::new().expect("tempdir");
         let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -563,8 +569,7 @@ mod tests {
         assert!(rendered.contains("Saved to:"));
         assert!(rendered.contains("Thread ID:"));
         assert!(rendered.contains("Thanks for the feedback!"));
-        assert!(!rendered.contains("github.com"));
-        assert!(!rendered.contains("open an issue"));
-        assert!(!rendered.contains("#adam-feedback"));
+        assert!(rendered.contains("open an issue"));
+        assert!(rendered.contains("https://github.com/xuziqiang98/adam"));
     }
 }

@@ -32,7 +32,7 @@ use textwrap::wrap;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 
-const MCP_DOCS_URL: &str = "https://developers.openai.com/codex/mcp";
+const MCP_DOCS_URL: &str = "https://github.com/xuziqiang98/adam/blob/main/docs/mcp.md";
 
 pub(crate) struct McpToolsModal {
     servers: Vec<(String, McpServerConfig)>,
