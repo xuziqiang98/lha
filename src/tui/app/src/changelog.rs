@@ -85,9 +85,10 @@ pub(crate) async fn get_git_changelog(cwd: &Path) -> io::Result<Option<Changelog
     let line_stats = collect_git_line_stats(cwd, &display_root, &status_entries).await?;
     let mut entries: Vec<ChangelogEntry> = status_entries
         .into_iter()
-        .map(|entry| ChangelogEntry {
+        .zip(line_stats)
+        .map(|(entry, line_stats)| ChangelogEntry {
             kind: entry.kind,
-            line_stats: line_stats.get(&entry.path).copied(),
+            line_stats,
             path: entry.path,
         })
         .collect();
@@ -281,26 +282,28 @@ async fn collect_git_line_stats(
     cwd: &Path,
     display_root: &Path,
     entries: &[GitStatusEntry],
-) -> io::Result<HashMap<PathBuf, LineStats>> {
-    let mut stats = collect_tracked_git_line_stats(cwd, display_root, entries).await?;
+) -> io::Result<Vec<Option<LineStats>>> {
+    let tracked_stats = collect_tracked_git_line_stats(cwd, display_root, entries).await?;
+    let mut stats = Vec::with_capacity(entries.len());
 
-    for entry in entries.iter().filter(|entry| entry.is_untracked) {
-        if stats.contains_key(&entry.path) {
+    for entry in entries {
+        if !entry.is_untracked {
+            stats.push(tracked_stats.get(&entry.path).copied());
             continue;
         }
 
-        match collect_added_file_line_stats(entry.path.clone()).await {
-            Ok(Some(line_stats)) => {
-                stats.insert(entry.path.clone(), line_stats);
-            }
-            Ok(None) => {}
+        let line_stats = match collect_added_file_line_stats(entry.path.clone()).await {
+            Ok(Some(line_stats)) => Some(line_stats),
+            Ok(None) => None,
             Err(err) => {
                 warn!(
                     "skipping line stats for untracked path {}: {err}",
                     entry.path.display()
                 );
+                None
             }
-        }
+        };
+        stats.push(line_stats);
     }
 
     Ok(stats)
@@ -1028,6 +1031,48 @@ mod tests {
                         removed: 0,
                     }),
                 }],
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn git_changelog_keeps_line_stats_per_same_path_status_entry() {
+        let dir = tempdir().expect("tempdir");
+        init_git_repo(dir.path());
+        std::fs::write(dir.path().join("f"), "old1\nold2\n").expect("write original file");
+        run_git(dir.path(), ["add", "f"]);
+        run_git(dir.path(), ["commit", "-m", "initial"]);
+        run_git(dir.path(), ["rm", "--cached", "f"]);
+        std::fs::write(dir.path().join("f"), "new1\n").expect("write replacement file");
+
+        let output = get_git_changelog(dir.path())
+            .await
+            .expect("git changelog")
+            .expect("git repo");
+        let display_root = std::fs::canonicalize(dir.path()).expect("canonicalize tempdir");
+
+        assert_eq!(
+            output,
+            ChangelogOutput::Entries {
+                display_root: display_root.clone(),
+                entries: vec![
+                    ChangelogEntry {
+                        kind: ChangelogKind::Added,
+                        path: display_root.join("f"),
+                        line_stats: Some(LineStats {
+                            added: 1,
+                            removed: 0,
+                        }),
+                    },
+                    ChangelogEntry {
+                        kind: ChangelogKind::Deleted,
+                        path: display_root.join("f"),
+                        line_stats: Some(LineStats {
+                            added: 0,
+                            removed: 2,
+                        }),
+                    },
+                ],
             }
         );
     }
