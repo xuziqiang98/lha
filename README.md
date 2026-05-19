@@ -13,6 +13,10 @@ export PATH="<adam binary path>:$PATH" >> ~/.bashrc
 The resulting binary is written to `target/release/adam`.
 The `adam-exec` binary is written to `target/release/adam-exec`.
 
+## Documentation
+
+- [MCP configuration](./docs/mcp.md)
+
 ## Structure
 
 The workspace is organized under [`src/`](./src) with seven top-level domains:
