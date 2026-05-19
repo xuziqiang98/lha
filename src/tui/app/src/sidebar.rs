@@ -84,6 +84,7 @@ pub(crate) struct StatusPanelSnapshot {
     pub(crate) left_context_tokens: Option<i64>,
     pub(crate) total_usage_tokens: i64,
     pub(crate) cache_hit_percent: Option<i64>,
+    pub(crate) context_compact_count: usize,
 }
 
 pub(crate) fn sidebar_width(total_width: u16) -> Option<u16> {
@@ -307,6 +308,12 @@ fn push_status(lines: &mut Vec<Line<'static>>, status: Option<&StatusPanelSnapsh
             format!("{cache_hit_percent}%").into(),
         ]));
     }
+    if context.context_compact_count > 0 {
+        lines.push(Line::from(vec![
+            "  compact ".dim(),
+            context.context_compact_count.to_string().into(),
+        ]));
+    }
 }
 
 fn agent_status_label(status: &AgentStatus) -> Span<'static> {
@@ -452,6 +459,7 @@ mod tests {
                 left_context_tokens: Some(55),
                 total_usage_tokens: 45,
                 cache_hit_percent: Some(25),
+                context_compact_count: 1,
             }),
         };
 
@@ -486,6 +494,7 @@ mod tests {
         assert!(rendered.contains("left 55"));
         assert!(rendered.contains("total 45"));
         assert!(rendered.contains("cached 25%"));
+        assert!(rendered.contains("compact 1"));
         assert!(!rendered.contains("used"));
         assert!(!rendered.contains("tokens"));
         assert!(!rendered.contains("Context"));
@@ -500,6 +509,7 @@ mod tests {
                 left_context_tokens: Some(19_800),
                 total_usage_tokens: 12_345,
                 cache_hit_percent: Some(25),
+                context_compact_count: 2,
             }),
             ..Default::default()
         };
@@ -509,6 +519,7 @@ mod tests {
         assert!(rendered.contains("left 19.8K"));
         assert!(rendered.contains("total 12.3K"));
         assert!(rendered.contains("cached 25%"));
+        assert!(rendered.contains("compact 2"));
         assert!(!rendered.contains("5K"));
     }
 
@@ -521,6 +532,7 @@ mod tests {
                 left_context_tokens: None,
                 total_usage_tokens: 12_345,
                 cache_hit_percent: None,
+                context_compact_count: 0,
             }),
             ..Default::default()
         };
@@ -529,6 +541,7 @@ mod tests {
 
         assert!(!rendered.contains("left"));
         assert!(!rendered.contains("cached"));
+        assert!(!rendered.contains("compact"));
         assert!(rendered.contains("total 12.3K"));
     }
 

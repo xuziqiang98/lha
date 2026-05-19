@@ -6557,6 +6557,7 @@ impl ChatWidget {
                 .token_info
                 .as_ref()
                 .and_then(|info| cache_hit_percent(&info.total_token_usage)),
+            context_compact_count: self.context_compact_count,
         });
 
         SidebarSnapshot {

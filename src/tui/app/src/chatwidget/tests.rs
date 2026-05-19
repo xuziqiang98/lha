@@ -1934,6 +1934,7 @@ async fn sidebar_status_uses_status_token_semantics() {
             left_context_tokens: Some(19_800),
             total_usage_tokens: 17_000,
             cache_hit_percent: Some(25),
+            context_compact_count: 0,
         }
     );
 }
@@ -1966,8 +1967,56 @@ async fn sidebar_status_omits_cache_hit_percent_when_cached_input_is_zero() {
             left_context_tokens: None,
             total_usage_tokens: 22_000,
             cache_hit_percent: None,
+            context_compact_count: 0,
         }
     );
+}
+
+#[tokio::test]
+async fn sidebar_status_includes_context_compact_count() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().expect("rollout file");
+    let configured = adam_agent::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        identity_kind: IdentityKind::Nobody,
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "compact-1".into(),
+        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: conversation_id,
+            turn_id: "turn-1".to_string(),
+            item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
+        }),
+    });
+    drain_insert_history(&mut rx);
+
+    let status = chat
+        .sidebar_snapshot()
+        .status
+        .expect("sidebar status should be present");
+
+    assert_eq!(status.context_compact_count, 1);
 }
 
 #[cfg_attr(
