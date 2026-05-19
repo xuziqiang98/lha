@@ -18,7 +18,9 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::changelog::ChangelogOutput;
 use crate::changelog::DirectorySnapshot;
 use crate::changelog::get_git_changelog;
+use crate::changelog::get_git_changelog_entry_count;
 use crate::changelog::get_non_git_changelog;
+use crate::changelog::get_non_git_changelog_entry_count;
 use crate::changelog::git_repo_root;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
@@ -870,6 +872,57 @@ impl App {
         });
     }
 
+    async fn request_changelog_count(&mut self) {
+        let cwd = self.config.cwd.clone();
+        let tx = self.app_event_tx.clone();
+
+        match git_repo_root(&cwd).await {
+            Ok(Some(_)) => {
+                tokio::spawn(async move {
+                    let result = get_git_changelog_entry_count(&cwd)
+                        .await
+                        .and_then(|count| {
+                            count.ok_or_else(|| io::Error::other("git changelog unavailable"))
+                        })
+                        .map_err(|err| err.to_string());
+                    tx.send(AppEvent::ChangelogCountResult(result));
+                });
+                return;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                self.app_event_tx
+                    .send(AppEvent::ChangelogCountResult(Err(err.to_string())));
+                return;
+            }
+        }
+
+        if let Err(err) = self.ensure_non_git_changelog_baseline(cwd.clone()).await {
+            self.app_event_tx
+                .send(AppEvent::ChangelogCountResult(Err(err)));
+            return;
+        }
+
+        let Some(tracker) = self.non_git_changelog_baselines.get(&cwd).cloned() else {
+            self.app_event_tx
+                .send(AppEvent::ChangelogCountResult(Err(format!(
+                    "missing changelog baseline for {}",
+                    cwd.display()
+                ))));
+            return;
+        };
+
+        tokio::spawn(async move {
+            let result = match tracker.wait_ready().await {
+                Ok(baseline) => get_non_git_changelog_entry_count(&cwd, baseline.as_ref())
+                    .await
+                    .map_err(|err| err.to_string()),
+                Err(err) => Err(err),
+            };
+            tx.send(AppEvent::ChangelogCountResult(result));
+        });
+    }
+
     fn insert_history_cell(&mut self, cell: Box<dyn HistoryCell>, tui: &mut tui::Tui) {
         let cell: Arc<dyn HistoryCell> = cell.into();
         self.insert_history_cell_arc(cell, tui);
@@ -919,6 +972,7 @@ impl App {
                 display_root,
                 entries,
             }) => {
+                self.chat_widget.set_changelog_files_count(entries.len());
                 if entries.is_empty() {
                     self.insert_history_cell_state(Arc::new(history_cell::new_info_event(
                         "No changes detected.".to_string(),
@@ -3450,6 +3504,9 @@ impl App {
             AppEvent::RequestChangelog => {
                 self.request_changelog().await;
             }
+            AppEvent::RequestChangelogCount => {
+                self.request_changelog_count().await;
+            }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
                 self.chat_widget.on_diff_complete();
@@ -3467,6 +3524,12 @@ impl App {
             AppEvent::ChangelogResult(result) => {
                 self.insert_changelog_result(result);
                 tui.frame_requester().schedule_frame();
+            }
+            AppEvent::ChangelogCountResult(result) => {
+                if let Ok(count) = result {
+                    self.chat_widget.set_changelog_files_count(count);
+                    tui.frame_requester().schedule_frame();
+                }
             }
             AppEvent::OpenAppLink {
                 title,
@@ -5670,6 +5733,43 @@ mod tests {
                 );
             }
             other => panic!("expected changelog result, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn request_changelog_count_uses_session_baseline_outside_git() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let temp_dir = tempdir().expect("tempdir");
+        let cwd = temp_dir.path().to_path_buf();
+        let path = cwd.join("tracked.txt");
+        std::fs::write(&path, "before").expect("write initial file");
+        app.config.cwd = cwd.clone();
+
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.ensure_non_git_changelog_baseline(cwd.clone())
+            .await
+            .expect("prepare baseline");
+        let tracker = app
+            .non_git_changelog_baselines
+            .get(&cwd)
+            .cloned()
+            .expect("baseline tracker");
+        tracker.wait_ready().await.expect("baseline ready");
+        std::fs::write(path, "after").expect("update file");
+
+        app.request_changelog_count().await;
+
+        let event = time::timeout(std::time::Duration::from_secs(2), app_event_rx.recv())
+            .await
+            .expect("wait for changelog count result")
+            .expect("result event");
+
+        match event {
+            AppEvent::ChangelogCountResult(Ok(count)) => {
+                assert_eq!(count, 1);
+            }
+            other => panic!("expected changelog count result, got {other:?}"),
         }
     }
 

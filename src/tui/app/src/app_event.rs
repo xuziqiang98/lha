@@ -123,6 +123,12 @@ pub(crate) enum AppEvent {
     /// Result of computing a `/changelog` command.
     ChangelogResult(Result<ChangelogOutput, String>),
 
+    /// Request the current `/changelog` file count for sidebar metadata.
+    RequestChangelogCount,
+
+    /// Result of computing the current `/changelog` file count.
+    ChangelogCountResult(Result<usize, String>),
+
     #[allow(dead_code)]
     /// Open the app link view in the bottom pane.
     OpenAppLink {

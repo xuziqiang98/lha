@@ -100,6 +100,31 @@ pub(crate) async fn get_git_changelog(cwd: &Path) -> io::Result<Option<Changelog
     }))
 }
 
+pub(crate) async fn get_git_changelog_entry_count(cwd: &Path) -> io::Result<Option<usize>> {
+    let Some(display_root) = git_repo_root(cwd).await? else {
+        return Ok(None);
+    };
+
+    let output = Command::new("git")
+        .args(["status", "--porcelain=v1", "--untracked-files=all", "-z"])
+        .current_dir(cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "git status failed with status {}",
+            output.status
+        )));
+    }
+
+    Ok(Some(
+        parse_porcelain_v1_z(&output.stdout, &display_root).len(),
+    ))
+}
+
 pub(crate) async fn git_repo_root(cwd: &Path) -> io::Result<Option<PathBuf>> {
     let output = match Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
@@ -146,6 +171,14 @@ pub(crate) async fn get_non_git_changelog(
         display_root,
         entries,
     })
+}
+
+pub(crate) async fn get_non_git_changelog_entry_count(
+    cwd: &Path,
+    baseline: &DirectorySnapshot,
+) -> io::Result<usize> {
+    let current = capture_directory_snapshot(cwd.to_path_buf()).await?;
+    Ok(diff_snapshots(baseline, &current).len())
 }
 
 fn capture_directory_snapshot_blocking(root: &Path) -> io::Result<DirectorySnapshot> {

@@ -182,6 +182,7 @@ use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::sidebar::AgentPanelEntry;
 use crate::sidebar::McpPanelSnapshot;
+use crate::sidebar::SIDEBAR_VISIBLE_FILES_LIMIT;
 use crate::sidebar::SidebarSnapshot;
 use crate::sidebar::SidebarWidget;
 use crate::sidebar::SkillPanelEntry;
@@ -481,6 +482,7 @@ pub(crate) struct ChatWidget {
     task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
     changed_files: VecDeque<String>,
+    changelog_files_count: usize,
     /// Tracks whether adam-agent currently considers an agent turn to be in progress.
     ///
     /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
@@ -1881,12 +1883,24 @@ impl ChatWidget {
 
     fn on_turn_diff(&mut self, unified_diff: String) {
         debug!("TurnDiffEvent: {unified_diff}");
+        let mut saw_changed_file = false;
         for path in paths_from_unified_diff(&unified_diff) {
+            saw_changed_file = true;
             if self.changed_files.iter().any(|existing| existing == &path) {
                 continue;
             }
-            self.changed_files.push_front(path);
+            if self.changed_files.len() < SIDEBAR_VISIBLE_FILES_LIMIT {
+                self.changed_files.push_front(path);
+            }
         }
+        if saw_changed_file {
+            self.app_event_tx.send(AppEvent::RequestChangelogCount);
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_changelog_files_count(&mut self, count: usize) {
+        self.changelog_files_count = count;
         self.request_redraw();
     }
 
@@ -2416,6 +2430,7 @@ impl ChatWidget {
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             changed_files: VecDeque::new(),
+            changelog_files_count: 0,
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
@@ -2579,6 +2594,7 @@ impl ChatWidget {
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             changed_files: VecDeque::new(),
+            changelog_files_count: 0,
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
@@ -2729,6 +2745,7 @@ impl ChatWidget {
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             changed_files: VecDeque::new(),
+            changelog_files_count: 0,
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
@@ -6549,6 +6566,9 @@ impl ChatWidget {
             task,
             todo,
             files: self.changed_files.iter().cloned().collect(),
+            files_more_count: self
+                .changelog_files_count
+                .saturating_sub(SIDEBAR_VISIBLE_FILES_LIMIT),
             agents: self.sidebar_agents.clone(),
             skills: self
                 .loaded_skills

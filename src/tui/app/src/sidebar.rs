@@ -25,6 +25,7 @@ pub(crate) const SIDEBAR_MIN_WIDTH: u16 = 28;
 pub(crate) const SIDEBAR_MAX_WIDTH: u16 = 42;
 pub(crate) const SIDEBAR_PERCENT: u16 = 28;
 pub(crate) const MAIN_MIN_WIDTH: u16 = 72;
+pub(crate) const SIDEBAR_VISIBLE_FILES_LIMIT: usize = 6;
 const SIDEBAR_BUDDY_CONTENT_RESERVE: u16 = 2;
 
 #[derive(Clone, Debug, Default)]
@@ -32,6 +33,7 @@ pub(crate) struct SidebarSnapshot {
     pub(crate) task: Option<TaskPanelSnapshot>,
     pub(crate) todo: Option<TodoPanelSnapshot>,
     pub(crate) files: Vec<String>,
+    pub(crate) files_more_count: usize,
     pub(crate) agents: Vec<AgentPanelEntry>,
     pub(crate) skills: Vec<SkillPanelEntry>,
     pub(crate) mcp: Option<McpPanelSnapshot>,
@@ -126,7 +128,12 @@ impl Widget for SidebarWidget<'_> {
         let mut lines = Vec::new();
         push_task(&mut lines, self.snapshot.task.as_ref(), area.width);
         push_todo(&mut lines, self.snapshot.todo.as_ref(), area.width);
-        push_files(&mut lines, &self.snapshot.files, area.width);
+        push_files(
+            &mut lines,
+            &self.snapshot.files,
+            self.snapshot.files_more_count,
+            area.width,
+        );
         push_agents(&mut lines, &self.snapshot.agents, area.width);
         push_skills(&mut lines, &self.snapshot.skills, area.width);
         push_mcp(&mut lines, self.snapshot.mcp.as_ref(), area.width);
@@ -188,19 +195,19 @@ fn push_todo(lines: &mut Vec<Line<'static>>, todo: Option<&TodoPanelSnapshot>, w
     }
 }
 
-fn push_files(lines: &mut Vec<Line<'static>>, files: &[String], width: u16) {
+fn push_files(lines: &mut Vec<Line<'static>>, files: &[String], more_count: usize, width: u16) {
     if files.is_empty() {
         return;
     }
     push_section(lines, "Files");
-    for file in files.iter().take(6) {
+    for file in files.iter().take(SIDEBAR_VISIBLE_FILES_LIMIT) {
         lines.push(Line::from(vec![
             "  ".into(),
             truncate(file, width).magenta(),
         ]));
     }
-    if files.len() > 6 {
-        lines.push(format!("  +{} more", files.len() - 6).dim().into());
+    if more_count > 0 {
+        lines.push(format!("  +{more_count} more").dim().into());
     }
 }
 
@@ -423,6 +430,7 @@ mod tests {
                 ],
             }),
             files: vec!["src/tui/app/src/sidebar.rs".to_string()],
+            files_more_count: 0,
             agents: vec![AgentPanelEntry {
                 thread_id: ThreadId::new(),
                 label: "Worker (worker)".to_string(),
@@ -568,7 +576,10 @@ mod tests {
     #[test]
     fn files_and_skills_show_more_counts() {
         let snapshot = SidebarSnapshot {
-            files: (0..8).map(|i| format!("file-{i}.rs")).collect(),
+            files: (0..SIDEBAR_VISIBLE_FILES_LIMIT)
+                .map(|i| format!("file-{i}.rs"))
+                .collect(),
+            files_more_count: 2,
             skills: (0..8)
                 .map(|i| SkillPanelEntry {
                     name: format!("skill-{i}"),

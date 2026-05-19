@@ -2121,6 +2121,7 @@ async fn make_chatwidget_manual_inner(
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
         changed_files: VecDeque::new(),
+        changelog_files_count: 0,
         agent_turn_running: false,
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),
@@ -2292,6 +2293,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
         changed_files: VecDeque::new(),
+        changelog_files_count: 0,
         agent_turn_running: false,
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),
@@ -3129,33 +3131,65 @@ async fn sidebar_task_hides_proposed_plan_without_heading() {
     assert!(chat.sidebar_snapshot().task.is_none());
 }
 
-#[tokio::test]
-async fn sidebar_files_more_count_uses_all_touched_files() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    let unified_diff = (0..20)
+fn unified_diff_for_file_indices(indices: impl IntoIterator<Item = usize>) -> String {
+    indices
+        .into_iter()
         .map(|i| {
             format!(
                 "diff --git a/file-{i}.rs b/file-{i}.rs\n--- a/file-{i}.rs\n+++ b/file-{i}.rs\n@@ -1 +1 @@\n-old\n+new\n"
             )
         })
-        .collect::<String>();
+        .collect()
+}
+
+#[tokio::test]
+async fn sidebar_files_more_count_stays_zero_through_visible_limit() {
+    for count in [3, crate::sidebar::SIDEBAR_VISIBLE_FILES_LIMIT] {
+        let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+
+        chat.on_turn_diff(unified_diff_for_file_indices(0..count));
+
+        let snapshot = chat.sidebar_snapshot();
+        assert_eq!(snapshot.files.len(), count);
+        assert_eq!(snapshot.files_more_count, 0);
+        assert!(!render_sidebar_snapshot(&snapshot).contains("more"));
+    }
+}
+
+#[tokio::test]
+async fn sidebar_files_keeps_visible_files_and_counts_hidden_files() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let unified_diff = unified_diff_for_file_indices(0..20);
 
     chat.on_turn_diff(unified_diff);
+    assert_matches!(rx.try_recv(), Ok(AppEvent::RequestChangelogCount));
+    chat.set_changelog_files_count(20);
 
     let snapshot = chat.sidebar_snapshot();
-    assert_eq!(snapshot.files.len(), 20);
+    assert_eq!(snapshot.files.len(), 6);
+    assert_eq!(snapshot.files_more_count, 14);
 
     let rendered = render_sidebar_snapshot(&snapshot);
-    assert!(rendered.contains("file-19.rs"));
-    assert!(rendered.contains("file-14.rs"));
-    assert!(!rendered.contains("file-13.rs"));
+    assert!(rendered.contains("file-5.rs"));
+    assert!(rendered.contains("file-0.rs"));
+    assert!(!rendered.contains("file-6.rs"));
     assert!(rendered.contains("+14 more"));
 
     chat.on_turn_diff(
-        "diff --git a/file-19.rs b/file-19.rs\n--- a/file-19.rs\n+++ b/file-19.rs\n@@ -1 +1 @@\n-new\n+newer\n"
+        "diff --git a/file-5.rs b/file-5.rs\n--- a/file-5.rs\n+++ b/file-5.rs\n@@ -1 +1 @@\n-new\n+newer\n"
             .to_string(),
     );
-    assert_eq!(chat.sidebar_snapshot().files.len(), 20);
+    let snapshot = chat.sidebar_snapshot();
+    assert_eq!(snapshot.files.len(), 6);
+    assert_eq!(snapshot.files_more_count, 14);
+
+    chat.on_turn_diff(
+        "diff --git a/file-6.rs b/file-6.rs\n--- a/file-6.rs\n+++ b/file-6.rs\n@@ -1 +1 @@\n-new\n+newer\n"
+            .to_string(),
+    );
+    let snapshot = chat.sidebar_snapshot();
+    assert_eq!(snapshot.files.len(), 6);
+    assert_eq!(snapshot.files_more_count, 14);
 }
 
 #[tokio::test]
