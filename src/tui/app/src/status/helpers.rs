@@ -121,11 +121,11 @@ pub(crate) fn format_tokens_compact(value: i64) -> String {
 
 pub(crate) fn cache_hit_percent(usage: &TokenUsage) -> Option<i64> {
     let input = usage.input_tokens.max(0);
-    if input == 0 {
+    let cached = usage.cached_input().min(input);
+    if input == 0 || cached == 0 {
         return None;
     }
 
-    let cached = usage.cached_input().min(input);
     Some((cached.saturating_mul(100).saturating_add(input / 2)) / input)
 }
 
@@ -150,4 +150,57 @@ pub(crate) fn format_directory_display(directory: &Path, max_width: Option<usize
     }
 
     formatted
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn cache_hit_percent_is_unknown_without_input_tokens() {
+        let usage = TokenUsage {
+            cached_input_tokens: 5_000,
+            ..TokenUsage::default()
+        };
+
+        assert_eq!(cache_hit_percent(&usage), None);
+    }
+
+    #[test]
+    fn cache_hit_percent_is_unknown_without_cached_input_tokens() {
+        let usage = TokenUsage {
+            input_tokens: 20_000,
+            output_tokens: 2_000,
+            total_tokens: 22_000,
+            ..TokenUsage::default()
+        };
+
+        assert_eq!(cache_hit_percent(&usage), None);
+    }
+
+    #[test]
+    fn cache_hit_percent_rounds_cached_input_share() {
+        let usage = TokenUsage {
+            input_tokens: 20_000,
+            cached_input_tokens: 5_000,
+            output_tokens: 2_000,
+            total_tokens: 22_000,
+            ..TokenUsage::default()
+        };
+
+        assert_eq!(cache_hit_percent(&usage), Some(25));
+    }
+
+    #[test]
+    fn cache_hit_percent_clamps_cached_input_to_input_tokens() {
+        let usage = TokenUsage {
+            input_tokens: 100,
+            cached_input_tokens: 200,
+            total_tokens: 100,
+            ..TokenUsage::default()
+        };
+
+        assert_eq!(cache_hit_percent(&usage), Some(100));
+    }
 }

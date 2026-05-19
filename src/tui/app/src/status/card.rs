@@ -195,10 +195,9 @@ impl StatusHistoryCell {
     fn token_usage_spans(&self) -> Vec<Span<'static>> {
         let total_fmt = format_tokens_compact(self.token_usage.total);
         let input_fmt = format_tokens_compact(self.token_usage.input);
-        let cached_input_fmt = format_tokens_compact(self.token_usage.cached_input);
         let output_fmt = format_tokens_compact(self.token_usage.output);
 
-        let mut spans = vec![
+        vec![
             Span::from(total_fmt),
             Span::from(" total"),
             Span::from(" (").dim(),
@@ -207,18 +206,21 @@ impl StatusHistoryCell {
             Span::from(" + ").dim(),
             Span::from(output_fmt).dim(),
             Span::from(" output").dim(),
-        ];
-        if let Some(cache_hit_percent) = self.token_usage.cache_hit_percent {
-            spans.extend([
-                Span::from(", ").dim(),
-                Span::from(cached_input_fmt).dim(),
-                Span::from(" cached").dim(),
-                Span::from(" · ").dim(),
-                Span::from(format!("{cache_hit_percent}% hit")).dim(),
-            ]);
-        }
-        spans.push(Span::from(")").dim());
-        spans
+            Span::from(")").dim(),
+        ]
+    }
+
+    fn cache_hit_spans(&self) -> Option<Vec<Span<'static>>> {
+        let cache_hit_percent = self.token_usage.cache_hit_percent?;
+        let cached_input_fmt = format_tokens_compact(self.token_usage.cached_input);
+
+        Some(vec![
+            Span::from(format!("{cache_hit_percent}% hit")),
+            Span::from(" (").dim(),
+            Span::from(cached_input_fmt).dim(),
+            Span::from(" cached").dim(),
+            Span::from(")").dim(),
+        ])
     }
 
     fn context_window_spans(&self) -> Option<Vec<Span<'static>>> {
@@ -278,6 +280,9 @@ impl HistoryCell for StatusHistoryCell {
             push_label(&mut labels, &mut seen, "Identity");
         }
         push_label(&mut labels, &mut seen, "Token usage");
+        if self.token_usage.cache_hit_percent.is_some() {
+            push_label(&mut labels, &mut seen, "Cache hit");
+        }
         if self.token_usage.context_window.is_some() {
             push_label(&mut labels, &mut seen, "Context window");
         }
@@ -323,6 +328,9 @@ impl HistoryCell for StatusHistoryCell {
 
         lines.push(Line::from(Vec::<Span<'static>>::new()));
         lines.push(formatter.line("Token usage", self.token_usage_spans()));
+        if let Some(spans) = self.cache_hit_spans() {
+            lines.push(formatter.line("Cache hit", spans));
+        }
 
         if let Some(spans) = self.context_window_spans() {
             lines.push(formatter.line("Context window", spans));
@@ -410,7 +418,7 @@ mod tests {
     }
 
     #[test]
-    fn token_usage_spans_include_cached_tokens_and_hit_rate() {
+    fn token_usage_spans_omit_cached_tokens_and_hit_rate() {
         let cell = cell_for_usage(StatusTokenUsageData {
             total: 17_000,
             input: 15_000,
@@ -426,10 +434,28 @@ mod tests {
             .map(|span| span.content.to_string())
             .collect::<String>();
 
-        assert_eq!(
-            rendered,
-            "17K total (15K input + 2K output, 5K cached · 25% hit)"
-        );
+        assert_eq!(rendered, "17K total (15K input + 2K output)");
+    }
+
+    #[test]
+    fn cache_hit_spans_include_cached_tokens_and_hit_rate() {
+        let cell = cell_for_usage(StatusTokenUsageData {
+            total: 17_000,
+            input: 15_000,
+            cached_input: 5_000,
+            output: 2_000,
+            cache_hit_percent: Some(25),
+            context_window: None,
+        });
+
+        let rendered = cell
+            .cache_hit_spans()
+            .expect("cache hit should be known")
+            .into_iter()
+            .map(|span| span.content.to_string())
+            .collect::<String>();
+
+        assert_eq!(rendered, "25% hit (5K cached)");
     }
 
     #[test]
@@ -450,5 +476,62 @@ mod tests {
             .collect::<String>();
 
         assert_eq!(rendered, "17K total (15K input + 2K output)");
+    }
+
+    #[test]
+    fn display_lines_render_cache_hit_as_separate_line() {
+        let cell = cell_for_usage(StatusTokenUsageData {
+            total: 17_000,
+            input: 15_000,
+            cached_input: 5_000,
+            output: 2_000,
+            cache_hit_percent: Some(25),
+            context_window: None,
+        });
+
+        let rendered_lines = cell
+            .display_lines(120)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        let token_usage_line = rendered_lines
+            .iter()
+            .find(|line| line.contains("Token usage"))
+            .unwrap_or_else(|| panic!("missing token usage line: {rendered_lines:?}"));
+        let cache_hit_line = rendered_lines
+            .iter()
+            .find(|line| line.contains("Cache hit"))
+            .unwrap_or_else(|| panic!("missing cache hit line: {rendered_lines:?}"));
+
+        assert!(token_usage_line.contains("17K total (15K input + 2K output)"));
+        assert!(!token_usage_line.contains("cached"));
+        assert!(!token_usage_line.contains("hit"));
+        assert!(cache_hit_line.contains("25% hit (5K cached)"));
+    }
+
+    #[test]
+    fn display_lines_omit_cache_hit_when_unknown() {
+        let cell = cell_for_usage(StatusTokenUsageData {
+            total: 17_000,
+            input: 15_000,
+            cached_input: 0,
+            output: 2_000,
+            cache_hit_percent: None,
+            context_window: None,
+        });
+
+        let rendered = cell
+            .display_lines(120)
+            .into_iter()
+            .flat_map(|line| line.spans.into_iter())
+            .map(|span| span.content.to_string())
+            .collect::<String>();
+
+        assert!(!rendered.contains("Cache hit"));
     }
 }
