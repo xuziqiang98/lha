@@ -3142,6 +3142,18 @@ fn unified_diff_for_file_indices(indices: impl IntoIterator<Item = usize>) -> St
         .collect()
 }
 
+fn unified_diff_for_added_file(path: &str) -> String {
+    format!(
+        "diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n@@ -0,0 +1 @@\n+new\n"
+    )
+}
+
+fn unified_diff_for_deleted_file(path: &str) -> String {
+    format!(
+        "diff --git a/{path} b/{path}\ndeleted file mode 100644\n--- a/{path}\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n"
+    )
+}
+
 #[tokio::test]
 async fn sidebar_files_more_count_stays_zero_through_visible_limit() {
     for count in [3, crate::sidebar::SIDEBAR_VISIBLE_FILES_LIMIT] {
@@ -3154,6 +3166,42 @@ async fn sidebar_files_more_count_stays_zero_through_visible_limit() {
         assert_eq!(snapshot.files_more_count, 0);
         assert!(!render_sidebar_snapshot(&snapshot).contains("more"));
     }
+}
+
+#[tokio::test]
+async fn sidebar_files_ignore_deleted_diff_paths() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    while rx.try_recv().is_ok() {}
+
+    chat.on_turn_diff(unified_diff_for_deleted_file("gone.rs"));
+
+    let snapshot = chat.sidebar_snapshot();
+    assert!(snapshot.files.is_empty());
+    assert_eq!(snapshot.files_more_count, 0);
+    assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn sidebar_files_counts_added_and_modified_but_not_deleted() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let unified_diff = format!(
+        "{}{}{}",
+        unified_diff_for_added_file("new.rs"),
+        unified_diff_for_file_indices(0..6),
+        unified_diff_for_deleted_file("gone.rs"),
+    );
+
+    chat.on_turn_diff(unified_diff);
+    chat.set_changelog_files_count(7);
+
+    let snapshot = chat.sidebar_snapshot();
+    assert_eq!(snapshot.files.len(), 6);
+    assert_eq!(snapshot.files_more_count, 1);
+
+    let rendered = render_sidebar_snapshot(&snapshot);
+    assert!(rendered.contains("new.rs"));
+    assert!(!rendered.contains("gone.rs"));
+    assert!(rendered.contains("+1 more"));
 }
 
 #[tokio::test]

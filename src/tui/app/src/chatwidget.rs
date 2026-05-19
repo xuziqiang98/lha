@@ -741,13 +741,10 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
 fn paths_from_unified_diff(diff: &str) -> Vec<String> {
     let mut paths = Vec::new();
     for line in diff.lines() {
-        let Some(raw) = line
-            .strip_prefix("+++ b/")
-            .or_else(|| line.strip_prefix("--- a/"))
-        else {
+        let Some(raw) = line.strip_prefix("+++ b/") else {
             continue;
         };
-        if raw == "/dev/null" || raw.is_empty() {
+        if raw.is_empty() {
             continue;
         }
         let path = raw.split('\t').next().unwrap_or(raw).to_string();

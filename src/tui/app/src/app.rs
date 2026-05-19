@@ -17,10 +17,11 @@ use crate::approval_mode_modal::ApprovalModeModalAction;
 use crate::bottom_pane::ApprovalRequest;
 use crate::changelog::ChangelogOutput;
 use crate::changelog::DirectorySnapshot;
+use crate::changelog::count_sidebar_changelog_files;
 use crate::changelog::get_git_changelog;
-use crate::changelog::get_git_changelog_entry_count;
+use crate::changelog::get_git_changelog_sidebar_file_count;
 use crate::changelog::get_non_git_changelog;
-use crate::changelog::get_non_git_changelog_entry_count;
+use crate::changelog::get_non_git_changelog_sidebar_file_count;
 use crate::changelog::git_repo_root;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
@@ -879,7 +880,7 @@ impl App {
         match git_repo_root(&cwd).await {
             Ok(Some(_)) => {
                 tokio::spawn(async move {
-                    let result = get_git_changelog_entry_count(&cwd)
+                    let result = get_git_changelog_sidebar_file_count(&cwd)
                         .await
                         .and_then(|count| {
                             count.ok_or_else(|| io::Error::other("git changelog unavailable"))
@@ -914,7 +915,7 @@ impl App {
 
         tokio::spawn(async move {
             let result = match tracker.wait_ready().await {
-                Ok(baseline) => get_non_git_changelog_entry_count(&cwd, baseline.as_ref())
+                Ok(baseline) => get_non_git_changelog_sidebar_file_count(&cwd, baseline.as_ref())
                     .await
                     .map_err(|err| err.to_string()),
                 Err(err) => Err(err),
@@ -972,7 +973,8 @@ impl App {
                 display_root,
                 entries,
             }) => {
-                self.chat_widget.set_changelog_files_count(entries.len());
+                self.chat_widget
+                    .set_changelog_files_count(count_sidebar_changelog_files(&entries));
                 if entries.is_empty() {
                     self.insert_history_cell_state(Arc::new(history_cell::new_info_event(
                         "No changes detected.".to_string(),
