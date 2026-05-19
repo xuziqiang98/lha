@@ -282,26 +282,14 @@ async fn collect_git_line_stats(
     display_root: &Path,
     entries: &[GitStatusEntry],
 ) -> io::Result<HashMap<PathBuf, LineStats>> {
-    let mut stats = HashMap::new();
-    let cached_stats = collect_tracked_git_line_stats(
-        cwd,
-        display_root,
-        ["diff", "--numstat", "-z", "--cached", "--"],
-    )
-    .await?;
-    merge_line_stats(&mut stats, cached_stats);
-
-    let unstaged_stats =
-        collect_tracked_git_line_stats(cwd, display_root, ["diff", "--numstat", "-z", "--"])
-            .await?;
-    merge_line_stats(&mut stats, unstaged_stats);
+    let mut stats = collect_tracked_git_line_stats(cwd, display_root, entries).await?;
 
     for entry in entries.iter().filter(|entry| entry.is_untracked) {
         if stats.contains_key(&entry.path) {
             continue;
         }
 
-        match collect_untracked_git_line_stats(display_root, &entry.path).await {
+        match collect_added_file_line_stats(entry.path.clone()).await {
             Ok(Some(line_stats)) => {
                 stats.insert(entry.path.clone(), line_stats);
             }
@@ -318,11 +306,62 @@ async fn collect_git_line_stats(
     Ok(stats)
 }
 
-async fn collect_tracked_git_line_stats<const N: usize>(
+async fn collect_tracked_git_line_stats(
+    cwd: &Path,
+    display_root: &Path,
+    entries: &[GitStatusEntry],
+) -> io::Result<HashMap<PathBuf, LineStats>> {
+    let head_entries = match collect_git_numstat_entries(
+        cwd,
+        display_root,
+        ["diff", "--numstat", "-z", "HEAD", "--"],
+    )
+    .await
+    {
+        Ok(entries) => entries,
+        Err(err) => {
+            if !git_has_head(cwd).await? {
+                return collect_unborn_head_line_stats(entries).await;
+            }
+            return Err(err);
+        }
+    };
+
+    let mut stats = head_entries
+        .iter()
+        .filter_map(|(path, line_stats)| line_stats.map(|line_stats| (path.clone(), line_stats)))
+        .collect::<HashMap<_, _>>();
+
+    let missing_tracked_paths = entries
+        .iter()
+        .filter(|entry| !entry.is_untracked && !head_entries.contains_key(&entry.path))
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
+
+    if missing_tracked_paths.is_empty() {
+        return Ok(stats);
+    }
+
+    let cached_entries = collect_git_numstat_entries(
+        cwd,
+        display_root,
+        ["diff", "--numstat", "-z", "--cached", "--"],
+    )
+    .await?;
+    for path in missing_tracked_paths {
+        if let Some(Some(line_stats)) = cached_entries.get(&path) {
+            stats.insert(path, *line_stats);
+        }
+    }
+
+    Ok(stats)
+}
+
+async fn collect_git_numstat_entries<const N: usize>(
     cwd: &Path,
     display_root: &Path,
     args: [&str; N],
-) -> io::Result<HashMap<PathBuf, LineStats>> {
+) -> io::Result<HashMap<PathBuf, Option<LineStats>>> {
     let output = Command::new("git")
         .args(args)
         .current_dir(cwd)
@@ -338,54 +377,102 @@ async fn collect_tracked_git_line_stats<const N: usize>(
         )));
     }
 
-    Ok(parse_numstat_z(&output.stdout, display_root))
+    Ok(parse_numstat_z_entries(&output.stdout, display_root))
 }
 
-async fn collect_untracked_git_line_stats(
-    display_root: &Path,
-    path: &Path,
-) -> io::Result<Option<LineStats>> {
-    let Ok(relative_path) = path.strip_prefix(display_root) else {
-        return Ok(None);
-    };
-
+async fn git_has_head(cwd: &Path) -> io::Result<bool> {
     let output = Command::new("git")
-        .args(["diff", "--numstat", "-z", "--no-index", "--", "/dev/null"])
-        .arg(relative_path)
-        .current_dir(display_root)
+        .args(["rev-parse", "--verify", "HEAD"])
+        .current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .output()
         .await?;
 
-    let status_code = output.status.code();
-    if !matches!(status_code, Some(0 | 1)) {
-        return Err(io::Error::other(format!(
-            "git diff --no-index failed with status {}",
-            output.status
-        )));
-    }
-
-    let mut stats = parse_numstat_z(&output.stdout, display_root);
-    Ok(stats.remove(path).or_else(|| stats.into_values().next()))
+    Ok(output.status.success())
 }
 
-fn merge_line_stats(
-    stats: &mut HashMap<PathBuf, LineStats>,
-    incoming: HashMap<PathBuf, LineStats>,
-) {
-    for (path, line_stats) in incoming {
-        stats
-            .entry(path)
-            .and_modify(|existing| {
-                existing.added += line_stats.added;
-                existing.removed += line_stats.removed;
-            })
-            .or_insert(line_stats);
+async fn collect_unborn_head_line_stats(
+    entries: &[GitStatusEntry],
+) -> io::Result<HashMap<PathBuf, LineStats>> {
+    let mut stats = HashMap::new();
+
+    for entry in entries
+        .iter()
+        .filter(|entry| !entry.is_untracked && entry.kind == ChangelogKind::Added)
+    {
+        match collect_added_file_line_stats(entry.path.clone()).await {
+            Ok(Some(line_stats)) => {
+                stats.insert(entry.path.clone(), line_stats);
+            }
+            Ok(None) => {}
+            Err(err) => {
+                warn!(
+                    "skipping line stats for added path {}: {err}",
+                    entry.path.display()
+                );
+            }
+        }
     }
+
+    Ok(stats)
 }
 
+async fn collect_added_file_line_stats(path: PathBuf) -> io::Result<Option<LineStats>> {
+    task::spawn_blocking(move || collect_added_file_line_stats_blocking(&path))
+        .await
+        .map_err(|err| io::Error::other(format!("line stats task failed: {err}")))?
+}
+
+fn collect_added_file_line_stats_blocking(path: &Path) -> io::Result<Option<LineStats>> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_file() {
+        return Ok(None);
+    }
+
+    let file = File::open(path)?;
+    line_stats_for_added_file_reader(file)
+}
+
+fn line_stats_for_added_file_reader(mut reader: impl Read) -> io::Result<Option<LineStats>> {
+    let mut buffer = [0_u8; 8192];
+    let mut added = 0;
+    let mut last_byte = None;
+
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+
+        let chunk = &buffer[..read];
+        if chunk.contains(&0) {
+            return Ok(None);
+        }
+
+        added += chunk.iter().filter(|byte| **byte == b'\n').count();
+        last_byte = chunk.last().copied();
+    }
+
+    if last_byte.is_some() && last_byte != Some(b'\n') {
+        added += 1;
+    }
+
+    Ok(Some(LineStats { added, removed: 0 }))
+}
+
+#[cfg(test)]
 fn parse_numstat_z(output: &[u8], display_root: &Path) -> HashMap<PathBuf, LineStats> {
+    parse_numstat_z_entries(output, display_root)
+        .into_iter()
+        .filter_map(|(path, line_stats)| line_stats.map(|line_stats| (path, line_stats)))
+        .collect()
+}
+
+fn parse_numstat_z_entries(
+    output: &[u8],
+    display_root: &Path,
+) -> HashMap<PathBuf, Option<LineStats>> {
     let mut stats = HashMap::new();
     let mut records = output.split(|byte| *byte == 0);
 
@@ -408,9 +495,6 @@ fn parse_numstat_z(output: &[u8], display_root: &Path) -> HashMap<PathBuf, LineS
         };
 
         let Some(path) = path else {
-            continue;
-        };
-        let Some(line_stats) = line_stats else {
             continue;
         };
 
@@ -752,36 +836,70 @@ mod tests {
     }
 
     #[test]
-    fn merge_line_stats_sums_existing_paths() {
-        let path = PathBuf::from("/repo/src/lib.rs");
-        let mut stats = HashMap::from([(
-            path.clone(),
-            LineStats {
-                added: 1,
-                removed: 2,
-            },
-        )]);
-
-        merge_line_stats(
-            &mut stats,
-            HashMap::from([(
-                path.clone(),
-                LineStats {
-                    added: 3,
-                    removed: 4,
-                },
-            )]),
-        );
+    fn parse_numstat_entries_preserves_binary_paths_without_stats() {
+        let stats = parse_numstat_z_entries(b"-\t-\timage.png\0", Path::new("/repo"));
 
         assert_eq!(
             stats,
-            HashMap::from([(
-                path,
-                LineStats {
-                    added: 4,
-                    removed: 6,
-                },
-            )])
+            HashMap::from([(PathBuf::from("/repo/image.png"), None)])
+        );
+    }
+
+    #[test]
+    fn added_file_line_stats_counts_final_line_without_trailing_newline() {
+        assert_eq!(
+            line_stats_for_added_file_reader(std::io::Cursor::new(b"hello")).expect("line stats"),
+            Some(LineStats {
+                added: 1,
+                removed: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn added_file_line_stats_counts_empty_file_as_zero_lines() {
+        assert_eq!(
+            line_stats_for_added_file_reader(std::io::Cursor::new(b"")).expect("line stats"),
+            Some(LineStats {
+                added: 0,
+                removed: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn added_file_line_stats_skips_binary_bytes() {
+        assert_eq!(
+            line_stats_for_added_file_reader(std::io::Cursor::new(b"abc\0def"))
+                .expect("line stats"),
+            None
+        );
+    }
+
+    #[test]
+    fn added_file_line_stats_counts_trailing_newline_lines() {
+        assert_eq!(
+            line_stats_for_added_file_reader(std::io::Cursor::new(b"one\ntwo\n"))
+                .expect("line stats"),
+            Some(LineStats {
+                added: 2,
+                removed: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn added_file_line_stats_counts_lines_across_buffers() {
+        let mut content = vec![b'a'; 9000];
+        content.push(b'\n');
+        content.extend_from_slice(b"tail");
+
+        assert_eq!(
+            line_stats_for_added_file_reader(std::io::Cursor::new(content)).expect("line stats"),
+            Some(LineStats {
+                added: 2,
+                removed: 0,
+            })
         );
     }
 
@@ -819,10 +937,132 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn git_changelog_uses_final_worktree_stats_for_staged_and_unstaged_changes() {
+        let dir = tempdir().expect("tempdir");
+        init_git_repo(dir.path());
+        std::fs::write(dir.path().join("changed.txt"), "old\n").expect("write original file");
+        run_git(dir.path(), ["add", "changed.txt"]);
+        run_git(dir.path(), ["commit", "-m", "initial"]);
+
+        std::fs::write(dir.path().join("changed.txt"), "middle\n").expect("write staged change");
+        run_git(dir.path(), ["add", "changed.txt"]);
+        std::fs::write(dir.path().join("changed.txt"), "new\n").expect("write unstaged change");
+
+        let output = get_git_changelog(dir.path())
+            .await
+            .expect("git changelog")
+            .expect("git repo");
+        let display_root = std::fs::canonicalize(dir.path()).expect("canonicalize tempdir");
+
+        assert_eq!(
+            output,
+            ChangelogOutput::Entries {
+                display_root: display_root.clone(),
+                entries: vec![ChangelogEntry {
+                    kind: ChangelogKind::Modified,
+                    path: display_root.join("changed.txt"),
+                    line_stats: Some(LineStats {
+                        added: 1,
+                        removed: 1,
+                    }),
+                }],
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn git_changelog_uses_cached_stats_when_staged_change_is_canceled_by_worktree() {
+        let dir = tempdir().expect("tempdir");
+        init_git_repo(dir.path());
+        std::fs::write(dir.path().join("changed.txt"), "old\n").expect("write original file");
+        run_git(dir.path(), ["add", "changed.txt"]);
+        run_git(dir.path(), ["commit", "-m", "initial"]);
+
+        std::fs::write(dir.path().join("changed.txt"), "new\n").expect("write staged change");
+        run_git(dir.path(), ["add", "changed.txt"]);
+        std::fs::write(dir.path().join("changed.txt"), "old\n").expect("restore worktree content");
+
+        let output = get_git_changelog(dir.path())
+            .await
+            .expect("git changelog")
+            .expect("git repo");
+        let display_root = std::fs::canonicalize(dir.path()).expect("canonicalize tempdir");
+
+        assert_eq!(
+            output,
+            ChangelogOutput::Entries {
+                display_root: display_root.clone(),
+                entries: vec![ChangelogEntry {
+                    kind: ChangelogKind::Modified,
+                    path: display_root.join("changed.txt"),
+                    line_stats: Some(LineStats {
+                        added: 1,
+                        removed: 1,
+                    }),
+                }],
+            }
+        );
+    }
+
+    #[tokio::test]
     async fn git_changelog_includes_untracked_file_line_stats() {
         let dir = tempdir().expect("tempdir");
         init_git_repo(dir.path());
         std::fs::write(dir.path().join("new.txt"), "one\ntwo\n").expect("write new file");
+
+        let output = get_git_changelog(dir.path())
+            .await
+            .expect("git changelog")
+            .expect("git repo");
+        let display_root = std::fs::canonicalize(dir.path()).expect("canonicalize tempdir");
+
+        assert_eq!(
+            output,
+            ChangelogOutput::Entries {
+                display_root: display_root.clone(),
+                entries: vec![ChangelogEntry {
+                    kind: ChangelogKind::Added,
+                    path: display_root.join("new.txt"),
+                    line_stats: Some(LineStats {
+                        added: 2,
+                        removed: 0,
+                    }),
+                }],
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn git_changelog_skips_untracked_binary_file_line_stats() {
+        let dir = tempdir().expect("tempdir");
+        init_git_repo(dir.path());
+        std::fs::write(dir.path().join("image.bin"), b"abc\0def").expect("write binary file");
+
+        let output = get_git_changelog(dir.path())
+            .await
+            .expect("git changelog")
+            .expect("git repo");
+        let display_root = std::fs::canonicalize(dir.path()).expect("canonicalize tempdir");
+
+        assert_eq!(
+            output,
+            ChangelogOutput::Entries {
+                display_root: display_root.clone(),
+                entries: vec![ChangelogEntry {
+                    kind: ChangelogKind::Added,
+                    path: display_root.join("image.bin"),
+                    line_stats: None,
+                }],
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn git_changelog_counts_added_file_lines_without_head() {
+        let dir = tempdir().expect("tempdir");
+        init_git_repo(dir.path());
+        std::fs::write(dir.path().join("new.txt"), "one\ntwo\n").expect("write new file");
+        run_git(dir.path(), ["add", "new.txt"]);
 
         let output = get_git_changelog(dir.path())
             .await
