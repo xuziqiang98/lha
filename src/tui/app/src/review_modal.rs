@@ -46,6 +46,7 @@ pub(crate) struct ReviewModal {
 pub(crate) enum ReviewModalAction {
     None,
     Exit,
+    SubmittedReview,
 }
 
 impl ReviewModal {
@@ -174,7 +175,7 @@ impl ReviewModal {
             ReviewListAction::StartReview(review_request) => {
                 self.app_event_tx
                     .send(AppEvent::StartReview { review_request });
-                ReviewModalAction::Exit
+                ReviewModalAction::SubmittedReview
             }
         }
     }
@@ -1012,7 +1013,7 @@ mod tests {
 
         assert_eq!(
             modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-            ReviewModalAction::Exit
+            ReviewModalAction::SubmittedReview
         );
 
         match rx.try_recv() {
@@ -1037,7 +1038,7 @@ mod tests {
 
         assert_eq!(
             modal.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE)),
-            ReviewModalAction::Exit
+            ReviewModalAction::SubmittedReview
         );
 
         match rx.try_recv() {
@@ -1171,7 +1172,7 @@ mod tests {
         );
         assert_eq!(
             modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-            ReviewModalAction::Exit
+            ReviewModalAction::SubmittedReview
         );
         assert_next_branch_review(&mut rx, "feature/b");
 
@@ -1191,7 +1192,7 @@ mod tests {
         );
         assert_eq!(
             modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-            ReviewModalAction::Exit
+            ReviewModalAction::SubmittedReview
         );
         assert_next_branch_review(&mut rx, "feature/c");
     }
@@ -1214,7 +1215,7 @@ mod tests {
         );
         assert_eq!(
             modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-            ReviewModalAction::Exit
+            ReviewModalAction::SubmittedReview
         );
         assert_next_branch_review(&mut rx, "feature/b");
 
@@ -1234,7 +1235,7 @@ mod tests {
         );
         assert_eq!(
             modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-            ReviewModalAction::Exit
+            ReviewModalAction::SubmittedReview
         );
         assert_next_branch_review(&mut rx, "feature/c");
     }
@@ -1256,7 +1257,7 @@ mod tests {
 
         assert_eq!(
             modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-            ReviewModalAction::Exit
+            ReviewModalAction::SubmittedReview
         );
         assert_next_branch_review(&mut rx, "feature/api-second");
     }
@@ -1279,7 +1280,7 @@ mod tests {
 
         assert_eq!(
             modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-            ReviewModalAction::Exit
+            ReviewModalAction::SubmittedReview
         );
         assert_next_branch_review(&mut rx, "feature/api-first");
     }
@@ -1294,7 +1295,7 @@ mod tests {
         );
         assert_eq!(
             modal.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-            ReviewModalAction::Exit
+            ReviewModalAction::SubmittedReview
         );
 
         match rx.try_recv() {

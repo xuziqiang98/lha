@@ -1678,6 +1678,7 @@ impl App {
 
     async fn start_review(&mut self, review_request: ReviewRequest) -> Result<()> {
         self.review_modal = None;
+        self.chat_widget.prepare_for_review_start_transition();
         if !self.config.features.enabled(Feature::DetachedReview) {
             self.chat_widget.submit_op(Op::Review { review_request });
             return Ok(());
@@ -1688,6 +1689,7 @@ impl App {
 
     async fn start_detached_review(&mut self, review_request: ReviewRequest) -> Result<()> {
         let Some(parent_thread_id) = self.active_thread_id.or(self.primary_thread_id) else {
+            self.chat_widget.clear_review_start_transition();
             self.chat_widget
                 .add_error_message("Current session is not ready to review yet.".to_string());
             return Ok(());
@@ -1696,6 +1698,7 @@ impl App {
         let parent_thread = match self.server.get_thread(parent_thread_id).await {
             Ok(thread) => thread,
             Err(err) => {
+                self.chat_widget.clear_review_start_transition();
                 self.chat_widget.add_error_message(format!(
                     "Failed to start detached review for thread {parent_thread_id}: {err}"
                 ));
@@ -1703,6 +1706,7 @@ impl App {
             }
         };
         let Some(parent_rollout_path) = parent_thread.rollout_path() else {
+            self.chat_widget.clear_review_start_transition();
             self.chat_widget
                 .add_error_message("Current session is not ready to review yet.".to_string());
             return Ok(());
@@ -1729,6 +1733,7 @@ impl App {
         {
             Ok(thread) => thread,
             Err(err) => {
+                self.chat_widget.clear_review_start_transition();
                 self.chat_widget
                     .add_error_message(format!("Failed to create detached review thread: {err}"));
                 return Ok(());
@@ -1737,6 +1742,7 @@ impl App {
         let review_thread_id = detached_thread.thread_id;
 
         if let Err(err) = self.handle_thread_created(review_thread_id).await {
+            self.chat_widget.clear_review_start_transition();
             self.chat_widget
                 .add_error_message(format!("Failed to attach detached review thread: {err}"));
             return Ok(());
@@ -1750,6 +1756,7 @@ impl App {
             .await
         {
             self.review_parent_by_child.remove(&review_thread_id);
+            self.chat_widget.clear_review_start_transition();
             self.chat_widget
                 .add_error_message(format!("Failed to start detached review: {err}"));
         }
@@ -2794,10 +2801,16 @@ impl App {
             .as_mut()
             .map(|modal| modal.handle_key_event(key_event))
             .unwrap_or(ReviewModalAction::None);
-        if action == ReviewModalAction::Exit {
-            self.review_modal = None;
+        match action {
+            ReviewModalAction::None => {
+                tui.frame_requester().schedule_frame();
+            }
+            ReviewModalAction::Exit => {
+                self.review_modal = None;
+                tui.frame_requester().schedule_frame();
+            }
+            ReviewModalAction::SubmittedReview => {}
         }
-        tui.frame_requester().schedule_frame();
     }
 
     async fn handle_project_trust_modal_key(

@@ -539,6 +539,8 @@ pub(crate) struct ChatWidget {
     is_review_mode: bool,
     // Snapshot of token usage to restore after review mode exits.
     pre_review_token_info: Option<Option<TokenUsageInfo>>,
+    // True after the user submits /review and before the review banner is inserted.
+    pending_review_start_transition: bool,
     // Whether the next streamed assistant content should be preceded by a final message separator.
     //
     // This is set whenever we insert a visible history cell that conceptually belongs to a turn.
@@ -1078,6 +1080,7 @@ impl ChatWidget {
     // Raw reasoning uses the same flow as summarized reasoning
 
     fn on_task_started(&mut self) {
+        let defer_review_redraw = self.pending_review_start_transition;
         self.agent_turn_running = true;
         self.turn_sleep_inhibitor
             .set_turn_running(/* turn_running */ true);
@@ -1087,16 +1090,23 @@ impl ChatWidget {
         self.plan_item_active = false;
         self.plan_stream_controller = None;
         self.otel_manager.reset_runtime_metrics();
-        self.bottom_pane.clear_quit_shortcut_hint();
+        if defer_review_redraw {
+            self.bottom_pane.clear_quit_shortcut_hint_with_redraw(false);
+        } else {
+            self.bottom_pane.clear_quit_shortcut_hint();
+        }
         self.quit_shortcut_expires_at = None;
         self.quit_shortcut_key = None;
-        self.update_task_running_state();
         self.current_status = StatusIndicatorState::working();
         self.retry_status = None;
-        self.bottom_pane.set_interrupt_hint_visible(true);
-        self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
+        if defer_review_redraw {
+            return;
+        }
+        self.update_task_running_state();
+        self.bottom_pane.set_interrupt_hint_visible(true);
+        self.set_status_header(String::from("Working"));
         self.request_redraw();
     }
 
@@ -2421,6 +2431,7 @@ impl ChatWidget {
             quit_shortcut_key: None,
             is_review_mode: false,
             pre_review_token_info: None,
+            pending_review_start_transition: false,
             needs_final_message_separator: false,
             had_work_activity: false,
             saw_plan_update_this_turn: false,
@@ -2590,6 +2601,7 @@ impl ChatWidget {
             quit_shortcut_key: None,
             is_review_mode: false,
             pre_review_token_info: None,
+            pending_review_start_transition: false,
             needs_final_message_separator: false,
             had_work_activity: false,
             last_separator_elapsed_secs: None,
@@ -2732,6 +2744,7 @@ impl ChatWidget {
             quit_shortcut_key: None,
             is_review_mode: false,
             pre_review_token_info: None,
+            pending_review_start_transition: false,
             needs_final_message_separator: false,
             had_work_activity: false,
             saw_plan_update_this_turn: false,
@@ -3788,6 +3801,18 @@ impl ChatWidget {
             self.restore_retry_status_if_present();
         }
 
+        if self.pending_review_start_transition
+            && matches!(
+                &msg,
+                EventMsg::Error(_)
+                    | EventMsg::StreamError(_)
+                    | EventMsg::TurnAborted(_)
+                    | EventMsg::TurnComplete(_)
+            )
+        {
+            self.clear_review_start_transition();
+        }
+
         if from_replay
             && self.pending_replay_legacy_context_compactions > 0
             && !matches!(&msg, EventMsg::ContextCompacted(_))
@@ -4021,21 +4046,34 @@ impl ChatWidget {
         self.on_agent_message("Context compacted".to_owned());
     }
 
+    pub(crate) fn prepare_for_review_start_transition(&mut self) {
+        self.pending_review_start_transition = true;
+    }
+
+    pub(crate) fn clear_review_start_transition(&mut self) {
+        self.pending_review_start_transition = false;
+    }
+
     fn on_entered_review_mode(&mut self, review: ReviewRequest, from_replay: bool) {
         // Enter review mode and emit a concise banner
         if self.pre_review_token_info.is_none() {
             self.pre_review_token_info = Some(self.token_info.clone());
         }
         // Avoid toggling running state for replayed history events on resume.
-        if !from_replay && !self.bottom_pane.is_task_running() {
-            self.bottom_pane.set_task_running(true);
-        }
         self.is_review_mode = true;
         let hint = review
             .user_facing_hint
             .unwrap_or_else(|| adam_agent::review_prompts::user_facing_hint(&review.target));
         let banner = format!(">> Code review started: {hint} <<");
         self.add_to_history(history_cell::new_review_status_line(banner));
+        if !from_replay {
+            if !self.bottom_pane.is_task_running() {
+                self.bottom_pane.set_task_running_with_redraw(true, false);
+            }
+            self.bottom_pane
+                .set_interrupt_hint_visible_with_redraw(true, false);
+        }
+        self.clear_review_start_transition();
     }
 
     fn on_exited_review_mode(&mut self, review: ExitedReviewModeEvent) {
@@ -6254,9 +6292,6 @@ impl ChatWidget {
     pub(crate) fn submit_op(&mut self, op: Op) {
         // Record outbound operation for session replay fidelity.
         crate::session_log::log_outbound_op(&op);
-        if matches!(&op, Op::Review { .. }) && !self.bottom_pane.is_task_running() {
-            self.bottom_pane.set_task_running(true);
-        }
         if let Err(e) = self.codex_op_tx.send(op) {
             tracing::error!("failed to submit op: {e}");
         }

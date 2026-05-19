@@ -1678,6 +1678,66 @@ async fn entered_review_mode_does_not_request_redraw_before_banner_insert() {
     assert_matches!(frame_rx.try_recv(), Err(TryRecvError::Empty));
 }
 
+#[tokio::test]
+async fn pending_review_turn_started_defers_redraw_until_banner_insert() {
+    let (frame_requester, mut frame_rx) = FrameRequester::test_with_receiver();
+    let (mut chat, mut rx, _ops) =
+        make_chatwidget_manual_with_frame_requester(None, frame_requester).await;
+    while frame_rx.try_recv().is_ok() {}
+
+    chat.prepare_for_review_start_transition();
+    chat.handle_codex_event(Event {
+        id: "turn-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+
+    assert!(chat.agent_turn_running);
+    assert!(!chat.bottom_pane.is_task_running());
+    assert!(chat.pending_review_start_transition);
+    assert_matches!(frame_rx.try_recv(), Err(TryRecvError::Empty));
+
+    chat.handle_codex_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        }),
+    });
+
+    let event = rx.try_recv().expect("review banner history event");
+    let cell = into_insert_history_cell(event).expect("insert history cell");
+    let banner = lines_to_single_string(&cell.display_lines(80));
+    assert_eq!(banner, ">> Code review started: current changes <<\n");
+    assert!(chat.is_review_mode);
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(!chat.pending_review_start_transition);
+    assert_matches!(frame_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn pending_review_start_error_clears_transition() {
+    let (frame_requester, mut frame_rx) = FrameRequester::test_with_receiver();
+    let (mut chat, mut rx, _ops) =
+        make_chatwidget_manual_with_frame_requester(None, frame_requester).await;
+    while frame_rx.try_recv().is_ok() {}
+
+    chat.prepare_for_review_start_transition();
+    chat.handle_codex_event(Event {
+        id: "review-error".into(),
+        msg: EventMsg::Error(adam_agent::protocol::ErrorEvent {
+            message: "Review prompt cannot be empty".to_string(),
+            codex_error_info: Some(adam_agent::protocol::CodexErrorInfo::Other),
+        }),
+    });
+
+    assert!(!chat.pending_review_start_transition);
+    assert!(rx.try_recv().is_ok());
+    assert!(frame_rx.try_recv().is_ok());
+}
+
 /// Exiting review restores the pre-review context window indicator.
 #[tokio::test]
 async fn review_restores_context_window_indicator() {
@@ -2040,6 +2100,7 @@ async fn make_chatwidget_manual_inner(
         quit_shortcut_key: None,
         is_review_mode: false,
         pre_review_token_info: None,
+        pending_review_start_transition: false,
         needs_final_message_separator: false,
         had_work_activity: false,
         saw_plan_update_this_turn: false,
@@ -2210,6 +2271,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         quit_shortcut_key: None,
         is_review_mode: false,
         pre_review_token_info: None,
+        pending_review_start_transition: false,
         needs_final_message_separator: false,
         had_work_activity: false,
         saw_plan_update_this_turn: false,

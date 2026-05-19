@@ -541,8 +541,14 @@ impl BottomPane {
 
     /// Clear the "press again to quit" hint immediately.
     pub(crate) fn clear_quit_shortcut_hint(&mut self) {
+        self.clear_quit_shortcut_hint_with_redraw(true);
+    }
+
+    pub(crate) fn clear_quit_shortcut_hint_with_redraw(&mut self, request_redraw: bool) {
         self.composer.clear_quit_shortcut_hint(self.has_input_focus);
-        self.request_redraw();
+        if request_redraw {
+            self.request_redraw();
+        }
     }
 
     #[cfg(test)]
@@ -572,6 +578,10 @@ impl BottomPane {
     // esc_backtrack_hint_visible removed; hints are controlled internally.
 
     pub fn set_task_running(&mut self, running: bool) {
+        self.set_task_running_with_redraw(running, true);
+    }
+
+    pub fn set_task_running_with_redraw(&mut self, running: bool, request_redraw: bool) {
         let was_running = self.is_task_running;
         self.is_task_running = running;
         self.composer.set_task_running(running);
@@ -589,17 +599,23 @@ impl BottomPane {
                     status.set_interrupt_hint_visible(true);
                 }
                 self.sync_status_inline_message();
-                self.request_redraw();
+                if request_redraw {
+                    self.request_redraw();
+                }
             }
         } else {
             // Hide the status indicator when a task completes, but keep other modal views.
-            self.hide_status_indicator();
+            self.hide_status_indicator_with_redraw(request_redraw);
         }
     }
 
     /// Hide the status indicator while leaving task-running state untouched.
     pub(crate) fn hide_status_indicator(&mut self) {
-        if self.status.take().is_some() {
+        self.hide_status_indicator_with_redraw(true);
+    }
+
+    pub(crate) fn hide_status_indicator_with_redraw(&mut self, request_redraw: bool) {
+        if self.status.take().is_some() && request_redraw {
             self.request_redraw();
         }
     }
@@ -617,9 +633,19 @@ impl BottomPane {
     }
 
     pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
+        self.set_interrupt_hint_visible_with_redraw(visible, true);
+    }
+
+    pub(crate) fn set_interrupt_hint_visible_with_redraw(
+        &mut self,
+        visible: bool,
+        request_redraw: bool,
+    ) {
         if let Some(status) = self.status.as_mut() {
             status.set_interrupt_hint_visible(visible);
-            self.request_redraw();
+            if request_redraw {
+                self.request_redraw();
+            }
         }
     }
 
