@@ -54,19 +54,40 @@ struct ToolUseState {
 #[derive(Debug, Default)]
 struct UsageState {
     input_tokens: i64,
+    cache_creation_input_tokens: i64,
+    cache_read_input_tokens: i64,
     output_tokens: i64,
 }
 
 impl UsageState {
+    fn apply(&mut self, usage: UsagePayload) {
+        if let Some(input_tokens) = usage.input_tokens {
+            self.input_tokens = input_tokens;
+        }
+        if let Some(cache_creation_input_tokens) = usage.cache_creation_input_tokens {
+            self.cache_creation_input_tokens = cache_creation_input_tokens;
+        }
+        if let Some(cache_read_input_tokens) = usage.cache_read_input_tokens {
+            self.cache_read_input_tokens = cache_read_input_tokens;
+        }
+        if let Some(output_tokens) = usage.output_tokens {
+            self.output_tokens = output_tokens;
+        }
+    }
+
     fn token_usage(&self) -> Option<TokenUsage> {
-        if self.input_tokens == 0 && self.output_tokens == 0 {
+        let input_tokens = self
+            .input_tokens
+            .saturating_add(self.cache_creation_input_tokens)
+            .saturating_add(self.cache_read_input_tokens);
+        if input_tokens == 0 && self.output_tokens == 0 {
             return None;
         }
 
-        let total_tokens = self.input_tokens.saturating_add(self.output_tokens);
+        let total_tokens = input_tokens.saturating_add(self.output_tokens);
         Some(TokenUsage {
-            input_tokens: self.input_tokens,
-            cached_input_tokens: 0,
+            input_tokens,
+            cached_input_tokens: self.cache_read_input_tokens,
             output_tokens: self.output_tokens,
             reasoning_output_tokens: 0,
             total_tokens,
@@ -105,6 +126,10 @@ struct UsagePayload {
     #[serde(default)]
     input_tokens: Option<i64>,
     #[serde(default)]
+    cache_creation_input_tokens: Option<i64>,
+    #[serde(default)]
+    cache_read_input_tokens: Option<i64>,
+    #[serde(default)]
     output_tokens: Option<i64>,
 }
 
@@ -121,7 +146,8 @@ struct ContentBlockPayload {
 #[derive(Debug, Deserialize)]
 struct DeltaPayload {
     #[serde(rename = "type")]
-    kind: String,
+    #[serde(default)]
+    kind: Option<String>,
     #[serde(default)]
     text: Option<String>,
     #[serde(default)]
@@ -135,6 +161,19 @@ struct ErrorPayload {
     #[serde(rename = "type")]
     kind: String,
     message: String,
+}
+
+fn parse_messages_event(event_name: &str, data: &str) -> Result<MessagesEvent, serde_json::Error> {
+    let mut value = serde_json::from_str::<Value>(data)?;
+    if let Some(object) = value.as_object_mut()
+        && !object.contains_key("type")
+        && !event_name.is_empty()
+        && event_name != "message"
+    {
+        object.insert("type".to_string(), Value::String(event_name.to_string()));
+    }
+
+    serde_json::from_value(value)
 }
 
 pub async fn process_messages_sse(
@@ -181,10 +220,13 @@ pub async fn process_messages_sse(
             }
         };
 
-        let event: MessagesEvent = match serde_json::from_str(&sse.data) {
+        let event: MessagesEvent = match parse_messages_event(&sse.event, &sse.data) {
             Ok(event) => event,
             Err(err) => {
-                debug!("failed to parse Messages SSE event: {err}");
+                debug!(
+                    event_name = sse.event.as_str(),
+                    "failed to parse Messages SSE event: {err}"
+                );
                 continue;
             }
         };
@@ -199,12 +241,7 @@ pub async fn process_messages_sse(
                         response_id.clone()
                     });
                     if let Some(usage) = message.usage {
-                        if let Some(input_tokens) = usage.input_tokens {
-                            usage_state.input_tokens = input_tokens;
-                        }
-                        if let Some(output_tokens) = usage.output_tokens {
-                            usage_state.output_tokens = output_tokens;
-                        }
+                        usage_state.apply(usage);
                     }
                 }
                 let _ = tx_event.send(Ok(ResponseEvent::Created)).await;
@@ -234,8 +271,8 @@ pub async fn process_messages_sse(
                 let Some(delta) = event.delta else {
                     continue;
                 };
-                match delta.kind.as_str() {
-                    "text_delta" => {
+                match delta.kind.as_deref() {
+                    Some("text_delta") => {
                         let text = delta.text.unwrap_or_default();
                         let assistant_item_id = assistant_item_id
                             .get_or_insert_with(next_assistant_item_id)
@@ -249,7 +286,7 @@ pub async fn process_messages_sse(
                         )
                         .await;
                     }
-                    "input_json_delta" => {
+                    Some("input_json_delta") => {
                         if let Some(tool_use) = tool_uses.get_mut(&index)
                             && let Some(partial_json) = delta.partial_json
                         {
@@ -319,10 +356,8 @@ pub async fn process_messages_sse(
                 {
                     stop_reason = Some(reason);
                 }
-                if let Some(usage) = event.usage
-                    && let Some(output_tokens) = usage.output_tokens
-                {
-                    usage_state.output_tokens = output_tokens;
+                if let Some(usage) = event.usage {
+                    usage_state.apply(usage);
                 }
             }
             "message_stop" => {
@@ -515,6 +550,112 @@ mod tests {
             ResponseEvent::OutputItemDone(TranscriptItem::Message { .. })
         ));
         assert!(matches!(events[5], ResponseEvent::Completed { .. }));
+    }
+
+    #[tokio::test]
+    async fn parses_usage_when_data_type_missing_and_event_name_present() {
+        let body = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":12}}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\n",
+            "event: message_delta\n",
+            "data: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n"
+        );
+
+        let (tx, mut rx) = mpsc::channel(16);
+        process_messages_sse(build_stream(body), tx, Duration::from_secs(1), None).await;
+
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event.expect("event should succeed"));
+        }
+
+        let ResponseEvent::Completed { token_usage, .. } =
+            events.last().expect("completed event should be emitted")
+        else {
+            panic!("unexpected final event: {:?}", events.last());
+        };
+
+        assert_eq!(
+            token_usage.as_ref(),
+            Some(&TokenUsage {
+                input_tokens: 12,
+                cached_input_tokens: 0,
+                output_tokens: 5,
+                reasoning_output_tokens: 0,
+                total_tokens: 17,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn message_delta_without_delta_type_preserves_stop_reason() {
+        let body = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\"}}\n\n",
+            "event: message_delta\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n"
+        );
+
+        let (tx, mut rx) = mpsc::channel(16);
+        process_messages_sse(build_stream(body), tx, Duration::from_secs(1), None).await;
+
+        assert!(matches!(
+            rx.recv().await.expect("created event").expect("created"),
+            ResponseEvent::Created
+        ));
+        let err = rx
+            .recv()
+            .await
+            .expect("error event")
+            .expect_err("max_tokens should be an error");
+        assert_eq!(
+            err.to_string(),
+            "stream error: messages response reached max_tokens limit"
+        );
+        assert!(rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn parses_cache_usage_from_messages_stream() {
+        let body = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\"}}\n\n",
+            "event: message_delta\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":100,\"cache_creation_input_tokens\":20,\"cache_read_input_tokens\":30,\"output_tokens\":7}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n"
+        );
+
+        let (tx, mut rx) = mpsc::channel(16);
+        process_messages_sse(build_stream(body), tx, Duration::from_secs(1), None).await;
+
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event.expect("event should succeed"));
+        }
+
+        let ResponseEvent::Completed { token_usage, .. } =
+            events.last().expect("completed event should be emitted")
+        else {
+            panic!("unexpected final event: {:?}", events.last());
+        };
+
+        assert_eq!(
+            token_usage.as_ref(),
+            Some(&TokenUsage {
+                input_tokens: 150,
+                cached_input_tokens: 30,
+                output_tokens: 7,
+                reasoning_output_tokens: 0,
+                total_tokens: 157,
+            })
+        );
     }
 
     #[tokio::test]
