@@ -5652,6 +5652,7 @@ mod tests {
                     vec![crate::changelog::ChangelogEntry {
                         kind: crate::changelog::ChangelogKind::Modified,
                         path,
+                        line_stats: None,
                     }]
                 );
             }
@@ -5710,6 +5711,7 @@ mod tests {
             entries: vec![crate::changelog::ChangelogEntry {
                 kind: crate::changelog::ChangelogKind::Modified,
                 path: app.config.cwd.join("changed.txt"),
+                line_stats: None,
             }],
         }));
         let mut buf = Buffer::empty(area);

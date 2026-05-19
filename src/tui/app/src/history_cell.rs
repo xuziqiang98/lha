@@ -20,6 +20,7 @@ use crate::changelog::ChangelogKind;
 use crate::changelog::format_changelog_path;
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
+use crate::diff_render::render_line_count_summary;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::OutputLinesParams;
 use crate::exec_cell::TOOL_CALL_MAX_LINES;
@@ -2130,7 +2131,15 @@ pub(crate) fn new_changelog_output(
             };
             let path = format_changelog_path(&entry.path, cwd, display_root);
             let prefix = if index == 0 { "  └ " } else { "    " };
-            lines.push(vec![prefix.into(), marker, " ".dim(), path.dim()].into());
+            let mut spans = vec![prefix.into(), marker, " ".dim(), path.dim()];
+            if let Some(line_stats) = entry.line_stats {
+                spans.push(" ".into());
+                spans.extend(render_line_count_summary(
+                    line_stats.added,
+                    line_stats.removed,
+                ));
+            }
+            lines.push(spans.into());
         }
     }
 
@@ -2634,26 +2643,41 @@ mod tests {
                 ChangelogEntry {
                     kind: ChangelogKind::Added,
                     path: PathBuf::from("/repo/project/src/lib.rs"),
+                    line_stats: Some(crate::changelog::LineStats {
+                        added: 10,
+                        removed: 0,
+                    }),
                 },
                 ChangelogEntry {
                     kind: ChangelogKind::Added,
                     path: PathBuf::from("/repo/project/src/main.rs"),
+                    line_stats: None,
                 },
                 ChangelogEntry {
                     kind: ChangelogKind::Modified,
                     path: home.join("notes/ideas.md"),
+                    line_stats: Some(crate::changelog::LineStats {
+                        added: 4,
+                        removed: 2,
+                    }),
                 },
                 ChangelogEntry {
                     kind: ChangelogKind::Modified,
                     path: home.join("notes/todo.md"),
+                    line_stats: None,
                 },
                 ChangelogEntry {
                     kind: ChangelogKind::Deleted,
                     path: PathBuf::from("/opt/shared/legacy.txt"),
+                    line_stats: Some(crate::changelog::LineStats {
+                        added: 0,
+                        removed: 7,
+                    }),
                 },
                 ChangelogEntry {
                     kind: ChangelogKind::Deleted,
                     path: PathBuf::from("/opt/shared/old.txt"),
+                    line_stats: None,
                 },
             ],
             cwd,
@@ -2667,15 +2691,15 @@ mod tests {
                 "Changed files".to_string(),
                 "".to_string(),
                 "Added (2)".to_string(),
-                "  └ A ./src/lib.rs".to_string(),
+                "  └ A ./src/lib.rs (+10 -0)".to_string(),
                 "    A ./src/main.rs".to_string(),
                 "".to_string(),
                 "Modified (2)".to_string(),
-                "  └ M ~/notes/ideas.md".to_string(),
+                "  └ M ~/notes/ideas.md (+4 -2)".to_string(),
                 "    M ~/notes/todo.md".to_string(),
                 "".to_string(),
                 "Deleted (2)".to_string(),
-                "  └ D /opt/shared/legacy.txt".to_string(),
+                "  └ D /opt/shared/legacy.txt (+0 -7)".to_string(),
                 "    D /opt/shared/old.txt".to_string(),
             ]
         );
@@ -2689,6 +2713,7 @@ mod tests {
             vec![ChangelogEntry {
                 kind: ChangelogKind::Modified,
                 path: PathBuf::from("/repo/project/shared/lib.rs"),
+                line_stats: None,
             }],
             cwd,
             repo_root,

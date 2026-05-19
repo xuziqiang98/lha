@@ -26,6 +26,13 @@ pub(crate) enum ChangelogKind {
 pub(crate) struct ChangelogEntry {
     pub(crate) kind: ChangelogKind,
     pub(crate) path: PathBuf,
+    pub(crate) line_stats: Option<LineStats>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LineStats {
+    pub(crate) added: usize,
+    pub(crate) removed: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +52,13 @@ pub(crate) struct DirectorySnapshot {
 enum FileFingerprint {
     Regular { len: u64, sha256: [u8; 32] },
     Symlink { target: PathBuf },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GitStatusEntry {
+    kind: ChangelogKind,
+    path: PathBuf,
+    is_untracked: bool,
 }
 
 pub(crate) async fn get_git_changelog(cwd: &Path) -> io::Result<Option<ChangelogOutput>> {
@@ -67,7 +81,16 @@ pub(crate) async fn get_git_changelog(cwd: &Path) -> io::Result<Option<Changelog
         )));
     }
 
-    let mut entries = parse_porcelain_v1_z(&output.stdout, &display_root);
+    let status_entries = parse_porcelain_v1_z(&output.stdout, &display_root);
+    let line_stats = collect_git_line_stats(cwd, &display_root, &status_entries).await?;
+    let mut entries: Vec<ChangelogEntry> = status_entries
+        .into_iter()
+        .map(|entry| ChangelogEntry {
+            kind: entry.kind,
+            line_stats: line_stats.get(&entry.path).copied(),
+            path: entry.path,
+        })
+        .collect();
     sort_entries(cwd, &display_root, &mut entries);
 
     Ok(Some(ChangelogOutput::Entries {
@@ -216,11 +239,13 @@ fn diff_snapshots(
             None => entries.push(ChangelogEntry {
                 kind: ChangelogKind::Added,
                 path: path.clone(),
+                line_stats: None,
             }),
             Some(baseline_fingerprint) if baseline_fingerprint != current_fingerprint => {
                 entries.push(ChangelogEntry {
                     kind: ChangelogKind::Modified,
                     path: path.clone(),
+                    line_stats: None,
                 });
             }
             Some(_) => {}
@@ -232,6 +257,7 @@ fn diff_snapshots(
             entries.push(ChangelogEntry {
                 kind: ChangelogKind::Deleted,
                 path: path.clone(),
+                line_stats: None,
             });
         }
     }
@@ -251,7 +277,163 @@ fn sort_entries(cwd: &Path, display_root: &Path, entries: &mut [ChangelogEntry])
     });
 }
 
-fn parse_porcelain_v1_z(output: &[u8], display_root: &Path) -> Vec<ChangelogEntry> {
+async fn collect_git_line_stats(
+    cwd: &Path,
+    display_root: &Path,
+    entries: &[GitStatusEntry],
+) -> io::Result<HashMap<PathBuf, LineStats>> {
+    let mut stats = HashMap::new();
+    let cached_stats = collect_tracked_git_line_stats(
+        cwd,
+        display_root,
+        ["diff", "--numstat", "-z", "--cached", "--"],
+    )
+    .await?;
+    merge_line_stats(&mut stats, cached_stats);
+
+    let unstaged_stats =
+        collect_tracked_git_line_stats(cwd, display_root, ["diff", "--numstat", "-z", "--"])
+            .await?;
+    merge_line_stats(&mut stats, unstaged_stats);
+
+    for entry in entries.iter().filter(|entry| entry.is_untracked) {
+        if stats.contains_key(&entry.path) {
+            continue;
+        }
+
+        match collect_untracked_git_line_stats(display_root, &entry.path).await {
+            Ok(Some(line_stats)) => {
+                stats.insert(entry.path.clone(), line_stats);
+            }
+            Ok(None) => {}
+            Err(err) => {
+                warn!(
+                    "skipping line stats for untracked path {}: {err}",
+                    entry.path.display()
+                );
+            }
+        }
+    }
+
+    Ok(stats)
+}
+
+async fn collect_tracked_git_line_stats<const N: usize>(
+    cwd: &Path,
+    display_root: &Path,
+    args: [&str; N],
+) -> io::Result<HashMap<PathBuf, LineStats>> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "git diff --numstat failed with status {}",
+            output.status
+        )));
+    }
+
+    Ok(parse_numstat_z(&output.stdout, display_root))
+}
+
+async fn collect_untracked_git_line_stats(
+    display_root: &Path,
+    path: &Path,
+) -> io::Result<Option<LineStats>> {
+    let Ok(relative_path) = path.strip_prefix(display_root) else {
+        return Ok(None);
+    };
+
+    let output = Command::new("git")
+        .args(["diff", "--numstat", "-z", "--no-index", "--", "/dev/null"])
+        .arg(relative_path)
+        .current_dir(display_root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .await?;
+
+    let status_code = output.status.code();
+    if !matches!(status_code, Some(0 | 1)) {
+        return Err(io::Error::other(format!(
+            "git diff --no-index failed with status {}",
+            output.status
+        )));
+    }
+
+    let mut stats = parse_numstat_z(&output.stdout, display_root);
+    Ok(stats.remove(path).or_else(|| stats.into_values().next()))
+}
+
+fn merge_line_stats(
+    stats: &mut HashMap<PathBuf, LineStats>,
+    incoming: HashMap<PathBuf, LineStats>,
+) {
+    for (path, line_stats) in incoming {
+        stats
+            .entry(path)
+            .and_modify(|existing| {
+                existing.added += line_stats.added;
+                existing.removed += line_stats.removed;
+            })
+            .or_insert(line_stats);
+    }
+}
+
+fn parse_numstat_z(output: &[u8], display_root: &Path) -> HashMap<PathBuf, LineStats> {
+    let mut stats = HashMap::new();
+    let mut records = output.split(|byte| *byte == 0);
+
+    while let Some(record) = records.next() {
+        if record.is_empty() {
+            continue;
+        }
+
+        let fields: Vec<&[u8]> = record.splitn(3, |byte| *byte == b'\t').collect();
+        if fields.len() != 3 {
+            continue;
+        }
+
+        let line_stats = parse_numstat_counts(fields[0], fields[1]);
+        let path = if fields[2].is_empty() {
+            let _old_path = records.next();
+            records.next()
+        } else {
+            Some(fields[2])
+        };
+
+        let Some(path) = path else {
+            continue;
+        };
+        let Some(line_stats) = line_stats else {
+            continue;
+        };
+
+        stats.insert(display_root.join(decode_path(path)), line_stats);
+    }
+
+    stats
+}
+
+fn parse_numstat_counts(added: &[u8], removed: &[u8]) -> Option<LineStats> {
+    let added = std::str::from_utf8(added).ok()?;
+    let removed = std::str::from_utf8(removed).ok()?;
+    if added == "-" || removed == "-" {
+        return None;
+    }
+
+    Some(LineStats {
+        added: added.parse().ok()?,
+        removed: removed.parse().ok()?,
+    })
+}
+
+fn parse_porcelain_v1_z(output: &[u8], display_root: &Path) -> Vec<GitStatusEntry> {
     let mut entries = Vec::new();
     let mut records = output.split(|byte| *byte == 0);
 
@@ -260,7 +442,8 @@ fn parse_porcelain_v1_z(output: &[u8], display_root: &Path) -> Vec<ChangelogEntr
             continue;
         }
 
-        let Some(kind) = classify_status(&record[..3]) else {
+        let status = &record[..3];
+        let Some(kind) = classify_status(status) else {
             continue;
         };
 
@@ -269,13 +452,14 @@ fn parse_porcelain_v1_z(output: &[u8], display_root: &Path) -> Vec<ChangelogEntr
             continue;
         }
 
-        if is_rename_or_copy(&record[..3]) {
+        if is_rename_or_copy(status) {
             let _ = records.next();
         }
 
-        entries.push(ChangelogEntry {
+        entries.push(GitStatusEntry {
             kind,
             path: display_root.join(path),
+            is_untracked: status[0] == b'?' && status[1] == b'?',
         });
     }
 
@@ -351,6 +535,7 @@ pub(crate) fn format_changelog_path(path: &Path, cwd: &Path, display_root: &Path
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::process::Command as StdCommand;
     use tempfile::tempdir;
 
     #[test]
@@ -358,9 +543,10 @@ mod tests {
         let entries = parse_porcelain_v1_z(b"?? new.txt\0", Path::new("/repo"));
         assert_eq!(
             entries,
-            vec![ChangelogEntry {
+            vec![GitStatusEntry {
                 kind: ChangelogKind::Added,
                 path: PathBuf::from("/repo/new.txt"),
+                is_untracked: true,
             }]
         );
     }
@@ -371,13 +557,15 @@ mod tests {
         assert_eq!(
             entries,
             vec![
-                ChangelogEntry {
+                GitStatusEntry {
                     kind: ChangelogKind::Modified,
                     path: PathBuf::from("/repo/changed.txt"),
+                    is_untracked: false,
                 },
-                ChangelogEntry {
+                GitStatusEntry {
                     kind: ChangelogKind::Modified,
                     path: PathBuf::from("/repo/staged.txt"),
+                    is_untracked: false,
                 },
             ]
         );
@@ -390,13 +578,15 @@ mod tests {
         assert_eq!(
             entries,
             vec![
-                ChangelogEntry {
+                GitStatusEntry {
                     kind: ChangelogKind::Deleted,
                     path: PathBuf::from("/repo/gone.txt"),
+                    is_untracked: false,
                 },
-                ChangelogEntry {
+                GitStatusEntry {
                     kind: ChangelogKind::Deleted,
                     path: PathBuf::from("/repo/staged-gone.txt"),
+                    is_untracked: false,
                 },
             ]
         );
@@ -407,9 +597,10 @@ mod tests {
         let entries = parse_porcelain_v1_z(b"R  new.txt\0old.txt\0", Path::new("/repo"));
         assert_eq!(
             entries,
-            vec![ChangelogEntry {
+            vec![GitStatusEntry {
                 kind: ChangelogKind::Modified,
                 path: PathBuf::from("/repo/new.txt"),
+                is_untracked: false,
             }]
         );
     }
@@ -473,18 +664,22 @@ mod tests {
             ChangelogEntry {
                 kind: ChangelogKind::Deleted,
                 path: PathBuf::from("/repo/worktree/z.txt"),
+                line_stats: None,
             },
             ChangelogEntry {
                 kind: ChangelogKind::Added,
                 path: PathBuf::from("/repo/worktree/b.txt"),
+                line_stats: None,
             },
             ChangelogEntry {
                 kind: ChangelogKind::Added,
                 path: PathBuf::from("/repo/worktree/a.txt"),
+                line_stats: None,
             },
             ChangelogEntry {
                 kind: ChangelogKind::Modified,
                 path: PathBuf::from("/repo/worktree/c.txt"),
+                line_stats: None,
             },
         ];
 
@@ -496,20 +691,190 @@ mod tests {
                 ChangelogEntry {
                     kind: ChangelogKind::Added,
                     path: PathBuf::from("/repo/worktree/a.txt"),
+                    line_stats: None,
                 },
                 ChangelogEntry {
                     kind: ChangelogKind::Added,
                     path: PathBuf::from("/repo/worktree/b.txt"),
+                    line_stats: None,
                 },
                 ChangelogEntry {
                     kind: ChangelogKind::Modified,
                     path: PathBuf::from("/repo/worktree/c.txt"),
+                    line_stats: None,
                 },
                 ChangelogEntry {
                     kind: ChangelogKind::Deleted,
                     path: PathBuf::from("/repo/worktree/z.txt"),
+                    line_stats: None,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn parse_numstat_reads_regular_paths() {
+        let stats = parse_numstat_z(b"12\t3\tsrc/lib.rs\0", Path::new("/repo"));
+
+        assert_eq!(
+            stats,
+            HashMap::from([(
+                PathBuf::from("/repo/src/lib.rs"),
+                LineStats {
+                    added: 12,
+                    removed: 3,
+                },
+            )])
+        );
+    }
+
+    #[test]
+    fn parse_numstat_uses_new_path_for_renames() {
+        let stats = parse_numstat_z(b"1\t2\t\0old.rs\0new.rs\0", Path::new("/repo"));
+
+        assert_eq!(
+            stats,
+            HashMap::from([(
+                PathBuf::from("/repo/new.rs"),
+                LineStats {
+                    added: 1,
+                    removed: 2,
+                },
+            )])
+        );
+    }
+
+    #[test]
+    fn parse_numstat_ignores_binary_counts() {
+        let stats = parse_numstat_z(b"-\t-\timage.png\0", Path::new("/repo"));
+
+        assert_eq!(stats, HashMap::new());
+    }
+
+    #[test]
+    fn merge_line_stats_sums_existing_paths() {
+        let path = PathBuf::from("/repo/src/lib.rs");
+        let mut stats = HashMap::from([(
+            path.clone(),
+            LineStats {
+                added: 1,
+                removed: 2,
+            },
+        )]);
+
+        merge_line_stats(
+            &mut stats,
+            HashMap::from([(
+                path.clone(),
+                LineStats {
+                    added: 3,
+                    removed: 4,
+                },
+            )]),
+        );
+
+        assert_eq!(
+            stats,
+            HashMap::from([(
+                path,
+                LineStats {
+                    added: 4,
+                    removed: 6,
+                },
+            )])
+        );
+    }
+
+    #[tokio::test]
+    async fn git_changelog_includes_modified_file_line_stats() {
+        let dir = tempdir().expect("tempdir");
+        init_git_repo(dir.path());
+        std::fs::write(dir.path().join("changed.txt"), "one\ntwo\n").expect("write original file");
+        run_git(dir.path(), ["add", "changed.txt"]);
+        run_git(dir.path(), ["commit", "-m", "initial"]);
+
+        std::fs::write(dir.path().join("changed.txt"), "one\nthree\nfour\n")
+            .expect("write changed file");
+
+        let output = get_git_changelog(dir.path())
+            .await
+            .expect("git changelog")
+            .expect("git repo");
+        let display_root = std::fs::canonicalize(dir.path()).expect("canonicalize tempdir");
+
+        assert_eq!(
+            output,
+            ChangelogOutput::Entries {
+                display_root: display_root.clone(),
+                entries: vec![ChangelogEntry {
+                    kind: ChangelogKind::Modified,
+                    path: display_root.join("changed.txt"),
+                    line_stats: Some(LineStats {
+                        added: 2,
+                        removed: 1,
+                    }),
+                }],
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn git_changelog_includes_untracked_file_line_stats() {
+        let dir = tempdir().expect("tempdir");
+        init_git_repo(dir.path());
+        std::fs::write(dir.path().join("new.txt"), "one\ntwo\n").expect("write new file");
+
+        let output = get_git_changelog(dir.path())
+            .await
+            .expect("git changelog")
+            .expect("git repo");
+        let display_root = std::fs::canonicalize(dir.path()).expect("canonicalize tempdir");
+
+        assert_eq!(
+            output,
+            ChangelogOutput::Entries {
+                display_root: display_root.clone(),
+                entries: vec![ChangelogEntry {
+                    kind: ChangelogKind::Added,
+                    path: display_root.join("new.txt"),
+                    line_stats: Some(LineStats {
+                        added: 2,
+                        removed: 0,
+                    }),
+                }],
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn git_changelog_includes_deleted_file_line_stats() {
+        let dir = tempdir().expect("tempdir");
+        init_git_repo(dir.path());
+        let path = dir.path().join("gone.txt");
+        std::fs::write(&path, "one\ntwo\nthree\n").expect("write original file");
+        run_git(dir.path(), ["add", "gone.txt"]);
+        run_git(dir.path(), ["commit", "-m", "initial"]);
+        std::fs::remove_file(&path).expect("remove file");
+
+        let output = get_git_changelog(dir.path())
+            .await
+            .expect("git changelog")
+            .expect("git repo");
+        let display_root = std::fs::canonicalize(dir.path()).expect("canonicalize tempdir");
+
+        assert_eq!(
+            output,
+            ChangelogOutput::Entries {
+                display_root: display_root.clone(),
+                entries: vec![ChangelogEntry {
+                    kind: ChangelogKind::Deleted,
+                    path: display_root.join("gone.txt"),
+                    line_stats: Some(LineStats {
+                        added: 0,
+                        removed: 3,
+                    }),
+                }],
+            }
         );
     }
 
@@ -533,6 +898,7 @@ mod tests {
                 entries: vec![ChangelogEntry {
                     kind: ChangelogKind::Added,
                     path: dir.path().join("new.txt"),
+                    line_stats: None,
                 }],
             }
         );
@@ -559,6 +925,7 @@ mod tests {
                 entries: vec![ChangelogEntry {
                     kind: ChangelogKind::Deleted,
                     path,
+                    line_stats: None,
                 }],
             }
         );
@@ -585,6 +952,7 @@ mod tests {
                 entries: vec![ChangelogEntry {
                     kind: ChangelogKind::Modified,
                     path,
+                    line_stats: None,
                 }],
             }
         );
@@ -610,6 +978,7 @@ mod tests {
                 entries: vec![ChangelogEntry {
                     kind: ChangelogKind::Added,
                     path,
+                    line_stats: None,
                 }],
             }
         );
@@ -646,8 +1015,28 @@ mod tests {
                 entries: vec![ChangelogEntry {
                     kind: ChangelogKind::Modified,
                     path: link,
+                    line_stats: None,
                 }],
             }
+        );
+    }
+
+    fn init_git_repo(path: &Path) {
+        run_git(path, ["init"]);
+        run_git(path, ["config", "user.email", "test@example.com"]);
+        run_git(path, ["config", "user.name", "Test User"]);
+    }
+
+    fn run_git<const N: usize>(path: &Path, args: [&str; N]) {
+        let output = StdCommand::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 }
