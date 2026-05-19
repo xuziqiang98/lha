@@ -1647,6 +1647,37 @@ async fn entered_review_mode_defaults_to_current_changes_banner() {
     assert!(chat.is_review_mode);
 }
 
+#[tokio::test]
+async fn entered_review_mode_does_not_request_redraw_before_banner_insert() {
+    let (frame_requester, mut frame_rx) = FrameRequester::test_with_receiver();
+    let (mut chat, mut rx, _ops) =
+        make_chatwidget_manual_with_frame_requester(None, frame_requester).await;
+
+    chat.handle_codex_event(Event {
+        id: "turn-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+    while frame_rx.try_recv().is_ok() {}
+
+    chat.handle_codex_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        }),
+    });
+
+    let event = rx.try_recv().expect("review banner history event");
+    let cell = into_insert_history_cell(event).expect("insert history cell");
+    let banner = lines_to_single_string(&cell.display_lines(80));
+    assert_eq!(banner, ">> Code review started: current changes <<\n");
+    assert!(chat.is_review_mode);
+    assert_matches!(frame_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
 /// Exiting review restores the pre-review context window indicator.
 #[tokio::test]
 async fn review_restores_context_window_indicator() {

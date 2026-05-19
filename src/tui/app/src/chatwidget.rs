@@ -4036,7 +4036,6 @@ impl ChatWidget {
             .unwrap_or_else(|| adam_agent::review_prompts::user_facing_hint(&review.target));
         let banner = format!(">> Code review started: {hint} <<");
         self.add_to_history(history_cell::new_review_status_line(banner));
-        self.request_redraw();
     }
 
     fn on_exited_review_mode(&mut self, review: ExitedReviewModeEvent) {
