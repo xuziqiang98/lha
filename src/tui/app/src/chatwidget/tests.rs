@@ -1679,7 +1679,21 @@ async fn entered_review_mode_does_not_request_redraw_before_banner_insert() {
 }
 
 #[tokio::test]
-async fn pending_review_turn_started_defers_redraw_until_banner_insert() {
+async fn pending_review_prepare_marks_task_running_without_redraw() {
+    let (frame_requester, mut frame_rx) = FrameRequester::test_with_receiver();
+    let (mut chat, _rx, _ops) =
+        make_chatwidget_manual_with_frame_requester(None, frame_requester).await;
+    while frame_rx.try_recv().is_ok() {}
+
+    chat.prepare_for_review_start_transition();
+
+    assert!(chat.pending_review_start_transition);
+    assert!(chat.bottom_pane.is_task_running());
+    assert_matches!(frame_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn pending_review_turn_started_keeps_busy_without_redraw_until_banner_insert() {
     let (frame_requester, mut frame_rx) = FrameRequester::test_with_receiver();
     let (mut chat, mut rx, _ops) =
         make_chatwidget_manual_with_frame_requester(None, frame_requester).await;
@@ -1695,7 +1709,7 @@ async fn pending_review_turn_started_defers_redraw_until_banner_insert() {
     });
 
     assert!(chat.agent_turn_running);
-    assert!(!chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.is_task_running());
     assert!(chat.pending_review_start_transition);
     assert_matches!(frame_rx.try_recv(), Err(TryRecvError::Empty));
 
@@ -1734,8 +1748,38 @@ async fn pending_review_start_error_clears_transition() {
     });
 
     assert!(!chat.pending_review_start_transition);
+    assert!(!chat.bottom_pane.is_task_running());
     assert!(rx.try_recv().is_ok());
     assert!(frame_rx.try_recv().is_ok());
+}
+
+#[tokio::test]
+async fn pending_review_start_ctrl_c_interrupts_instead_of_only_quit_hint() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.prepare_for_review_start_transition();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::Interrupt));
+}
+
+#[tokio::test]
+async fn pending_review_start_queues_enter_submission_instead_of_submitting_turn() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::Steer, false);
+
+    chat.prepare_for_review_start_transition();
+    chat.bottom_pane
+        .set_composer_text("do not replace review".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "do not replace review"
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 /// Exiting review restores the pre-review context window indicator.

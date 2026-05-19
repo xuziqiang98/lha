@@ -760,10 +760,20 @@ impl ChatWidget {
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
-    /// both the agent turn lifecycle and MCP startup lifecycle.
+    /// the agent turn lifecycle, MCP startup lifecycle, and review-start transition.
+    fn task_running_state(&self) -> bool {
+        self.agent_turn_running
+            || self.mcp_startup_status.is_some()
+            || self.pending_review_start_transition
+    }
+
     fn update_task_running_state(&mut self) {
+        self.bottom_pane.set_task_running(self.task_running_state());
+    }
+
+    fn update_task_running_state_with_redraw(&mut self, request_redraw: bool) {
         self.bottom_pane
-            .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
+            .set_task_running_with_redraw(self.task_running_state(), request_redraw);
     }
 
     fn restore_reasoning_status_header(&mut self) {
@@ -1102,6 +1112,7 @@ impl ChatWidget {
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
         if defer_review_redraw {
+            self.update_task_running_state_with_redraw(false);
             return;
         }
         self.update_task_running_state();
@@ -4048,10 +4059,12 @@ impl ChatWidget {
 
     pub(crate) fn prepare_for_review_start_transition(&mut self) {
         self.pending_review_start_transition = true;
+        self.update_task_running_state_with_redraw(false);
     }
 
     pub(crate) fn clear_review_start_transition(&mut self) {
         self.pending_review_start_transition = false;
+        self.update_task_running_state_with_redraw(false);
     }
 
     fn on_entered_review_mode(&mut self, review: ReviewRequest, from_replay: bool) {
@@ -4066,6 +4079,7 @@ impl ChatWidget {
             .unwrap_or_else(|| adam_agent::review_prompts::user_facing_hint(&review.target));
         let banner = format!(">> Code review started: {hint} <<");
         self.add_to_history(history_cell::new_review_status_line(banner));
+        self.clear_review_start_transition();
         if !from_replay {
             if !self.bottom_pane.is_task_running() {
                 self.bottom_pane.set_task_running_with_redraw(true, false);
@@ -4073,7 +4087,6 @@ impl ChatWidget {
             self.bottom_pane
                 .set_interrupt_hint_visible_with_redraw(true, false);
         }
-        self.clear_review_start_transition();
     }
 
     fn on_exited_review_mode(&mut self, review: ExitedReviewModeEvent) {
