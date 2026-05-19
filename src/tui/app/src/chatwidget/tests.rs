@@ -11,6 +11,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::UserHistoryCell;
+use crate::sidebar::SidebarWidget;
 use crate::style::proposed_plan_style;
 use crate::test_backend::VT100Backend;
 use crate::transcript_selection::TranscriptSelectionPoint;
@@ -2454,6 +2455,18 @@ fn buffer_to_string(buf: &Buffer) -> String {
         .join("\n")
 }
 
+fn render_sidebar_snapshot(snapshot: &SidebarSnapshot) -> String {
+    let area = Rect::new(0, 0, 42, 30);
+    let mut buf = Buffer::empty(area);
+    SidebarWidget {
+        snapshot,
+        buddy_state: None,
+        animations_enabled: false,
+    }
+    .render(area, &mut buf);
+    buffer_to_string(&buf)
+}
+
 fn live_tail_text(tail: Option<crate::transcript_view::TranscriptLiveTail>) -> String {
     tail.map(|tail| lines_to_single_string(&tail.lines))
         .unwrap_or_default()
@@ -3114,6 +3127,35 @@ async fn sidebar_task_hides_proposed_plan_without_heading() {
     chat.on_plan_item_completed("- Step 1\n".to_string());
 
     assert!(chat.sidebar_snapshot().task.is_none());
+}
+
+#[tokio::test]
+async fn sidebar_files_more_count_uses_all_touched_files() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let unified_diff = (0..20)
+        .map(|i| {
+            format!(
+                "diff --git a/file-{i}.rs b/file-{i}.rs\n--- a/file-{i}.rs\n+++ b/file-{i}.rs\n@@ -1 +1 @@\n-old\n+new\n"
+            )
+        })
+        .collect::<String>();
+
+    chat.on_turn_diff(unified_diff);
+
+    let snapshot = chat.sidebar_snapshot();
+    assert_eq!(snapshot.files.len(), 20);
+
+    let rendered = render_sidebar_snapshot(&snapshot);
+    assert!(rendered.contains("file-19.rs"));
+    assert!(rendered.contains("file-14.rs"));
+    assert!(!rendered.contains("file-13.rs"));
+    assert!(rendered.contains("+14 more"));
+
+    chat.on_turn_diff(
+        "diff --git a/file-19.rs b/file-19.rs\n--- a/file-19.rs\n+++ b/file-19.rs\n@@ -1 +1 @@\n-new\n+newer\n"
+            .to_string(),
+    );
+    assert_eq!(chat.sidebar_snapshot().files.len(), 20);
 }
 
 #[tokio::test]

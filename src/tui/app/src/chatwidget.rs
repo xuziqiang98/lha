@@ -1886,9 +1886,6 @@ impl ChatWidget {
                 continue;
             }
             self.changed_files.push_front(path);
-            while self.changed_files.len() > 12 {
-                self.changed_files.pop_back();
-            }
         }
         self.request_redraw();
     }
