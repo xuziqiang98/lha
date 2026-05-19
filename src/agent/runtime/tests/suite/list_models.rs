@@ -30,7 +30,7 @@ fn test_openai_endpoint() -> adam_llm::RuntimeEndpoint {
     let mut endpoint = built_in_runtime_endpoints()["openai"].clone();
     endpoint.env_key = None;
     endpoint.env_key_instructions = None;
-    endpoint.experimental_bearer_token = Some("sk-test".to_string());
+    endpoint.bearer_token = Some("sk-test".to_string());
     endpoint
 }
 

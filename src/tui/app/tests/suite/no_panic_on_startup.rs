@@ -35,7 +35,7 @@ model_provider = "test-provider"
 name = "test-provider"
 base_url = "https://example.com/v1"
 dialect = "responses"
-experimental_bearer_token = "sk-test"
+bearer_token = "sk-test"
 
 [projects]
 "{cwd}" = {{ trust_level = "trusted" }}

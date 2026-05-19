@@ -7010,7 +7010,7 @@ show_raw_agent_reasoning = true
                 base_url: Some(format!("https://example.com/{provider_id}")),
                 env_key: None,
                 env_key_instructions: None,
-                experimental_bearer_token: Some(format!("sk-{provider_id}")),
+                bearer_token: Some(format!("sk-{provider_id}")),
                 dialect: ModelsDialect::Chat,
                 query_params: None,
                 http_headers: None,

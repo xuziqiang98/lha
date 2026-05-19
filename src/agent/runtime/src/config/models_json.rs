@@ -82,7 +82,7 @@ pub struct ModelsEndpoint {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_key_instructions: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub experimental_bearer_token: Option<String>,
+    pub bearer_token: Option<String>,
     #[serde(default)]
     pub dialect: ModelsDialect,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -209,7 +209,7 @@ impl ModelsJson {
                 }
                 runtime.env_key = endpoint.env_key.clone();
                 runtime.env_key_instructions = endpoint.env_key_instructions.clone();
-                runtime.experimental_bearer_token = endpoint.experimental_bearer_token.clone();
+                runtime.bearer_token = endpoint.bearer_token.clone();
                 runtime.query_params = endpoint.query_params.clone();
                 runtime.http_headers = endpoint.http_headers.clone();
                 runtime.env_http_headers = endpoint.env_http_headers.clone();
@@ -468,7 +468,7 @@ mod tests {
                       "base_url": "https://example.com/v1",
                       "env_key": null,
                       "env_key_instructions": null,
-                      "experimental_bearer_token": "sk-test",
+                      "bearer_token": "sk-test",
                       "query_params": null,
                       "http_headers": null,
                       "env_http_headers": null,
@@ -502,7 +502,7 @@ mod tests {
                   "endpoints": {
                     "chat": {
                       "base_url": "https://example.com/v1",
-                      "experimental_bearer_token": "sk-test",
+                      "bearer_token": "sk-test",
                       "models": {
                         "gpt-test": {}
                       }
@@ -538,6 +538,33 @@ mod tests {
         std::fs::write(temp.path().join(MODELS_JSON_FILE), r#"{"unknown":true}"#).unwrap();
         let err = ModelsJson::load_from_adam_home(temp.path()).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn old_experimental_bearer_token_field_is_rejected() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(
+            temp.path().join(MODELS_JSON_FILE),
+            r#"{
+              "providers": {
+                "custom": {
+                  "endpoints": {
+                    "chat": {
+                      "base_url": "https://example.com/v1",
+                      "experimental_bearer_token": "sk-test",
+                      "models": {
+                        "gpt-test": {}
+                      }
+                    }
+                  }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+        let err = ModelsJson::load_from_adam_home(temp.path()).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        assert!(err.to_string().contains("experimental_bearer_token"));
     }
 
     #[test]

@@ -52,7 +52,7 @@ pub struct RuntimeEndpoint {
     /// Value to use with `Authorization: Bearer <token>` header. Use of this
     /// config is discouraged in favor of `env_key` for security reasons, but
     /// this may be necessary when using this programmatically.
-    pub experimental_bearer_token: Option<String>,
+    pub bearer_token: Option<String>,
     /// Which conversation dialect this endpoint expects.
     #[serde(default)]
     pub(crate) dialect: ConversationDialect,
@@ -217,8 +217,8 @@ impl RuntimeEndpoint {
         self
     }
 
-    pub fn with_bearer_token(mut self, experimental_bearer_token: Option<String>) -> Self {
-        self.experimental_bearer_token = experimental_bearer_token;
+    pub fn with_bearer_token(mut self, bearer_token: Option<String>) -> Self {
+        self.bearer_token = bearer_token;
         self
     }
 
@@ -321,7 +321,7 @@ impl RuntimeEndpoint {
     }
 
     pub fn has_local_auth(&self) -> bool {
-        self.experimental_bearer_token
+        self.bearer_token
             .as_deref()
             .is_some_and(|token| !token.trim().is_empty())
             || self
@@ -357,7 +357,7 @@ impl RuntimeEndpoint {
                 .filter(|v| !v.trim().is_empty()),
             env_key: Some("OPENAI_API_KEY".to_string()),
             env_key_instructions: None,
-            experimental_bearer_token: None,
+            bearer_token: None,
             dialect: ConversationDialect::Responses,
             query_params: None,
             http_headers: Some(
@@ -405,7 +405,7 @@ impl RuntimeEndpoint {
             base_url,
             env_key: None,
             env_key_instructions: None,
-            experimental_bearer_token: None,
+            bearer_token: None,
             dialect,
             query_params: None,
             http_headers: None,

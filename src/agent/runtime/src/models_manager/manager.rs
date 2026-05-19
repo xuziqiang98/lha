@@ -1149,9 +1149,7 @@ mod tests {
             .get("dialect")
             .and_then(toml::Value::as_str)
             .unwrap_or("chat");
-        let bearer = endpoint
-            .get("experimental_bearer_token")
-            .and_then(toml::Value::as_str);
+        let bearer = endpoint.get("bearer_token").and_then(toml::Value::as_str);
         let env_key = endpoint.get("env_key").and_then(toml::Value::as_str);
         let endpoint_value = &mut provider["endpoints"][endpoint_id];
         if endpoint_value.is_null() {
@@ -1162,7 +1160,7 @@ mod tests {
             endpoint_value["base_url"] = json!(base_url);
         }
         if let Some(bearer) = bearer {
-            endpoint_value["experimental_bearer_token"] = json!(bearer);
+            endpoint_value["bearer_token"] = json!(bearer);
         }
         if let Some(env_key) = env_key {
             endpoint_value["env_key"] = json!(env_key);
@@ -1811,13 +1809,13 @@ model_provider = "provider_a"
 name = "provider_a"
 base_url = "https://example.com/a"
 dialect = "chat"
-experimental_bearer_token = "sk-a"
+bearer_token = "sk-a"
 
 [model_providers.provider_b]
 name = "provider_b"
 base_url = "https://example.com/b"
 dialect = "chat"
-experimental_bearer_token = "sk-b"
+bearer_token = "sk-b"
 
 [profiles.second]
 model = "gpt-5.2"
@@ -1893,13 +1891,13 @@ model_provider = "anthropic.messages"
 name = "anthropic"
 base_url = "https://api.anthropic.com/v1"
 dialect = "messages"
-experimental_bearer_token = "sk-msg"
+bearer_token = "sk-msg"
 
 [model_providers.anthropic.variants.chat]
 name = "anthropic"
 base_url = "https://example.com/chat"
 dialect = "chat"
-experimental_bearer_token = "sk-chat"
+bearer_token = "sk-chat"
 
 [profiles.chat]
 model = "claude-sonnet-4-5"
@@ -1960,13 +1958,13 @@ model_provider = "openai"
 name = "anthropic"
 base_url = "https://api.anthropic.com/v1"
 dialect = "messages"
-experimental_bearer_token = "sk-msg"
+bearer_token = "sk-msg"
 
 [model_providers.anthropic.variants.chat]
 name = "anthropic"
 base_url = "https://example.com/chat"
 dialect = "chat"
-experimental_bearer_token = "sk-chat"
+bearer_token = "sk-chat"
 
 [profiles.messages]
 model = "gpt-5.2"
@@ -2135,7 +2133,7 @@ model_provider = "provider_a"
 name = "provider_a"
 base_url = "https://example.com/a"
 dialect = "chat"
-experimental_bearer_token = "sk-a"
+bearer_token = "sk-a"
 "#,
         )
         .await;
@@ -2264,7 +2262,7 @@ model_provider = "provider_a"
 name = "provider_a"
 base_url = "https://example.com/a"
 dialect = "chat"
-experimental_bearer_token = "sk-a"
+bearer_token = "sk-a"
 "#,
         )
         .await;
@@ -2334,13 +2332,13 @@ model_provider = "provider_b"
 name = "provider_a"
 base_url = "https://example.com/a"
 dialect = "chat"
-experimental_bearer_token = "sk-a"
+bearer_token = "sk-a"
 
 [model_providers.provider_b]
 name = "provider_b"
 base_url = "https://example.com/b"
 dialect = "chat"
-experimental_bearer_token = "sk-b"
+bearer_token = "sk-b"
 "#,
         )
         .await;
@@ -2606,7 +2604,7 @@ model = "claude-sonnet-4-5"
             AuthCredentialsStoreMode::File,
         ));
         let mut provider = provider_for("http://example.test".to_string());
-        provider.experimental_bearer_token = Some("sk-test".to_string());
+        provider.bearer_token = Some("sk-test".to_string());
         let manager = ModelsManager::with_provider(
             adam_home.path().to_path_buf(),
             auth_manager,
@@ -2690,7 +2688,7 @@ model = "mock-model"
         assert_eq!(picker_models[0].model, "mock-model");
 
         let mut updated_provider = provider_for("http://example.test/v2".to_string());
-        updated_provider.experimental_bearer_token = Some("sk-test".to_string());
+        updated_provider.bearer_token = Some("sk-test".to_string());
         manager.set_provider(updated_provider);
 
         let picker_models = manager

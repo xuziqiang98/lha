@@ -22,6 +22,6 @@ pub(crate) fn auth_provider_from_endpoint(endpoint: &RuntimeEndpoint) -> Result<
     }
 
     Ok(LlmAuthProvider {
-        token: endpoint.experimental_bearer_token.clone(),
+        token: endpoint.bearer_token.clone(),
     })
 }

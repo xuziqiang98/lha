@@ -121,7 +121,7 @@ pub fn write_mock_responses_models_json(
           "name": "{provider_id}",
           "base_url": "{server_uri}/v1",
           "dialect": "responses",
-          "experimental_bearer_token": "sk-test",
+          "bearer_token": "sk-test",
           "request_max_retries": 0,
           "stream_max_retries": 0,
           "models": {{

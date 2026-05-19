@@ -54,6 +54,9 @@
         "base_url": {
           "type": "string"
         },
+        "bearer_token": {
+          "type": "string"
+        },
         "dialect": {
           "allOf": [
             {
@@ -72,9 +75,6 @@
           "type": "string"
         },
         "env_key_instructions": {
-          "type": "string"
-        },
-        "experimental_bearer_token": {
           "type": "string"
         },
         "http_headers": {

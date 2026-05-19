@@ -6641,7 +6641,7 @@ mod tests {
         let (session, turn_context) = make_session_and_context().await;
         let mut endpoint = turn_context.runtime.endpoint();
         endpoint.base_url = Some("https://example.com/v2".to_string());
-        endpoint.experimental_bearer_token = Some("sk-updated".to_string());
+        endpoint.bearer_token = Some("sk-updated".to_string());
         endpoint.set_chat_turns();
 
         session.update_model_provider(endpoint.clone()).await;
@@ -6898,7 +6898,7 @@ mod tests {
         let (session, turn_context) = make_session_and_context().await;
         let mut endpoint = turn_context.runtime.endpoint();
         endpoint.base_url = Some("https://example.com/v2".to_string());
-        endpoint.experimental_bearer_token = Some("sk-updated".to_string());
+        endpoint.bearer_token = Some("sk-updated".to_string());
         endpoint.set_chat_turns();
         {
             let mut state = session.state.lock().await;

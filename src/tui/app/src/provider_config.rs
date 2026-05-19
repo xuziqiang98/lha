@@ -340,7 +340,7 @@ pub(crate) fn persist_custom_provider_files(
             base_url: None,
             env_key: None,
             env_key_instructions: None,
-            experimental_bearer_token: None,
+            bearer_token: None,
             dialect: config.dialect.as_models_dialect(),
             query_params: None,
             http_headers: None,
@@ -355,7 +355,7 @@ pub(crate) fn persist_custom_provider_files(
     endpoint.base_url = Some(config.base_url.clone());
     endpoint.env_key = None;
     endpoint.env_key_instructions = None;
-    endpoint.experimental_bearer_token = Some(config.api_key.clone());
+    endpoint.bearer_token = Some(config.api_key.clone());
     endpoint.dialect = config.dialect.as_models_dialect();
     endpoint.query_params = None;
     endpoint.http_headers = None;

@@ -494,8 +494,8 @@ fn create_models_json_mapped_config_toml(codex_home: &Path) -> std::io::Result<(
         codex_home.join("models.json"),
         r#"{
   "providers": {
-    "provider_a": { "endpoints": { "main": { "base_url": "https://example.com/a", "dialect": "chat", "experimental_bearer_token": "sk-a", "models": { "glm-5": {} } } } },
-    "provider_b": { "endpoints": { "main": { "base_url": "https://example.com/b", "dialect": "chat", "experimental_bearer_token": "sk-b", "models": { "deepseek-v3": {} } } } }
+    "provider_a": { "endpoints": { "main": { "base_url": "https://example.com/a", "dialect": "chat", "bearer_token": "sk-a", "models": { "glm-5": {} } } } },
+    "provider_b": { "endpoints": { "main": { "base_url": "https://example.com/b", "dialect": "chat", "bearer_token": "sk-b", "models": { "deepseek-v3": {} } } } }
   }
 }
 "#,
@@ -508,7 +508,7 @@ fn create_config_toml_with_custom_provider(codex_home: &Path) -> std::io::Result
         codex_home.join("models.json"),
         r#"{
   "providers": {
-    "iie": { "endpoints": { "main": { "base_url": "https://example.com/iie", "dialect": "responses", "experimental_bearer_token": "sk-test", "models": { "deepseek-v3": {} } } } }
+    "iie": { "endpoints": { "main": { "base_url": "https://example.com/iie", "dialect": "responses", "bearer_token": "sk-test", "models": { "deepseek-v3": {} } } } }
   }
 }
 "#,
@@ -521,8 +521,8 @@ fn create_ambiguous_models_json_config_toml(codex_home: &Path) -> std::io::Resul
         codex_home.join("models.json"),
         r#"{
   "providers": {
-    "iie": { "endpoints": { "main": { "base_url": "https://example.com/iie", "dialect": "responses", "experimental_bearer_token": "sk-iie", "models": { "deepseek-v3": {} } } } },
-    "chatanywhere": { "endpoints": { "main": { "base_url": "https://example.com/chatanywhere", "dialect": "responses", "experimental_bearer_token": "sk-chatanywhere", "models": { "deepseek-v3": {} } } } }
+    "iie": { "endpoints": { "main": { "base_url": "https://example.com/iie", "dialect": "responses", "bearer_token": "sk-iie", "models": { "deepseek-v3": {} } } } },
+    "chatanywhere": { "endpoints": { "main": { "base_url": "https://example.com/chatanywhere", "dialect": "responses", "bearer_token": "sk-chatanywhere", "models": { "deepseek-v3": {} } } } }
   }
 }
 "#,
@@ -546,7 +546,7 @@ fn create_variant_switching_config_toml(
           "name": "i9vc",
           "base_url": "{server_uri}/v1",
           "dialect": "responses",
-          "experimental_bearer_token": "sk-responses",
+          "bearer_token": "sk-responses",
           "request_max_retries": 0,
           "stream_max_retries": 0,
           "models": {{ "gpt-5.4": {{}} }}
@@ -555,7 +555,7 @@ fn create_variant_switching_config_toml(
           "name": "i9vc",
           "base_url": "{server_uri}/v1",
           "dialect": "messages",
-          "experimental_bearer_token": "sk-messages",
+          "bearer_token": "sk-messages",
           "request_max_retries": 0,
           "stream_max_retries": 0,
           "models": {{ "glm-5.1": {{}} }}
@@ -569,7 +569,7 @@ fn create_variant_switching_config_toml(
           "name": "other_provider",
           "base_url": "{server_uri}/v1",
           "dialect": "responses",
-          "experimental_bearer_token": "sk-other",
+          "bearer_token": "sk-other",
           "request_max_retries": 0,
           "stream_max_retries": 0,
           "models": {{ "gpt-4.1": {{}} }}
@@ -616,7 +616,7 @@ fn create_implicit_default_variant_switching_config_toml(
           "name": "i9vc",
           "base_url": "{server_uri}/v1",
           "dialect": "responses",
-          "experimental_bearer_token": "sk-responses",
+          "bearer_token": "sk-responses",
           "request_max_retries": 0,
           "stream_max_retries": 0,
           "models": {{ "gpt-5.4": {{}} }}
@@ -625,7 +625,7 @@ fn create_implicit_default_variant_switching_config_toml(
           "name": "i9vc",
           "base_url": "{server_uri}/v1",
           "dialect": "messages",
-          "experimental_bearer_token": "sk-messages",
+          "bearer_token": "sk-messages",
           "request_max_retries": 0,
           "stream_max_retries": 0,
           "models": {{ "glm-5.1": {{}} }}
