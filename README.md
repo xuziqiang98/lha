@@ -15,6 +15,7 @@ The `adam-exec` binary is written to `target/release/adam-exec`.
 
 ## Documentation
 
+- [Slash commands](./docs/slash-commands.md)
 - [MCP configuration](./docs/mcp.md)
 
 ## Structure
