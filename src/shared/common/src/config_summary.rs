@@ -42,6 +42,8 @@ fn identity_kind_label(identity_kind: IdentityKind) -> &'static str {
         IdentityKind::Nobody => "nobody",
         IdentityKind::Planner => "planner",
         IdentityKind::Programmer => "programmer",
+        IdentityKind::Explorer => "explorer",
+        IdentityKind::Reviewer => "reviewer",
     }
 }
 

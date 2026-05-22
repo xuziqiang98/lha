@@ -113,10 +113,8 @@ pub enum Feature {
     EnableRequestCompression,
     /// Force HTTP/1.1 for model streaming requests.
     ForceHttp1Streaming,
-    /// Enable multi-agent collaboration tools.
-    Collab,
-    /// Run `/review` in a detached review thread that appears in `/agent`.
-    DetachedReview,
+    /// Enable one-shot delegated agent job tools.
+    AgentJobs,
     /// Enable apps.
     Apps,
     /// Allow prompting and installing missing MCP dependencies.
@@ -340,7 +338,7 @@ fn disable_removed_features(features: &mut Features) {
 }
 
 fn enable_always_on_features(features: &mut Features) {
-    features.enable(Feature::Collab);
+    features.enable(Feature::AgentJobs);
     features.enable(Feature::BackfillCompactPlanContext);
 }
 
@@ -542,20 +540,10 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::Collab,
-        key: "multi_agent",
+        id: Feature::AgentJobs,
+        key: "agent_jobs",
         stage: Stage::Stable,
         default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::DetachedReview,
-        key: "detached_review",
-        stage: Stage::Experimental {
-            name: "Detached review threads",
-            menu_description: "Run /review in a separate review thread that appears in /agent while the current thread still shows progress and results.",
-            announcement: "NEW: Detached review threads are available in /experimental.",
-        },
-        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Apps,
@@ -687,7 +675,6 @@ mod tests {
     use super::Features;
     use super::FeaturesToml;
     use super::Stage;
-    use super::feature_for_key;
     use crate::config::ConfigToml;
     use crate::config::profile::ConfigProfile;
     use pretty_assertions::assert_eq;
@@ -705,27 +692,21 @@ mod tests {
     }
 
     #[test]
-    fn collab_is_stable_and_enabled_by_default() {
-        let stage = Feature::Collab.stage();
+    fn agent_jobs_is_stable_and_enabled_by_default() {
+        let stage = Feature::AgentJobs.stage();
 
         assert_eq!(Stage::Stable, stage);
-        assert_eq!(true, Feature::Collab.default_enabled());
+        assert_eq!(true, Feature::AgentJobs.default_enabled());
         assert_eq!(None, stage.experimental_menu_name());
         assert_eq!(None, stage.experimental_menu_description());
         assert_eq!(None, stage.experimental_announcement());
     }
 
     #[test]
-    fn collab_is_legacy_alias_for_multi_agent() {
-        assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
-        assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
-    }
-
-    #[test]
-    fn collab_stays_enabled_when_base_config_sets_multi_agent_false() {
+    fn agent_jobs_stays_enabled_when_base_config_sets_false() {
         let cfg = ConfigToml {
             features: Some(FeaturesToml {
-                entries: BTreeMap::from([("multi_agent".to_string(), false)]),
+                entries: BTreeMap::from([("agent_jobs".to_string(), false)]),
             }),
             ..Default::default()
         };
@@ -733,14 +714,14 @@ mod tests {
         let features =
             Features::from_config(&cfg, &ConfigProfile::default(), FeatureOverrides::default());
 
-        assert!(features.enabled(Feature::Collab));
+        assert!(features.enabled(Feature::AgentJobs));
     }
 
     #[test]
-    fn collab_stays_enabled_when_profile_sets_multi_agent_false() {
+    fn agent_jobs_stays_enabled_when_profile_sets_false() {
         let profile = ConfigProfile {
             features: Some(FeaturesToml {
-                entries: BTreeMap::from([("multi_agent".to_string(), false)]),
+                entries: BTreeMap::from([("agent_jobs".to_string(), false)]),
             }),
             ..Default::default()
         };
@@ -751,22 +732,7 @@ mod tests {
             FeatureOverrides::default(),
         );
 
-        assert!(features.enabled(Feature::Collab));
-    }
-
-    #[test]
-    fn collab_stays_enabled_when_legacy_alias_sets_collab_false() {
-        let cfg = ConfigToml {
-            features: Some(FeaturesToml {
-                entries: BTreeMap::from([("collab".to_string(), false)]),
-            }),
-            ..Default::default()
-        };
-
-        let features =
-            Features::from_config(&cfg, &ConfigProfile::default(), FeatureOverrides::default());
-
-        assert!(features.enabled(Feature::Collab));
+        assert!(features.enabled(Feature::AgentJobs));
     }
 
     #[test]

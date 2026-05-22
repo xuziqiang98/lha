@@ -69,10 +69,11 @@ pub(crate) fn spawn_agent(
     codex_op_tx
 }
 
-/// Spawn agent loops for an existing thread (e.g., a forked thread).
-/// Sends the provided `SessionConfiguredEvent` immediately, then forwards subsequent
-/// events and accepts Ops for submission.
-pub(crate) fn spawn_agent_from_existing(
+/// Attach an existing thread to the chat widget event/op bridge.
+///
+/// Sends the provided `SessionConfiguredEvent` immediately, then forwards
+/// subsequent events and accepts Ops for submission.
+pub(crate) fn attach_existing_thread(
     thread: std::sync::Arc<CodexThread>,
     session_configured: adam_agent::protocol::SessionConfiguredEvent,
     app_event_tx: AppEventSender,
@@ -100,21 +101,6 @@ pub(crate) fn spawn_agent_from_existing(
 
         while let Ok(event) = thread.next_event().await {
             app_event_tx_clone.send(AppEvent::CodexEvent(event));
-        }
-    });
-
-    codex_op_tx
-}
-
-/// Spawn an op-forwarding loop for an existing thread without subscribing to events.
-pub(crate) fn spawn_op_forwarder(thread: std::sync::Arc<CodexThread>) -> UnboundedSender<Op> {
-    let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
-
-    tokio::spawn(async move {
-        while let Some(op) = codex_op_rx.recv().await {
-            if let Err(e) = thread.submit(op).await {
-                tracing::error!("failed to submit op: {e}");
-            }
         }
     });
 

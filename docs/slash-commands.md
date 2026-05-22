@@ -35,8 +35,6 @@ asking the model to interpret the request.
 | `/init` | None | No | Ask Adam to create an `AGENTS.md` instruction file unless one already exists in the current directory. |
 | `/compact` | None | No | Summarize the conversation to reduce context usage. |
 | `/identity` | None | No | Open the identity selector when identities are enabled. |
-| `/agent` | None | Yes | Open the active agent thread picker. |
-| `/multi-agents` | None | Yes | Open the active agent thread picker. |
 | `/changelog` | None | Yes | Show added, modified, and deleted files. |
 | `/diff` | None | Yes | Show git diff, including untracked files. |
 | `/mention` | None | Yes | Insert `@` to start mentioning a file. |

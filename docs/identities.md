@@ -9,11 +9,13 @@ which mode the next turn will use.
 
 ## Built-in Identities
 
-Adam currently includes three built-in identities:
+Adam currently includes five built-in identities:
 
 - `nobody`
 - `planner`
 - `programmer`
+- `explorer`
+- `reviewer`
 
 ## `nobody`
 
@@ -51,6 +53,30 @@ formatters, run tests, or carry out an already-decided plan.
 General repository instructions, sandboxing rules, and approval requirements
 still apply in `programmer` mode.
 
+## `explorer`
+
+`explorer` is a read-only codebase navigation identity. It is intended for
+isolated one-shot jobs launched by `spawn_agent` or `adam exec --identity
+explorer`.
+
+Use `explorer` when Adam needs a narrow repository fact or path-specific answer
+but the search process should not enter the main agent context. The runtime
+only exposes read-only navigation tools (`grep_files`, `read_file`, and
+`list_dir`) for this identity.
+
+`explorer` is a bounded job identity, not a long-lived sub-agent.
+
+## `reviewer`
+
+`reviewer` is a read-only code review identity. `/review` launches it through a
+CLI-backed one-shot job, then folds only the final review result back into the
+main thread.
+
+Use `reviewer` for automated review findings. The runtime only exposes
+read-only navigation and inspection command tools for this identity.
+
+`reviewer` is a bounded job identity, not a long-lived sub-agent.
+
 ## Choosing An Identity
 
 | Goal | Recommended identity |
@@ -58,6 +84,8 @@ still apply in `programmer` mode.
 | I want a normal assistant response. | `nobody` |
 | I want a plan before edits. | `planner` |
 | I want code changes now. | `programmer` |
+| I want isolated codebase exploration. | `explorer` |
+| I want an isolated code review. | `reviewer` |
 | I have a large ambiguous task. | Start with `planner`, then switch to `programmer`. |
 | I already have a precise task. | `programmer` |
 
@@ -79,11 +107,15 @@ identity.
   plan.
 - `programmer` does not override sandboxing, approval requirements, or
   repository instructions.
+- `explorer` and `reviewer` are one-shot, read-only identities. They do not
+  support ongoing child-agent conversations.
 - Workflow identities are a separate planned/experimental design and do not
   replace the current built-in identities.
 
 ## Related Documentation
 
 - [Slash commands](./slash-commands.md) documents `/identity`.
+- [Design Philosophy](./design-philosophy.md) explains Adam's single-agent
+  product model and bounded delegation rules.
 - [Workflow identities](./workflow-identities.md) describes the planned
   structured workflow identity design.

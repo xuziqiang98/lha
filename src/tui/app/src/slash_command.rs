@@ -29,8 +29,6 @@ pub enum SlashCommand {
     Init,
     Compact,
     Identity,
-    Agent,
-    MultiAgents,
     // Undo,
     Changelog,
     Diff,
@@ -77,7 +75,6 @@ impl SlashCommand {
             SlashCommand::Providers => "add a custom provider and save models for it",
             SlashCommand::Personality => "choose a communication style for Adam",
             SlashCommand::Identity => "choose Adam identity",
-            SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
             SlashCommand::Changelog => "show added, modified, and deleted files",
             SlashCommand::Approvals => "choose what Adam can do without approval",
             SlashCommand::Permissions => "choose what Adam is allowed to do",
@@ -133,7 +130,6 @@ impl SlashCommand {
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
             SlashCommand::Identity => false,
-            SlashCommand::Agent | SlashCommand::MultiAgents => true,
         }
     }
 
@@ -158,25 +154,6 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::str::FromStr;
-
-    #[test]
-    fn multi_agents_alias_parses() {
-        assert_eq!(
-            SlashCommand::from_str("multi-agents").expect("parse alias"),
-            SlashCommand::MultiAgents
-        );
-    }
-
-    #[test]
-    fn built_in_commands_include_multi_agents_alias() {
-        assert!(
-            built_in_slash_commands()
-                .into_iter()
-                .any(|(command, slash_command)| {
-                    command == "multi-agents" && slash_command == SlashCommand::MultiAgents
-                })
-        );
-    }
 
     #[test]
     fn stop_command_is_canonical_name() {

@@ -367,7 +367,7 @@ async fn turn_start_accepts_identity_override_v2() -> Result<()> {
     let identity = Identity {
         kind: IdentityKind::Nobody,
         settings: Settings {
-            model: "mock-model-collab".to_string(),
+            model: "mock-model-identity".to_string(),
             reasoning_effort: Some(ReasoningEffort::High),
             developer_instructions: None,
         },
@@ -403,7 +403,7 @@ async fn turn_start_accepts_identity_override_v2() -> Result<()> {
 
     let request = response_mock.single_request();
     let payload = request.body_json();
-    assert_eq!(payload["model"].as_str(), Some("mock-model-collab"));
+    assert_eq!(payload["model"].as_str(), Some("mock-model-identity"));
     let state = AdamStateStore::new(adam_home.path()).load()?;
     assert_eq!(state.last_selected_identity, Some(IdentityKind::Nobody));
 

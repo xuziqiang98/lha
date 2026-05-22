@@ -59,6 +59,8 @@ pub enum IdentityKind {
     Nobody,
     Planner,
     Programmer,
+    Explorer,
+    Reviewer,
 }
 
 /// Identity for an Adam session.

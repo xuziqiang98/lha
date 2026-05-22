@@ -6,7 +6,6 @@ import type { ReviewTarget } from "./ReviewTarget";
 
 export type ReviewStartParams = { threadId: string, target: ReviewTarget,
 /**
- * Where to run the review: inline (default) on the current thread or
- * detached on a new thread (returned in `reviewThreadId`).
+ * Where to run the review. Inline is the only supported mode; omitted means inline.
  */
 delivery: ReviewDelivery | null, };

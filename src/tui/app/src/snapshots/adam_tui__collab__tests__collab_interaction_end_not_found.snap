@@ -1,7 +1,0 @@
----
-source: src/harness/tui/src/collab.rs
-expression: cell_to_text(&cell)
----
-• Input result for Robie [explorer]
-  └ Please continue and return the answer only.
-    Status: Not found

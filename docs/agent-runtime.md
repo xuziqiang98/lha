@@ -29,7 +29,7 @@ The intended stack is:
 - SQLite-backed session state
 - Adam protocol `Op` / `EventMsg`
 - Approval, sandbox, exec-policy, and coding tool UX
-- Skills, project-doc injection, review flows, and subagents
+- Skills, project-doc injection, review flows, and CLI-backed delegated jobs
 
 `adam-agent-runtime` also should not depend on `adam-llm` compatibility bridges
 that reconstruct provider-facing transcript items. Session/runtime code should

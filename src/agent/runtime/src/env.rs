@@ -1,5 +1,13 @@
 //! Functions for environment detection that need to be shared across crates.
 
+/// Serialized provider context passed from a parent Adam session to a delegated
+/// `adam exec` job.
+pub const ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR: &str = "ADAM_AGENT_JOB_PROVIDER_CONTEXT";
+
+/// Ephemeral auth token passed from a parent Adam session to a delegated
+/// `adam exec` job. The child consumes and removes this during startup.
+pub const ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR: &str = "ADAM_AGENT_JOB_AUTH_TOKEN";
+
 fn env_var_set(key: &str) -> bool {
     std::env::var(key).is_ok_and(|v| !v.trim().is_empty())
 }

@@ -24,12 +24,81 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
+#[cfg(unix)]
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt as _;
 use uuid::Uuid;
 use wiremock::MockServer;
+
+#[cfg(unix)]
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<OsString>,
+}
+
+#[cfg(unix)]
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let previous = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, previous }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.previous {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn write_fake_reviewer_exec(dir: &TempDir, review_output: &ReviewOutputEvent) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let script = dir.path().join("adam-exec-fake");
+    let args_log = dir.path().join("args.log");
+    let review_json = serde_json::to_string(review_output)
+        .unwrap_or_else(|err| panic!("review output json: {err}"));
+    let body = format!(
+        r#"#!/bin/sh
+out=""
+: > "{args_log}"
+while [ "$#" -gt 0 ]; do
+  printf "%s\n" "$1" >> "{args_log}"
+  if [ "$1" = "--output-last-message" ]; then
+    out="$2"
+    printf "%s\n" "$2" >> "{args_log}"
+    shift 2
+  else
+    shift
+  fi
+done
+cat >/dev/null
+printf '%s' '{review_json}' > "$out"
+"#,
+        args_log = args_log.display(),
+        review_json = review_json.replace('\'', "'\\''"),
+    );
+    std::fs::write(&script, body).unwrap_or_else(|err| panic!("write fake reviewer exec: {err}"));
+    let mut permissions = std::fs::metadata(&script)
+        .unwrap_or_else(|err| panic!("script metadata: {err}"))
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&script, permissions)
+        .unwrap_or_else(|err| panic!("chmod fake reviewer exec: {err}"));
+    script
+}
 
 /// Verify that submitting `Op::Review` spawns a child task and emits
 /// EnteredReviewMode -> ExitedReviewMode(None) -> TurnComplete
@@ -174,6 +243,83 @@ async fn review_op_emits_lifecycle_and_review_output() {
 
     let _adam_home_guard = adam_home;
     server.verify().await;
+}
+
+#[cfg(unix)]
+#[serial_test::serial(review_exec_env)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_op_uses_cli_backed_reviewer_job() {
+    let expected = ReviewOutputEvent {
+        findings: vec![ReviewFinding {
+            title: "CLI reviewer finding".to_string(),
+            body: "Reviewer job returned through the result file.".to_string(),
+            confidence_score: 0.95,
+            priority: 1,
+            code_location: ReviewCodeLocation {
+                absolute_file_path: PathBuf::from("/tmp/reviewed.rs"),
+                line_range: ReviewLineRange { start: 4, end: 4 },
+            },
+        }],
+        overall_correctness: "patch is correct".to_string(),
+        overall_explanation: "The fake reviewer completed successfully.".to_string(),
+        overall_confidence_score: 0.8,
+    };
+    let fake_exec_dir = TempDir::new().expect("fake exec tempdir");
+    let fake_exec = write_fake_reviewer_exec(&fake_exec_dir, &expected);
+    let _exec_guard = EnvVarGuard::set("ADAM_AGENT_EXEC_BIN", fake_exec.as_os_str());
+
+    let server = MockServer::start().await;
+    let adam_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, adam_home.clone(), |_| {}).await;
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "Use the fake reviewer job".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    let mut saw_entered = false;
+    let review = loop {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), codex.next_event())
+            .await
+            .expect("timeout waiting for review event")
+            .expect("event stream should stay open");
+        match event.msg {
+            EventMsg::EnteredReviewMode(_) => saw_entered = true,
+            EventMsg::ExitedReviewMode(ev) => {
+                assert!(
+                    saw_entered,
+                    "ExitedReviewMode must not arrive before EnteredReviewMode"
+                );
+                break ev
+                    .review_output
+                    .expect("expected ExitedReviewMode with Some(review_output)");
+            }
+            _ => {}
+        }
+    };
+    assert_eq!(expected, review);
+
+    let args = std::fs::read_to_string(fake_exec_dir.path().join("args.log")).expect("args log");
+    let args = args.lines().collect::<Vec<_>>();
+    assert!(
+        args.windows(2)
+            .any(|window| window == ["--identity", "reviewer"]),
+        "expected reviewer identity args: {args:?}"
+    );
+    assert!(
+        args.contains(&"--output-last-message"),
+        "expected result-file channel args: {args:?}"
+    );
+
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    let _adam_home_guard = adam_home;
 }
 
 /// When the model returns plain text that is not JSON, ensure the child

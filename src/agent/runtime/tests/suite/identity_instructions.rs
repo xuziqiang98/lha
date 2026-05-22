@@ -33,7 +33,7 @@ fn identity_with_kind_and_instructions(kind: IdentityKind, instructions: Option<
     }
 }
 
-fn collab_mode_with_instructions(instructions: Option<&str>) -> Identity {
+fn identity_with_instructions(instructions: Option<&str>) -> Identity {
     identity_with_kind_and_instructions(IdentityKind::Nobody, instructions)
 }
 
@@ -56,7 +56,7 @@ fn developer_texts(input: &[Value]) -> Vec<String> {
         .collect()
 }
 
-fn collab_xml(text: &str) -> String {
+fn identity_xml(text: &str) -> String {
     format!("{IDENTITY_OPEN_TAG}{text}{IDENTITY_CLOSE_TAG}")
 }
 
@@ -65,7 +65,7 @@ fn count_exact(texts: &[String], target: &str) -> usize {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn no_collaboration_instructions_by_default() -> Result<()> {
+async fn no_identity_instructions_by_default() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -93,7 +93,7 @@ async fn no_collaboration_instructions_by_default() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_input_includes_collaboration_instructions_after_override() -> Result<()> {
+async fn user_input_includes_identity_instructions_after_override() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -101,8 +101,8 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
 
     let test = test_codex().build(&server).await?;
 
-    let collab_text = "collab instructions";
-    let identity = collab_mode_with_instructions(Some(collab_text));
+    let identity_text = "identity instructions";
+    let identity = identity_with_instructions(Some(identity_text));
     test.codex
         .submit(Op::OverrideTurnContext {
             cwd: None,
@@ -130,22 +130,22 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
 
     let input = req.single_request().input();
     let dev_texts = developer_texts(&input);
-    let collab_text = collab_xml(collab_text);
-    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
+    let identity_text = identity_xml(identity_text);
+    assert_eq!(count_exact(&dev_texts, &identity_text), 1);
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
+async fn identity_instructions_added_on_user_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let req = mount_sse_once(&server, sse_completed("resp-1")).await;
 
     let test = test_codex().build(&server).await?;
-    let collab_text = "turn instructions";
-    let identity = collab_mode_with_instructions(Some(collab_text));
+    let identity_text = "turn instructions";
+    let identity = identity_with_instructions(Some(identity_text));
 
     test.codex
         .submit(Op::UserTurn {
@@ -169,22 +169,22 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
 
     let input = req.single_request().input();
     let dev_texts = developer_texts(&input);
-    let collab_text = collab_xml(collab_text);
-    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
+    let identity_text = identity_xml(identity_text);
+    assert_eq!(count_exact(&dev_texts, &identity_text), 1);
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn override_then_next_turn_uses_updated_collaboration_instructions() -> Result<()> {
+async fn override_then_next_turn_uses_updated_identity_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let req = mount_sse_once(&server, sse_completed("resp-1")).await;
 
     let test = test_codex().build(&server).await?;
-    let collab_text = "override instructions";
-    let identity = collab_mode_with_instructions(Some(collab_text));
+    let identity_text = "override instructions";
+    let identity = identity_with_instructions(Some(identity_text));
 
     test.codex
         .submit(Op::OverrideTurnContext {
@@ -213,14 +213,14 @@ async fn override_then_next_turn_uses_updated_collaboration_instructions() -> Re
 
     let input = req.single_request().input();
     let dev_texts = developer_texts(&input);
-    let collab_text = collab_xml(collab_text);
-    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
+    let identity_text = identity_xml(identity_text);
+    assert_eq!(count_exact(&dev_texts, &identity_text), 1);
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_turn_overrides_collaboration_instructions_after_override() -> Result<()> {
+async fn user_turn_overrides_identity_instructions_after_override() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -228,9 +228,9 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
 
     let test = test_codex().build(&server).await?;
     let base_text = "base instructions";
-    let base_mode = collab_mode_with_instructions(Some(base_text));
+    let base_mode = identity_with_instructions(Some(base_text));
     let turn_text = "turn override";
-    let turn_mode = collab_mode_with_instructions(Some(turn_text));
+    let turn_mode = identity_with_instructions(Some(turn_text));
 
     test.codex
         .submit(Op::OverrideTurnContext {
@@ -268,8 +268,8 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
 
     let input = req.single_request().input();
     let dev_texts = developer_texts(&input);
-    let base_text = collab_xml(base_text);
-    let turn_text = collab_xml(turn_text);
+    let base_text = identity_xml(base_text);
+    let turn_text = identity_xml(turn_text);
     assert_eq!(count_exact(&dev_texts, &base_text), 0);
     assert_eq!(count_exact(&dev_texts, &turn_text), 1);
 
@@ -297,7 +297,7 @@ async fn identity_update_emits_new_instruction_message() -> Result<()> {
             model: None,
             effort: None,
             summary: None,
-            identity: Some(collab_mode_with_instructions(Some(first_text))),
+            identity: Some(identity_with_instructions(Some(first_text))),
             personality: None,
         })
         .await?;
@@ -322,7 +322,7 @@ async fn identity_update_emits_new_instruction_message() -> Result<()> {
             model: None,
             effort: None,
             summary: None,
-            identity: Some(collab_mode_with_instructions(Some(second_text))),
+            identity: Some(identity_with_instructions(Some(second_text))),
             personality: None,
         })
         .await?;
@@ -340,8 +340,8 @@ async fn identity_update_emits_new_instruction_message() -> Result<()> {
 
     let input = req2.single_request().input();
     let dev_texts = developer_texts(&input);
-    let first_text = collab_xml(first_text);
-    let second_text = collab_xml(second_text);
+    let first_text = identity_xml(first_text);
+    let second_text = identity_xml(second_text);
     assert_eq!(count_exact(&dev_texts, &first_text), 1);
     assert_eq!(count_exact(&dev_texts, &second_text), 1);
 
@@ -357,7 +357,7 @@ async fn identity_update_noop_does_not_append() -> Result<()> {
     let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
     let test = test_codex().build(&server).await?;
-    let collab_text = "same instructions";
+    let identity_text = "same instructions";
 
     test.codex
         .submit(Op::OverrideTurnContext {
@@ -368,7 +368,7 @@ async fn identity_update_noop_does_not_append() -> Result<()> {
             model: None,
             effort: None,
             summary: None,
-            identity: Some(collab_mode_with_instructions(Some(collab_text))),
+            identity: Some(identity_with_instructions(Some(identity_text))),
             personality: None,
         })
         .await?;
@@ -393,7 +393,7 @@ async fn identity_update_noop_does_not_append() -> Result<()> {
             model: None,
             effort: None,
             summary: None,
-            identity: Some(collab_mode_with_instructions(Some(collab_text))),
+            identity: Some(identity_with_instructions(Some(identity_text))),
             personality: None,
         })
         .await?;
@@ -411,8 +411,8 @@ async fn identity_update_noop_does_not_append() -> Result<()> {
 
     let input = req2.single_request().input();
     let dev_texts = developer_texts(&input);
-    let collab_text = collab_xml(collab_text);
-    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
+    let identity_text = identity_xml(identity_text);
+    assert_eq!(count_exact(&dev_texts, &identity_text), 1);
 
     Ok(())
 }
@@ -487,8 +487,8 @@ async fn identity_update_emits_new_instruction_message_when_mode_changes() -> Re
 
     let input = req2.single_request().input();
     let dev_texts = developer_texts(&input);
-    let code_text = collab_xml(code_text);
-    let plan_text = collab_xml(plan_text);
+    let code_text = identity_xml(code_text);
+    let plan_text = identity_xml(plan_text);
     assert_eq!(count_exact(&dev_texts, &code_text), 1);
     assert_eq!(count_exact(&dev_texts, &plan_text), 1);
 
@@ -504,7 +504,7 @@ async fn identity_update_noop_does_not_append_when_mode_is_unchanged() -> Result
     let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
     let test = test_codex().build(&server).await?;
-    let collab_text = "mode-stable instructions";
+    let identity_text = "mode-stable instructions";
 
     test.codex
         .submit(Op::OverrideTurnContext {
@@ -517,7 +517,7 @@ async fn identity_update_noop_does_not_append_when_mode_is_unchanged() -> Result
             summary: None,
             identity: Some(identity_with_kind_and_instructions(
                 IdentityKind::Programmer,
-                Some(collab_text),
+                Some(identity_text),
             )),
             personality: None,
         })
@@ -545,7 +545,7 @@ async fn identity_update_noop_does_not_append_when_mode_is_unchanged() -> Result
             summary: None,
             identity: Some(identity_with_kind_and_instructions(
                 IdentityKind::Programmer,
-                Some(collab_text),
+                Some(identity_text),
             )),
             personality: None,
         })
@@ -564,14 +564,14 @@ async fn identity_update_noop_does_not_append_when_mode_is_unchanged() -> Result
 
     let input = req2.single_request().input();
     let dev_texts = developer_texts(&input);
-    let collab_text = collab_xml(collab_text);
-    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
+    let identity_text = identity_xml(identity_text);
+    assert_eq!(count_exact(&dev_texts, &identity_text), 1);
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resume_replays_collaboration_instructions() -> Result<()> {
+async fn resume_replays_identity_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -587,7 +587,7 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
         .expect("rollout path");
     let home = initial.home.clone();
 
-    let collab_text = "resume instructions";
+    let identity_text = "resume instructions";
     initial
         .codex
         .submit(Op::OverrideTurnContext {
@@ -598,7 +598,7 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
             model: None,
             effort: None,
             summary: None,
-            identity: Some(collab_mode_with_instructions(Some(collab_text))),
+            identity: Some(identity_with_instructions(Some(identity_text))),
             personality: None,
         })
         .await?;
@@ -630,14 +630,14 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
 
     let input = req2.single_request().input();
     let dev_texts = developer_texts(&input);
-    let collab_text = collab_xml(collab_text);
-    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
+    let identity_text = identity_xml(identity_text);
+    assert_eq!(count_exact(&dev_texts, &identity_text), 1);
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
+async fn empty_identity_instructions_are_ignored() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -654,7 +654,7 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
             model: None,
             effort: None,
             summary: None,
-            identity: Some(collab_mode_with_instructions(Some(""))),
+            identity: Some(identity_with_instructions(Some(""))),
             personality: None,
         })
         .await?;
@@ -673,8 +673,8 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
     let input = req.single_request().input();
     let dev_texts = developer_texts(&input);
     assert_eq!(dev_texts.len(), 1);
-    let collab_text = collab_xml("");
-    assert_eq!(count_exact(&dev_texts, &collab_text), 0);
+    let identity_text = identity_xml("");
+    assert_eq!(count_exact(&dev_texts, &identity_text), 0);
 
     Ok(())
 }

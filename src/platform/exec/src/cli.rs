@@ -1,4 +1,5 @@
 use adam_common::CliConfigOverrides;
+use adam_protocol::config_types::IdentityKind;
 use clap::Args;
 use clap::FromArgMatches;
 use clap::Parser;
@@ -34,6 +35,10 @@ pub struct Cli {
     /// Configuration profile from config.toml to specify default options.
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
+
+    /// Identity preset the agent should use.
+    #[arg(long = "identity", value_enum)]
+    pub identity: Option<ExecIdentityArg>,
 
     /// Convenience alias for low-friction sandboxed automatic execution (-a on-request, --sandbox workspace-write).
     #[arg(long = "full-auto", default_value_t = false, global = true)]
@@ -99,6 +104,28 @@ pub enum Command {
 
     /// Run a code review against the current repository.
     Review(ReviewArgs),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum ExecIdentityArg {
+    Nobody,
+    Planner,
+    Programmer,
+    Explorer,
+    Reviewer,
+}
+
+impl From<ExecIdentityArg> for IdentityKind {
+    fn from(value: ExecIdentityArg) -> Self {
+        match value {
+            ExecIdentityArg::Nobody => IdentityKind::Nobody,
+            ExecIdentityArg::Planner => IdentityKind::Planner,
+            ExecIdentityArg::Programmer => IdentityKind::Programmer,
+            ExecIdentityArg::Explorer => IdentityKind::Explorer,
+            ExecIdentityArg::Reviewer => IdentityKind::Reviewer,
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -267,5 +294,12 @@ mod tests {
             }
         });
         assert_eq!(effective_prompt.as_deref(), Some(PROMPT));
+    }
+
+    #[test]
+    fn parses_identity_flag() {
+        let cli = Cli::parse_from(["adam-exec", "--identity", "explorer", "inspect"]);
+
+        assert_eq!(cli.identity, Some(ExecIdentityArg::Explorer));
     }
 }

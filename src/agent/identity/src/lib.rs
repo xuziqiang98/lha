@@ -5,9 +5,17 @@ use adam_protocol::openai_models::ReasoningEffort;
 
 const PLANNER_PROMPT: &str = include_str!("../planner/prompt.md");
 const PROGRAMMER_PROMPT: &str = include_str!("../programmer/prompt.md");
+const EXPLORER_PROMPT: &str = include_str!("../explorer/prompt.md");
+const REVIEWER_PROMPT: &str = include_str!("../reviewer/prompt.md");
 
 pub fn builtin_identity_presets() -> Vec<IdentityMask> {
-    vec![nobody_preset(), planner_preset(), programmer_preset()]
+    vec![
+        nobody_preset(),
+        planner_preset(),
+        programmer_preset(),
+        explorer_preset(),
+        reviewer_preset(),
+    ]
 }
 
 pub fn nobody_preset() -> IdentityMask {
@@ -40,5 +48,27 @@ pub fn programmer_preset() -> IdentityMask {
         reasoning_effort: None,
         developer_instructions: Some(Some(PROGRAMMER_PROMPT.to_string())),
         capabilities: IdentityCapabilities { write_tools: true },
+    }
+}
+
+pub fn explorer_preset() -> IdentityMask {
+    IdentityMask {
+        name: "explorer".to_string(),
+        kind: Some(IdentityKind::Explorer),
+        model: None,
+        reasoning_effort: Some(Some(ReasoningEffort::Low)),
+        developer_instructions: Some(Some(EXPLORER_PROMPT.to_string())),
+        capabilities: IdentityCapabilities { write_tools: false },
+    }
+}
+
+pub fn reviewer_preset() -> IdentityMask {
+    IdentityMask {
+        name: "reviewer".to_string(),
+        kind: Some(IdentityKind::Reviewer),
+        model: None,
+        reasoning_effort: Some(Some(ReasoningEffort::Medium)),
+        developer_instructions: Some(Some(REVIEWER_PROMPT.to_string())),
+        capabilities: IdentityCapabilities { write_tools: false },
     }
 }

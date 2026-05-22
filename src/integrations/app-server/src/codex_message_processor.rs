@@ -40,7 +40,6 @@ use adam_agent::mcp::group_tools_by_server;
 use adam_agent::parse_cursor;
 use adam_agent::protocol::EventMsg;
 use adam_agent::protocol::Op;
-use adam_agent::protocol::ReviewDelivery as CoreReviewDelivery;
 use adam_agent::protocol::ReviewRequest;
 use adam_agent::protocol::ReviewTarget as CoreReviewTarget;
 use adam_agent::protocol::SessionConfiguredEvent;
@@ -98,7 +97,6 @@ use adam_app_server_protocol::RemoveConversationSubscriptionResponse;
 use adam_app_server_protocol::RequestId;
 use adam_app_server_protocol::ResumeConversationParams;
 use adam_app_server_protocol::ResumeConversationResponse;
-use adam_app_server_protocol::ReviewDelivery as ApiReviewDelivery;
 use adam_app_server_protocol::ReviewStartParams;
 use adam_app_server_protocol::ReviewStartResponse;
 use adam_app_server_protocol::ReviewTarget as ApiReviewTarget;
@@ -161,7 +159,6 @@ use adam_protocol::config_types::WindowsSandboxLevel;
 use adam_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
 use adam_protocol::items::TurnItem;
 use adam_protocol::models::TranscriptItem;
-use adam_protocol::protocol::AgentStatus;
 use adam_protocol::protocol::GitInfo as CoreGitInfo;
 use adam_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
 use adam_protocol::protocol::McpServerRefreshConfig;
@@ -3309,20 +3306,21 @@ impl CodexMessageProcessor {
             // Request shutdown.
             match conversation.submit(Op::Shutdown).await {
                 Ok(_) => {
-                    // Poll agent status rather than consuming events so attached listeners do not block shutdown.
-                    let wait_for_shutdown = async {
-                        loop {
-                            if matches!(conversation.agent_status().await, AgentStatus::Shutdown) {
-                                break;
-                            }
-                            tokio::time::sleep(Duration::from_millis(50)).await;
-                        }
-                    };
-                    if tokio::time::timeout(Duration::from_secs(10), wait_for_shutdown)
-                        .await
-                        .is_err()
+                    match tokio::time::timeout(
+                        Duration::from_secs(10),
+                        conversation.wait_for_shutdown_complete(),
+                    )
+                    .await
                     {
-                        warn!("thread {thread_id} shutdown timed out; proceeding with archive");
+                        Ok(Ok(())) => {}
+                        Ok(Err(err)) => {
+                            warn!(
+                                "thread {thread_id} shutdown wait failed: {err}; proceeding with archive"
+                            );
+                        }
+                        Err(_) => {
+                            warn!("thread {thread_id} shutdown timed out; proceeding with archive");
+                        }
                     }
                 }
                 Err(err) => {
@@ -3798,107 +3796,13 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn start_detached_review(
-        &mut self,
-        request_id: &RequestId,
-        parent_thread_id: ThreadId,
-        review_request: ReviewRequest,
-        display_text: &str,
-    ) -> std::result::Result<(), JSONRPCErrorError> {
-        let rollout_path =
-            find_thread_path_by_id_str(&self.config.adam_home, &parent_thread_id.to_string())
-                .await
-                .map_err(|err| JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to locate thread id {parent_thread_id}: {err}"),
-                    data: None,
-                })?
-                .ok_or_else(|| JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("no rollout found for thread id {parent_thread_id}"),
-                    data: None,
-                })?;
-
-        let mut config = self.config.as_ref().clone();
-        if let Some(review_model) = &config.review_model {
-            config.model = Some(review_model.clone());
-        }
-
-        let NewThread {
-            thread_id,
-            thread: review_thread,
-            session_configured,
-            ..
-        } = self
-            .thread_manager
-            .fork_thread(usize::MAX, config, rollout_path)
-            .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("error creating detached review thread: {err}"),
-                data: None,
-            })?;
-
-        if let Err(err) = self
-            .attach_conversation_listener(thread_id, false, ApiVersion::V2)
-            .await
-        {
-            tracing::warn!(
-                "failed to attach listener for review thread {}: {}",
-                thread_id,
-                err.message
-            );
-        }
-
-        let fallback_provider = self.config.model_provider_id.as_str();
-        if let Some(rollout_path) = review_thread.rollout_path() {
-            match read_summary_from_rollout(rollout_path.as_path(), fallback_provider).await {
-                Ok(summary) => {
-                    let thread = summary_to_thread(summary);
-                    let notif = ThreadStartedNotification { thread };
-                    self.outgoing
-                        .send_server_notification(ServerNotification::ThreadStarted(notif))
-                        .await;
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        "failed to load summary for review thread {}: {}",
-                        session_configured.session_id,
-                        err
-                    );
-                }
-            }
-        } else {
-            tracing::warn!(
-                "review thread {} has no rollout path",
-                session_configured.session_id
-            );
-        }
-
-        let turn_id = review_thread
-            .submit(Op::Review { review_request })
-            .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to start detached review turn: {err}"),
-                data: None,
-            })?;
-
-        let turn = Self::build_review_turn(turn_id, display_text);
-        let review_thread_id = thread_id.to_string();
-        self.emit_review_started(request_id, turn, review_thread_id.clone(), review_thread_id)
-            .await;
-
-        Ok(())
-    }
-
     async fn review_start(&mut self, request_id: RequestId, params: ReviewStartParams) {
         let ReviewStartParams {
             thread_id,
             target,
-            delivery,
+            delivery: _,
         } = params;
-        let (parent_thread_id, parent_thread) = match self.load_thread(&thread_id).await {
+        let (_parent_thread_id, parent_thread) = match self.load_thread(&thread_id).await {
             Ok(v) => v,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -3914,35 +3818,17 @@ impl CodexMessageProcessor {
             }
         };
 
-        let delivery = delivery.unwrap_or(ApiReviewDelivery::Inline).to_core();
-        match delivery {
-            CoreReviewDelivery::Inline => {
-                if let Err(err) = self
-                    .start_inline_review(
-                        &request_id,
-                        parent_thread,
-                        review_request,
-                        display_text.as_str(),
-                        thread_id.clone(),
-                    )
-                    .await
-                {
-                    self.outgoing.send_error(request_id, err).await;
-                }
-            }
-            CoreReviewDelivery::Detached => {
-                if let Err(err) = self
-                    .start_detached_review(
-                        &request_id,
-                        parent_thread_id,
-                        review_request,
-                        display_text.as_str(),
-                    )
-                    .await
-                {
-                    self.outgoing.send_error(request_id, err).await;
-                }
-            }
+        if let Err(err) = self
+            .start_inline_review(
+                &request_id,
+                parent_thread,
+                review_request,
+                display_text.as_str(),
+                thread_id.clone(),
+            )
+            .await
+        {
+            self.outgoing.send_error(request_id, err).await;
         }
     }
 
@@ -3974,12 +3860,9 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: AddConversationListenerParams,
     ) {
-        let AddConversationListenerParams {
-            conversation_id,
-            experimental_raw_events,
-        } = params;
+        let AddConversationListenerParams { conversation_id } = params;
         match self
-            .attach_conversation_listener(conversation_id, experimental_raw_events, ApiVersion::V1)
+            .attach_conversation_listener(conversation_id, false, ApiVersion::V1)
             .await
         {
             Ok(subscription_id) => {
@@ -4073,37 +3956,39 @@ impl CodexMessageProcessor {
                                 continue;
                             }
 
-                        // For now, we send a notification for every event,
-                        // JSON-serializing the `Event` as-is, but these should
-                        // be migrated to be variants of `ServerNotification`
-                        // instead.
-                        let event_formatted = match &event.msg {
-                            EventMsg::TurnStarted(_) => "task_started",
-                            EventMsg::TurnComplete(_) => "task_complete",
-                            _ => &event.msg.to_string(),
-                        };
-                        let mut params = match serde_json::to_value(event.clone()) {
-                            Ok(serde_json::Value::Object(map)) => map,
-                            Ok(_) => {
-                                error!("event did not serialize to an object");
-                                continue;
-                            }
-                            Err(err) => {
-                                error!("failed to serialize event: {err}");
-                                continue;
-                            }
-                        };
-                        params.insert(
-                            "conversationId".to_string(),
-                            conversation_id.to_string().into(),
-                        );
+                        if !matches!(&event.msg, EventMsg::RawTranscriptItem(_)) {
+                            // For now, we send a notification for every event,
+                            // JSON-serializing the `Event` as-is, but these should
+                            // be migrated to be variants of `ServerNotification`
+                            // instead.
+                            let event_formatted = match &event.msg {
+                                EventMsg::TurnStarted(_) => "task_started",
+                                EventMsg::TurnComplete(_) => "task_complete",
+                                _ => &event.msg.to_string(),
+                            };
+                            let mut params = match serde_json::to_value(event.clone()) {
+                                Ok(serde_json::Value::Object(map)) => map,
+                                Ok(_) => {
+                                    error!("event did not serialize to an object");
+                                    continue;
+                                }
+                                Err(err) => {
+                                    error!("failed to serialize event: {err}");
+                                    continue;
+                                }
+                            };
+                            params.insert(
+                                "conversationId".to_string(),
+                                conversation_id.to_string().into(),
+                            );
 
-                        outgoing_for_task
-                            .send_notification(OutgoingNotification {
-                                method: format!("adam/event/{event_formatted}"),
-                                params: Some(params.into()),
-                            })
-                            .await;
+                            outgoing_for_task
+                                .send_notification(OutgoingNotification {
+                                    method: format!("adam/event/{event_formatted}"),
+                                    params: Some(params.into()),
+                                })
+                                .await;
+                        }
 
                         apply_bespoke_event_handling(
                             event.clone(),

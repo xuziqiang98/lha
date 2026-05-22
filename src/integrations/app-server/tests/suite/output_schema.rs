@@ -55,10 +55,7 @@ async fn send_user_turn_accepts_output_schema_v1() -> Result<()> {
     } = to_response::<NewConversationResponse>(new_conv_resp)?;
 
     let listener_id = mcp
-        .send_add_conversation_listener_request(AddConversationListenerParams {
-            conversation_id,
-            experimental_raw_events: false,
-        })
+        .send_add_conversation_listener_request(AddConversationListenerParams { conversation_id })
         .await?;
     timeout(
         DEFAULT_READ_TIMEOUT,
@@ -157,10 +154,7 @@ async fn send_user_turn_output_schema_is_per_turn_v1() -> Result<()> {
     } = to_response::<NewConversationResponse>(new_conv_resp)?;
 
     let listener_id = mcp
-        .send_add_conversation_listener_request(AddConversationListenerParams {
-            conversation_id,
-            experimental_raw_events: false,
-        })
+        .send_add_conversation_listener_request(AddConversationListenerParams { conversation_id })
         .await?;
     timeout(
         DEFAULT_READ_TIMEOUT,

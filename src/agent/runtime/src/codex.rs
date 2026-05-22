@@ -28,9 +28,6 @@ use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::handle_tool_call_request;
 use crate::stream_events_utils::last_assistant_message_from_item;
-use crate::subagents::AgentControl;
-use crate::subagents::AgentStatus;
-use crate::subagents::agent_status_from_event;
 use crate::terminal;
 use crate::truncate::TruncationPolicy;
 use crate::user_notification::UserNotifier;
@@ -43,6 +40,7 @@ use adam_agent_core::kernel::AgentKernel;
 use adam_agent_core::kernel::TurnEventProcessor;
 use adam_agent_core::kernel::TurnEventUpdate;
 use adam_agent_core::kernel::TurnStreamOutcome;
+use adam_agent_runtime::SessionStatus;
 use adam_llm::DefaultRuntimeClientFactory;
 use adam_llm::RuntimeEndpoint;
 use adam_llm::RuntimeNotice;
@@ -75,7 +73,6 @@ use adam_protocol::protocol::RawTranscriptItemEvent;
 use adam_protocol::protocol::ReviewRequest;
 use adam_protocol::protocol::RolloutItem;
 use adam_protocol::protocol::SessionSource;
-use adam_protocol::protocol::SubAgentSource;
 use adam_protocol::protocol::TurnAbortReason;
 use adam_protocol::protocol::TurnContextItem;
 use adam_protocol::protocol::TurnStartedEvent;
@@ -238,13 +235,24 @@ pub struct Codex {
     pub(crate) next_id: AtomicU64,
     pub(crate) tx_sub: Sender<Submission>,
     pub(crate) rx_event: Receiver<Event>,
-    // Last known status of the agent.
-    pub(crate) agent_status: watch::Receiver<AgentStatus>,
+    pub(crate) session_status: watch::Receiver<SessionStatus>,
+    pub(crate) shutdown_complete: watch::Receiver<bool>,
     pub(crate) session: Arc<Session>,
 }
 
 fn transcript_input_from_user_input(input: Vec<UserInput>) -> TranscriptItem {
     transcript_item_from_user_input(input)
+}
+
+fn session_status_from_event(msg: &EventMsg) -> Option<SessionStatus> {
+    match msg {
+        EventMsg::TurnStarted(_) => Some(SessionStatus::Running),
+        EventMsg::TurnComplete(_)
+        | EventMsg::TurnAborted(_)
+        | EventMsg::Error(_)
+        | EventMsg::ShutdownComplete => Some(SessionStatus::Idle),
+        _ => None,
+    }
 }
 
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
@@ -264,13 +272,12 @@ impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn(
-        mut config: Config,
+        config: Config,
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
         skills_manager: Arc<SkillsManager>,
         conversation_history: InitialHistory,
         session_source: SessionSource,
-        agent_control: AgentControl,
         dynamic_tools: Vec<DynamicToolSpec>,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -284,12 +291,6 @@ impl Codex {
                 err.path.display(),
                 err.message
             );
-        }
-
-        if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
-            && depth >= config.agent_max_depth
-        {
-            config.features.disable(Feature::Collab);
         }
 
         let enabled_skills = loaded_skills.enabled_skills();
@@ -357,7 +358,8 @@ impl Codex {
 
         // Generate a unique ID for the lifetime of this Adam session.
         let session_source_clone = session_configuration.session_source.clone();
-        let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+        let (session_status_tx, session_status_rx) = watch::channel(SessionStatus::Idle);
+        let (shutdown_complete_tx, shutdown_complete_rx) = watch::channel(false);
 
         let session_init_span = info_span!("session_init");
         let session = Session::new(
@@ -367,11 +369,11 @@ impl Codex {
             models_manager.clone(),
             exec_policy,
             tx_event.clone(),
-            agent_status_tx.clone(),
+            session_status_tx.clone(),
+            shutdown_complete_tx,
             conversation_history,
             session_source_clone,
             skills_manager,
-            agent_control,
         )
         .instrument(session_init_span)
         .await
@@ -390,7 +392,8 @@ impl Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
             rx_event,
-            agent_status: agent_status_rx,
+            session_status: session_status_rx,
+            shutdown_complete: shutdown_complete_rx,
             session,
         };
 
@@ -432,8 +435,21 @@ impl Codex {
         Ok(event)
     }
 
-    pub(crate) async fn agent_status(&self) -> AgentStatus {
-        self.agent_status.borrow().clone()
+    pub(crate) async fn session_status(&self) -> SessionStatus {
+        *self.session_status.borrow()
+    }
+
+    pub(crate) async fn wait_for_shutdown_complete(&self) -> CodexResult<()> {
+        let mut shutdown_complete = self.shutdown_complete.clone();
+        loop {
+            if *shutdown_complete.borrow_and_update() {
+                return Ok(());
+            }
+            shutdown_complete
+                .changed()
+                .await
+                .map_err(|_| CodexErr::InternalAgentDied)?;
+        }
     }
 
     pub(crate) async fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
@@ -480,7 +496,8 @@ impl Codex {
 pub(crate) struct Session {
     pub(crate) conversation_id: ThreadId,
     tx_event: Sender<Event>,
-    agent_status: watch::Sender<AgentStatus>,
+    session_status: watch::Sender<SessionStatus>,
+    shutdown_complete: watch::Sender<bool>,
     state: Mutex<SessionState>,
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
@@ -870,7 +887,7 @@ impl Session {
             web_search_mode: per_turn_config.web_search_mode,
             session_source: session_configuration.session_source.clone(),
         })
-        .with_agent_roles(per_turn_config.agent_roles.clone());
+        .with_identity_kind(session_configuration.identity.kind);
         if let Some(workflow) = workflow.as_ref() {
             tools_config = tools_config.with_workflow_tools(workflow.allowed_tools());
         }
@@ -913,11 +930,11 @@ impl Session {
         models_manager: Arc<ModelsManager>,
         exec_policy: ExecPolicyManager,
         tx_event: Sender<Event>,
-        agent_status: watch::Sender<AgentStatus>,
+        session_status: watch::Sender<SessionStatus>,
+        shutdown_complete: watch::Sender<bool>,
         initial_history: InitialHistory,
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
-        agent_control: AgentControl,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -1112,7 +1129,11 @@ impl Session {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
-            agent_control,
+            agent_jobs: crate::agent_jobs::AgentJobManager::new(
+                config.adam_home.clone(),
+                config.agent_job_max_concurrency,
+                config.agent_job_max_runtime_seconds,
+            ),
             state_db: state_db_ctx.clone(),
             runtime_factory: Arc::new(DefaultRuntimeClientFactory::new()),
         };
@@ -1120,7 +1141,8 @@ impl Session {
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
-            agent_status,
+            session_status,
+            shutdown_complete,
             state: Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
@@ -1613,8 +1635,8 @@ impl Session {
     ) -> Option<TranscriptItem> {
         let prev = previous?;
         if prev.identity != next.identity {
-            // If the next mode has empty developer instructions, this returns None and we emit no
-            // update, so prior collaboration instructions remain in the prompt history.
+            // If the next identity has empty developer instructions, this returns None and we emit
+            // no update, so prior identity instructions remain in the prompt history.
             Some(DeveloperInstructions::from_identity(&next.identity)?.into())
         } else {
             None
@@ -1690,13 +1712,17 @@ impl Session {
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
-        // Record the last known agent status.
-        if let Some(status) = agent_status_from_event(&event.msg) {
-            self.agent_status.send_replace(status);
+        let is_shutdown_complete = matches!(event.msg, EventMsg::ShutdownComplete);
+        if let Some(status) = session_status_from_event(&event.msg) {
+            self.session_status.send_replace(status);
         }
         // Persist the event into rollout (recorder filters as needed)
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
         self.persist_rollout_items(&rollout_items).await;
+        if is_shutdown_complete {
+            self.flush_rollout().await;
+            self.shutdown_complete.send_replace(true);
+        }
         if let Err(e) = self.tx_event.send(event).await {
             debug!("dropping event because channel is closed: {e}");
         }
@@ -1708,13 +1734,16 @@ impl Session {
     /// clients (e.g. app-server thread/rollback) re-read the rollout file synchronously on
     /// receipt of the event and depend on the marker already being visible on disk.
     pub(crate) async fn send_event_raw_flushed(&self, event: Event) {
-        // Record the last known agent status.
-        if let Some(status) = agent_status_from_event(&event.msg) {
-            self.agent_status.send_replace(status);
+        let is_shutdown_complete = matches!(event.msg, EventMsg::ShutdownComplete);
+        if let Some(status) = session_status_from_event(&event.msg) {
+            self.session_status.send_replace(status);
         }
         self.persist_rollout_items(&[RolloutItem::EventMsg(event.msg.clone())])
             .await;
         self.flush_rollout().await;
+        if is_shutdown_complete {
+            self.shutdown_complete.send_replace(true);
+        }
         if let Err(e) = self.tx_event.send(event).await {
             debug!("dropping event because channel is closed: {e}");
         }
@@ -2194,8 +2223,8 @@ impl Session {
                 state.session_configuration.base_instructions.clone(),
             )
         };
-        if let Some(collab_instructions) = DeveloperInstructions::from_identity(&identity) {
-            items.push(collab_instructions.into());
+        if let Some(identity_instructions) = DeveloperInstructions::from_identity(&identity) {
+            items.push(identity_instructions.into());
         }
         if self.features.enabled(Feature::Personality)
             && let Some(personality) = turn_context.personality
@@ -2221,15 +2250,10 @@ impl Session {
                 directory: turn_context.cwd.to_string_lossy().into_owned(),
             }));
         }
-        let subagents = self
-            .services
-            .agent_control
-            .format_environment_context_subagents(self.conversation_id)
-            .await;
-        items.push(TranscriptItem::from(
-            EnvironmentContext::new(Some(turn_context.cwd.clone()), shell.as_ref().clone())
-                .with_subagents(subagents),
-        ));
+        items.push(TranscriptItem::from(EnvironmentContext::new(
+            Some(turn_context.cwd.clone()),
+            shell.as_ref().clone(),
+        )));
         items
     }
 
@@ -2717,8 +2741,8 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 identity,
                 personality,
             } => {
-                let identity = if let Some(collab_mode) = identity {
-                    collab_mode
+                let identity = if let Some(identity) = identity {
+                    identity
                 } else {
                     let state = sess.state.lock().await;
                     state
@@ -2826,7 +2850,8 @@ mod handlers {
     use crate::codex::TurnContext;
     use crate::codex::buddy_turn_snapshot_to_config;
 
-    use crate::codex::spawn_review_thread;
+    use crate::agent_jobs::AgentJobStatus;
+    use crate::codex::start_cli_backed_review_turn;
     use crate::config::Config;
 
     use crate::mcp::auth::compute_auth_statuses;
@@ -3341,6 +3366,14 @@ mod handlers {
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+        let agent_jobs = sess.services.agent_jobs.close_all().await;
+        let cancelled_agent_jobs = agent_jobs
+            .iter()
+            .filter(|job| matches!(job.status, AgentJobStatus::Cancelled))
+            .count();
+        if cancelled_agent_jobs > 0 {
+            info!("cancelled {cancelled_agent_jobs} delegated agent jobs during shutdown");
+        }
         sess.services
             .unified_exec_manager
             .terminate_all_processes()
@@ -3382,7 +3415,7 @@ mod handlers {
             id: sub_id,
             msg: EventMsg::ShutdownComplete,
         };
-        sess.send_event_raw(event).await;
+        sess.send_event_raw_flushed(event).await;
         true
     }
 
@@ -3396,7 +3429,7 @@ mod handlers {
         sess.refresh_mcp_servers_if_requested(&turn_context).await;
         match resolve_review_request(review_request, turn_context.cwd.as_path()) {
             Ok(resolved) => {
-                spawn_review_thread(
+                start_cli_backed_review_turn(
                     Arc::clone(sess),
                     Arc::clone(config),
                     turn_context.clone(),
@@ -3419,8 +3452,8 @@ mod handlers {
     }
 }
 
-/// Spawn a review thread using the given prompt.
-async fn spawn_review_thread(
+/// Start a review turn that delegates reviewer model work to a CLI-backed one-shot job.
+async fn start_cli_backed_review_turn(
     sess: Arc<Session>,
     config: Arc<Config>,
     parent_turn_context: Arc<TurnContext>,
@@ -3450,7 +3483,7 @@ async fn spawn_review_thread(
         web_search_mode: Some(review_web_search_mode),
         session_source: parent_turn_context.runtime.get_session_source(),
     })
-    .with_agent_roles(config.agent_roles.clone());
+    .with_identity_kind(IdentityKind::Reviewer);
 
     let review_prompt = resolved.prompt.clone();
     let auth_manager = parent_turn_context.runtime.auth_manager();
@@ -3489,6 +3522,10 @@ async fn spawn_review_thread(
         parent_turn_context.runtime.get_session_source(),
     );
 
+    let mut review_identity = parent_turn_context.identity.clone();
+    review_identity.kind = IdentityKind::Reviewer;
+    review_identity.settings.model = model.clone();
+
     let review_turn_context = TurnContext {
         sub_id: sub_id.to_string(),
         runtime,
@@ -3497,7 +3534,7 @@ async fn spawn_review_thread(
         developer_instructions: None,
         user_instructions: None,
         compact_prompt: parent_turn_context.compact_prompt.clone(),
-        identity: parent_turn_context.identity.clone(),
+        identity: review_identity,
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
@@ -3520,7 +3557,6 @@ async fn spawn_review_thread(
         text_elements: Vec::new(),
     }];
     let tc = Arc::new(review_turn_context);
-    sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
 
     // Announce entering review mode so UIs can switch modes.
     let review_request = ReviewRequest {
@@ -3529,6 +3565,7 @@ async fn spawn_review_thread(
     };
     sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
         .await;
+    sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
 }
 
 fn skills_to_info(
@@ -5153,8 +5190,6 @@ pub(super) fn get_last_assistant_message_from_turn(
 pub(crate) use tests::make_session_and_context;
 
 use crate::git_info::get_git_repo_root;
-#[cfg(test)]
-pub(crate) use tests::make_session_and_context_with_rx;
 
 pub(crate) fn runtime_notice_to_event_msg(notice: RuntimeNotice) -> EventMsg {
     match notice.kind {
@@ -6338,9 +6373,9 @@ mod tests {
             config.model_provider_id.as_str(),
             config.model_provider.clone(),
         ));
-        let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
-        let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+        let (session_status_tx, _session_status_rx) = watch::channel(SessionStatus::Idle);
+        let (shutdown_complete_tx, _shutdown_complete_rx) = watch::channel(false);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
@@ -6404,7 +6439,11 @@ mod tests {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
-            agent_control,
+            agent_jobs: crate::agent_jobs::AgentJobManager::new(
+                config.adam_home.clone(),
+                config.agent_job_max_concurrency,
+                config.agent_job_max_runtime_seconds,
+            ),
             state_db: None,
             runtime_factory: Arc::new(DefaultRuntimeClientFactory::new()),
         };
@@ -6426,7 +6465,8 @@ mod tests {
         let session = Session {
             conversation_id,
             tx_event,
-            agent_status: agent_status_tx,
+            session_status: session_status_tx,
+            shutdown_complete: shutdown_complete_tx,
             state: Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
@@ -6462,6 +6502,36 @@ mod tests {
         let adam_home = tempfile::tempdir().expect("create temp dir");
         let config = build_test_config(adam_home.path()).await;
         make_session_and_context_for_config(config).await
+    }
+
+    #[tokio::test]
+    async fn agent_job_exec_config_uses_endpoint_bearer_token() {
+        let adam_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(adam_home.path()).await;
+        config.model_provider.bearer_token = Some("provider-token".to_string());
+        let (_session, turn_context) = make_session_and_context_for_config(config).await;
+
+        let exec_config = crate::agent_jobs::AgentJobExecConfig::from_runtime(
+            &turn_context.runtime,
+            &turn_context.runtime.get_model(),
+        );
+
+        assert_eq!(exec_config.auth_token.as_deref(), Some("provider-token"));
+        assert_eq!(exec_config.model_provider.bearer_token, None);
+    }
+
+    #[tokio::test]
+    async fn agent_job_exec_config_does_not_fallback_to_auth_manager() {
+        let adam_home = tempfile::tempdir().expect("create temp dir");
+        let config = build_test_config(adam_home.path()).await;
+        let (_session, turn_context) = make_session_and_context_for_config(config).await;
+
+        let exec_config = crate::agent_jobs::AgentJobExecConfig::from_runtime(
+            &turn_context.runtime,
+            &turn_context.runtime.get_model(),
+        );
+
+        assert_eq!(exec_config.auth_token, None);
     }
 
     async fn make_session_and_context_without_personality() -> (Session, TurnContext) {
@@ -6531,9 +6601,9 @@ mod tests {
             config.model_provider_id.as_str(),
             config.model_provider.clone(),
         ));
-        let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
-        let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+        let (session_status_tx, _session_status_rx) = watch::channel(SessionStatus::Idle);
+        let (shutdown_complete_tx, _shutdown_complete_rx) = watch::channel(false);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
@@ -6597,7 +6667,11 @@ mod tests {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
-            agent_control,
+            agent_jobs: crate::agent_jobs::AgentJobManager::new(
+                config.adam_home.clone(),
+                config.agent_job_max_concurrency,
+                config.agent_job_max_runtime_seconds,
+            ),
             state_db: None,
             runtime_factory: Arc::new(DefaultRuntimeClientFactory::new()),
         };
@@ -6619,7 +6693,8 @@ mod tests {
         let session = Arc::new(Session {
             conversation_id,
             tx_event,
-            agent_status: agent_status_tx,
+            session_status: session_status_tx,
+            shutdown_complete: shutdown_complete_tx,
             state: Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),

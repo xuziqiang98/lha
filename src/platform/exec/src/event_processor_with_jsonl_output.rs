@@ -6,11 +6,6 @@ use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::handle_last_message;
 use crate::exec_events::AgentMessageItem;
-use crate::exec_events::CollabAgentState;
-use crate::exec_events::CollabAgentStatus;
-use crate::exec_events::CollabTool;
-use crate::exec_events::CollabToolCallItem;
-use crate::exec_events::CollabToolCallStatus;
 use crate::exec_events::CommandExecutionItem;
 use crate::exec_events::CommandExecutionStatus;
 use crate::exec_events::ErrorItem;
@@ -40,17 +35,6 @@ use crate::exec_events::Usage;
 use crate::exec_events::WebSearchItem;
 use adam_agent::config::Config;
 use adam_agent::protocol;
-use adam_agent::protocol::AgentStatus as CoreAgentStatus;
-use adam_agent::protocol::CollabAgentInteractionBeginEvent;
-use adam_agent::protocol::CollabAgentInteractionEndEvent;
-use adam_agent::protocol::CollabAgentSpawnBeginEvent;
-use adam_agent::protocol::CollabAgentSpawnEndEvent;
-use adam_agent::protocol::CollabCloseBeginEvent;
-use adam_agent::protocol::CollabCloseEndEvent;
-use adam_agent::protocol::CollabResumeBeginEvent;
-use adam_agent::protocol::CollabResumeEndEvent;
-use adam_agent::protocol::CollabWaitingBeginEvent;
-use adam_agent::protocol::CollabWaitingEndEvent;
 use adam_protocol::models::WebSearchAction;
 use adam_protocol::plan_tool::StepStatus;
 use adam_protocol::plan_tool::UpdatePlanArgs;
@@ -69,7 +53,6 @@ pub struct EventProcessorWithJsonOutput {
     running_todo_list: Option<RunningTodoList>,
     last_total_token_usage: Option<adam_agent::protocol::TokenUsage>,
     running_mcp_tool_calls: HashMap<String, RunningMcpToolCall>,
-    running_collab_tool_calls: HashMap<String, RunningCollabToolCall>,
     running_web_search_calls: HashMap<String, String>,
     last_critical_error: Option<ThreadErrorEvent>,
 }
@@ -95,12 +78,6 @@ struct RunningMcpToolCall {
     arguments: JsonValue,
 }
 
-#[derive(Debug, Clone)]
-struct RunningCollabToolCall {
-    tool: CollabTool,
-    item_id: String,
-}
-
 impl EventProcessorWithJsonOutput {
     pub fn new(last_message_path: Option<PathBuf>) -> Self {
         Self {
@@ -112,7 +89,6 @@ impl EventProcessorWithJsonOutput {
             running_todo_list: None,
             last_total_token_usage: None,
             running_mcp_tool_calls: HashMap::new(),
-            running_collab_tool_calls: HashMap::new(),
             running_web_search_calls: HashMap::new(),
             last_critical_error: None,
         }
@@ -139,20 +115,6 @@ impl EventProcessorWithJsonOutput {
             }
             protocol::EventMsg::McpToolCallBegin(ev) => self.handle_mcp_tool_call_begin(ev),
             protocol::EventMsg::McpToolCallEnd(ev) => self.handle_mcp_tool_call_end(ev),
-            protocol::EventMsg::CollabAgentSpawnBegin(ev) => self.handle_collab_spawn_begin(ev),
-            protocol::EventMsg::CollabAgentSpawnEnd(ev) => self.handle_collab_spawn_end(ev),
-            protocol::EventMsg::CollabAgentInteractionBegin(ev) => {
-                self.handle_collab_interaction_begin(ev)
-            }
-            protocol::EventMsg::CollabAgentInteractionEnd(ev) => {
-                self.handle_collab_interaction_end(ev)
-            }
-            protocol::EventMsg::CollabWaitingBegin(ev) => self.handle_collab_wait_begin(ev),
-            protocol::EventMsg::CollabWaitingEnd(ev) => self.handle_collab_wait_end(ev),
-            protocol::EventMsg::CollabResumeBegin(ev) => self.handle_collab_resume_begin(ev),
-            protocol::EventMsg::CollabResumeEnd(ev) => self.handle_collab_resume_end(ev),
-            protocol::EventMsg::CollabCloseBegin(ev) => self.handle_collab_close_begin(ev),
-            protocol::EventMsg::CollabCloseEnd(ev) => self.handle_collab_close_end(ev),
             protocol::EventMsg::PatchApplyBegin(ev) => self.handle_patch_apply_begin(ev),
             protocol::EventMsg::PatchApplyEnd(ev) => self.handle_patch_apply_end(ev),
             protocol::EventMsg::WebSearchBegin(ev) => self.handle_web_search_begin(ev),
@@ -417,248 +379,6 @@ impl EventProcessorWithJsonOutput {
         vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
     }
 
-    fn handle_collab_spawn_begin(&mut self, ev: &CollabAgentSpawnBeginEvent) -> Vec<ThreadEvent> {
-        self.start_collab_tool_call(
-            &ev.call_id,
-            CollabTool::SpawnAgent,
-            ev.sender_thread_id.to_string(),
-            Vec::new(),
-            Some(ev.prompt.clone()),
-        )
-    }
-
-    fn handle_collab_spawn_end(&mut self, ev: &CollabAgentSpawnEndEvent) -> Vec<ThreadEvent> {
-        let (receiver_thread_ids, agents_states) = match ev.new_thread_id {
-            Some(id) => {
-                let receiver_id = id.to_string();
-                let agent_state = CollabAgentState::from(ev.status.clone());
-                (
-                    vec![receiver_id.clone()],
-                    [(receiver_id, agent_state)].into_iter().collect(),
-                )
-            }
-            None => (Vec::new(), HashMap::new()),
-        };
-        let status = if ev.new_thread_id.is_some() && !is_collab_failure(&ev.status) {
-            CollabToolCallStatus::Completed
-        } else {
-            CollabToolCallStatus::Failed
-        };
-        self.finish_collab_tool_call(
-            &ev.call_id,
-            CollabTool::SpawnAgent,
-            ev.sender_thread_id.to_string(),
-            receiver_thread_ids,
-            Some(ev.prompt.clone()),
-            agents_states,
-            status,
-        )
-    }
-
-    fn handle_collab_interaction_begin(
-        &mut self,
-        ev: &CollabAgentInteractionBeginEvent,
-    ) -> Vec<ThreadEvent> {
-        self.start_collab_tool_call(
-            &ev.call_id,
-            CollabTool::SendInput,
-            ev.sender_thread_id.to_string(),
-            vec![ev.receiver_thread_id.to_string()],
-            Some(ev.prompt.clone()),
-        )
-    }
-
-    fn handle_collab_interaction_end(
-        &mut self,
-        ev: &CollabAgentInteractionEndEvent,
-    ) -> Vec<ThreadEvent> {
-        let receiver_id = ev.receiver_thread_id.to_string();
-        let agent_state = CollabAgentState::from(ev.status.clone());
-        let status = if is_collab_failure(&ev.status) {
-            CollabToolCallStatus::Failed
-        } else {
-            CollabToolCallStatus::Completed
-        };
-        self.finish_collab_tool_call(
-            &ev.call_id,
-            CollabTool::SendInput,
-            ev.sender_thread_id.to_string(),
-            vec![receiver_id.clone()],
-            Some(ev.prompt.clone()),
-            [(receiver_id, agent_state)].into_iter().collect(),
-            status,
-        )
-    }
-
-    fn handle_collab_wait_begin(&mut self, ev: &CollabWaitingBeginEvent) -> Vec<ThreadEvent> {
-        self.start_collab_tool_call(
-            &ev.call_id,
-            CollabTool::Wait,
-            ev.sender_thread_id.to_string(),
-            ev.receiver_thread_ids
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
-            None,
-        )
-    }
-
-    fn handle_collab_wait_end(&mut self, ev: &CollabWaitingEndEvent) -> Vec<ThreadEvent> {
-        let status = if ev.statuses.values().any(is_collab_failure) {
-            CollabToolCallStatus::Failed
-        } else {
-            CollabToolCallStatus::Completed
-        };
-        let mut receiver_thread_ids = ev
-            .statuses
-            .keys()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>();
-        receiver_thread_ids.sort();
-        let agents_states = ev
-            .statuses
-            .iter()
-            .map(|(thread_id, status)| {
-                (
-                    thread_id.to_string(),
-                    CollabAgentState::from(status.clone()),
-                )
-            })
-            .collect();
-        self.finish_collab_tool_call(
-            &ev.call_id,
-            CollabTool::Wait,
-            ev.sender_thread_id.to_string(),
-            receiver_thread_ids,
-            None,
-            agents_states,
-            status,
-        )
-    }
-
-    fn handle_collab_resume_begin(&mut self, ev: &CollabResumeBeginEvent) -> Vec<ThreadEvent> {
-        self.start_collab_tool_call(
-            &ev.call_id,
-            CollabTool::ResumeAgent,
-            ev.sender_thread_id.to_string(),
-            vec![ev.receiver_thread_id.to_string()],
-            None,
-        )
-    }
-
-    fn handle_collab_resume_end(&mut self, ev: &CollabResumeEndEvent) -> Vec<ThreadEvent> {
-        let receiver_id = ev.receiver_thread_id.to_string();
-        let agent_state = CollabAgentState::from(ev.status.clone());
-        let status = if is_collab_failure(&ev.status) {
-            CollabToolCallStatus::Failed
-        } else {
-            CollabToolCallStatus::Completed
-        };
-        self.finish_collab_tool_call(
-            &ev.call_id,
-            CollabTool::ResumeAgent,
-            ev.sender_thread_id.to_string(),
-            vec![receiver_id.clone()],
-            None,
-            [(receiver_id, agent_state)].into_iter().collect(),
-            status,
-        )
-    }
-
-    fn handle_collab_close_begin(&mut self, ev: &CollabCloseBeginEvent) -> Vec<ThreadEvent> {
-        self.start_collab_tool_call(
-            &ev.call_id,
-            CollabTool::CloseAgent,
-            ev.sender_thread_id.to_string(),
-            vec![ev.receiver_thread_id.to_string()],
-            None,
-        )
-    }
-
-    fn handle_collab_close_end(&mut self, ev: &CollabCloseEndEvent) -> Vec<ThreadEvent> {
-        let receiver_id = ev.receiver_thread_id.to_string();
-        let agent_state = CollabAgentState::from(ev.status.clone());
-        let status = if is_collab_failure(&ev.status) {
-            CollabToolCallStatus::Failed
-        } else {
-            CollabToolCallStatus::Completed
-        };
-        self.finish_collab_tool_call(
-            &ev.call_id,
-            CollabTool::CloseAgent,
-            ev.sender_thread_id.to_string(),
-            vec![receiver_id.clone()],
-            None,
-            [(receiver_id, agent_state)].into_iter().collect(),
-            status,
-        )
-    }
-
-    fn start_collab_tool_call(
-        &mut self,
-        call_id: &str,
-        tool: CollabTool,
-        sender_thread_id: String,
-        receiver_thread_ids: Vec<String>,
-        prompt: Option<String>,
-    ) -> Vec<ThreadEvent> {
-        let item_id = self.get_next_item_id();
-        self.running_collab_tool_calls.insert(
-            call_id.to_string(),
-            RunningCollabToolCall {
-                tool: tool.clone(),
-                item_id: item_id.clone(),
-            },
-        );
-        let item = ThreadItem {
-            id: item_id,
-            details: ThreadItemDetails::CollabToolCall(CollabToolCallItem {
-                tool,
-                sender_thread_id,
-                receiver_thread_ids,
-                prompt,
-                agents_states: HashMap::new(),
-                status: CollabToolCallStatus::InProgress,
-            }),
-        };
-        vec![ThreadEvent::ItemStarted(ItemStartedEvent { item })]
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn finish_collab_tool_call(
-        &mut self,
-        call_id: &str,
-        tool: CollabTool,
-        sender_thread_id: String,
-        receiver_thread_ids: Vec<String>,
-        prompt: Option<String>,
-        agents_states: HashMap<String, CollabAgentState>,
-        status: CollabToolCallStatus,
-    ) -> Vec<ThreadEvent> {
-        let (tool, item_id) = match self.running_collab_tool_calls.remove(call_id) {
-            Some(running) => (running.tool, running.item_id),
-            None => {
-                warn!(
-                    call_id,
-                    "Received collab tool end without begin; synthesizing new item"
-                );
-                (tool, self.get_next_item_id())
-            }
-        };
-        let item = ThreadItem {
-            id: item_id,
-            details: ThreadItemDetails::CollabToolCall(CollabToolCallItem {
-                tool,
-                sender_thread_id,
-                receiver_thread_ids,
-                prompt,
-                agents_states,
-                status,
-            }),
-        };
-        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
-    }
-
     fn handle_patch_apply_begin(
         &mut self,
         ev: &protocol::PatchApplyBeginEvent,
@@ -827,48 +547,6 @@ impl EventProcessorWithJsonOutput {
         }
 
         items
-    }
-}
-
-fn is_collab_failure(status: &CoreAgentStatus) -> bool {
-    matches!(
-        status,
-        CoreAgentStatus::Errored(_) | CoreAgentStatus::NotFound
-    )
-}
-
-impl From<CoreAgentStatus> for CollabAgentState {
-    fn from(value: CoreAgentStatus) -> Self {
-        match value {
-            CoreAgentStatus::PendingInit => Self {
-                status: CollabAgentStatus::PendingInit,
-                message: None,
-            },
-            CoreAgentStatus::Running => Self {
-                status: CollabAgentStatus::Running,
-                message: None,
-            },
-            CoreAgentStatus::Interrupted => Self {
-                status: CollabAgentStatus::Interrupted,
-                message: None,
-            },
-            CoreAgentStatus::Completed(message) => Self {
-                status: CollabAgentStatus::Completed,
-                message,
-            },
-            CoreAgentStatus::Errored(message) => Self {
-                status: CollabAgentStatus::Errored,
-                message: Some(message),
-            },
-            CoreAgentStatus::Shutdown => Self {
-                status: CollabAgentStatus::Shutdown,
-                message: None,
-            },
-            CoreAgentStatus::NotFound => Self {
-                status: CollabAgentStatus::NotFound,
-                message: None,
-            },
-        }
     }
 }
 

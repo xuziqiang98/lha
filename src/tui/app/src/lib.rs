@@ -42,7 +42,6 @@ use tracing_subscriber::prelude::*;
 use uuid::Uuid;
 
 mod additional_dirs;
-mod agent_selection_modal;
 mod app;
 mod app_backtrack;
 mod app_event;
@@ -55,7 +54,6 @@ mod chatwidget;
 mod cli;
 mod clipboard_paste;
 mod clipboard_text;
-mod collab;
 mod color;
 pub mod custom_terminal;
 mod cwd_prompt;
@@ -80,7 +78,6 @@ mod mcp_tools_modal;
 mod model_migration;
 mod model_selection_modal;
 mod mouse;
-mod multi_agents;
 mod notifications;
 #[allow(dead_code)]
 pub mod onboarding;

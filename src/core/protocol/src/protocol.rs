@@ -890,109 +890,6 @@ pub enum EventMsg {
     PlanDelta(PlanDeltaEvent),
     ReasoningContentDelta(ReasoningContentDeltaEvent),
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
-
-    /// Collab interaction: agent spawn begin.
-    CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent),
-    /// Collab interaction: agent spawn end.
-    CollabAgentSpawnEnd(CollabAgentSpawnEndEvent),
-    /// Collab interaction: agent interaction begin.
-    CollabAgentInteractionBegin(CollabAgentInteractionBeginEvent),
-    /// Collab interaction: agent interaction end.
-    CollabAgentInteractionEnd(CollabAgentInteractionEndEvent),
-    /// Collab interaction: waiting begin.
-    CollabWaitingBegin(CollabWaitingBeginEvent),
-    /// Collab interaction: waiting end.
-    CollabWaitingEnd(CollabWaitingEndEvent),
-    /// Collab interaction: resume begin.
-    CollabResumeBegin(CollabResumeBeginEvent),
-    /// Collab interaction: resume end.
-    CollabResumeEnd(CollabResumeEndEvent),
-    /// Collab interaction: close begin.
-    CollabCloseBegin(CollabCloseBeginEvent),
-    /// Collab interaction: close end.
-    CollabCloseEnd(CollabCloseEndEvent),
-}
-
-impl From<CollabAgentSpawnBeginEvent> for EventMsg {
-    fn from(event: CollabAgentSpawnBeginEvent) -> Self {
-        EventMsg::CollabAgentSpawnBegin(event)
-    }
-}
-
-impl From<CollabAgentSpawnEndEvent> for EventMsg {
-    fn from(event: CollabAgentSpawnEndEvent) -> Self {
-        EventMsg::CollabAgentSpawnEnd(event)
-    }
-}
-
-impl From<CollabAgentInteractionBeginEvent> for EventMsg {
-    fn from(event: CollabAgentInteractionBeginEvent) -> Self {
-        EventMsg::CollabAgentInteractionBegin(event)
-    }
-}
-
-impl From<CollabAgentInteractionEndEvent> for EventMsg {
-    fn from(event: CollabAgentInteractionEndEvent) -> Self {
-        EventMsg::CollabAgentInteractionEnd(event)
-    }
-}
-
-impl From<CollabWaitingBeginEvent> for EventMsg {
-    fn from(event: CollabWaitingBeginEvent) -> Self {
-        EventMsg::CollabWaitingBegin(event)
-    }
-}
-
-impl From<CollabWaitingEndEvent> for EventMsg {
-    fn from(event: CollabWaitingEndEvent) -> Self {
-        EventMsg::CollabWaitingEnd(event)
-    }
-}
-
-impl From<CollabResumeBeginEvent> for EventMsg {
-    fn from(event: CollabResumeBeginEvent) -> Self {
-        EventMsg::CollabResumeBegin(event)
-    }
-}
-
-impl From<CollabResumeEndEvent> for EventMsg {
-    fn from(event: CollabResumeEndEvent) -> Self {
-        EventMsg::CollabResumeEnd(event)
-    }
-}
-
-impl From<CollabCloseBeginEvent> for EventMsg {
-    fn from(event: CollabCloseBeginEvent) -> Self {
-        EventMsg::CollabCloseBegin(event)
-    }
-}
-
-impl From<CollabCloseEndEvent> for EventMsg {
-    fn from(event: CollabCloseEndEvent) -> Self {
-        EventMsg::CollabCloseEnd(event)
-    }
-}
-
-/// Agent lifecycle status, derived from emitted events.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, Default)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
-pub enum AgentStatus {
-    /// Agent is waiting for initialization.
-    #[default]
-    PendingInit,
-    /// Agent is currently running.
-    Running,
-    /// Agent's current turn was interrupted and it may receive more input.
-    Interrupted,
-    /// Agent is done. Contains the final assistant message.
-    Completed(Option<String>),
-    /// Agent encountered an error.
-    Errored(String),
-    /// Agent has been shutdown.
-    Shutdown,
-    /// Agent is not found.
-    NotFound,
 }
 
 /// Adam errors that we expose to clients.
@@ -1542,26 +1439,8 @@ pub enum SessionSource {
     VSCode,
     Exec,
     Mcp,
-    SubAgent(SubAgentSource),
     #[serde(other)]
     Unknown,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
-pub enum SubAgentSource {
-    Review,
-    Compact,
-    ThreadSpawn {
-        parent_thread_id: ThreadId,
-        depth: i32,
-        #[serde(default)]
-        agent_nickname: Option<String>,
-        #[serde(default)]
-        agent_role: Option<String>,
-    },
-    Other(String),
 }
 
 impl fmt::Display for SessionSource {
@@ -1571,45 +1450,7 @@ impl fmt::Display for SessionSource {
             SessionSource::VSCode => f.write_str("vscode"),
             SessionSource::Exec => f.write_str("exec"),
             SessionSource::Mcp => f.write_str("mcp"),
-            SessionSource::SubAgent(sub_source) => write!(f, "subagent_{sub_source}"),
             SessionSource::Unknown => f.write_str("unknown"),
-        }
-    }
-}
-
-impl SessionSource {
-    pub fn get_nickname(&self) -> Option<String> {
-        match self {
-            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_nickname, .. }) => {
-                agent_nickname.clone()
-            }
-            _ => None,
-        }
-    }
-
-    pub fn get_agent_role(&self) -> Option<String> {
-        match self {
-            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_role, .. }) => {
-                agent_role.clone()
-            }
-            _ => None,
-        }
-    }
-}
-
-impl fmt::Display for SubAgentSource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SubAgentSource::Review => f.write_str("review"),
-            SubAgentSource::Compact => f.write_str("compact"),
-            SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                depth,
-                ..
-            } => {
-                write!(f, "thread_spawn_{parent_thread_id}_d{depth}")
-            }
-            SubAgentSource::Other(other) => f.write_str(other),
         }
     }
 }
@@ -1779,7 +1620,6 @@ pub struct GitInfo {
 #[serde(rename_all = "snake_case")]
 pub enum ReviewDelivery {
     Inline,
-    Detached,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
@@ -2374,174 +2214,6 @@ pub enum TurnAbortReason {
     ReviewEnded,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct CollabAgentSpawnBeginEvent {
-    /// Identifier for the collab tool call.
-    pub call_id: String,
-    /// Thread ID of the sender.
-    pub sender_thread_id: ThreadId,
-    /// Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the
-    /// beginning.
-    pub prompt: String,
-    /// Effective model used by the spawned agent after inheritance and role overrides.
-    pub model: String,
-    /// Effective reasoning effort used by the spawned agent after inheritance and role overrides.
-    pub reasoning_effort: ReasoningEffortConfig,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct CollabAgentSpawnEndEvent {
-    /// Identifier for the collab tool call.
-    pub call_id: String,
-    /// Thread ID of the sender.
-    pub sender_thread_id: ThreadId,
-    /// Thread ID of the newly spawned agent, if it was created.
-    pub new_thread_id: Option<ThreadId>,
-    /// User-facing nickname of the newly spawned agent, if known.
-    pub new_agent_nickname: Option<String>,
-    /// Role label of the newly spawned agent, if known.
-    pub new_agent_role: Option<String>,
-    /// Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the
-    /// beginning.
-    pub prompt: String,
-    /// Effective model used by the spawned agent after inheritance and role overrides.
-    pub model: String,
-    /// Effective reasoning effort used by the spawned agent after inheritance and role overrides.
-    pub reasoning_effort: ReasoningEffortConfig,
-    /// Last known status of the new agent reported to the sender agent.
-    pub status: AgentStatus,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct CollabAgentInteractionBeginEvent {
-    /// Identifier for the collab tool call.
-    pub call_id: String,
-    /// Thread ID of the sender.
-    pub sender_thread_id: ThreadId,
-    /// Thread ID of the receiver.
-    pub receiver_thread_id: ThreadId,
-    /// Prompt sent from the sender to the receiver. Can be empty to prevent CoT
-    /// leaking at the beginning.
-    pub prompt: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct CollabAgentInteractionEndEvent {
-    /// Identifier for the collab tool call.
-    pub call_id: String,
-    /// Thread ID of the sender.
-    pub sender_thread_id: ThreadId,
-    /// Thread ID of the receiver.
-    pub receiver_thread_id: ThreadId,
-    /// User-facing nickname of the receiver agent, if known.
-    pub receiver_agent_nickname: Option<String>,
-    /// Role label of the receiver agent, if known.
-    pub receiver_agent_role: Option<String>,
-    /// Prompt sent from the sender to the receiver. Can be empty to prevent CoT
-    /// leaking at the beginning.
-    pub prompt: String,
-    /// Last known status of the receiver agent reported to the sender agent.
-    pub status: AgentStatus,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct CollabAgentRef {
-    pub thread_id: ThreadId,
-    #[serde(default)]
-    pub agent_nickname: Option<String>,
-    #[serde(default)]
-    pub agent_role: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct CollabWaitingBeginEvent {
-    /// Thread ID of the sender.
-    pub sender_thread_id: ThreadId,
-    /// Thread ID of the receivers.
-    pub receiver_thread_ids: Vec<ThreadId>,
-    /// Additional receiver metadata for UI consumers that want nicknames/roles.
-    #[serde(default)]
-    pub receiver_agents: Vec<CollabAgentRef>,
-    /// ID of the waiting call.
-    pub call_id: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct CollabWaitingEndEvent {
-    /// Thread ID of the sender.
-    pub sender_thread_id: ThreadId,
-    /// ID of the waiting call.
-    pub call_id: String,
-    /// Last known status of the receiver agents reported to the sender agent.
-    pub statuses: HashMap<ThreadId, AgentStatus>,
-    /// Receiver metadata paired with statuses for richer UI rendering.
-    #[serde(default)]
-    pub agent_statuses: Vec<CollabAgentStatusEntry>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct CollabAgentStatusEntry {
-    pub agent: CollabAgentRef,
-    pub status: AgentStatus,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct CollabResumeBeginEvent {
-    /// Identifier for the collab tool call.
-    pub call_id: String,
-    /// Thread ID of the sender.
-    pub sender_thread_id: ThreadId,
-    /// Thread ID of the receiver.
-    pub receiver_thread_id: ThreadId,
-    /// User-facing nickname of the receiver agent, if known.
-    pub receiver_agent_nickname: Option<String>,
-    /// Role label of the receiver agent, if known.
-    pub receiver_agent_role: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct CollabResumeEndEvent {
-    /// Identifier for the collab tool call.
-    pub call_id: String,
-    /// Thread ID of the sender.
-    pub sender_thread_id: ThreadId,
-    /// Thread ID of the receiver.
-    pub receiver_thread_id: ThreadId,
-    /// User-facing nickname of the receiver agent, if known.
-    pub receiver_agent_nickname: Option<String>,
-    /// Role label of the receiver agent, if known.
-    pub receiver_agent_role: Option<String>,
-    /// Last known status of the receiver agent reported to the sender agent.
-    pub status: AgentStatus,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct CollabCloseBeginEvent {
-    /// Identifier for the collab tool call.
-    pub call_id: String,
-    /// Thread ID of the sender.
-    pub sender_thread_id: ThreadId,
-    /// Thread ID of the receiver.
-    pub receiver_thread_id: ThreadId,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct CollabCloseEndEvent {
-    /// Identifier for the collab tool call.
-    pub call_id: String,
-    /// Thread ID of the sender.
-    pub sender_thread_id: ThreadId,
-    /// Thread ID of the receiver.
-    pub receiver_thread_id: ThreadId,
-    /// User-facing nickname of the receiver agent, if known.
-    pub receiver_agent_nickname: Option<String>,
-    /// Role label of the receiver agent, if known.
-    pub receiver_agent_role: Option<String>,
-    /// Last known status of the receiver agent reported to the sender agent before
-    /// the close.
-    pub status: AgentStatus,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2550,7 +2222,6 @@ mod tests {
     use anyhow::Result;
     use pretty_assertions::assert_eq;
     use serde_json::json;
-    use std::collections::HashMap;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -2759,57 +2430,6 @@ mod tests {
                 "local_images": [],
                 "text_elements": [],
             })
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn thread_spawn_source_round_trips_nickname_and_role() -> Result<()> {
-        let source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id: ThreadId::new(),
-            depth: 1,
-            agent_nickname: Some("Atlas".to_string()),
-            agent_role: Some("worker".to_string()),
-        });
-
-        let json_source = serde_json::to_value(&source)?;
-        let serialized = serde_json::to_string(&json_source)?;
-        assert!(serialized.contains("\"agent_nickname\":\"Atlas\""));
-        assert!(serialized.contains("\"agent_role\":\"worker\""));
-
-        let decoded: SessionSource = serde_json::from_value(json_source)?;
-        assert_eq!(decoded.get_nickname(), Some("Atlas".to_string()));
-        assert_eq!(decoded.get_agent_role(), Some("worker".to_string()));
-
-        Ok(())
-    }
-
-    #[test]
-    fn collab_waiting_event_serializes_richer_agent_metadata() -> Result<()> {
-        let thread_id = ThreadId::new();
-        let event = CollabWaitingEndEvent {
-            sender_thread_id: ThreadId::new(),
-            call_id: "call-1".to_string(),
-            statuses: HashMap::from([(thread_id, AgentStatus::Running)]),
-            agent_statuses: vec![CollabAgentStatusEntry {
-                agent: CollabAgentRef {
-                    thread_id,
-                    agent_nickname: Some("Atlas".to_string()),
-                    agent_role: Some("worker".to_string()),
-                },
-                status: AgentStatus::Running,
-            }],
-        };
-
-        let json_event = serde_json::to_value(event)?;
-        assert_eq!(
-            json_event["agent_statuses"][0]["agent"]["agent_nickname"],
-            json!("Atlas")
-        );
-        assert_eq!(
-            json_event["agent_statuses"][0]["agent"]["agent_role"],
-            json!("worker")
         );
 
         Ok(())

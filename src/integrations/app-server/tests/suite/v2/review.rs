@@ -164,53 +164,6 @@ async fn review_start_rejects_empty_base_branch() -> Result<()> {
 }
 
 #[tokio::test]
-async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<()> {
-    let review_payload = json!({
-        "findings": [],
-        "overall_correctness": "ok",
-        "overall_explanation": "detached review",
-        "overall_confidence_score": 0.5
-    })
-    .to_string();
-    let server = create_mock_responses_server_repeating_assistant(&review_payload).await;
-
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
-
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let thread_id = start_default_thread(&mut mcp).await?;
-
-    let review_req = mcp
-        .send_review_start_request(ReviewStartParams {
-            thread_id: thread_id.clone(),
-            delivery: Some(ReviewDelivery::Detached),
-            target: ReviewTarget::Custom {
-                instructions: "detached review".to_string(),
-            },
-        })
-        .await?;
-    let review_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(review_req)),
-    )
-    .await??;
-    let ReviewStartResponse {
-        turn,
-        review_thread_id,
-    } = to_response::<ReviewStartResponse>(review_resp)?;
-
-    assert_eq!(turn.status, TurnStatus::InProgress);
-    assert_ne!(
-        review_thread_id, thread_id,
-        "detached review should run on a different thread"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn review_start_rejects_empty_commit_sha() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let adam_home = TempDir::new()?;

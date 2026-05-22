@@ -54,7 +54,9 @@
       "enum": [
         "nobody",
         "planner",
-        "programmer"
+        "programmer",
+        "explorer",
+        "reviewer"
       ],
       "type": "string"
     },

@@ -1,6 +1,3 @@
-use crate::agent_selection_modal::AgentSelectionModal;
-use crate::agent_selection_modal::AgentSelectionModalAction;
-use crate::agent_selection_modal::AgentSelectionModalItem;
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event::BuddyConfigEdit;
@@ -50,9 +47,6 @@ use crate::model_migration::run_model_migration_prompt;
 use crate::model_selection_modal::ModelSelectionModal;
 use crate::model_selection_modal::ModelSelectionModalAction;
 use crate::model_selection_modal::ModelSelectionModalContext;
-use crate::multi_agents::AgentPickerThreadEntry;
-use crate::multi_agents::format_agent_picker_item_name;
-use crate::multi_agents::sort_agent_picker_threads;
 use crate::pager_overlay::Overlay;
 use crate::personality_selection_modal::PersonalitySelectionModal;
 use crate::personality_selection_modal::PersonalitySelectionModalAction;
@@ -68,7 +62,6 @@ use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 use crate::review_modal::ReviewModal;
 use crate::review_modal::ReviewModalAction;
-use crate::sidebar::AgentPanelEntry;
 use crate::skills_modal::SkillsModal;
 use crate::skills_modal::SkillsModalAction;
 use crate::tui;
@@ -93,7 +86,6 @@ use adam_agent::features::Feature;
 use adam_agent::git_info::resolve_root_git_project_for_trust;
 use adam_agent::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use adam_agent::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
-use adam_agent::protocol::AgentStatus;
 use adam_agent::protocol::AskForApproval;
 use adam_agent::protocol::Event;
 use adam_agent::protocol::EventMsg;
@@ -104,9 +96,7 @@ use adam_agent::protocol::ReviewRequest;
 use adam_agent::protocol::SandboxPolicy;
 use adam_agent::protocol::SessionSource;
 use adam_agent::protocol::SkillErrorInfo;
-use adam_agent::protocol::SubAgentSource;
 use adam_agent::protocol::TokenUsage;
-use adam_agent::protocol::TurnAbortReason;
 #[cfg(target_os = "windows")]
 use adam_agent::windows_sandbox::WindowsSandboxLevelExt;
 use adam_ansi_escape::ansi_escape_line;
@@ -157,6 +147,7 @@ use tokio::select;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
+#[cfg(test)]
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
@@ -303,12 +294,6 @@ struct SessionSummary {
     resume_command: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-struct ThreadEventSnapshot {
-    session_configured: Option<Event>,
-    events: Vec<Event>,
-}
-
 #[derive(Debug)]
 struct ThreadEventStore {
     session_configured: Option<Event>,
@@ -374,13 +359,6 @@ impl ThreadEventStore {
             && !removed.id.is_empty()
         {
             self.user_message_ids.remove(&removed.id);
-        }
-    }
-
-    fn snapshot(&self) -> ThreadEventSnapshot {
-        ThreadEventSnapshot {
-            session_configured: self.session_configured.clone(),
-            events: self.buffer.iter().cloned().collect(),
         }
     }
 }
@@ -616,7 +594,6 @@ pub(crate) struct App {
     shift_mouse_bypass_restore_at: Option<Instant>,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
-    agent_picker_threads: HashMap<ThreadId, AgentPickerThreadEntry>,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<Event>>,
     thread_created_rx: broadcast::Receiver<ThreadId>,
@@ -624,7 +601,6 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
-    review_parent_by_child: HashMap<ThreadId, ThreadId>,
     non_git_changelog_baselines: HashMap<PathBuf, Arc<NonGitBaselineTracker>>,
     provider_config_modal: Option<ProviderConfigModalState>,
     project_trust_modal: Option<ProjectTrustModal>,
@@ -638,7 +614,6 @@ pub(crate) struct App {
     skills_modal: Option<SkillsModal>,
     pending_skills_modal_open: bool,
     approval_mode_modal: Option<ApprovalModeModal>,
-    agent_selection_modal: Option<AgentSelectionModal>,
     review_modal: Option<ReviewModal>,
     pending_startup_trust_prompt: bool,
     deferred_initial_user_message: Option<UserMessage>,
@@ -692,59 +667,6 @@ impl Default for NonGitBaselineTracker {
     fn default() -> Self {
         let (result, _) = watch::channel(None);
         Self { result }
-    }
-}
-
-fn detached_review_session_source(
-    parent_thread_id: ThreadId,
-    parent_session_source: &SessionSource,
-) -> SessionSource {
-    let depth = match parent_session_source {
-        SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) => {
-            (*depth).saturating_add(1)
-        }
-        _ => 1,
-    };
-    SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-        parent_thread_id,
-        depth,
-        agent_nickname: None,
-        agent_role: Some("review".to_string()),
-    })
-}
-
-fn should_mirror_detached_review_event(msg: &EventMsg) -> bool {
-    matches!(
-        msg,
-        EventMsg::TurnStarted(_)
-            | EventMsg::TurnComplete(_)
-            | EventMsg::TurnAborted(_)
-            | EventMsg::Error(_)
-            | EventMsg::EnteredReviewMode(_)
-            | EventMsg::ExitedReviewMode(_)
-    )
-}
-
-fn is_terminal_detached_review_event(msg: &EventMsg) -> bool {
-    matches!(
-        msg,
-        EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) | EventMsg::Error(_)
-    )
-}
-
-fn agent_status_from_lifecycle_event(msg: &EventMsg) -> Option<AgentStatus> {
-    match msg {
-        EventMsg::TurnStarted(_) => Some(AgentStatus::Running),
-        EventMsg::TurnComplete(ev) => Some(AgentStatus::Completed(ev.last_agent_message.clone())),
-        EventMsg::TurnAborted(ev) => match ev.reason {
-            TurnAbortReason::Interrupted => Some(AgentStatus::Interrupted),
-            TurnAbortReason::Replaced | TurnAbortReason::ReviewEnded => {
-                Some(AgentStatus::Errored(format!("{:?}", ev.reason)))
-            }
-        },
-        EventMsg::Error(ev) => Some(AgentStatus::Errored(ev.message.clone())),
-        EventMsg::ShutdownComplete => Some(AgentStatus::Shutdown),
-        _ => None,
     }
 }
 
@@ -1624,32 +1546,6 @@ impl App {
         self.active_thread_rx = receiver;
     }
 
-    async fn store_active_thread_receiver(&mut self) {
-        let Some(active_id) = self.active_thread_id else {
-            return;
-        };
-        let Some(receiver) = self.active_thread_rx.take() else {
-            return;
-        };
-        if let Some(channel) = self.thread_event_channels.get_mut(&active_id) {
-            let mut store = channel.store.lock().await;
-            store.active = false;
-            channel.receiver = Some(receiver);
-        }
-    }
-
-    async fn activate_thread_for_replay(
-        &mut self,
-        thread_id: ThreadId,
-    ) -> Option<(mpsc::Receiver<Event>, ThreadEventSnapshot)> {
-        let channel = self.thread_event_channels.get_mut(&thread_id)?;
-        let receiver = channel.receiver.take()?;
-        let mut store = channel.store.lock().await;
-        store.active = true;
-        let snapshot = store.snapshot();
-        Some((receiver, snapshot))
-    }
-
     async fn clear_active_thread(&mut self) {
         if let Some(active_id) = self.active_thread_id.take() {
             self.set_thread_active(active_id, false).await;
@@ -1658,25 +1554,6 @@ impl App {
     }
 
     async fn enqueue_thread_event(&mut self, thread_id: ThreadId, event: Event) -> Result<()> {
-        self.sync_agent_picker_thread_lifecycle_event(thread_id, &event.msg);
-        if let Some(parent_thread_id) = self.review_parent_by_child.get(&thread_id).copied()
-            && should_mirror_detached_review_event(&event.msg)
-        {
-            self.enqueue_thread_event_without_review_mirror(parent_thread_id, event.clone())
-                .await?;
-            if is_terminal_detached_review_event(&event.msg) {
-                self.review_parent_by_child.remove(&thread_id);
-            }
-        }
-        self.enqueue_thread_event_without_review_mirror(thread_id, event)
-            .await
-    }
-
-    async fn enqueue_thread_event_without_review_mirror(
-        &mut self,
-        thread_id: ThreadId,
-        event: Event,
-    ) -> Result<()> {
         let (sender, store) = {
             let channel = self.ensure_thread_channel(thread_id);
             (channel.sender.clone(), Arc::clone(&channel.store))
@@ -1735,438 +1612,16 @@ impl App {
     async fn start_review(&mut self, review_request: ReviewRequest) -> Result<()> {
         self.review_modal = None;
         self.chat_widget.prepare_for_review_start_transition();
-        if !self.config.features.enabled(Feature::DetachedReview) {
-            self.chat_widget.submit_op(Op::Review { review_request });
-            return Ok(());
-        }
-
-        self.start_detached_review(review_request).await
-    }
-
-    async fn start_detached_review(&mut self, review_request: ReviewRequest) -> Result<()> {
-        let Some(parent_thread_id) = self.active_thread_id.or(self.primary_thread_id) else {
-            self.chat_widget.clear_review_start_transition();
-            self.chat_widget
-                .add_error_message("Current session is not ready to review yet.".to_string());
-            return Ok(());
-        };
-
-        let parent_thread = match self.server.get_thread(parent_thread_id).await {
-            Ok(thread) => thread,
-            Err(err) => {
-                self.chat_widget.clear_review_start_transition();
-                self.chat_widget.add_error_message(format!(
-                    "Failed to start detached review for thread {parent_thread_id}: {err}"
-                ));
-                return Ok(());
-            }
-        };
-        let Some(parent_rollout_path) = parent_thread.rollout_path() else {
-            self.chat_widget.clear_review_start_transition();
-            self.chat_widget
-                .add_error_message("Current session is not ready to review yet.".to_string());
-            return Ok(());
-        };
-        parent_thread.flush_rollout().await;
-        let parent_session_source = parent_thread.config_snapshot().await.session_source;
-        let session_source =
-            detached_review_session_source(parent_thread_id, &parent_session_source);
-
-        let mut review_config = self.chat_widget.config_ref().clone();
-        if let Some(review_model) = &review_config.review_model {
-            review_config.model = Some(review_model.clone());
-        }
-
-        let detached_thread = match self
-            .server
-            .fork_thread_with_source(
-                usize::MAX,
-                review_config,
-                parent_rollout_path,
-                session_source,
-            )
-            .await
-        {
-            Ok(thread) => thread,
-            Err(err) => {
-                self.chat_widget.clear_review_start_transition();
-                self.chat_widget
-                    .add_error_message(format!("Failed to create detached review thread: {err}"));
-                return Ok(());
-            }
-        };
-        let review_thread_id = detached_thread.thread_id;
-
-        if let Err(err) = self.handle_thread_created(review_thread_id).await {
-            self.chat_widget.clear_review_start_transition();
-            self.chat_widget
-                .add_error_message(format!("Failed to attach detached review thread: {err}"));
-            return Ok(());
-        }
-
-        self.review_parent_by_child
-            .insert(review_thread_id, parent_thread_id);
-        if let Err(err) = detached_thread
-            .thread
-            .submit(Op::Review { review_request })
-            .await
-        {
-            self.review_parent_by_child.remove(&review_thread_id);
-            self.chat_widget.clear_review_start_transition();
-            self.chat_widget
-                .add_error_message(format!("Failed to start detached review: {err}"));
-        }
-
-        Ok(())
-    }
-
-    async fn open_agent_picker(&mut self) {
-        let thread_ids: Vec<ThreadId> = self.thread_event_channels.keys().cloned().collect();
-        for thread_id in thread_ids {
-            match self.server.get_thread(thread_id).await {
-                Ok(thread) => {
-                    let session_source = thread.config_snapshot().await.session_source;
-                    let status = self
-                        .agent_picker_threads
-                        .get(&thread_id)
-                        .map(|entry| entry.status.clone())
-                        .unwrap_or(AgentStatus::Running);
-                    self.upsert_agent_picker_thread(
-                        thread_id,
-                        session_source.get_nickname(),
-                        session_source.get_agent_role(),
-                        status,
-                        false,
-                    );
-                }
-                Err(_) => {
-                    self.mark_agent_picker_thread_closed(thread_id);
-                }
-            }
-        }
-
-        if self.agent_picker_threads.is_empty() {
-            self.chat_widget
-                .add_info_message("No agents available yet.".to_string(), None);
-            return;
-        }
-
-        let mut agent_threads: Vec<(ThreadId, AgentPickerThreadEntry)> = self
-            .agent_picker_threads
-            .iter()
-            .map(|(thread_id, entry)| (*thread_id, entry.clone()))
-            .collect();
-        sort_agent_picker_threads(&mut agent_threads);
-
-        self.chat_widget.dismiss_active_view();
-
-        let mut initial_selected_idx = None;
-        let items: Vec<AgentSelectionModalItem> = agent_threads
-            .iter()
-            .enumerate()
-            .map(|(idx, (thread_id, entry))| {
-                if self.active_thread_id == Some(*thread_id) {
-                    initial_selected_idx = Some(idx);
-                }
-                let is_primary = self.primary_thread_id == Some(*thread_id);
-                let name = format_agent_picker_item_name(
-                    entry.agent_nickname.as_deref(),
-                    entry.agent_role.as_deref(),
-                    is_primary,
-                );
-                AgentSelectionModalItem {
-                    thread_id: *thread_id,
-                    name,
-                    status: entry.status.clone(),
-                    is_current: self.active_thread_id == Some(*thread_id),
-                    is_closed: entry.is_closed,
-                }
-            })
-            .collect();
-
-        self.agent_selection_modal = AgentSelectionModal::new(items, initial_selected_idx);
-        self.chat_widget.request_redraw_for_ui();
-    }
-
-    fn upsert_agent_picker_thread(
-        &mut self,
-        thread_id: ThreadId,
-        agent_nickname: Option<String>,
-        agent_role: Option<String>,
-        status: AgentStatus,
-        is_closed: bool,
-    ) {
-        self.agent_picker_threads.insert(
-            thread_id,
-            AgentPickerThreadEntry {
-                agent_nickname,
-                agent_role,
-                status,
-                is_closed,
-            },
-        );
-    }
-
-    fn mark_agent_picker_thread_closed(&mut self, thread_id: ThreadId) {
-        if let Some(entry) = self.agent_picker_threads.get_mut(&thread_id) {
-            entry.is_closed = true;
-        } else {
-            self.upsert_agent_picker_thread(thread_id, None, None, AgentStatus::Shutdown, true);
-        }
-    }
-
-    fn update_agent_picker_thread_status(
-        &mut self,
-        thread_id: ThreadId,
-        agent_nickname: Option<String>,
-        agent_role: Option<String>,
-        status: AgentStatus,
-        is_closed: bool,
-    ) {
-        if let Some(entry) = self.agent_picker_threads.get_mut(&thread_id) {
-            if agent_nickname.is_some() {
-                entry.agent_nickname = agent_nickname;
-            }
-            if agent_role.is_some() {
-                entry.agent_role = agent_role;
-            }
-            entry.status = status;
-            entry.is_closed = is_closed;
-        } else {
-            self.upsert_agent_picker_thread(
-                thread_id,
-                agent_nickname,
-                agent_role,
-                status,
-                is_closed,
-            );
-        }
-    }
-
-    fn sync_agent_picker_thread_lifecycle_event(&mut self, thread_id: ThreadId, msg: &EventMsg) {
-        let Some(status) = agent_status_from_lifecycle_event(msg) else {
-            return;
-        };
-        let is_closed = matches!(status, AgentStatus::Shutdown);
-        self.update_agent_picker_thread_status(thread_id, None, None, status, is_closed);
-    }
-
-    fn sync_agent_picker_thread_from_event(&mut self, msg: &EventMsg) {
-        match msg {
-            EventMsg::CollabAgentSpawnEnd(ev) => {
-                if let Some(thread_id) = ev.new_thread_id {
-                    self.update_agent_picker_thread_status(
-                        thread_id,
-                        ev.new_agent_nickname.clone(),
-                        ev.new_agent_role.clone(),
-                        ev.status.clone(),
-                        false,
-                    );
-                }
-            }
-            EventMsg::CollabAgentInteractionEnd(ev) => {
-                self.update_agent_picker_thread_status(
-                    ev.receiver_thread_id,
-                    ev.receiver_agent_nickname.clone(),
-                    ev.receiver_agent_role.clone(),
-                    ev.status.clone(),
-                    false,
-                );
-            }
-            EventMsg::CollabWaitingEnd(ev) => {
-                let mut updated_thread_ids = HashSet::new();
-                for entry in &ev.agent_statuses {
-                    updated_thread_ids.insert(entry.agent.thread_id);
-                    self.update_agent_picker_thread_status(
-                        entry.agent.thread_id,
-                        entry.agent.agent_nickname.clone(),
-                        entry.agent.agent_role.clone(),
-                        entry.status.clone(),
-                        false,
-                    );
-                }
-                for (thread_id, status) in &ev.statuses {
-                    if updated_thread_ids.contains(thread_id) {
-                        continue;
-                    }
-                    self.update_agent_picker_thread_status(
-                        *thread_id,
-                        None,
-                        None,
-                        status.clone(),
-                        false,
-                    );
-                }
-            }
-            EventMsg::CollabResumeBegin(ev) => {
-                self.update_agent_picker_thread_status(
-                    ev.receiver_thread_id,
-                    ev.receiver_agent_nickname.clone(),
-                    ev.receiver_agent_role.clone(),
-                    AgentStatus::Running,
-                    false,
-                );
-            }
-            EventMsg::CollabResumeEnd(ev) => {
-                self.update_agent_picker_thread_status(
-                    ev.receiver_thread_id,
-                    ev.receiver_agent_nickname.clone(),
-                    ev.receiver_agent_role.clone(),
-                    ev.status.clone(),
-                    false,
-                );
-            }
-            EventMsg::CollabCloseEnd(ev) => {
-                self.update_agent_picker_thread_status(
-                    ev.receiver_thread_id,
-                    ev.receiver_agent_nickname.clone(),
-                    ev.receiver_agent_role.clone(),
-                    ev.status.clone(),
-                    true,
-                );
-            }
-            _ => {}
-        }
-    }
-
-    fn sidebar_agent_entries(&self) -> Vec<AgentPanelEntry> {
-        let mut agent_threads: Vec<(ThreadId, AgentPickerThreadEntry)> = self
-            .agent_picker_threads
-            .iter()
-            .filter(|(thread_id, entry)| {
-                !entry.is_closed && Some(**thread_id) != self.primary_thread_id
-            })
-            .map(|(thread_id, entry)| (*thread_id, entry.clone()))
-            .collect();
-        sort_agent_picker_threads(&mut agent_threads);
-        agent_threads
-            .into_iter()
-            .map(|(thread_id, entry)| AgentPanelEntry {
-                thread_id,
-                label: format_agent_picker_item_name(
-                    entry.agent_nickname.as_deref(),
-                    entry.agent_role.as_deref(),
-                    false,
-                ),
-                status: entry.status,
-            })
-            .collect()
-    }
-
-    async fn select_agent_thread(&mut self, tui: &mut tui::Tui, thread_id: ThreadId) -> Result<()> {
-        if self.active_thread_id == Some(thread_id) {
-            return Ok(());
-        }
-
-        let live_thread = match self.server.get_thread(thread_id).await {
-            Ok(thread) => Some(thread),
-            Err(err) => {
-                if self.thread_event_channels.contains_key(&thread_id) {
-                    self.mark_agent_picker_thread_closed(thread_id);
-                    None
-                } else {
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to attach to agent thread {thread_id}: {err}"
-                    ));
-                    return Ok(());
-                }
-            }
-        };
-        let is_replay_only = live_thread.is_none();
-
-        let previous_thread_id = self.active_thread_id;
-        self.store_active_thread_receiver().await;
-        self.active_thread_id = None;
-        let Some((receiver, snapshot)) = self.activate_thread_for_replay(thread_id).await else {
-            self.chat_widget
-                .add_error_message(format!("Agent thread {thread_id} is already active."));
-            if let Some(previous_thread_id) = previous_thread_id {
-                self.activate_thread_channel(previous_thread_id).await;
-            }
-            return Ok(());
-        };
-
-        self.active_thread_id = Some(thread_id);
-        self.active_thread_rx = Some(receiver);
-
-        let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
-        let codex_op_tx = if let Some(thread) = live_thread {
-            crate::chatwidget::spawn_op_forwarder(thread)
-        } else {
-            let (tx, _rx) = unbounded_channel();
-            tx
-        };
-        self.chat_widget = ChatWidget::new_with_op_sender(init, codex_op_tx);
-
-        self.reset_for_thread_switch(tui)?;
-        self.replay_thread_snapshot(snapshot);
-        if is_replay_only {
-            self.chat_widget.add_info_message(
-                format!("Agent thread {thread_id} is closed. Replaying saved transcript."),
-                None,
-            );
-        }
-        self.drain_active_thread_events(tui).await?;
-
-        Ok(())
-    }
-
-    fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        self.overlay = None;
-        self.transcript_cells.clear();
-        self.backtrack = BacktrackState::default();
-        self.backtrack_render_pending = false;
-        tui.terminal.clear_scrollback()?;
-        tui.terminal.clear()?;
+        self.chat_widget.submit_op(Op::Review { review_request });
         Ok(())
     }
 
     fn reset_thread_event_state(&mut self) {
         self.thread_event_channels.clear();
-        self.agent_picker_threads.clear();
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
         self.pending_primary_events.clear();
-        self.review_parent_by_child.clear();
-    }
-
-    async fn drain_active_thread_events(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        let Some(mut rx) = self.active_thread_rx.take() else {
-            return Ok(());
-        };
-
-        let mut disconnected = false;
-        loop {
-            match rx.try_recv() {
-                Ok(event) => self.handle_codex_event_now(event),
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    disconnected = true;
-                    break;
-                }
-            }
-        }
-
-        if !disconnected {
-            self.active_thread_rx = Some(rx);
-        } else {
-            self.clear_active_thread().await;
-        }
-
-        if self.backtrack_render_pending {
-            tui.frame_requester().schedule_frame();
-        }
-        Ok(())
-    }
-
-    fn replay_thread_snapshot(&mut self, snapshot: ThreadEventSnapshot) {
-        if let Some(event) = snapshot.session_configured {
-            self.handle_codex_event_replay(event);
-        }
-        for event in snapshot.events {
-            self.handle_codex_event_replay(event);
-        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2416,7 +1871,6 @@ impl App {
             shift_mouse_bypass_active: false,
             shift_mouse_bypass_restore_at: None,
             thread_event_channels: HashMap::new(),
-            agent_picker_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
             thread_created_rx: thread_manager.subscribe_thread_created(),
@@ -2424,7 +1878,6 @@ impl App {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
-            review_parent_by_child: HashMap::new(),
             non_git_changelog_baselines: HashMap::new(),
             provider_config_modal,
             project_trust_modal,
@@ -2438,7 +1891,6 @@ impl App {
             skills_modal: None,
             pending_skills_modal_open: false,
             approval_mode_modal: None,
-            agent_selection_modal: None,
             review_modal: None,
             pending_startup_trust_prompt: show_trust_popup_on_startup,
             deferred_initial_user_message,
@@ -2538,7 +1990,7 @@ impl App {
                             .await?
                     }
                 }
-                // Listen on new thread creation due to collab tools.
+                // Listen for thread creation so the picker can attach replay state.
                 created = app.thread_created_rx.recv(), if app.listen_for_threads => {
                     match created {
                         Ok(thread_id) => {
@@ -2683,18 +2135,6 @@ impl App {
                 }
                 TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
             }
-        } else if self.agent_selection_modal.is_some() {
-            match event {
-                TuiEvent::Key(key_event) => {
-                    return self
-                        .handle_agent_selection_modal_key_event(tui, key_event)
-                        .await;
-                }
-                TuiEvent::Draw => {
-                    self.draw_main_ui(tui)?;
-                }
-                TuiEvent::Mouse(_) | TuiEvent::Paste(_) => {}
-            }
         } else if self.review_modal.is_some() {
             match event {
                 TuiEvent::Key(key_event) => {
@@ -2752,8 +2192,6 @@ impl App {
         {
             return Ok(());
         }
-        self.chat_widget
-            .set_sidebar_agents(self.sidebar_agent_entries());
         let size = tui.terminal.size()?;
         tui.draw(size.height, |frame| {
             self.chat_widget.render(frame.area(), frame.buffer);
@@ -2777,8 +2215,6 @@ impl App {
             } else if let Some(modal) = &self.skills_modal {
                 modal.render(frame.area(), frame.buffer);
             } else if let Some(modal) = &self.approval_mode_modal {
-                modal.render(frame.area(), frame.buffer);
-            } else if let Some(modal) = &self.agent_selection_modal {
                 modal.render(frame.area(), frame.buffer);
             } else if let Some(modal) = &self.review_modal {
                 modal.render(frame.area(), frame.buffer);
@@ -3132,39 +2568,6 @@ impl App {
                 self.handle_approval_mode_action(action);
                 self.maybe_open_pending_skills_modal_with_redraw(tui);
                 Ok(AppRunControl::Continue)
-            }
-        }
-    }
-
-    async fn handle_agent_selection_modal_key_event(
-        &mut self,
-        tui: &mut tui::Tui,
-        key_event: KeyEvent,
-    ) -> Result<AppRunControl> {
-        let action = self
-            .agent_selection_modal
-            .as_mut()
-            .map(|modal| modal.handle_key_event(key_event))
-            .unwrap_or(AgentSelectionModalAction::None);
-        match action {
-            AgentSelectionModalAction::None => {
-                tui.frame_requester().schedule_frame();
-                Ok(AppRunControl::Continue)
-            }
-            AgentSelectionModalAction::Exit => {
-                self.agent_selection_modal = None;
-                self.maybe_open_pending_skills_modal_with_redraw(tui);
-                tui.frame_requester().schedule_frame();
-                Ok(AppRunControl::Continue)
-            }
-            AgentSelectionModalAction::SelectThread(thread_id) => {
-                self.agent_selection_modal = None;
-                tui.frame_requester().schedule_frame();
-                let control = self
-                    .handle_event(tui, AppEvent::SelectAgentThread(thread_id))
-                    .await?;
-                self.maybe_open_pending_skills_modal_with_redraw(tui);
-                Ok(control)
             }
         }
     }
@@ -4099,12 +3502,6 @@ impl App {
             AppEvent::OpenApprovalsPopup => {
                 self.open_approvals_modal();
             }
-            AppEvent::OpenAgentPicker => {
-                self.open_agent_picker().await;
-            }
-            AppEvent::SelectAgentThread(thread_id) => {
-                self.select_agent_thread(tui, thread_id).await?;
-            }
             AppEvent::OpenSkillsModal => {
                 self.open_skills_modal();
             }
@@ -4198,18 +3595,11 @@ impl App {
             let errors = errors_for_cwd(&cwd, response);
             emit_skill_load_warnings(&self.app_event_tx, &errors);
         }
-        self.sync_agent_picker_thread_from_event(&event.msg);
         self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event(event);
         if is_list_skills_response {
             self.maybe_open_pending_skills_modal();
         }
-    }
-
-    fn handle_codex_event_replay(&mut self, event: Event) {
-        self.sync_agent_picker_thread_from_event(&event.msg);
-        self.handle_backtrack_event(&event.msg);
-        self.chat_widget.handle_codex_event_replay(event);
     }
 
     fn handle_active_thread_event(&mut self, tui: &mut tui::Tui, event: Event) -> Result<()> {
@@ -4232,18 +3622,6 @@ impl App {
             }
         };
         let config_snapshot = thread.config_snapshot().await;
-        let status = if let Some(entry) = self.agent_picker_threads.get(&thread_id) {
-            entry.status.clone()
-        } else {
-            thread.agent_status().await
-        };
-        self.upsert_agent_picker_thread(
-            thread_id,
-            config_snapshot.session_source.get_nickname(),
-            config_snapshot.session_source.get_agent_role(),
-            status,
-            false,
-        );
         let event = Event {
             id: String::new(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -4450,7 +3828,6 @@ impl App {
             && self.mcp_tools_modal.is_none()
             && self.skills_modal.is_none()
             && self.approval_mode_modal.is_none()
-            && self.agent_selection_modal.is_none()
             && self.review_modal.is_none()
             && self.chat_widget.no_modal_or_popup_active()
     }
@@ -5305,11 +4682,6 @@ mod tests {
     use adam_agent::features::Feature;
     use adam_agent::models_manager::manager::ModelsManager;
     use adam_agent::protocol::AskForApproval;
-    use adam_agent::protocol::CollabAgentRef;
-    use adam_agent::protocol::CollabAgentStatusEntry;
-    use adam_agent::protocol::CollabCloseEndEvent;
-    use adam_agent::protocol::CollabWaitingEndEvent;
-    use adam_agent::protocol::ErrorEvent;
     use adam_agent::protocol::Event;
     use adam_agent::protocol::EventMsg;
     use adam_agent::protocol::McpListToolsResponseEvent;
@@ -5319,15 +4691,11 @@ mod tests {
     use adam_agent::protocol::SessionConfiguredEvent;
     use adam_agent::protocol::SessionSource;
     use adam_agent::protocol::ThreadRolledBackEvent;
-    use adam_agent::protocol::TurnAbortedEvent;
-    use adam_agent::protocol::TurnCompleteEvent;
-    use adam_agent::protocol::TurnStartedEvent;
     use adam_otel::OtelManager;
     use adam_protocol::ThreadId;
     use adam_protocol::config_types::IdentityKind;
     use adam_protocol::config_types::TrustLevel;
     use adam_protocol::user_input::TextElement;
-    use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use mcp_types::Tool;
     use mcp_types::ToolInputSchema;
@@ -5837,405 +5205,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn open_agent_picker_shows_no_agents_message_when_empty() {
-        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-
-        app.open_agent_picker().await;
-
-        assert!(app.agent_selection_modal.is_none());
-        assert!(app.chat_widget.no_modal_or_popup_active());
-        while let Ok(event) = app_event_rx.try_recv() {
-            assert!(
-                !matches!(event, AppEvent::UpdateFeatureFlags { .. }),
-                "did not expect feature flag update event: {event:?}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn open_agent_picker_allows_existing_agent_threads() {
-        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-
-        let thread_id = ThreadId::new();
-        app.thread_event_channels
-            .insert(thread_id, ThreadEventChannel::new(4));
-
-        app.open_agent_picker().await;
-
-        let action = app
-            .agent_selection_modal
-            .as_mut()
-            .expect("agent selection modal")
-            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        assert_eq!(action, AgentSelectionModalAction::SelectThread(thread_id));
-        assert!(app_event_rx.try_recv().is_err());
-    }
-
-    #[tokio::test]
-    async fn open_agent_picker_sets_centered_modal() {
-        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
-
-        let thread_id = ThreadId::new();
-        app.thread_event_channels
-            .insert(thread_id, ThreadEventChannel::new(4));
-
-        app.open_agent_picker().await;
-
-        assert!(
-            app.agent_selection_modal.is_some(),
-            "expected App to own the /agent modal"
-        );
-        assert!(app.chat_widget.no_modal_or_popup_active());
-    }
-
-    #[tokio::test]
-    async fn sidebar_agent_entries_match_active_agent_picker_threads() {
-        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let primary_id =
-            ThreadId::from_string("00000000-0000-7000-8000-000000000001").expect("primary id");
-        let active_id =
-            ThreadId::from_string("00000000-0000-7000-8000-000000000002").expect("active id");
-        let closed_id =
-            ThreadId::from_string("00000000-0000-7000-8000-000000000003").expect("closed id");
-
-        app.primary_thread_id = Some(primary_id);
-        app.upsert_agent_picker_thread(
-            primary_id,
-            Some("Main".to_string()),
-            Some("default".to_string()),
-            AgentStatus::Running,
-            false,
-        );
-        app.upsert_agent_picker_thread(
-            active_id,
-            Some("Robie".to_string()),
-            Some("explorer".to_string()),
-            AgentStatus::Completed(Some("done".to_string())),
-            false,
-        );
-        app.upsert_agent_picker_thread(
-            closed_id,
-            Some("Closed".to_string()),
-            Some("worker".to_string()),
-            AgentStatus::Errored("tool timeout".to_string()),
-            true,
-        );
-
-        assert_eq!(
-            app.sidebar_agent_entries(),
-            vec![AgentPanelEntry {
-                thread_id: active_id,
-                label: "Robie [explorer]".to_string(),
-                status: AgentStatus::Completed(Some("done".to_string())),
-            }]
-        );
-    }
-
-    #[tokio::test]
-    async fn collab_waiting_end_updates_sidebar_agent_status() {
-        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let thread_id = ThreadId::new();
-
-        app.handle_codex_event_now(Event {
-            id: String::new(),
-            msg: EventMsg::CollabWaitingEnd(CollabWaitingEndEvent {
-                sender_thread_id: ThreadId::new(),
-                call_id: "wait-1".to_string(),
-                statuses: HashMap::new(),
-                agent_statuses: vec![CollabAgentStatusEntry {
-                    agent: CollabAgentRef {
-                        thread_id,
-                        agent_nickname: Some("Robie".to_string()),
-                        agent_role: Some("explorer".to_string()),
-                    },
-                    status: AgentStatus::Completed(Some("done".to_string())),
-                }],
-            }),
-        });
-
-        assert_eq!(
-            app.agent_picker_threads.get(&thread_id),
-            Some(&AgentPickerThreadEntry {
-                agent_nickname: Some("Robie".to_string()),
-                agent_role: Some("explorer".to_string()),
-                status: AgentStatus::Completed(Some("done".to_string())),
-                is_closed: false,
-            })
-        );
-        assert_eq!(
-            app.sidebar_agent_entries(),
-            vec![AgentPanelEntry {
-                thread_id,
-                label: "Robie [explorer]".to_string(),
-                status: AgentStatus::Completed(Some("done".to_string())),
-            }]
-        );
-    }
-
-    #[tokio::test]
-    async fn collab_close_end_marks_sidebar_agent_closed() {
-        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let thread_id = ThreadId::new();
-
-        app.upsert_agent_picker_thread(
-            thread_id,
-            Some("Robie".to_string()),
-            Some("explorer".to_string()),
-            AgentStatus::Running,
-            false,
-        );
-        app.handle_codex_event_now(Event {
-            id: String::new(),
-            msg: EventMsg::CollabCloseEnd(CollabCloseEndEvent {
-                sender_thread_id: ThreadId::new(),
-                receiver_thread_id: thread_id,
-                receiver_agent_nickname: Some("Robie".to_string()),
-                receiver_agent_role: Some("explorer".to_string()),
-                call_id: "close-1".to_string(),
-                status: AgentStatus::Errored("tool timeout".to_string()),
-            }),
-        });
-
-        assert_eq!(
-            app.agent_picker_threads.get(&thread_id),
-            Some(&AgentPickerThreadEntry {
-                agent_nickname: Some("Robie".to_string()),
-                agent_role: Some("explorer".to_string()),
-                status: AgentStatus::Errored("tool timeout".to_string()),
-                is_closed: true,
-            })
-        );
-        assert_eq!(app.sidebar_agent_entries(), Vec::new());
-    }
-
-    #[tokio::test]
-    async fn handle_thread_created_preserves_cached_agent_status() {
-        let mut app = make_test_app().await;
-        let thread = app
-            .server
-            .start_thread(app.config.clone())
-            .await
-            .expect("start thread");
-
-        app.upsert_agent_picker_thread(
-            thread.thread_id,
-            Some("Robie".to_string()),
-            Some("explorer".to_string()),
-            AgentStatus::Completed(Some("done".to_string())),
-            false,
-        );
-
-        app.handle_thread_created(thread.thread_id)
-            .await
-            .expect("attach thread listener");
-
-        assert_eq!(
-            app.agent_picker_threads.get(&thread.thread_id),
-            Some(&AgentPickerThreadEntry {
-                agent_nickname: None,
-                agent_role: None,
-                status: AgentStatus::Completed(Some("done".to_string())),
-                is_closed: false,
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn thread_lifecycle_turn_complete_updates_sidebar_agent_status() {
-        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let thread_id = ThreadId::new();
-
-        app.upsert_agent_picker_thread(
-            thread_id,
-            Some("Robie".to_string()),
-            Some("explorer".to_string()),
-            AgentStatus::Running,
-            false,
-        );
-        app.enqueue_thread_event(
-            thread_id,
-            Event {
-                id: "complete".to_string(),
-                msg: EventMsg::TurnComplete(TurnCompleteEvent {
-                    last_agent_message: Some("done".to_string()),
-                }),
-            },
-        )
-        .await
-        .expect("enqueue turn complete");
-
-        assert_eq!(
-            app.sidebar_agent_entries(),
-            vec![AgentPanelEntry {
-                thread_id,
-                label: "Robie [explorer]".to_string(),
-                status: AgentStatus::Completed(Some("done".to_string())),
-            }]
-        );
-    }
-
-    #[tokio::test]
-    async fn thread_lifecycle_interrupted_updates_sidebar_agent_status() {
-        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let thread_id = ThreadId::new();
-
-        app.upsert_agent_picker_thread(
-            thread_id,
-            Some("Robie".to_string()),
-            Some("explorer".to_string()),
-            AgentStatus::Running,
-            false,
-        );
-        app.enqueue_thread_event(
-            thread_id,
-            Event {
-                id: "interrupted".to_string(),
-                msg: EventMsg::TurnAborted(TurnAbortedEvent {
-                    reason: TurnAbortReason::Interrupted,
-                }),
-            },
-        )
-        .await
-        .expect("enqueue turn aborted");
-
-        assert_eq!(
-            app.agent_picker_threads.get(&thread_id),
-            Some(&AgentPickerThreadEntry {
-                agent_nickname: Some("Robie".to_string()),
-                agent_role: Some("explorer".to_string()),
-                status: AgentStatus::Interrupted,
-                is_closed: false,
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn thread_lifecycle_error_updates_sidebar_agent_status() {
-        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let thread_id = ThreadId::new();
-
-        app.upsert_agent_picker_thread(
-            thread_id,
-            Some("Robie".to_string()),
-            Some("explorer".to_string()),
-            AgentStatus::Running,
-            false,
-        );
-        app.enqueue_thread_event(
-            thread_id,
-            Event {
-                id: "error".to_string(),
-                msg: EventMsg::Error(ErrorEvent {
-                    message: "boom".to_string(),
-                    codex_error_info: None,
-                }),
-            },
-        )
-        .await
-        .expect("enqueue error");
-
-        assert_eq!(
-            app.agent_picker_threads.get(&thread_id),
-            Some(&AgentPickerThreadEntry {
-                agent_nickname: Some("Robie".to_string()),
-                agent_role: Some("explorer".to_string()),
-                status: AgentStatus::Errored("boom".to_string()),
-                is_closed: false,
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn thread_lifecycle_shutdown_marks_agent_closed() {
-        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let thread_id = ThreadId::new();
-
-        app.upsert_agent_picker_thread(
-            thread_id,
-            Some("Robie".to_string()),
-            Some("explorer".to_string()),
-            AgentStatus::Running,
-            false,
-        );
-        app.enqueue_thread_event(
-            thread_id,
-            Event {
-                id: "shutdown".to_string(),
-                msg: EventMsg::ShutdownComplete,
-            },
-        )
-        .await
-        .expect("enqueue shutdown");
-
-        assert_eq!(
-            app.agent_picker_threads.get(&thread_id),
-            Some(&AgentPickerThreadEntry {
-                agent_nickname: Some("Robie".to_string()),
-                agent_role: Some("explorer".to_string()),
-                status: AgentStatus::Shutdown,
-                is_closed: true,
-            })
-        );
-        assert_eq!(app.sidebar_agent_entries(), Vec::new());
-    }
-
-    #[tokio::test]
-    async fn mirrored_detached_review_lifecycle_updates_child_not_parent() {
-        let mut app = make_test_app().await;
-        let parent_thread_id = ThreadId::new();
-        let child_thread_id = ThreadId::new();
-
-        app.upsert_agent_picker_thread(
-            parent_thread_id,
-            Some("Parent".to_string()),
-            Some("default".to_string()),
-            AgentStatus::Running,
-            false,
-        );
-        app.upsert_agent_picker_thread(
-            child_thread_id,
-            Some("Review".to_string()),
-            Some("review".to_string()),
-            AgentStatus::Running,
-            false,
-        );
-        app.review_parent_by_child
-            .insert(child_thread_id, parent_thread_id);
-
-        app.enqueue_thread_event(
-            child_thread_id,
-            Event {
-                id: "review-complete".to_string(),
-                msg: EventMsg::TurnComplete(TurnCompleteEvent {
-                    last_agent_message: Some("done".to_string()),
-                }),
-            },
-        )
-        .await
-        .expect("enqueue child turn complete");
-
-        assert_eq!(
-            app.agent_picker_threads.get(&parent_thread_id),
-            Some(&AgentPickerThreadEntry {
-                agent_nickname: Some("Parent".to_string()),
-                agent_role: Some("default".to_string()),
-                status: AgentStatus::Running,
-                is_closed: false,
-            })
-        );
-        assert_eq!(
-            app.agent_picker_threads.get(&child_thread_id),
-            Some(&AgentPickerThreadEntry {
-                agent_nickname: Some("Review".to_string()),
-                agent_role: Some("review".to_string()),
-                status: AgentStatus::Completed(Some("done".to_string())),
-                is_closed: false,
-            })
-        );
-    }
-
-    #[tokio::test]
     async fn thread_scoped_history_is_dropped_after_thread_switch() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
 
@@ -6271,59 +5240,6 @@ mod tests {
 
         assert!(!inserted);
         assert!(app.transcript_cells.is_empty());
-    }
-
-    #[tokio::test]
-    async fn open_agent_picker_keeps_missing_threads_for_replay() {
-        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let thread_id = ThreadId::new();
-
-        app.thread_event_channels
-            .insert(thread_id, ThreadEventChannel::new(1));
-
-        app.open_agent_picker().await;
-
-        assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
-        assert_eq!(
-            app.agent_picker_threads.get(&thread_id),
-            Some(&AgentPickerThreadEntry {
-                agent_nickname: None,
-                agent_role: None,
-                status: AgentStatus::Shutdown,
-                is_closed: true,
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn open_agent_picker_keeps_cached_closed_threads() {
-        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let thread_id = ThreadId::new();
-
-        app.thread_event_channels
-            .insert(thread_id, ThreadEventChannel::new(1));
-        app.agent_picker_threads.insert(
-            thread_id,
-            AgentPickerThreadEntry {
-                agent_nickname: Some("Robie".to_string()),
-                agent_role: Some("explorer".to_string()),
-                status: AgentStatus::Interrupted,
-                is_closed: false,
-            },
-        );
-
-        app.open_agent_picker().await;
-
-        assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
-        assert_eq!(
-            app.agent_picker_threads.get(&thread_id),
-            Some(&AgentPickerThreadEntry {
-                agent_nickname: Some("Robie".to_string()),
-                agent_role: Some("explorer".to_string()),
-                status: AgentStatus::Interrupted,
-                is_closed: true,
-            })
-        );
     }
 
     #[tokio::test]
@@ -6392,165 +5308,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn start_review_creates_detached_review_thread_when_feature_enabled() {
-        let mut app = make_test_app().await;
-        app.config.features.enable(Feature::DetachedReview);
-        app.chat_widget
-            .set_feature_enabled(Feature::DetachedReview, true);
-
-        let parent = app
-            .server
-            .start_thread(app.config.clone())
-            .await
-            .expect("start parent thread");
-        app.enqueue_primary_event(Event {
-            id: String::new(),
-            msg: EventMsg::SessionConfigured(parent.session_configured.clone()),
-        })
-        .await
-        .expect("enqueue primary event");
-
-        app.start_review(ReviewRequest {
-            target: ReviewTarget::UncommittedChanges,
-            user_facing_hint: None,
-        })
-        .await
-        .expect("start detached review");
-
-        let child_ids: Vec<_> = app
-            .agent_picker_threads
-            .keys()
-            .copied()
-            .filter(|thread_id| *thread_id != parent.thread_id)
-            .collect();
-        assert_eq!(child_ids.len(), 1, "expected one detached review thread");
-
-        let child_id = child_ids[0];
-        assert_eq!(app.active_thread_id, Some(parent.thread_id));
-        assert!(app.thread_event_channels.contains_key(&child_id));
-        assert_eq!(
-            app.review_parent_by_child.get(&child_id),
-            Some(&parent.thread_id)
-        );
-        assert_eq!(
-            app.agent_picker_threads.get(&child_id),
-            Some(&AgentPickerThreadEntry {
-                agent_nickname: None,
-                agent_role: Some("review".to_string()),
-                status: AgentStatus::PendingInit,
-                is_closed: false,
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn detached_review_events_are_mirrored_to_parent_thread() {
-        let mut app = make_test_app().await;
-        let parent_thread_id = ThreadId::new();
-        let child_thread_id = ThreadId::new();
-        app.ensure_thread_channel(parent_thread_id);
-        app.activate_thread_channel(parent_thread_id).await;
-        app.ensure_thread_channel(child_thread_id);
-        app.review_parent_by_child
-            .insert(child_thread_id, parent_thread_id);
-
-        let review_request = ReviewRequest {
-            target: ReviewTarget::UncommittedChanges,
-            user_facing_hint: None,
-        };
-        app.enqueue_thread_event(
-            child_thread_id,
-            Event {
-                id: "entered-review".to_string(),
-                msg: EventMsg::TurnStarted(TurnStartedEvent {
-                    model_context_window: None,
-                    identity_kind: IdentityKind::default(),
-                }),
-            },
-        )
-        .await
-        .expect("enqueue turn started");
-        app.enqueue_thread_event(
-            child_thread_id,
-            Event {
-                id: "review-begin".to_string(),
-                msg: EventMsg::EnteredReviewMode(review_request.clone()),
-            },
-        )
-        .await
-        .expect("enqueue entered review");
-
-        let parent_snapshot = app
-            .thread_event_channels
-            .get(&parent_thread_id)
-            .expect("parent channel")
-            .store
-            .lock()
-            .await
-            .snapshot();
-        assert!(
-            parent_snapshot
-                .events
-                .iter()
-                .any(|event| matches!(&event.msg, EventMsg::TurnStarted(_)))
-        );
-        assert!(parent_snapshot.events.iter().any(|event| matches!(
-            &event.msg,
-            EventMsg::EnteredReviewMode(got) if got == &review_request
-        )));
-
-        app.enqueue_thread_event(
-            child_thread_id,
-            Event {
-                id: "review-complete".to_string(),
-                msg: EventMsg::TurnComplete(TurnCompleteEvent {
-                    last_agent_message: None,
-                }),
-            },
-        )
-        .await
-        .expect("enqueue turn complete");
-
-        assert!(!app.review_parent_by_child.contains_key(&child_thread_id));
-    }
-
-    #[test]
-    fn agent_picker_item_name_snapshot() {
-        let thread_id =
-            ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread id");
-        let snapshot = [
-            format!(
-                "{} | {}",
-                format_agent_picker_item_name(Some("Robie"), Some("explorer"), true),
-                thread_id
-            ),
-            format!(
-                "{} | {}",
-                format_agent_picker_item_name(Some("Robie"), Some("explorer"), false),
-                thread_id
-            ),
-            format!(
-                "{} | {}",
-                format_agent_picker_item_name(Some("Robie"), None, false),
-                thread_id
-            ),
-            format!(
-                "{} | {}",
-                format_agent_picker_item_name(None, Some("explorer"), false),
-                thread_id
-            ),
-            format!(
-                "{} | {}",
-                format_agent_picker_item_name(None, None, false),
-                thread_id
-            ),
-        ]
-        .join("\n");
-
-        assert_snapshot!("agent_picker_item_name", snapshot);
-    }
-
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
@@ -6590,7 +5347,6 @@ mod tests {
             shift_mouse_bypass_active: false,
             shift_mouse_bypass_restore_at: None,
             thread_event_channels: HashMap::new(),
-            agent_picker_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
             thread_created_rx: server.subscribe_thread_created(),
@@ -6598,7 +5354,6 @@ mod tests {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
-            review_parent_by_child: HashMap::new(),
             non_git_changelog_baselines: HashMap::new(),
             provider_config_modal: None,
             project_trust_modal: None,
@@ -6612,7 +5367,6 @@ mod tests {
             skills_modal: None,
             pending_skills_modal_open: false,
             approval_mode_modal: None,
-            agent_selection_modal: None,
             review_modal: None,
             pending_startup_trust_prompt: false,
             deferred_initial_user_message: None,
@@ -6664,7 +5418,6 @@ mod tests {
                 shift_mouse_bypass_active: false,
                 shift_mouse_bypass_restore_at: None,
                 thread_event_channels: HashMap::new(),
-                agent_picker_threads: HashMap::new(),
                 active_thread_id: None,
                 active_thread_rx: None,
                 thread_created_rx: server.subscribe_thread_created(),
@@ -6672,7 +5425,6 @@ mod tests {
                 primary_thread_id: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
-                review_parent_by_child: HashMap::new(),
                 non_git_changelog_baselines: HashMap::new(),
                 provider_config_modal: None,
                 project_trust_modal: None,
@@ -6686,7 +5438,6 @@ mod tests {
                 skills_modal: None,
                 pending_skills_modal_open: false,
                 approval_mode_modal: None,
-                agent_selection_modal: None,
                 review_modal: None,
                 pending_startup_trust_prompt: false,
                 deferred_initial_user_message: None,
@@ -6807,7 +5558,6 @@ show_raw_agent_reasoning = true
             shift_mouse_bypass_active: false,
             shift_mouse_bypass_restore_at: None,
             thread_event_channels: HashMap::new(),
-            agent_picker_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
             thread_created_rx: server.subscribe_thread_created(),
@@ -6815,7 +5565,6 @@ show_raw_agent_reasoning = true
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
-            review_parent_by_child: HashMap::new(),
             non_git_changelog_baselines: HashMap::new(),
             provider_config_modal: None,
             project_trust_modal: None,
@@ -6829,7 +5578,6 @@ show_raw_agent_reasoning = true
             skills_modal: None,
             pending_skills_modal_open: false,
             approval_mode_modal: None,
-            agent_selection_modal: None,
             review_modal: None,
             pending_startup_trust_prompt: true,
             deferred_initial_user_message: None,

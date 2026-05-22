@@ -2157,7 +2157,6 @@ async fn make_chatwidget_manual_inner(
         plan_stream_controller: None,
         running_commands: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
-        pending_collab_spawn_requests: HashMap::new(),
         skills_all: Vec::new(),
         skills_have_loaded: false,
         skills_request_in_flight: false,
@@ -2204,7 +2203,6 @@ async fn make_chatwidget_manual_inner(
         plan_item_active: false,
         latest_proposed_plan_title: None,
         latest_update_plan: None,
-        sidebar_agents: Vec::new(),
         last_separator_elapsed_secs: None,
         last_rendered_width: std::cell::Cell::new(None),
         last_transcript_area: std::cell::Cell::new(None),
@@ -2329,7 +2327,6 @@ async fn make_chatwidget_manual_with_frame_requester(
         plan_stream_controller: None,
         running_commands: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
-        pending_collab_spawn_requests: HashMap::new(),
         skills_all: Vec::new(),
         skills_have_loaded: false,
         skills_request_in_flight: false,
@@ -2376,7 +2373,6 @@ async fn make_chatwidget_manual_with_frame_requester(
         plan_item_active: false,
         latest_proposed_plan_title: None,
         latest_update_plan: None,
-        sidebar_agents: Vec::new(),
         last_separator_elapsed_secs: None,
         last_rendered_width: std::cell::Cell::new(None),
         last_transcript_area: std::cell::Cell::new(None),
@@ -4662,16 +4658,6 @@ fn skills_placeholder_copy_describes_management_flow() {
 }
 
 #[tokio::test]
-async fn agent_command_requests_centered_agent_selection_modal() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    chat.dispatch_command(SlashCommand::Agent);
-
-    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenAgentPicker));
-    assert!(!render_bottom_popup(&chat, 80).contains("Multi-agents"));
-}
-
-#[tokio::test]
 async fn slash_init_skips_when_project_doc_exists() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     let tempdir = tempdir().unwrap();
@@ -5190,7 +5176,7 @@ async fn plan_without_user_override_keeps_current_effort() {
 }
 
 #[tokio::test]
-async fn collab_mode_is_not_sent_until_selected() {
+async fn identity_is_not_sent_until_selected() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::Identities, true);
@@ -5209,7 +5195,7 @@ async fn collab_mode_is_not_sent_until_selected() {
 }
 
 #[tokio::test]
-async fn collab_mode_enabling_keeps_custom_until_selected() {
+async fn identity_enabling_keeps_custom_until_selected() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.set_feature_enabled(Feature::Identities, true);
     assert_eq!(chat.active_identity_kind(), IdentityKind::Nobody);

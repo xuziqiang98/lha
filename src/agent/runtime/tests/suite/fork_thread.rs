@@ -1,4 +1,6 @@
+use adam_agent::CodexAuth;
 use adam_agent::NewThread;
+use adam_agent::ThreadManager;
 use adam_agent::parse_turn_item;
 use adam_agent::protocol::EventMsg;
 use adam_agent::protocol::Op;
@@ -6,9 +8,13 @@ use adam_agent::protocol::RolloutItem;
 use adam_agent::protocol::RolloutLine;
 use adam_protocol::items::TurnItem;
 use adam_protocol::user_input::UserInput;
+use core::time::Duration;
+use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use tempfile::tempdir;
+use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -18,6 +24,33 @@ use wiremock::matchers::path;
 /// Build minimal SSE stream with completed marker using the JSON fixture.
 fn sse_completed(id: &str) -> String {
     core_test_support::load_sse_fixture_with_id("../fixtures/completed_template.json", id)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_thread_notifies_thread_created_subscribers() {
+    let adam_home = tempdir().expect("tempdir");
+    let config = load_default_config_for_test(&adam_home).await;
+    let thread_manager = ThreadManager::with_models_provider(
+        CodexAuth::from_api_key("sk-test"),
+        config.model_provider.clone(),
+    );
+    let mut thread_created_rx = thread_manager.subscribe_thread_created();
+
+    let NewThread { thread_id, .. } = thread_manager
+        .start_thread(config)
+        .await
+        .expect("start thread");
+
+    let notified_thread_id = timeout(Duration::from_secs(1), thread_created_rx.recv())
+        .await
+        .expect("thread created notification")
+        .expect("thread created channel open");
+
+    assert_eq!(notified_thread_id, thread_id);
+    thread_manager
+        .get_thread(notified_thread_id)
+        .await
+        .expect("notified thread is registered");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

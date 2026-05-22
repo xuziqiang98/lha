@@ -314,8 +314,8 @@ impl HistoryCell for StatusHistoryCell {
         if let Some(thread_name) = thread_name {
             lines.push(formatter.line("Thread name", vec![Span::from(thread_name.to_string())]));
         }
-        if let Some(collab_mode) = self.identity.as_ref() {
-            lines.push(formatter.line("Identity", vec![Span::from(collab_mode.clone())]));
+        if let Some(identity) = self.identity.as_ref() {
+            lines.push(formatter.line("Identity", vec![Span::from(identity.clone())]));
         }
         if let Some(session) = self.session_id.as_ref() {
             lines.push(formatter.line("Session", vec![Span::from(session.clone())]));

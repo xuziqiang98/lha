@@ -3747,7 +3747,7 @@ mod tests {
 
     #[test]
     fn footer_collapse_snapshots() {
-        fn setup_collab_footer(
+        fn setup_identity_footer(
             composer: &mut ChatComposer,
             context_percent: i64,
             indicator: Option<IdentityIndicator>,
@@ -3768,7 +3768,7 @@ mod tests {
             120,
             true,
             |composer| {
-                setup_collab_footer(composer, 100, Some(IdentityIndicator::Programmer));
+                setup_identity_footer(composer, 100, Some(IdentityIndicator::Programmer));
             },
         );
         snapshot_composer_state_with_width(
@@ -3776,7 +3776,7 @@ mod tests {
             60,
             true,
             |composer| {
-                setup_collab_footer(composer, 100, Some(IdentityIndicator::Programmer));
+                setup_identity_footer(composer, 100, Some(IdentityIndicator::Programmer));
             },
         );
         snapshot_composer_state_with_width(
@@ -3784,7 +3784,7 @@ mod tests {
             44,
             true,
             |composer| {
-                setup_collab_footer(composer, 100, Some(IdentityIndicator::Programmer));
+                setup_identity_footer(composer, 100, Some(IdentityIndicator::Programmer));
             },
         );
         snapshot_composer_state_with_width(
@@ -3792,7 +3792,7 @@ mod tests {
             26,
             true,
             |composer| {
-                setup_collab_footer(composer, 100, Some(IdentityIndicator::Programmer));
+                setup_identity_footer(composer, 100, Some(IdentityIndicator::Programmer));
             },
         );
 
@@ -3802,7 +3802,7 @@ mod tests {
             120,
             true,
             |composer| {
-                setup_collab_footer(composer, 100, Some(IdentityIndicator::Planner));
+                setup_identity_footer(composer, 100, Some(IdentityIndicator::Planner));
             },
         );
         snapshot_composer_state_with_width(
@@ -3810,7 +3810,7 @@ mod tests {
             60,
             true,
             |composer| {
-                setup_collab_footer(composer, 100, Some(IdentityIndicator::Planner));
+                setup_identity_footer(composer, 100, Some(IdentityIndicator::Planner));
             },
         );
         snapshot_composer_state_with_width(
@@ -3818,7 +3818,7 @@ mod tests {
             44,
             true,
             |composer| {
-                setup_collab_footer(composer, 100, Some(IdentityIndicator::Planner));
+                setup_identity_footer(composer, 100, Some(IdentityIndicator::Planner));
             },
         );
         snapshot_composer_state_with_width(
@@ -3826,7 +3826,7 @@ mod tests {
             26,
             true,
             |composer| {
-                setup_collab_footer(composer, 100, Some(IdentityIndicator::Planner));
+                setup_identity_footer(composer, 100, Some(IdentityIndicator::Planner));
             },
         );
 
@@ -3836,7 +3836,7 @@ mod tests {
             120,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(IdentityIndicator::Programmer));
+                setup_identity_footer(composer, 98, Some(IdentityIndicator::Programmer));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3847,7 +3847,7 @@ mod tests {
             50,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(IdentityIndicator::Programmer));
+                setup_identity_footer(composer, 98, Some(IdentityIndicator::Programmer));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3858,7 +3858,7 @@ mod tests {
             40,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(IdentityIndicator::Programmer));
+                setup_identity_footer(composer, 98, Some(IdentityIndicator::Programmer));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3869,7 +3869,7 @@ mod tests {
             30,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(IdentityIndicator::Programmer));
+                setup_identity_footer(composer, 98, Some(IdentityIndicator::Programmer));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3880,7 +3880,7 @@ mod tests {
             20,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(IdentityIndicator::Programmer));
+                setup_identity_footer(composer, 98, Some(IdentityIndicator::Programmer));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3893,7 +3893,7 @@ mod tests {
             120,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(IdentityIndicator::Planner));
+                setup_identity_footer(composer, 98, Some(IdentityIndicator::Planner));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3904,7 +3904,7 @@ mod tests {
             50,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(IdentityIndicator::Planner));
+                setup_identity_footer(composer, 98, Some(IdentityIndicator::Planner));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3915,7 +3915,7 @@ mod tests {
             40,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(IdentityIndicator::Planner));
+                setup_identity_footer(composer, 98, Some(IdentityIndicator::Planner));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3926,7 +3926,7 @@ mod tests {
             30,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(IdentityIndicator::Planner));
+                setup_identity_footer(composer, 98, Some(IdentityIndicator::Planner));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
@@ -3937,7 +3937,7 @@ mod tests {
             20,
             true,
             |composer| {
-                setup_collab_footer(composer, 98, Some(IdentityIndicator::Planner));
+                setup_identity_footer(composer, 98, Some(IdentityIndicator::Planner));
                 composer.set_steer_enabled(true);
                 composer.set_task_running(true);
                 composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());

@@ -7,7 +7,6 @@ export type ReviewStartResponse = { turn: Turn,
 /**
  * Identifies the thread where the review runs.
  *
- * For inline reviews, this is the original thread id.
- * For detached reviews, this is the id of the new review thread.
+ * This is the original thread id for supported inline reviews.
  */
 reviewThreadId: string, };

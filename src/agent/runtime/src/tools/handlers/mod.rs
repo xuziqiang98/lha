@@ -1,6 +1,5 @@
-pub(crate) mod agent_jobs;
 pub mod apply_patch;
-pub(crate) mod collab;
+pub(crate) mod delegated_jobs;
 mod dynamic;
 mod grep_files;
 mod list_dir;
@@ -19,9 +18,8 @@ pub use plan::PLAN_TOOL;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
-pub use agent_jobs::BatchJobHandler;
 pub use apply_patch::ApplyPatchHandler;
-pub use collab::CollabHandler;
+pub use delegated_jobs::DelegatedJobHandler;
 pub use dynamic::DynamicToolHandler;
 pub use grep_files::GrepFilesHandler;
 pub use list_dir::ListDirHandler;

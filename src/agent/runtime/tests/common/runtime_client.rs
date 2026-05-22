@@ -120,12 +120,6 @@ fn session_source_to_origin_tag(session_source: &SessionSource) -> String {
         SessionSource::VSCode => "vscode".to_string(),
         SessionSource::Exec => "exec".to_string(),
         SessionSource::Mcp => "mcp".to_string(),
-        SessionSource::SubAgent(sub) => match sub {
-            adam_agent::protocol::SubAgentSource::Review => "review".to_string(),
-            adam_agent::protocol::SubAgentSource::Compact => "compact".to_string(),
-            adam_agent::protocol::SubAgentSource::ThreadSpawn { .. } => "thread_spawn".to_string(),
-            adam_agent::protocol::SubAgentSource::Other(label) => label.to_lowercase(),
-        },
         SessionSource::Unknown => "unknown".to_string(),
     }
 }

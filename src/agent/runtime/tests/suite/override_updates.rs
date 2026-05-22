@@ -22,7 +22,7 @@ use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 
-fn collab_mode_with_instructions(instructions: Option<&str>) -> Identity {
+fn identity_with_instructions(instructions: Option<&str>) -> Identity {
     Identity {
         kind: IdentityKind::Nobody,
         settings: Settings {
@@ -33,7 +33,7 @@ fn collab_mode_with_instructions(instructions: Option<&str>) -> Identity {
     }
 }
 
-fn collab_xml(text: &str) -> String {
+fn identity_xml(text: &str) -> String {
     format!("{IDENTITY_OPEN_TAG}{text}{IDENTITY_CLOSE_TAG}")
 }
 
@@ -179,13 +179,13 @@ async fn override_turn_context_without_user_turn_does_not_record_environment_upd
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn override_turn_context_without_user_turn_does_not_record_collaboration_update() -> Result<()> {
+async fn override_turn_context_without_user_turn_does_not_record_identity_update() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let test = test_codex().build(&server).await?;
-    let collab_text = "override collaboration instructions";
-    let identity = collab_mode_with_instructions(Some(collab_text));
+    let identity_text = "override identity instructions";
+    let identity = identity_with_instructions(Some(identity_text));
 
     test.codex
         .submit(Op::OverrideTurnContext {
@@ -207,12 +207,12 @@ async fn override_turn_context_without_user_turn_does_not_record_collaboration_u
     let rollout_path = test.codex.rollout_path().expect("rollout path");
     let rollout_text = read_rollout_text(&rollout_path).await?;
     let developer_texts = rollout_developer_texts(&rollout_text);
-    let collab_text = collab_xml(collab_text);
-    let collab_count = developer_texts
+    let identity_text = identity_xml(identity_text);
+    let identity_count = developer_texts
         .iter()
-        .filter(|text| text.as_str() == collab_text.as_str())
+        .filter(|text| text.as_str() == identity_text.as_str())
         .count();
-    assert_eq!(collab_count, 0);
+    assert_eq!(identity_count, 0);
 
     Ok(())
 }

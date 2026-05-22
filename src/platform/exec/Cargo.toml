@@ -25,6 +25,7 @@ adam-common = { workspace = true, features = [
     "sandbox_summary",
 ] }
 adam-agent = { workspace = true }
+adam-identity = { workspace = true }
 adam-llm = { workspace = true }
 adam-protocol = { workspace = true }
 adam-utils-absolute-path = { workspace = true }

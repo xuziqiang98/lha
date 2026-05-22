@@ -41,6 +41,8 @@ impl ToolHandler for RequestUserInputHandler {
             let identity_name = match kind {
                 IdentityKind::Nobody => "nobody",
                 IdentityKind::Programmer => "programmer",
+                IdentityKind::Explorer => "explorer",
+                IdentityKind::Reviewer => "reviewer",
                 IdentityKind::Planner => unreachable!(),
             };
             return Err(FunctionCallError::RespondToModel(format!(

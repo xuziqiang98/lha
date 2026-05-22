@@ -2099,6 +2099,8 @@ fn identity_label(identity_kind: adam_protocol::config_types::IdentityKind) -> &
         adam_protocol::config_types::IdentityKind::Nobody => "nobody",
         adam_protocol::config_types::IdentityKind::Planner => "planner",
         adam_protocol::config_types::IdentityKind::Programmer => "programmer",
+        adam_protocol::config_types::IdentityKind::Explorer => "explorer",
+        adam_protocol::config_types::IdentityKind::Reviewer => "reviewer",
     }
 }
 

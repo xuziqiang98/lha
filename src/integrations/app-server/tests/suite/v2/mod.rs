@@ -6,6 +6,7 @@ mod identity_list;
 mod initialize;
 mod output_schema;
 mod plan_item;
+mod raw_transcript;
 mod request_user_input;
 mod review;
 mod thread_archive;

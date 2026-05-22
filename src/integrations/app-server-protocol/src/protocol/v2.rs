@@ -16,7 +16,6 @@ use adam_protocol::openai_models::ReasoningEffort;
 use adam_protocol::parse_command::ParsedCommand as CoreParsedCommand;
 use adam_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use adam_protocol::plan_tool::StepStatus as CorePlanStepStatus;
-use adam_protocol::protocol::AgentStatus as CoreAgentStatus;
 use adam_protocol::protocol::AskForApproval as CoreAskForApproval;
 use adam_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use adam_protocol::protocol::NetworkAccess as CoreNetworkAccess;
@@ -27,7 +26,6 @@ use adam_protocol::protocol::SkillInterface as CoreSkillInterface;
 use adam_protocol::protocol::SkillMetadata as CoreSkillMetadata;
 use adam_protocol::protocol::SkillScope as CoreSkillScope;
 use adam_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
-use adam_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use adam_protocol::protocol::TokenUsage as CoreTokenUsage;
 use adam_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use adam_protocol::user_input::ByteRange as CoreByteRange;
@@ -214,7 +212,7 @@ impl From<CoreSandboxMode> for SandboxMode {
 
 v2_enum_from_core!(
     pub enum ReviewDelivery from adam_protocol::protocol::ReviewDelivery {
-        Inline, Detached
+        Inline
     }
 );
 
@@ -717,7 +715,6 @@ pub enum SessionSource {
     VsCode,
     Exec,
     AppServer,
-    SubAgent(CoreSubAgentSource),
     #[serde(other)]
     Unknown,
 }
@@ -729,7 +726,6 @@ impl From<CoreSessionSource> for SessionSource {
             CoreSessionSource::VSCode => SessionSource::VsCode,
             CoreSessionSource::Exec => SessionSource::Exec,
             CoreSessionSource::Mcp => SessionSource::AppServer,
-            CoreSessionSource::SubAgent(sub) => SessionSource::SubAgent(sub),
             CoreSessionSource::Unknown => SessionSource::Unknown,
         }
     }
@@ -742,7 +738,6 @@ impl From<SessionSource> for CoreSessionSource {
             SessionSource::VsCode => CoreSessionSource::VSCode,
             SessionSource::Exec => CoreSessionSource::Exec,
             SessionSource::AppServer => CoreSessionSource::Mcp,
-            SessionSource::SubAgent(sub) => CoreSessionSource::SubAgent(sub),
             SessionSource::Unknown => CoreSessionSource::Unknown,
         }
     }
@@ -1225,11 +1220,6 @@ pub enum ThreadSourceKind {
     VsCode,
     Exec,
     AppServer,
-    SubAgent,
-    SubAgentReview,
-    SubAgentCompact,
-    SubAgentThreadSpawn,
-    SubAgentOther,
     Unknown,
 }
 
@@ -1666,8 +1656,7 @@ pub struct ReviewStartParams {
     pub thread_id: String,
     pub target: ReviewTarget,
 
-    /// Where to run the review: inline (default) on the current thread or
-    /// detached on a new thread (returned in `reviewThreadId`).
+    /// Where to run the review. Inline is the only supported mode; omitted means inline.
     #[serde(default)]
     pub delivery: Option<ReviewDelivery>,
 }
@@ -1679,8 +1668,7 @@ pub struct ReviewStartResponse {
     pub turn: Turn,
     /// Identifies the thread where the review runs.
     ///
-    /// For inline reviews, this is the original thread id.
-    /// For detached reviews, this is the id of the new review thread.
+    /// This is the original thread id for supported inline reviews.
     pub review_thread_id: String,
 }
 
@@ -1935,25 +1923,6 @@ pub enum ThreadItem {
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    CollabAgentToolCall {
-        /// Unique identifier for this collab tool call.
-        id: String,
-        /// Name of the collab tool that was invoked.
-        tool: CollabAgentTool,
-        /// Current status of the collab tool call.
-        status: CollabAgentToolCallStatus,
-        /// Thread ID of the agent issuing the collab request.
-        sender_thread_id: String,
-        /// Thread ID of the receiving agent, when applicable. In case of spawn operation,
-        /// this corresponds to the newly spawned agent.
-        receiver_thread_ids: Vec<String>,
-        /// Prompt text sent as part of the collab tool call, when available.
-        prompt: Option<String>,
-        /// Last known status of the target agents, when available.
-        agents_states: HashMap<String, CollabAgentState>,
-    },
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
     WebSearch {
         id: String,
         query: String,
@@ -2060,17 +2029,6 @@ pub enum CommandExecutionStatus {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub enum CollabAgentTool {
-    SpawnAgent,
-    SendInput,
-    ResumeAgent,
-    Wait,
-    CloseAgent,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
 pub struct FileUpdateChange {
     pub path: String,
     pub kind: PatchChangeKind,
@@ -2104,71 +2062,6 @@ pub enum McpToolCallStatus {
     InProgress,
     Completed,
     Failed,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum CollabAgentToolCallStatus {
-    InProgress,
-    Completed,
-    Failed,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum CollabAgentStatus {
-    PendingInit,
-    Running,
-    Interrupted,
-    Completed,
-    Errored,
-    Shutdown,
-    NotFound,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct CollabAgentState {
-    pub status: CollabAgentStatus,
-    pub message: Option<String>,
-}
-
-impl From<CoreAgentStatus> for CollabAgentState {
-    fn from(value: CoreAgentStatus) -> Self {
-        match value {
-            CoreAgentStatus::PendingInit => Self {
-                status: CollabAgentStatus::PendingInit,
-                message: None,
-            },
-            CoreAgentStatus::Running => Self {
-                status: CollabAgentStatus::Running,
-                message: None,
-            },
-            CoreAgentStatus::Interrupted => Self {
-                status: CollabAgentStatus::Interrupted,
-                message: None,
-            },
-            CoreAgentStatus::Completed(message) => Self {
-                status: CollabAgentStatus::Completed,
-                message,
-            },
-            CoreAgentStatus::Errored(message) => Self {
-                status: CollabAgentStatus::Errored,
-                message: Some(message),
-            },
-            CoreAgentStatus::Shutdown => Self {
-                status: CollabAgentStatus::Shutdown,
-                message: None,
-            },
-            CoreAgentStatus::NotFound => Self {
-                status: CollabAgentStatus::NotFound,
-                message: None,
-            },
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -2642,6 +2535,22 @@ mod tests {
 
         let back_to_v2 = SandboxPolicy::from(core_policy);
         assert_eq!(back_to_v2, v2_policy);
+    }
+
+    #[test]
+    fn review_delivery_deserializes_inline() {
+        let delivery =
+            serde_json::from_value::<ReviewDelivery>(json!("inline")).expect("inline delivery");
+
+        assert_eq!(delivery, ReviewDelivery::Inline);
+    }
+
+    #[test]
+    fn review_delivery_rejects_detached() {
+        let err = serde_json::from_value::<ReviewDelivery>(json!("detached"))
+            .expect_err("detached review delivery should be unsupported");
+
+        assert!(err.to_string().contains("unknown variant"));
     }
 
     #[test]

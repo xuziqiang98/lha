@@ -5,4 +5,4 @@
 /**
  * Built-in Adam identity kind.
  */
-export type IdentityKind = "nobody" | "planner" | "programmer";
+export type IdentityKind = "nobody" | "planner" | "programmer" | "explorer" | "reviewer";

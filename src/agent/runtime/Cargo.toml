@@ -57,7 +57,6 @@ adam-utils-pty = { workspace = true }
 adam-utils-readiness = { workspace = true }
 adam-utils-string = { workspace = true }
 adam-windows-sandbox = { package = "adam-windows-sandbox", path = "../../platform/sandbox/windows" }
-csv = { workspace = true }
 dunce = { workspace = true }
 dirs = { workspace = true }
 encoding_rs = { workspace = true }

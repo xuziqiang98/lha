@@ -10,10 +10,6 @@
       "properties": {
         "conversationId": {
           "$ref": "#/definitions/ThreadId"
-        },
-        "experimentalRawEvents": {
-          "default": false,
-          "type": "boolean"
         }
       },
       "required": [
@@ -59,77 +55,6 @@
         }
       ]
     },
-    "AgentStatus": {
-      "description": "Agent lifecycle status, derived from emitted events.",
-      "oneOf": [
-        {
-          "description": "Agent is waiting for initialization.",
-          "enum": [
-            "pending_init"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Agent is currently running.",
-          "enum": [
-            "running"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Agent's current turn was interrupted and it may receive more input.",
-          "enum": [
-            "interrupted"
-          ],
-          "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Agent is done. Contains the final assistant message.",
-          "properties": {
-            "completed": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "completed"
-          ],
-          "title": "CompletedAgentStatus",
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Agent encountered an error.",
-          "properties": {
-            "errored": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "errored"
-          ],
-          "title": "ErroredAgentStatus",
-          "type": "object"
-        },
-        {
-          "description": "Agent has been shutdown.",
-          "enum": [
-            "shutdown"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Agent is not found.",
-          "enum": [
-            "not_found"
-          ],
-          "type": "string"
-        }
-      ]
-    },
     "Annotations": {
       "description": "Optional annotations for the client. The client can use annotations to inform how objects are used or displayed",
       "properties": {
@@ -166,7 +91,7 @@
           "type": "string"
         },
         "conversationId": {
-          "$ref": "#/definitions/v2/ThreadId"
+          "$ref": "#/definitions/ThreadId"
         },
         "fileChanges": {
           "additionalProperties": {
@@ -1683,46 +1608,6 @@
         }
       ]
     },
-    "CollabAgentRef": {
-      "properties": {
-        "agent_nickname": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "agent_role": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "thread_id": {
-          "$ref": "#/definitions/ThreadId"
-        }
-      },
-      "required": [
-        "thread_id"
-      ],
-      "type": "object"
-    },
-    "CollabAgentStatusEntry": {
-      "properties": {
-        "agent": {
-          "$ref": "#/definitions/CollabAgentRef"
-        },
-        "status": {
-          "$ref": "#/definitions/AgentStatus"
-        }
-      },
-      "required": [
-        "agent",
-        "status"
-      ],
-      "type": "object"
-    },
     "CommandExecutionApprovalDecision": {
       "oneOf": [
         {
@@ -2566,7 +2451,7 @@
             "forked_from_id": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/v2/ThreadId"
+                  "$ref": "#/definitions/ThreadId"
                 },
                 {
                   "type": "null"
@@ -2637,7 +2522,7 @@
               "description": "How to sandbox commands executed in the system"
             },
             "session_id": {
-              "$ref": "#/definitions/v2/ThreadId"
+              "$ref": "#/definitions/ThreadId"
             },
             "thread_name": {
               "description": "Optional user-facing thread name (may be unset).",
@@ -2673,7 +2558,7 @@
           "description": "Updated session metadata (e.g., thread name changes).",
           "properties": {
             "thread_id": {
-              "$ref": "#/definitions/v2/ThreadId"
+              "$ref": "#/definitions/ThreadId"
             },
             "thread_name": {
               "type": [
@@ -3957,7 +3842,7 @@
               "$ref": "#/definitions/TurnItem"
             },
             "thread_id": {
-              "$ref": "#/definitions/v2/ThreadId"
+              "$ref": "#/definitions/ThreadId"
             },
             "turn_id": {
               "type": "string"
@@ -3985,7 +3870,7 @@
               "$ref": "#/definitions/TurnItem"
             },
             "thread_id": {
-              "$ref": "#/definitions/v2/ThreadId"
+              "$ref": "#/definitions/ThreadId"
             },
             "turn_id": {
               "type": "string"
@@ -4144,567 +4029,6 @@
           ],
           "title": "ReasoningRawContentDeltaEventMsg",
           "type": "object"
-        },
-        {
-          "description": "Collab interaction: agent spawn begin.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the collab tool call.",
-              "type": "string"
-            },
-            "model": {
-              "description": "Effective model used by the spawned agent after inheritance and role overrides.",
-              "type": "string"
-            },
-            "prompt": {
-              "description": "Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.",
-              "type": "string"
-            },
-            "reasoning_effort": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/v2/ReasoningEffort"
-                }
-              ],
-              "description": "Effective reasoning effort used by the spawned agent after inheritance and role overrides."
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/v2/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "type": {
-              "enum": [
-                "collab_agent_spawn_begin"
-              ],
-              "title": "CollabAgentSpawnBeginEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "model",
-            "prompt",
-            "reasoning_effort",
-            "sender_thread_id",
-            "type"
-          ],
-          "title": "CollabAgentSpawnBeginEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Collab interaction: agent spawn end.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the collab tool call.",
-              "type": "string"
-            },
-            "model": {
-              "description": "Effective model used by the spawned agent after inheritance and role overrides.",
-              "type": "string"
-            },
-            "new_agent_nickname": {
-              "description": "User-facing nickname of the newly spawned agent, if known.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "new_agent_role": {
-              "description": "Role label of the newly spawned agent, if known.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "new_thread_id": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/v2/ThreadId"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Thread ID of the newly spawned agent, if it was created."
-            },
-            "prompt": {
-              "description": "Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.",
-              "type": "string"
-            },
-            "reasoning_effort": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/v2/ReasoningEffort"
-                }
-              ],
-              "description": "Effective reasoning effort used by the spawned agent after inheritance and role overrides."
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/v2/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "status": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/AgentStatus"
-                }
-              ],
-              "description": "Last known status of the new agent reported to the sender agent."
-            },
-            "type": {
-              "enum": [
-                "collab_agent_spawn_end"
-              ],
-              "title": "CollabAgentSpawnEndEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "model",
-            "prompt",
-            "reasoning_effort",
-            "sender_thread_id",
-            "status",
-            "type"
-          ],
-          "title": "CollabAgentSpawnEndEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Collab interaction: agent interaction begin.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the collab tool call.",
-              "type": "string"
-            },
-            "prompt": {
-              "description": "Prompt sent from the sender to the receiver. Can be empty to prevent CoT leaking at the beginning.",
-              "type": "string"
-            },
-            "receiver_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/v2/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the receiver."
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/v2/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "type": {
-              "enum": [
-                "collab_agent_interaction_begin"
-              ],
-              "title": "CollabAgentInteractionBeginEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "prompt",
-            "receiver_thread_id",
-            "sender_thread_id",
-            "type"
-          ],
-          "title": "CollabAgentInteractionBeginEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Collab interaction: agent interaction end.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the collab tool call.",
-              "type": "string"
-            },
-            "prompt": {
-              "description": "Prompt sent from the sender to the receiver. Can be empty to prevent CoT leaking at the beginning.",
-              "type": "string"
-            },
-            "receiver_agent_nickname": {
-              "description": "User-facing nickname of the receiver agent, if known.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "receiver_agent_role": {
-              "description": "Role label of the receiver agent, if known.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "receiver_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/v2/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the receiver."
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/v2/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "status": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/AgentStatus"
-                }
-              ],
-              "description": "Last known status of the receiver agent reported to the sender agent."
-            },
-            "type": {
-              "enum": [
-                "collab_agent_interaction_end"
-              ],
-              "title": "CollabAgentInteractionEndEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "prompt",
-            "receiver_thread_id",
-            "sender_thread_id",
-            "status",
-            "type"
-          ],
-          "title": "CollabAgentInteractionEndEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Collab interaction: waiting begin.",
-          "properties": {
-            "call_id": {
-              "description": "ID of the waiting call.",
-              "type": "string"
-            },
-            "receiver_agents": {
-              "default": [],
-              "description": "Additional receiver metadata for UI consumers that want nicknames/roles.",
-              "items": {
-                "$ref": "#/definitions/CollabAgentRef"
-              },
-              "type": "array"
-            },
-            "receiver_thread_ids": {
-              "description": "Thread ID of the receivers.",
-              "items": {
-                "$ref": "#/definitions/v2/ThreadId"
-              },
-              "type": "array"
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/v2/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "type": {
-              "enum": [
-                "collab_waiting_begin"
-              ],
-              "title": "CollabWaitingBeginEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "receiver_thread_ids",
-            "sender_thread_id",
-            "type"
-          ],
-          "title": "CollabWaitingBeginEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Collab interaction: waiting end.",
-          "properties": {
-            "agent_statuses": {
-              "default": [],
-              "description": "Receiver metadata paired with statuses for richer UI rendering.",
-              "items": {
-                "$ref": "#/definitions/CollabAgentStatusEntry"
-              },
-              "type": "array"
-            },
-            "call_id": {
-              "description": "ID of the waiting call.",
-              "type": "string"
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/v2/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "statuses": {
-              "additionalProperties": {
-                "$ref": "#/definitions/AgentStatus"
-              },
-              "description": "Last known status of the receiver agents reported to the sender agent.",
-              "type": "object"
-            },
-            "type": {
-              "enum": [
-                "collab_waiting_end"
-              ],
-              "title": "CollabWaitingEndEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "sender_thread_id",
-            "statuses",
-            "type"
-          ],
-          "title": "CollabWaitingEndEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Collab interaction: resume begin.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the collab tool call.",
-              "type": "string"
-            },
-            "receiver_agent_nickname": {
-              "description": "User-facing nickname of the receiver agent, if known.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "receiver_agent_role": {
-              "description": "Role label of the receiver agent, if known.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "receiver_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/v2/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the receiver."
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/v2/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "type": {
-              "enum": [
-                "collab_resume_begin"
-              ],
-              "title": "CollabResumeBeginEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "receiver_thread_id",
-            "sender_thread_id",
-            "type"
-          ],
-          "title": "CollabResumeBeginEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Collab interaction: resume end.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the collab tool call.",
-              "type": "string"
-            },
-            "receiver_agent_nickname": {
-              "description": "User-facing nickname of the receiver agent, if known.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "receiver_agent_role": {
-              "description": "Role label of the receiver agent, if known.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "receiver_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/v2/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the receiver."
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/v2/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "status": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/AgentStatus"
-                }
-              ],
-              "description": "Last known status of the receiver agent reported to the sender agent."
-            },
-            "type": {
-              "enum": [
-                "collab_resume_end"
-              ],
-              "title": "CollabResumeEndEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "receiver_thread_id",
-            "sender_thread_id",
-            "status",
-            "type"
-          ],
-          "title": "CollabResumeEndEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Collab interaction: close begin.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the collab tool call.",
-              "type": "string"
-            },
-            "receiver_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/v2/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the receiver."
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/v2/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "type": {
-              "enum": [
-                "collab_close_begin"
-              ],
-              "title": "CollabCloseBeginEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "receiver_thread_id",
-            "sender_thread_id",
-            "type"
-          ],
-          "title": "CollabCloseBeginEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Collab interaction: close end.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the collab tool call.",
-              "type": "string"
-            },
-            "receiver_agent_nickname": {
-              "description": "User-facing nickname of the receiver agent, if known.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "receiver_agent_role": {
-              "description": "Role label of the receiver agent, if known.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "receiver_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/v2/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the receiver."
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/v2/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "status": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/AgentStatus"
-                }
-              ],
-              "description": "Last known status of the receiver agent reported to the sender agent before the close."
-            },
-            "type": {
-              "enum": [
-                "collab_close_end"
-              ],
-              "title": "CollabCloseEndEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "receiver_thread_id",
-            "sender_thread_id",
-            "status",
-            "type"
-          ],
-          "title": "CollabCloseEndEventMsg",
-          "type": "object"
         }
       ],
       "title": "EventMsg"
@@ -4723,7 +4047,7 @@
           "type": "array"
         },
         "conversationId": {
-          "$ref": "#/definitions/v2/ThreadId"
+          "$ref": "#/definitions/ThreadId"
         },
         "cwd": {
           "type": "string"
@@ -5262,7 +4586,9 @@
       "enum": [
         "nobody",
         "planner",
-        "programmer"
+        "programmer",
+        "explorer",
+        "reviewer"
       ],
       "type": "string"
     },
@@ -7631,31 +6957,14 @@
       "type": "object"
     },
     "SessionSource": {
-      "oneOf": [
-        {
-          "enum": [
-            "cli",
-            "vscode",
-            "exec",
-            "mcp",
-            "unknown"
-          ],
-          "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "subagent": {
-              "$ref": "#/definitions/SubAgentSource"
-            }
-          },
-          "required": [
-            "subagent"
-          ],
-          "title": "SubagentSessionSource",
-          "type": "object"
-        }
-      ]
+      "enum": [
+        "cli",
+        "vscode",
+        "exec",
+        "mcp",
+        "unknown"
+      ],
+      "type": "string"
     },
     "SetDefaultModelParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -7895,70 +7204,6 @@
         "completed"
       ],
       "type": "string"
-    },
-    "SubAgentSource": {
-      "oneOf": [
-        {
-          "enum": [
-            "review",
-            "compact"
-          ],
-          "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "thread_spawn": {
-              "properties": {
-                "agent_nickname": {
-                  "default": null,
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "agent_role": {
-                  "default": null,
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "depth": {
-                  "format": "int32",
-                  "type": "integer"
-                },
-                "parent_thread_id": {
-                  "$ref": "#/definitions/ThreadId"
-                }
-              },
-              "required": [
-                "depth",
-                "parent_thread_id"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "thread_spawn"
-          ],
-          "title": "ThreadSpawnSubAgentSource",
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "other": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "other"
-          ],
-          "title": "OtherSubAgentSource",
-          "type": "object"
-        }
-      ]
     },
     "TextContent": {
       "description": "Text provided to or from an LLM.",
@@ -9646,53 +8891,6 @@
           }
         ]
       },
-      "CollabAgentState": {
-        "properties": {
-          "message": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "status": {
-            "$ref": "#/definitions/v2/CollabAgentStatus"
-          }
-        },
-        "required": [
-          "status"
-        ],
-        "type": "object"
-      },
-      "CollabAgentStatus": {
-        "enum": [
-          "pendingInit",
-          "running",
-          "interrupted",
-          "completed",
-          "errored",
-          "shutdown",
-          "notFound"
-        ],
-        "type": "string"
-      },
-      "CollabAgentTool": {
-        "enum": [
-          "spawnAgent",
-          "sendInput",
-          "resumeAgent",
-          "wait",
-          "closeAgent"
-        ],
-        "type": "string"
-      },
-      "CollabAgentToolCallStatus": {
-        "enum": [
-          "inProgress",
-          "completed",
-          "failed"
-        ],
-        "type": "string"
-      },
       "CommandAction": {
         "oneOf": [
           {
@@ -10827,7 +10025,9 @@
         "enum": [
           "nobody",
           "planner",
-          "programmer"
+          "programmer",
+          "explorer",
+          "reviewer"
         ],
         "type": "string"
       },
@@ -11834,8 +11034,7 @@
       },
       "ReviewDelivery": {
         "enum": [
-          "inline",
-          "detached"
+          "inline"
         ],
         "type": "string"
       },
@@ -11852,7 +11051,7 @@
               }
             ],
             "default": null,
-            "description": "Where to run the review: inline (default) on the current thread or detached on a new thread (returned in `reviewThreadId`)."
+            "description": "Where to run the review. Inline is the only supported mode; omitted means inline."
           },
           "target": {
             "$ref": "#/definitions/v2/ReviewTarget"
@@ -11872,7 +11071,7 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "reviewThreadId": {
-            "description": "Identifies the thread where the review runs.\n\nFor inline reviews, this is the original thread id. For detached reviews, this is the id of the new review thread.",
+            "description": "Identifies the thread where the review runs.\n\nThis is the original thread id for supported inline reviews.",
             "type": "string"
           },
           "turn": {
@@ -12113,31 +11312,14 @@
         "type": "object"
       },
       "SessionSource": {
-        "oneOf": [
-          {
-            "enum": [
-              "cli",
-              "vscode",
-              "exec",
-              "appServer",
-              "unknown"
-            ],
-            "type": "string"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "subAgent": {
-                "$ref": "#/definitions/v2/SubAgentSource"
-              }
-            },
-            "required": [
-              "subAgent"
-            ],
-            "title": "SubAgentSessionSource",
-            "type": "object"
-          }
-        ]
+        "enum": [
+          "cli",
+          "vscode",
+          "exec",
+          "appServer",
+          "unknown"
+        ],
+        "type": "string"
       },
       "Settings": {
         "description": "Settings for an identity.",
@@ -12427,70 +11609,6 @@
         ],
         "title": "SkillsListResponse",
         "type": "object"
-      },
-      "SubAgentSource": {
-        "oneOf": [
-          {
-            "enum": [
-              "review",
-              "compact"
-            ],
-            "type": "string"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "thread_spawn": {
-                "properties": {
-                  "agent_nickname": {
-                    "default": null,
-                    "type": [
-                      "string",
-                      "null"
-                    ]
-                  },
-                  "agent_role": {
-                    "default": null,
-                    "type": [
-                      "string",
-                      "null"
-                    ]
-                  },
-                  "depth": {
-                    "format": "int32",
-                    "type": "integer"
-                  },
-                  "parent_thread_id": {
-                    "$ref": "#/definitions/v2/ThreadId"
-                  }
-                },
-                "required": [
-                  "depth",
-                  "parent_thread_id"
-                ],
-                "type": "object"
-              }
-            },
-            "required": [
-              "thread_spawn"
-            ],
-            "title": "ThreadSpawnSubAgentSource",
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "other": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "other"
-            ],
-            "title": "OtherSubAgentSource",
-            "type": "object"
-          }
-        ]
       },
       "TerminalInteractionNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -12863,9 +11981,6 @@
         "title": "ThreadForkResponse",
         "type": "object"
       },
-      "ThreadId": {
-        "type": "string"
-      },
       "ThreadItem": {
         "oneOf": [
           {
@@ -13141,73 +12256,6 @@
               "type"
             ],
             "title": "McpToolCallThreadItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "agentsStates": {
-                "additionalProperties": {
-                  "$ref": "#/definitions/v2/CollabAgentState"
-                },
-                "description": "Last known status of the target agents, when available.",
-                "type": "object"
-              },
-              "id": {
-                "description": "Unique identifier for this collab tool call.",
-                "type": "string"
-              },
-              "prompt": {
-                "description": "Prompt text sent as part of the collab tool call, when available.",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "receiverThreadIds": {
-                "description": "Thread ID of the receiving agent, when applicable. In case of spawn operation, this corresponds to the newly spawned agent.",
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "senderThreadId": {
-                "description": "Thread ID of the agent issuing the collab request.",
-                "type": "string"
-              },
-              "status": {
-                "allOf": [
-                  {
-                    "$ref": "#/definitions/v2/CollabAgentToolCallStatus"
-                  }
-                ],
-                "description": "Current status of the collab tool call."
-              },
-              "tool": {
-                "allOf": [
-                  {
-                    "$ref": "#/definitions/v2/CollabAgentTool"
-                  }
-                ],
-                "description": "Name of the collab tool that was invoked."
-              },
-              "type": {
-                "enum": [
-                  "collabAgentToolCall"
-                ],
-                "title": "CollabAgentToolCallThreadItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "agentsStates",
-              "id",
-              "receiverThreadIds",
-              "senderThreadId",
-              "status",
-              "tool",
-              "type"
-            ],
-            "title": "CollabAgentToolCallThreadItem",
             "type": "object"
           },
           {
@@ -13734,11 +12782,6 @@
           "vscode",
           "exec",
           "appServer",
-          "subAgent",
-          "subAgentReview",
-          "subAgentCompact",
-          "subAgentThreadSpawn",
-          "subAgentOther",
           "unknown"
         ],
         "type": "string"

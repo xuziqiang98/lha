@@ -43,6 +43,14 @@ Tool names such as `local_shell` should remain generic function-tool names at
 the `adam-llm` boundary; product defaults such as sandbox policy belong above
 that SDK boundary.
 
+## Product Philosophy
+
+Adam's product model is a single main agent. Isolated model work such as
+exploration or review should run as bounded CLI-backed one-shot jobs, not as
+long-lived sub-agent sessions or model-visible collaboration. See
+[Design Philosophy](./design-philosophy.md) for the design principles and naming
+rules.
+
 ## Intended Dependency Direction
 
 The intended dependency flow is:

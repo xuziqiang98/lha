@@ -1,8 +1,8 @@
 //! Validates that the identity list endpoint returns the expected default presets.
 //!
 //! The test drives the app server through the MCP harness and asserts that the list response
-//! includes the nobody, planner, and programmer identities with their default reasoning effort
-//! settings, which keeps the API contract visible in one place.
+//! includes the default identities with their default reasoning effort settings, which keeps the
+//! API contract visible in one place.
 
 #![allow(clippy::unwrap_used)]
 
@@ -44,7 +44,13 @@ async fn list_identities_returns_presets() -> Result<()> {
 
     let IdentityListResponse { data: items } = to_response::<IdentityListResponse>(response)?;
 
-    let expected = [nobody_preset(), planner_preset(), programmer_preset()];
+    let expected = [
+        preset(IdentityKind::Nobody),
+        preset(IdentityKind::Planner),
+        preset(IdentityKind::Programmer),
+        preset(IdentityKind::Explorer),
+        preset(IdentityKind::Reviewer),
+    ];
     assert_eq!(expected.len(), items.len());
     for (expected_mask, actual_mask) in expected.iter().zip(items.iter()) {
         assert_eq!(expected_mask.name, actual_mask.name);
@@ -58,26 +64,10 @@ async fn list_identities_returns_presets() -> Result<()> {
     Ok(())
 }
 
-fn nobody_preset() -> IdentityMask {
+fn preset(kind: IdentityKind) -> IdentityMask {
     let presets = test_builtin_identity_presets();
     presets
         .into_iter()
-        .find(|preset| preset.kind == Some(IdentityKind::Nobody))
-        .unwrap()
-}
-
-fn planner_preset() -> IdentityMask {
-    let presets = test_builtin_identity_presets();
-    presets
-        .into_iter()
-        .find(|preset| preset.kind == Some(IdentityKind::Planner))
-        .unwrap()
-}
-
-fn programmer_preset() -> IdentityMask {
-    let presets = test_builtin_identity_presets();
-    presets
-        .into_iter()
-        .find(|preset| preset.kind == Some(IdentityKind::Programmer))
+        .find(|preset| preset.kind == Some(kind))
         .unwrap()
 }

@@ -8,10 +8,6 @@
   "properties": {
     "conversationId": {
       "$ref": "#/definitions/ThreadId"
-    },
-    "experimentalRawEvents": {
-      "default": false,
-      "type": "boolean"
     }
   },
   "required": [

@@ -1,8 +1,6 @@
 use crate::buddy;
 use crate::buddy::state::BuddyState;
 use crate::status::format_tokens_compact;
-use adam_agent::protocol::AgentStatus;
-use adam_protocol::ThreadId;
 use adam_protocol::plan_tool::StepStatus;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -12,7 +10,6 @@ use ratatui::style::Style;
 use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::Borders;
 use ratatui::widgets::Paragraph;
@@ -34,7 +31,6 @@ pub(crate) struct SidebarSnapshot {
     pub(crate) todo: Option<TodoPanelSnapshot>,
     pub(crate) files: Vec<String>,
     pub(crate) files_more_count: usize,
-    pub(crate) agents: Vec<AgentPanelEntry>,
     pub(crate) skills: Vec<SkillPanelEntry>,
     pub(crate) mcp: Option<McpPanelSnapshot>,
     pub(crate) status: Option<StatusPanelSnapshot>,
@@ -54,13 +50,6 @@ pub(crate) struct TodoPanelSnapshot {
 pub(crate) struct TodoPanelItem {
     pub(crate) step: String,
     pub(crate) status: StepStatus,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AgentPanelEntry {
-    pub(crate) thread_id: ThreadId,
-    pub(crate) label: String,
-    pub(crate) status: AgentStatus,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -135,7 +124,6 @@ impl Widget for SidebarWidget<'_> {
             self.snapshot.files_more_count,
             area.width,
         );
-        push_agents(&mut lines, &self.snapshot.agents, area.width);
         push_skills(&mut lines, &self.snapshot.skills, area.width);
         push_mcp(&mut lines, self.snapshot.mcp.as_ref(), area.width);
         push_status(&mut lines, self.snapshot.status.as_ref(), area.width);
@@ -209,27 +197,6 @@ fn push_files(lines: &mut Vec<Line<'static>>, files: &[String], more_count: usiz
     }
     if more_count > 0 {
         lines.push(format!("  +{more_count} more").dim().into());
-    }
-}
-
-fn push_agents(lines: &mut Vec<Line<'static>>, agents: &[AgentPanelEntry], width: u16) {
-    if agents.is_empty() {
-        return;
-    }
-
-    push_section(lines, "Agents");
-    for agent in agents.iter().take(6) {
-        let _thread_id = agent.thread_id;
-        let status = agent_status_label(&agent.status);
-        lines.push(Line::from(vec![
-            "  ".into(),
-            truncate(&agent.label, width).cyan(),
-            " ".dim(),
-            status,
-        ]));
-    }
-    if agents.len() > 6 {
-        lines.push(format!("  +{} more", agents.len() - 6).dim().into());
     }
 }
 
@@ -313,18 +280,6 @@ fn push_status(lines: &mut Vec<Line<'static>>, status: Option<&StatusPanelSnapsh
             "  compact ".dim(),
             context.context_compact_count.to_string().into(),
         ]));
-    }
-}
-
-fn agent_status_label(status: &AgentStatus) -> Span<'static> {
-    match status {
-        AgentStatus::PendingInit => "pending".dim(),
-        AgentStatus::Running => "running".dim(),
-        AgentStatus::Interrupted => "interrupted".dim(),
-        AgentStatus::Completed(_) => "completed".dim(),
-        AgentStatus::Errored(_) => "error".red(),
-        AgentStatus::Shutdown => "shutdown".dim(),
-        AgentStatus::NotFound => "missing".red(),
     }
 }
 
@@ -438,11 +393,6 @@ mod tests {
             }),
             files: vec!["src/tui/app/src/sidebar.rs".to_string()],
             files_more_count: 0,
-            agents: vec![AgentPanelEntry {
-                thread_id: ThreadId::new(),
-                label: "Worker (worker)".to_string(),
-                status: AgentStatus::Running,
-            }],
             skills: vec![SkillPanelEntry {
                 name: "skill-creator".to_string(),
                 path: PathBuf::from("/tmp/skill-creator/SKILL.md"),
@@ -464,7 +414,7 @@ mod tests {
         };
 
         let rendered = render_sidebar(&snapshot);
-        let sections = ["Task", "Todo", "Files", "Agents", "Skills", "MCP", "Status"];
+        let sections = ["Task", "Todo", "Files", "Skills", "MCP", "Status"];
         let positions = sections
             .iter()
             .map(|section| {
@@ -483,12 +433,6 @@ mod tests {
         assert!(!rendered.contains("[x]"));
         assert!(!rendered.contains("[~]"));
         assert!(!rendered.contains("[ ]"));
-        assert!(rendered.contains("Worker (worker) running"));
-        let agent_line = rendered
-            .lines()
-            .find(|line| line.contains("Worker (worker) running"))
-            .unwrap_or_else(|| panic!("missing agent line: {rendered:?}"));
-        assert!(!agent_line.contains("●"));
         assert!(rendered.contains("skill-creator"));
         assert!(rendered.contains("model gpt-5"));
         assert!(rendered.contains("left 55"));
@@ -548,7 +492,7 @@ mod tests {
     #[test]
     fn hides_empty_sections() {
         let rendered = render_sidebar(&SidebarSnapshot::default());
-        for section in ["Task", "Todo", "Files", "Agents", "Skills", "MCP"] {
+        for section in ["Task", "Todo", "Files", "Threads", "Skills", "MCP"] {
             assert!(!rendered.contains(section));
         }
         assert!(!rendered.contains("Status"));

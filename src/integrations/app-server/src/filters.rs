@@ -1,7 +1,6 @@
 use adam_agent::INTERACTIVE_SESSION_SOURCES;
 use adam_app_server_protocol::ThreadSourceKind;
 use adam_protocol::protocol::SessionSource as CoreSessionSource;
-use adam_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 
 pub(crate) fn compute_source_filters(
     source_kinds: Option<Vec<ThreadSourceKind>>,
@@ -17,14 +16,7 @@ pub(crate) fn compute_source_filters(
     let requires_post_filter = source_kinds.iter().any(|kind| {
         matches!(
             kind,
-            ThreadSourceKind::Exec
-                | ThreadSourceKind::AppServer
-                | ThreadSourceKind::SubAgent
-                | ThreadSourceKind::SubAgentReview
-                | ThreadSourceKind::SubAgentCompact
-                | ThreadSourceKind::SubAgentThreadSpawn
-                | ThreadSourceKind::SubAgentOther
-                | ThreadSourceKind::Unknown
+            ThreadSourceKind::Exec | ThreadSourceKind::AppServer | ThreadSourceKind::Unknown
         )
     });
 
@@ -38,11 +30,6 @@ pub(crate) fn compute_source_filters(
                 ThreadSourceKind::VsCode => Some(CoreSessionSource::VSCode),
                 ThreadSourceKind::Exec
                 | ThreadSourceKind::AppServer
-                | ThreadSourceKind::SubAgent
-                | ThreadSourceKind::SubAgentReview
-                | ThreadSourceKind::SubAgentCompact
-                | ThreadSourceKind::SubAgentThreadSpawn
-                | ThreadSourceKind::SubAgentOther
                 | ThreadSourceKind::Unknown => None,
             })
             .collect::<Vec<_>>();
@@ -56,27 +43,6 @@ pub(crate) fn source_kind_matches(source: &CoreSessionSource, filter: &[ThreadSo
         ThreadSourceKind::VsCode => matches!(source, CoreSessionSource::VSCode),
         ThreadSourceKind::Exec => matches!(source, CoreSessionSource::Exec),
         ThreadSourceKind::AppServer => matches!(source, CoreSessionSource::Mcp),
-        ThreadSourceKind::SubAgent => matches!(source, CoreSessionSource::SubAgent(_)),
-        ThreadSourceKind::SubAgentReview => {
-            matches!(
-                source,
-                CoreSessionSource::SubAgent(CoreSubAgentSource::Review)
-            )
-        }
-        ThreadSourceKind::SubAgentCompact => {
-            matches!(
-                source,
-                CoreSessionSource::SubAgent(CoreSubAgentSource::Compact)
-            )
-        }
-        ThreadSourceKind::SubAgentThreadSpawn => matches!(
-            source,
-            CoreSessionSource::SubAgent(CoreSubAgentSource::ThreadSpawn { .. })
-        ),
-        ThreadSourceKind::SubAgentOther => matches!(
-            source,
-            CoreSessionSource::SubAgent(CoreSubAgentSource::Other(_))
-        ),
         ThreadSourceKind::Unknown => matches!(source, CoreSessionSource::Unknown),
     })
 }
@@ -84,9 +50,7 @@ pub(crate) fn source_kind_matches(source: &CoreSessionSource, filter: &[ThreadSo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_protocol::ThreadId;
     use pretty_assertions::assert_eq;
-    use uuid::Uuid;
 
     #[test]
     fn compute_source_filters_defaults_to_interactive_sources() {
@@ -114,44 +78,5 @@ mod tests {
             vec![CoreSessionSource::Cli, CoreSessionSource::VSCode]
         );
         assert_eq!(filter, Some(source_kinds));
-    }
-
-    #[test]
-    fn compute_source_filters_subagent_variant_requires_post_filtering() {
-        let source_kinds = vec![ThreadSourceKind::SubAgentReview];
-        let (allowed_sources, filter) = compute_source_filters(Some(source_kinds.clone()));
-
-        assert_eq!(allowed_sources, Vec::new());
-        assert_eq!(filter, Some(source_kinds));
-    }
-
-    #[test]
-    fn source_kind_matches_distinguishes_subagent_variants() {
-        let parent_thread_id =
-            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("valid thread id");
-        let review = CoreSessionSource::SubAgent(CoreSubAgentSource::Review);
-        let spawn = CoreSessionSource::SubAgent(CoreSubAgentSource::ThreadSpawn {
-            parent_thread_id,
-            depth: 1,
-            agent_nickname: None,
-            agent_role: None,
-        });
-
-        assert!(source_kind_matches(
-            &review,
-            &[ThreadSourceKind::SubAgentReview]
-        ));
-        assert!(!source_kind_matches(
-            &review,
-            &[ThreadSourceKind::SubAgentThreadSpawn]
-        ));
-        assert!(source_kind_matches(
-            &spawn,
-            &[ThreadSourceKind::SubAgentThreadSpawn]
-        ));
-        assert!(!source_kind_matches(
-            &spawn,
-            &[ThreadSourceKind::SubAgentReview]
-        ));
     }
 }

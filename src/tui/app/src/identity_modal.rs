@@ -237,6 +237,8 @@ fn identity_description(kind: Option<IdentityKind>) -> &'static str {
         Some(IdentityKind::Nobody) => "Default assistant identity.",
         Some(IdentityKind::Planner) => "Plans work and asks before implementation.",
         Some(IdentityKind::Programmer) => "Implements code changes directly.",
+        Some(IdentityKind::Explorer) => "Explores code in a read-only isolated job.",
+        Some(IdentityKind::Reviewer) => "Reviews code in a read-only isolated job.",
         None => "Custom assistant identity.",
     }
 }
@@ -285,6 +287,8 @@ mod tests {
                 mask(IdentityKind::Nobody, "Nobody"),
                 mask(IdentityKind::Planner, "Planner"),
                 mask(IdentityKind::Programmer, "Programmer"),
+                mask(IdentityKind::Explorer, "Explorer"),
+                mask(IdentityKind::Reviewer, "Reviewer"),
             ],
             Some(IdentityKind::Nobody),
         )

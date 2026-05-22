@@ -1,22 +1,18 @@
 use std::sync::Arc;
+use std::time::Duration;
 
-use adam_protocol::config_types::WebSearchMode;
-use adam_protocol::items::TurnItem;
 use adam_protocol::models::ContentItem;
 use adam_protocol::models::TranscriptItem;
-use adam_protocol::protocol::AgentMessageContentDeltaEvent;
-use adam_protocol::protocol::AgentMessageDeltaEvent;
-use adam_protocol::protocol::Event;
 use adam_protocol::protocol::EventMsg;
 use adam_protocol::protocol::ExitedReviewModeEvent;
-use adam_protocol::protocol::ItemCompletedEvent;
 use adam_protocol::protocol::ReviewOutputEvent;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
+use crate::agent_jobs::AgentJobExecConfig;
+use crate::agent_jobs::AgentJobStatus;
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::state::TaskKind;
@@ -53,18 +49,13 @@ impl SessionTask for ReviewTask {
             .otel_manager
             .counter("codex.task.review", 1, &[]);
 
-        // Start sub-codex conversation and get the receiver for events.
-        let output = match start_review_conversation(
+        let output = run_review_job(
             session.clone(),
             ctx.clone(),
             input,
             cancellation_token.clone(),
         )
-        .await
-        {
-            Some(receiver) => process_review_events(session.clone(), ctx.clone(), receiver).await,
-            None => None,
-        };
+        .await;
         if !cancellation_token.is_cancelled() {
             exit_review_mode(session.clone_session(), output.clone(), ctx.clone()).await;
         }
@@ -76,89 +67,94 @@ impl SessionTask for ReviewTask {
     }
 }
 
-async fn start_review_conversation(
+async fn run_review_job(
     session: Arc<SessionTaskContext>,
     ctx: Arc<TurnContext>,
     input: Vec<UserInput>,
     cancellation_token: CancellationToken,
-) -> Option<async_channel::Receiver<Event>> {
+) -> Option<ReviewOutputEvent> {
+    let prompt = input
+        .into_iter()
+        .filter_map(|item| match item {
+            UserInput::Text { text, .. } => Some(text),
+            UserInput::LocalImage { .. } => None,
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
     let config = ctx.runtime.config();
-    let mut sub_agent_config = config.as_ref().clone();
-    // Carry over review-only feature restrictions so the delegate cannot
-    // re-enable blocked tools (web search, view image).
-    sub_agent_config.web_search_mode = Some(WebSearchMode::Disabled);
-
-    // Set explicit review rubric for the sub-agent
-    sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
-
     let model = config
         .review_model
         .clone()
         .unwrap_or_else(|| ctx.runtime.get_model());
-    sub_agent_config.model = Some(model);
-    (run_codex_thread_one_shot(
-        sub_agent_config,
-        session.auth_manager(),
-        session.models_manager(),
-        input,
-        session.clone_session(),
-        ctx.clone(),
-        cancellation_token,
-        None,
-    )
-    .await)
-        .ok()
-        .map(|io| io.rx_event)
-}
-
-async fn process_review_events(
-    session: Arc<SessionTaskContext>,
-    ctx: Arc<TurnContext>,
-    receiver: async_channel::Receiver<Event>,
-) -> Option<ReviewOutputEvent> {
-    let mut prev_agent_message: Option<Event> = None;
-    while let Ok(event) = receiver.recv().await {
-        match event.clone().msg {
-            EventMsg::AgentMessage(_) => {
-                if let Some(prev) = prev_agent_message.take() {
-                    session
-                        .clone_session()
-                        .send_event(ctx.as_ref(), prev.msg)
-                        .await;
-                }
-                prev_agent_message = Some(event);
+    let exec_config = AgentJobExecConfig::from_runtime(&ctx.runtime, &model);
+    // Review model work runs in an isolated CLI-backed job; this task only
+    // starts the job, waits for its final result, and folds that result back
+    // into the parent session.
+    let job = match session
+        .session
+        .services
+        .agent_jobs
+        .spawn(
+            session.session.conversation_id,
+            crate::agent_jobs::AgentJobType::Reviewer,
+            prompt,
+            ctx.cwd.clone(),
+            exec_config,
+            None,
+        )
+        .await
+    {
+        Ok(job) => job,
+        Err(err) => {
+            return Some(review_failure_output(format!(
+                "Review failed to start: {err}"
+            )));
+        }
+    };
+    while !cancellation_token.is_cancelled() {
+        let snapshot = session.session.services.agent_jobs.status(&job.id).await;
+        match snapshot.status {
+            AgentJobStatus::Completed { result, .. } => {
+                return Some(parse_review_output_event(&result));
             }
-            // Suppress ItemCompleted only for assistant messages: forwarding it
-            // would trigger legacy AgentMessage via as_legacy_events(), which this
-            // review flow intentionally hides in favor of structured output.
-            EventMsg::ItemCompleted(ItemCompletedEvent {
-                item: TurnItem::AgentMessage(_),
-                ..
-            })
-            | EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { .. })
-            | EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent { .. }) => {}
-            EventMsg::TurnComplete(task_complete) => {
-                // Parse review output from the last agent message (if present).
-                let out = task_complete
-                    .last_agent_message
-                    .as_deref()
-                    .map(parse_review_output_event);
-                return out;
+            AgentJobStatus::Failed { message, .. } => {
+                let message = message.trim();
+                let message = if message.is_empty() {
+                    "Review failed without error output.".to_string()
+                } else {
+                    format!("Review failed: {message}")
+                };
+                return Some(review_failure_output(message));
             }
-            EventMsg::TurnAborted(_) => {
-                // Cancellation or abort: consumer will finalize with None.
-                return None;
+            AgentJobStatus::TimedOut => {
+                return Some(review_failure_output(
+                    "Review timed out before producing a result.",
+                ));
             }
-            other => {
-                session
-                    .clone_session()
-                    .send_event(ctx.as_ref(), other)
-                    .await;
+            AgentJobStatus::Cancelled => {
+                return Some(review_failure_output(
+                    "Review was cancelled before producing a result.",
+                ));
             }
+            AgentJobStatus::NotFound => {
+                return Some(review_failure_output(
+                    "Review job disappeared before producing a result.",
+                ));
+            }
+            status if status.is_final() => return None,
+            AgentJobStatus::Running => tokio::time::sleep(Duration::from_millis(100)).await,
         }
     }
-    // Channel closed without TurnComplete: treat as interrupted.
+    let _ = session.session.services.agent_jobs.close(&job.id).await;
     None
+}
+
+fn review_failure_output(message: impl Into<String>) -> ReviewOutputEvent {
+    ReviewOutputEvent {
+        overall_explanation: message.into(),
+        ..Default::default()
+    }
 }
 
 /// Parse a ReviewOutputEvent from a text blob returned by the reviewer model.
@@ -244,4 +240,36 @@ pub(crate) async fn exit_review_mode(
             },
         )
         .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn review_failure_output_returns_user_visible_explanation() {
+        let output = review_failure_output("Review failed: boom");
+
+        assert_eq!(
+            output,
+            ReviewOutputEvent {
+                overall_explanation: "Review failed: boom".to_string(),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_review_output_event_falls_back_to_plain_text() {
+        let output = parse_review_output_event("plain failure text");
+
+        assert_eq!(
+            output,
+            ReviewOutputEvent {
+                overall_explanation: "plain failure text".to_string(),
+                ..Default::default()
+            }
+        );
+    }
 }

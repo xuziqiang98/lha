@@ -1,16 +1,16 @@
-use crate::config::AgentRoleConfig;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
-use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
-use crate::tools::handlers::collab::MAX_WAIT_TIMEOUT_MS;
-use crate::tools::handlers::collab::MIN_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::delegated_jobs::DEFAULT_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::delegated_jobs::MAX_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::delegated_jobs::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolRegistryBuilder;
 use adam_llm::FunctionToolDescriptor as ResponsesApiTool;
 use adam_llm::ToolDescriptor;
+use adam_protocol::config_types::IdentityKind;
 use adam_protocol::config_types::WebSearchMode;
 use adam_protocol::dynamic_tools::DynamicToolSpec;
 use adam_protocol::models::VIEW_IMAGE_TOOL_NAME;
@@ -18,7 +18,6 @@ use adam_protocol::openai_models::ApplyPatchToolType;
 use adam_protocol::openai_models::ConfigShellToolType;
 use adam_protocol::openai_models::ModelInfo;
 use adam_protocol::protocol::SessionSource;
-use adam_protocol::protocol::SubAgentSource;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -39,15 +38,13 @@ pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
-    pub collab_tools: bool,
+    pub delegated_job_tools: bool,
     pub identity_tools: bool,
     pub request_rule_enabled: bool,
     pub experimental_supported_tools: Vec<String>,
-    pub agent_roles: BTreeMap<String, AgentRoleConfig>,
-    pub agent_jobs_tools: bool,
-    pub agent_jobs_worker_tools: bool,
     pub workflow_tools: bool,
     pub workflow_allowed_tools: Option<BTreeSet<String>>,
+    pub identity_kind: IdentityKind,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -55,6 +52,7 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) declared_tool_contract: bool,
     pub(crate) features: &'a Features,
     pub(crate) web_search_mode: Option<WebSearchMode>,
+    #[allow(dead_code)]
     pub(crate) session_source: SessionSource,
 }
 
@@ -65,21 +63,12 @@ impl ToolsConfig {
             declared_tool_contract,
             features,
             web_search_mode,
-            session_source,
+            session_source: _,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
-        let include_collab_tools = features.enabled(Feature::Collab);
+        let include_delegated_job_tools = features.enabled(Feature::AgentJobs);
         let include_identity_tools = features.enabled(Feature::Identities);
         let request_rule_enabled = features.enabled(Feature::RequestRule);
-        let include_agent_jobs = include_collab_tools;
-        let agent_jobs_worker_tools = include_agent_jobs
-            && matches!(
-                session_source,
-                SessionSource::SubAgent(SubAgentSource::Other(label))
-                    if label.starts_with("agent_job:")
-            );
-        let agent_jobs_tools = include_agent_jobs && !agent_jobs_worker_tools;
-
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
         } else if features.enabled(Feature::UnifiedExec) {
@@ -111,21 +100,14 @@ impl ToolsConfig {
             shell_type,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
-            collab_tools: include_collab_tools,
+            delegated_job_tools: include_delegated_job_tools,
             identity_tools: include_identity_tools,
             request_rule_enabled,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
-            agent_roles: BTreeMap::new(),
-            agent_jobs_tools,
-            agent_jobs_worker_tools,
             workflow_tools: false,
             workflow_allowed_tools: None,
+            identity_kind: IdentityKind::Nobody,
         }
-    }
-
-    pub fn with_agent_roles(mut self, agent_roles: BTreeMap<String, AgentRoleConfig>) -> Self {
-        self.agent_roles = agent_roles;
-        self
     }
 
     pub fn with_workflow_tools(mut self, allowed_tools: Option<BTreeSet<String>>) -> Self {
@@ -133,16 +115,43 @@ impl ToolsConfig {
         self.workflow_allowed_tools = allowed_tools;
         self
     }
+
+    pub fn with_identity_kind(mut self, identity_kind: IdentityKind) -> Self {
+        self.identity_kind = identity_kind;
+        self
+    }
 }
 
 fn tool_is_exposed_for_runtime(config: &ToolsConfig, spec: &ToolDescriptor) -> bool {
     let allowed_by_runtime =
         !config.restrict_tool_specs_to_functions || matches!(spec, ToolDescriptor::Function(_));
+    allowed_by_runtime && tool_name_is_allowed_for_runtime(config, spec.name())
+}
+
+fn tool_name_is_allowed_for_runtime(config: &ToolsConfig, name: &str) -> bool {
     let allowed_by_workflow = config
         .workflow_allowed_tools
         .as_ref()
-        .is_none_or(|allowed| allowed.contains(spec.name()));
-    allowed_by_runtime && allowed_by_workflow
+        .is_none_or(|allowed| allowed.contains(name));
+    allowed_by_workflow && tool_name_is_allowed_by_identity(config, name)
+}
+
+fn tool_name_is_allowed_by_identity(config: &ToolsConfig, name: &str) -> bool {
+    match config.identity_kind {
+        IdentityKind::Explorer => matches!(name, "read_file" | "list_dir" | "grep_files"),
+        IdentityKind::Reviewer => matches!(
+            name,
+            "read_file"
+                | "list_dir"
+                | "grep_files"
+                | "exec_command"
+                | "shell"
+                | "local_shell"
+                | "shell_command"
+                | "container.exec"
+        ),
+        IdentityKind::Nobody | IdentityKind::Planner | IdentityKind::Programmer => true,
+    }
 }
 
 fn maybe_push_spec(builder: &mut ToolRegistryBuilder, config: &ToolsConfig, spec: ToolDescriptor) {
@@ -178,6 +187,19 @@ fn maybe_push_spec_with_parallel_support_and_register_handler<H>(
 {
     if tool_is_exposed_for_runtime(config, &spec) {
         builder.push_spec_with_parallel_support(spec, parallel);
+        builder.register_handler(name, handler);
+    }
+}
+
+fn maybe_register_handler<H>(
+    builder: &mut ToolRegistryBuilder,
+    config: &ToolsConfig,
+    name: &'static str,
+    handler: Arc<H>,
+) where
+    H: ToolHandler + 'static,
+{
+    if tool_name_is_allowed_for_runtime(config, name) {
         builder.register_handler(name, handler);
     }
 }
@@ -491,32 +513,25 @@ fn create_view_image_tool() -> ToolDescriptor {
     })
 }
 
-fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolDescriptor {
+fn create_spawn_agent_tool(_config: &ToolsConfig) -> ToolDescriptor {
     let properties = BTreeMap::from([
         (
             "message".to_string(),
             JsonSchema::String {
-                description: Some(
-                    "Initial plain-text task for the new agent. Use either message or items."
-                        .to_string(),
-                ),
+                description: Some("Plain-text task for the isolated exploration job.".to_string()),
             },
         ),
-        ("items".to_string(), create_collab_input_items_schema()),
         (
             "agent_type".to_string(),
             JsonSchema::String {
-                description: Some(crate::subagents::role::spawn_tool_spec::build(
-                    &config.agent_roles,
-                )),
+                description: Some("Delegated job type. Only `explorer` is supported.".to_string()),
             },
         ),
         (
-            "fork_context".to_string(),
-            JsonSchema::Boolean {
+            "max_runtime_seconds".to_string(),
+            JsonSchema::Number {
                 description: Some(
-                    "When true, fork the current thread history into the new agent before sending the initial prompt."
-                        .to_string(),
+                    "Optional maximum runtime in seconds for the delegated job, capped by agents.job_max_runtime_seconds.".to_string(),
                 ),
             },
         ),
@@ -525,252 +540,12 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolDescriptor {
     ToolDescriptor::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
         description:
-            "Spawn a sub-agent for a well-scoped task. Returns the agent id to use to communicate with this agent."
+            "Start an isolated one-shot exploration job. Use this for specific codebase questions when the final result is useful but the exploration process should stay out of the main context."
                 .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: None,
-            additional_properties: Some(false.into()),
-        },
-    })
-}
-
-fn create_spawn_agents_on_csv_tool() -> ToolDescriptor {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "csv_path".to_string(),
-        JsonSchema::String {
-            description: Some("Path to the CSV file containing input rows.".to_string()),
-        },
-    );
-    properties.insert(
-        "instruction".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Instruction template to apply to each CSV row. Use {column_name} placeholders to inject values from the row."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "id_column".to_string(),
-        JsonSchema::String {
-            description: Some("Optional column name to use as stable item id.".to_string()),
-        },
-    );
-    properties.insert(
-        "output_csv_path".to_string(),
-        JsonSchema::String {
-            description: Some("Optional output CSV path for exported results.".to_string()),
-        },
-    );
-    properties.insert(
-        "max_concurrency".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "Maximum concurrent workers for this job. Defaults to 16 and is capped by config."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "max_workers".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "Alias for max_concurrency. Set to 1 to run sequentially.".to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "max_runtime_seconds".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "Maximum runtime per worker before it is failed. Defaults to config or 1800 seconds."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "output_schema".to_string(),
-        JsonSchema::Object {
-            properties: BTreeMap::new(),
-            required: None,
-            additional_properties: None,
-        },
-    );
-    ToolDescriptor::Function(ResponsesApiTool {
-        name: "spawn_agents_on_csv".to_string(),
-        description: "Process a CSV by spawning one worker sub-agent per row. The instruction string is a template where `{column}` placeholders are replaced with row values. Each worker must call `report_agent_job_result` with a JSON object matching `output_schema` when provided; missing reports are treated as failures. This call blocks until all rows finish and automatically exports results to `output_csv_path` or a default path."
-            .to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["csv_path".to_string(), "instruction".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-    })
-}
-
-fn create_report_agent_job_result_tool() -> ToolDescriptor {
-    let properties = BTreeMap::from([
-        (
-            "job_id".to_string(),
-            JsonSchema::String {
-                description: Some("Agent job id for the currently assigned CSV batch.".to_string()),
-            },
-        ),
-        (
-            "item_id".to_string(),
-            JsonSchema::String {
-                description: Some("Item id for the current CSV row.".to_string()),
-            },
-        ),
-        (
-            "result".to_string(),
-            JsonSchema::Object {
-                properties: BTreeMap::new(),
-                required: None,
-                additional_properties: None,
-            },
-        ),
-        (
-            "stop".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "When true, request cancellation of the remaining items after recording this result."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
-    ToolDescriptor::Function(ResponsesApiTool {
-        name: "report_agent_job_result".to_string(),
-        description: "Worker-only tool for reporting the JSON result of a single agent-job item. Call this exactly once for the assigned row, then stop."
-            .to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec![
-                "job_id".to_string(),
-                "item_id".to_string(),
-                "result".to_string(),
-            ]),
-            additional_properties: Some(false.into()),
-        },
-    })
-}
-
-fn create_collab_input_items_schema() -> JsonSchema {
-    let properties = BTreeMap::from([
-        (
-            "type".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Input item type: text, image, local_image, skill, or mention.".to_string(),
-                ),
-            },
-        ),
-        (
-            "text".to_string(),
-            JsonSchema::String {
-                description: Some("Text content when type is text.".to_string()),
-            },
-        ),
-        (
-            "image_url".to_string(),
-            JsonSchema::String {
-                description: Some("Image URL when type is image.".to_string()),
-            },
-        ),
-        (
-            "name".to_string(),
-            JsonSchema::String {
-                description: Some("Display name when type is skill or mention.".to_string()),
-            },
-        ),
-        (
-            "path".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Path when type is local_image or skill, or structured mention target when type is mention."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    JsonSchema::Array {
-        description: Some(
-            "Structured input items. Use this to pass rich inputs instead of a plain message."
-                .to_string(),
-        ),
-        items: Box::new(JsonSchema::Object {
-            properties,
-            required: None,
-            additional_properties: Some(false.into()),
-        }),
-    }
-}
-
-fn create_send_input_tool() -> ToolDescriptor {
-    let properties = BTreeMap::from([
-        (
-            "id".to_string(),
-            JsonSchema::String {
-                description: Some("Agent id to message (from spawn_agent).".to_string()),
-            },
-        ),
-        (
-            "message".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Message to send to the agent. Use either message or items.".to_string(),
-                ),
-            },
-        ),
-        ("items".to_string(), create_collab_input_items_schema()),
-        (
-            "interrupt".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    ToolDescriptor::Function(ResponsesApiTool {
-        name: "send_input".to_string(),
-        description:
-            "Send a message to an existing agent. Use interrupt=true to redirect work immediately."
-                .to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["id".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-    })
-}
-
-fn create_resume_agent_tool() -> ToolDescriptor {
-    let properties = BTreeMap::from([(
-        "id".to_string(),
-        JsonSchema::String {
-            description: Some("Agent id to resume (from spawn_agent).".to_string()),
-        },
-    )]);
-
-    ToolDescriptor::Function(ResponsesApiTool {
-        name: "resume_agent".to_string(),
-        description: "Resume an existing agent from its rollout history if it is no longer active."
-            .to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["id".to_string()]),
+            required: Some(vec!["message".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -783,7 +558,7 @@ fn create_wait_tool() -> ToolDescriptor {
         JsonSchema::Array {
             items: Box::new(JsonSchema::String { description: None }),
             description: Some(
-                "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first."
+                "Delegated job ids to wait on. Pass multiple ids to wait for all requested jobs or until timeout."
                     .to_string(),
             ),
         },
@@ -799,7 +574,7 @@ fn create_wait_tool() -> ToolDescriptor {
 
     ToolDescriptor::Function(ResponsesApiTool {
         name: "wait".to_string(),
-        description: "Wait for all requested agents to reach a final status, or until timeout. Completed statuses may include the agent's final message. Returns any statuses collected before the deadline and sets timed_out when targets remain unfinished."
+        description: "Wait for delegated jobs to reach a final status, or until timeout. Completed statuses include the final result."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -898,14 +673,13 @@ fn create_close_agent_tool() -> ToolDescriptor {
     properties.insert(
         "id".to_string(),
         JsonSchema::String {
-            description: Some("Agent id to close (from spawn_agent).".to_string()),
+            description: Some("Delegated job id to cancel (from spawn_agent).".to_string()),
         },
     );
 
     ToolDescriptor::Function(ResponsesApiTool {
         name: "close_agent".to_string(),
-        description: "Close an agent when it is no longer needed and return its last known status."
-            .to_string(),
+        description: "Cancel a delegated job and return its last known status.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -1539,8 +1313,7 @@ pub(crate) fn build_specs(
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
-    use crate::tools::handlers::BatchJobHandler;
-    use crate::tools::handlers::CollabHandler;
+    use crate::tools::handlers::DelegatedJobHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::ListDirHandler;
@@ -1636,10 +1409,15 @@ pub(crate) fn build_specs(
         }
     } else if config.shell_type != ConfigShellToolType::Disabled {
         // Always register shell aliases so older prompts remain compatible.
-        builder.register_handler("shell", shell_handler.clone());
-        builder.register_handler("container.exec", shell_handler.clone());
-        builder.register_handler("local_shell", shell_handler);
-        builder.register_handler("shell_command", shell_command_handler);
+        maybe_register_handler(&mut builder, config, "shell", shell_handler.clone());
+        maybe_register_handler(
+            &mut builder,
+            config,
+            "container.exec",
+            shell_handler.clone(),
+        );
+        maybe_register_handler(&mut builder, config, "local_shell", shell_handler);
+        maybe_register_handler(&mut builder, config, "shell_command", shell_command_handler);
     }
 
     maybe_push_spec_with_parallel_support_and_register_handler(
@@ -1810,65 +1588,29 @@ pub(crate) fn build_specs(
         view_image_handler,
     );
 
-    if config.collab_tools {
-        let collab_handler = Arc::new(CollabHandler);
+    if config.delegated_job_tools {
+        let delegated_job_handler = Arc::new(DelegatedJobHandler);
         maybe_push_spec_and_register_handler(
             &mut builder,
             config,
             create_spawn_agent_tool(config),
             "spawn_agent",
-            collab_handler.clone(),
-        );
-        maybe_push_spec_and_register_handler(
-            &mut builder,
-            config,
-            create_send_input_tool(),
-            "send_input",
-            collab_handler.clone(),
-        );
-        maybe_push_spec_and_register_handler(
-            &mut builder,
-            config,
-            create_resume_agent_tool(),
-            "resume_agent",
-            collab_handler.clone(),
+            delegated_job_handler.clone(),
         );
         maybe_push_spec_and_register_handler(
             &mut builder,
             config,
             create_wait_tool(),
             "wait",
-            collab_handler.clone(),
+            delegated_job_handler.clone(),
         );
         maybe_push_spec_and_register_handler(
             &mut builder,
             config,
             create_close_agent_tool(),
             "close_agent",
-            collab_handler,
+            delegated_job_handler,
         );
-    }
-
-    if config.agent_jobs_tools || config.agent_jobs_worker_tools {
-        let agent_jobs_handler = Arc::new(BatchJobHandler);
-        if config.agent_jobs_tools {
-            maybe_push_spec_and_register_handler(
-                &mut builder,
-                config,
-                create_spawn_agents_on_csv_tool(),
-                "spawn_agents_on_csv",
-                agent_jobs_handler.clone(),
-            );
-        }
-        if config.agent_jobs_worker_tools {
-            maybe_push_spec_and_register_handler(
-                &mut builder,
-                config,
-                create_report_agent_job_result_tool(),
-                "report_agent_job_result",
-                agent_jobs_handler,
-            );
-        }
     }
 
     if let Some(mcp_tools) = mcp_tools {
@@ -2066,11 +1808,8 @@ mod tests {
         }
         for (name, spec) in [
             ("spawn_agent", create_spawn_agent_tool(&config)),
-            ("send_input", create_send_input_tool()),
-            ("resume_agent", create_resume_agent_tool()),
             ("wait", create_wait_tool()),
             ("close_agent", create_close_agent_tool()),
-            ("spawn_agents_on_csv", create_spawn_agents_on_csv_tool()),
         ] {
             expected.insert(name.to_string(), spec);
         }
@@ -2091,11 +1830,11 @@ mod tests {
     }
 
     #[test]
-    fn test_build_specs_collab_tools_enabled() {
+    fn test_build_specs_delegated_job_tools_enabled() {
         let config = test_config();
         let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
-        features.enable(Feature::Collab);
+        features.enable(Feature::AgentJobs);
         features.enable(Feature::Identities);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
@@ -2105,17 +1844,84 @@ mod tests {
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
-        assert_contains_tool_names(
-            &tools,
-            &[
-                "spawn_agent",
-                "send_input",
-                "resume_agent",
-                "wait",
-                "close_agent",
-                "spawn_agents_on_csv",
-            ],
+        assert_contains_tool_names(&tools, &["spawn_agent", "wait", "close_agent"]);
+    }
+
+    #[test]
+    fn explorer_only_exposes_read_only_navigation_tools() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("test-gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::ApplyPatchFreeform);
+        features.enable(Feature::AgentJobs);
+        features.enable(Feature::Identities);
+        features.enable(Feature::UnifiedExec);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            declared_tool_contract: false,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Live),
+            session_source: SessionSource::Cli,
+        })
+        .with_identity_kind(IdentityKind::Explorer);
+        let (tools, registry) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
+        let tool_names = tools
+            .iter()
+            .map(|tool| tool.spec.name())
+            .collect::<Vec<_>>();
+
+        assert_eq!(tool_names, vec!["grep_files", "read_file", "list_dir"]);
+        assert!(registry.handler("grep_files").is_some());
+        assert!(registry.handler("read_file").is_some());
+        assert!(registry.handler("list_dir").is_some());
+        assert!(registry.handler("spawn_agent").is_none());
+        assert!(registry.handler("exec_command").is_none());
+        assert!(registry.handler("write_stdin").is_none());
+        assert!(registry.handler("shell").is_none());
+        assert!(registry.handler("container.exec").is_none());
+        assert!(registry.handler("local_shell").is_none());
+        assert!(registry.handler("shell_command").is_none());
+        assert!(registry.handler("apply_patch").is_none());
+    }
+
+    #[test]
+    fn reviewer_exposes_read_only_navigation_and_inspection_command_tools() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("test-gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::ApplyPatchFreeform);
+        features.enable(Feature::AgentJobs);
+        features.enable(Feature::Identities);
+        features.enable(Feature::UnifiedExec);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            declared_tool_contract: false,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Live),
+            session_source: SessionSource::Cli,
+        })
+        .with_identity_kind(IdentityKind::Reviewer);
+        let (tools, registry) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
+        let tool_names = tools
+            .iter()
+            .map(|tool| tool.spec.name())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            tool_names,
+            vec!["exec_command", "grep_files", "read_file", "list_dir"]
         );
+        assert!(registry.handler("exec_command").is_some());
+        assert!(registry.handler("grep_files").is_some());
+        assert!(registry.handler("read_file").is_some());
+        assert!(registry.handler("list_dir").is_some());
+        assert!(registry.handler("spawn_agent").is_none());
+        assert!(registry.handler("write_stdin").is_none());
+        assert!(registry.handler("apply_patch").is_none());
+        assert!(registry.handler("container.exec").is_some());
+        assert!(registry.handler("shell").is_some());
+        assert!(registry.handler("local_shell").is_some());
+        assert!(registry.handler("shell_command").is_some());
     }
 
     #[test]
@@ -2124,7 +1930,7 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
-        features.enable(Feature::Collab);
+        features.enable(Feature::AgentJobs);
         features.enable(Feature::Identities);
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -2202,41 +2008,6 @@ mod tests {
     }
 
     #[test]
-    fn test_build_specs_agent_job_worker_tools_enabled() {
-        let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
-        let mut features = Features::with_defaults();
-        features.enable(Feature::Collab);
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_info: &model_info,
-            declared_tool_contract: false,
-            features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
-            session_source: SessionSource::SubAgent(SubAgentSource::Other(
-                "agent_job:test".to_string(),
-            )),
-        });
-        let (tools, _) = build_specs(&tools_config, None, &[]).build();
-        assert_contains_tool_names(
-            &tools,
-            &[
-                "spawn_agent",
-                "send_input",
-                "resume_agent",
-                "wait",
-                "close_agent",
-                "report_agent_job_result",
-            ],
-        );
-        assert!(
-            !tools
-                .iter()
-                .any(|tool| tool.spec.name() == "spawn_agents_on_csv"),
-            "worker agents should not expose spawn_agents_on_csv"
-        );
-    }
-
-    #[test]
     fn request_user_input_requires_identities_feature() {
         let config = test_config();
         let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
@@ -2284,15 +2055,8 @@ mod tests {
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
         let mut expected_tool_names = expected_tools.to_vec();
-        if features.enabled(Feature::Collab) {
-            expected_tool_names.extend([
-                "spawn_agent",
-                "send_input",
-                "resume_agent",
-                "wait",
-                "close_agent",
-                "spawn_agents_on_csv",
-            ]);
+        if features.enabled(Feature::AgentJobs) {
+            expected_tool_names.extend(["spawn_agent", "wait", "close_agent"]);
         }
 
         let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();

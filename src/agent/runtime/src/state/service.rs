@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use crate::AuthManager;
 use crate::RolloutRecorder;
+use crate::agent_jobs::AgentJobManager;
 use crate::exec_policy::ExecPolicyManager;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
 use crate::skills::SkillsManager;
 use crate::state_db::StateDbHandle;
-use crate::subagents::AgentControl;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::user_notification::UserNotifier;
@@ -31,7 +31,7 @@ pub(crate) struct SessionServices {
     pub(crate) otel_manager: OtelManager,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
     pub(crate) skills_manager: Arc<SkillsManager>,
-    pub(crate) agent_control: AgentControl,
+    pub(crate) agent_jobs: AgentJobManager,
     pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) runtime_factory: Arc<dyn RuntimeClientFactory>,
 }

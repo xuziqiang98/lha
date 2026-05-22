@@ -15,15 +15,12 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::skills::SkillsManager;
-use crate::subagents::AgentControl;
-use crate::subagents::status::is_final;
 use adam_llm::CatalogRefreshStrategy;
 use adam_llm::RuntimeEndpoint;
 use adam_protocol::ThreadId;
 use adam_protocol::config_types::IdentityMask;
 use adam_protocol::openai_models::ModelInfo;
 use adam_protocol::openai_models::ModelPreset;
-use adam_protocol::protocol::AgentStatus;
 use adam_protocol::protocol::InitialHistory;
 use adam_protocol::protocol::McpServerRefreshConfig;
 use adam_protocol::protocol::Op;
@@ -37,7 +34,6 @@ use tempfile::TempDir;
 use tokio::sync::RwLock;
 use tokio::sync::TryLockError;
 use tokio::sync::broadcast;
-use tokio::sync::watch;
 use tracing::warn;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
@@ -58,13 +54,9 @@ pub struct ThreadManager {
     _test_adam_home_guard: Option<TempDir>,
 }
 
-/// Shared, `Arc`-owned state for [`ThreadManager`]. This `Arc` is required to have a single
-/// `Arc` reference that can be downgraded to by `AgentControl` while preventing every single
-/// function to require an `Arc<&Self>`.
+/// Shared, `Arc`-owned state for [`ThreadManager`].
 pub(crate) struct ThreadManagerState {
     threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
-    retained_agent_statuses: Arc<RwLock<HashMap<ThreadId, RetainedAgentStatus>>>,
-    thread_generations: Arc<RwLock<HashMap<ThreadId, u64>>>,
     thread_created_tx: broadcast::Sender<ThreadId>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
@@ -74,19 +66,6 @@ pub(crate) struct ThreadManagerState {
     #[allow(dead_code)]
     // Captures submitted ops for testing purpose.
     ops_log: Arc<std::sync::Mutex<Vec<(ThreadId, Op)>>>,
-}
-
-#[derive(Clone)]
-pub(crate) enum RetainedAgentStatus {
-    Pending {
-        generation: u64,
-        _thread: Arc<CodexThread>,
-        status_rx: watch::Receiver<AgentStatus>,
-    },
-    Final {
-        generation: u64,
-        status: AgentStatus,
-    },
 }
 
 impl ThreadManager {
@@ -101,8 +80,6 @@ impl ThreadManager {
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
-                retained_agent_statuses: Arc::new(RwLock::new(HashMap::new())),
-                thread_generations: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::new(
                     adam_home.clone(),
@@ -147,8 +124,6 @@ impl ThreadManager {
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
-                retained_agent_statuses: Arc::new(RwLock::new(HashMap::new())),
-                thread_generations: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::with_provider(
                     adam_home.clone(),
@@ -319,7 +294,6 @@ impl ThreadManager {
                 config,
                 InitialHistory::New,
                 Arc::clone(&self.state.auth_manager),
-                self.agent_control(),
                 dynamic_tools,
             )
             .await
@@ -343,13 +317,7 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewThread> {
         self.state
-            .spawn_thread(
-                config,
-                initial_history,
-                auth_manager,
-                self.agent_control(),
-                Vec::new(),
-            )
+            .spawn_thread(config, initial_history, auth_manager, Vec::new())
             .await
     }
 
@@ -366,8 +334,6 @@ impl ThreadManager {
             thread.submit(Op::Shutdown).await?;
         }
         self.state.threads.write().await.clear();
-        self.state.retained_agent_statuses.write().await.clear();
-        self.state.thread_generations.write().await.clear();
         Ok(())
     }
 
@@ -388,7 +354,6 @@ impl ThreadManager {
                 config,
                 history,
                 Arc::clone(&self.state.auth_manager),
-                self.agent_control(),
                 Vec::new(),
             )
             .await
@@ -409,15 +374,10 @@ impl ThreadManager {
                 config,
                 history,
                 Arc::clone(&self.state.auth_manager),
-                self.agent_control(),
                 session_source,
                 Vec::new(),
             )
             .await
-    }
-
-    pub(crate) fn agent_control(&self) -> AgentControl {
-        AgentControl::new(Arc::downgrade(&self.state))
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -441,80 +401,9 @@ impl ThreadManagerState {
             .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))
     }
 
-    pub(crate) async fn get_status_or_retained(&self, thread_id: ThreadId) -> Option<AgentStatus> {
-        if let Ok(thread) = self.get_thread(thread_id).await {
-            return Some(thread.agent_status().await);
-        }
-        let retained = self.retained_agent_statuses.read().await;
-        retained.get(&thread_id).map(RetainedAgentStatus::status)
-    }
-
-    pub(crate) async fn subscribe_status_or_retained(
-        &self,
-        thread_id: ThreadId,
-    ) -> Option<watch::Receiver<AgentStatus>> {
-        if let Ok(thread) = self.get_thread(thread_id).await {
-            return Some(thread.subscribe_status());
-        }
-        let retained = self.retained_agent_statuses.read().await;
-        retained
-            .get(&thread_id)
-            .map(RetainedAgentStatus::subscribe_status)
-    }
-
-    pub(crate) async fn list_thread_ids(&self) -> Vec<ThreadId> {
-        self.threads.read().await.keys().copied().collect()
-    }
-
-    /// Send an operation to a thread by ID.
-    pub(crate) async fn send_op(&self, thread_id: ThreadId, op: Op) -> CodexResult<String> {
-        let thread = self.get_thread(thread_id).await?;
-        #[cfg(any(test, feature = "test-support"))]
-        {
-            if let Ok(mut log) = self.ops_log.lock() {
-                log.push((thread_id, op.clone()));
-            }
-        }
-        thread.submit(op).await
-    }
-
     /// Remove a thread from the manager by ID, returning it when present.
     pub(crate) async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
-        let thread = self.threads.write().await.remove(thread_id)?;
-        let generation = {
-            let generations = self.thread_generations.read().await;
-            generations.get(thread_id).copied().unwrap_or_default()
-        };
-        self.track_detached_thread(*thread_id, generation, thread.clone())
-            .await;
-        Some(thread)
-    }
-
-    /// Spawn a new thread with no history using a provided config.
-    pub(crate) async fn spawn_new_thread(
-        &self,
-        config: Config,
-        agent_control: AgentControl,
-    ) -> CodexResult<NewThread> {
-        self.spawn_new_thread_with_source(config, agent_control, self.session_source.clone())
-            .await
-    }
-
-    pub(crate) async fn spawn_new_thread_with_source(
-        &self,
-        config: Config,
-        agent_control: AgentControl,
-        session_source: SessionSource,
-    ) -> CodexResult<NewThread> {
-        self.spawn_thread_with_source(
-            config,
-            InitialHistory::New,
-            Arc::clone(&self.auth_manager),
-            agent_control,
-            session_source,
-            Vec::new(),
-        )
-        .await
+        self.threads.write().await.remove(thread_id)
     }
 
     /// Spawn a new thread with optional history and register it with the manager.
@@ -523,14 +412,12 @@ impl ThreadManagerState {
         config: Config,
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
-        agent_control: AgentControl,
         dynamic_tools: Vec<adam_protocol::dynamic_tools::DynamicToolSpec>,
     ) -> CodexResult<NewThread> {
         self.spawn_thread_with_source(
             config,
             initial_history,
             auth_manager,
-            agent_control,
             self.session_source.clone(),
             dynamic_tools,
         )
@@ -542,7 +429,6 @@ impl ThreadManagerState {
         config: Config,
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
-        agent_control: AgentControl,
         session_source: SessionSource,
         dynamic_tools: Vec<adam_protocol::dynamic_tools::DynamicToolSpec>,
     ) -> CodexResult<NewThread> {
@@ -555,46 +441,10 @@ impl ThreadManagerState {
             Arc::clone(&self.skills_manager),
             initial_history,
             session_source,
-            agent_control,
             dynamic_tools,
         )
         .await?;
         self.finalize_thread_spawn(codex, thread_id).await
-    }
-
-    pub(crate) async fn spawn_thread_with_initial_history_and_source(
-        &self,
-        config: Config,
-        initial_history: InitialHistory,
-        agent_control: AgentControl,
-        session_source: SessionSource,
-    ) -> CodexResult<NewThread> {
-        self.spawn_thread_with_source(
-            config,
-            initial_history,
-            Arc::clone(&self.auth_manager),
-            agent_control,
-            session_source,
-            Vec::new(),
-        )
-        .await
-    }
-
-    pub(crate) async fn resume_thread_from_rollout_with_source(
-        &self,
-        config: Config,
-        rollout_path: PathBuf,
-        agent_control: AgentControl,
-        session_source: SessionSource,
-    ) -> CodexResult<NewThread> {
-        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
-        self.spawn_thread_with_initial_history_and_source(
-            config,
-            initial_history,
-            agent_control,
-            session_source,
-        )
-        .await
     }
 
     async fn finalize_thread_spawn(
@@ -617,121 +467,14 @@ impl ThreadManagerState {
             codex,
             session_configured.rollout_path.clone(),
         ));
-        self.activate_thread(thread_id, thread.clone()).await;
+        self.threads.write().await.insert(thread_id, thread.clone());
+        let _ = self.thread_created_tx.send(thread_id);
 
         Ok(NewThread {
             thread_id,
             thread,
             session_configured,
         })
-    }
-
-    pub(crate) fn notify_thread_created(&self, thread_id: ThreadId) {
-        let _ = self.thread_created_tx.send(thread_id);
-    }
-
-    async fn activate_thread(&self, thread_id: ThreadId, thread: Arc<CodexThread>) {
-        {
-            let mut generations = self.thread_generations.write().await;
-            let generation = generations.entry(thread_id).or_insert(0);
-            *generation += 1;
-        }
-        self.retained_agent_statuses
-            .write()
-            .await
-            .remove(&thread_id);
-        self.threads.write().await.insert(thread_id, thread);
-    }
-
-    async fn track_detached_thread(
-        &self,
-        thread_id: ThreadId,
-        generation: u64,
-        thread: Arc<CodexThread>,
-    ) {
-        let status = thread.agent_status().await;
-        if is_final(&status) {
-            self.retained_agent_statuses
-                .write()
-                .await
-                .insert(thread_id, RetainedAgentStatus::Final { generation, status });
-            return;
-        }
-
-        let status_rx = thread.subscribe_status();
-        self.retained_agent_statuses.write().await.insert(
-            thread_id,
-            RetainedAgentStatus::Pending {
-                generation,
-                _thread: thread.clone(),
-                status_rx: status_rx.clone(),
-            },
-        );
-
-        let retained_agent_statuses = Arc::clone(&self.retained_agent_statuses);
-        tokio::spawn(async move {
-            let final_status = wait_for_final_retained_status(status_rx).await;
-            let mut retained = retained_agent_statuses.write().await;
-            let Some(current) = retained.get(&thread_id) else {
-                return;
-            };
-            if current.generation() != generation {
-                return;
-            }
-            match final_status {
-                Some(status) => {
-                    retained.insert(thread_id, RetainedAgentStatus::Final { generation, status });
-                }
-                None => {
-                    retained.remove(&thread_id);
-                }
-            }
-        });
-    }
-}
-
-impl RetainedAgentStatus {
-    fn generation(&self) -> u64 {
-        match self {
-            Self::Pending { generation, .. } | Self::Final { generation, .. } => *generation,
-        }
-    }
-
-    fn status(&self) -> AgentStatus {
-        match self {
-            Self::Pending { status_rx, .. } => status_rx.borrow().clone(),
-            Self::Final { status, .. } => status.clone(),
-        }
-    }
-
-    fn subscribe_status(&self) -> watch::Receiver<AgentStatus> {
-        match self {
-            Self::Pending { status_rx, .. } => status_rx.clone(),
-            Self::Final { status, .. } => {
-                let (_tx, rx) = watch::channel(status.clone());
-                rx
-            }
-        }
-    }
-}
-
-async fn wait_for_final_retained_status(
-    mut status_rx: watch::Receiver<AgentStatus>,
-) -> Option<AgentStatus> {
-    let mut status = status_rx.borrow().clone();
-    if is_final(&status) {
-        return Some(status);
-    }
-
-    loop {
-        if status_rx.changed().await.is_err() {
-            let latest = status_rx.borrow().clone();
-            return is_final(&latest).then_some(latest);
-        }
-        status = status_rx.borrow().clone();
-        if is_final(&status) {
-            return Some(status);
-        }
     }
 }
 

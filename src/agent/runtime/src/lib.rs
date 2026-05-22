@@ -5,8 +5,10 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+mod agent_jobs;
 pub mod api_bridge;
 mod apply_patch;
+pub use adam_agent_runtime::SessionStatus;
 pub mod auth;
 pub mod bash;
 mod buddy_intro;
@@ -17,7 +19,6 @@ mod codex_thread;
 mod compact_remote;
 pub use codex_thread::CodexThread;
 pub use codex_thread::ThreadConfigSnapshot;
-mod codex_delegate;
 mod command_safety;
 pub mod config;
 pub mod config_loader;
@@ -39,7 +40,6 @@ pub mod landlock;
 pub mod mcp;
 mod mcp_connection_manager;
 pub mod models_manager;
-mod subagents;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_CAPABILITY;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_METHOD;
 pub use mcp_connection_manager::SandboxState;

@@ -3,15 +3,12 @@ use crate::error::Result as CodexResult;
 use crate::protocol::Event;
 use crate::protocol::Op;
 use crate::protocol::Submission;
-use crate::subagents::AgentStatus;
 use adam_agent_runtime::SessionSnapshot;
 use adam_agent_runtime::SessionStatus;
 use adam_llm::RuntimeEndpoint;
 use adam_llm::RuntimeMetadata;
 use adam_protocol::config_types::IdentityKind;
 use adam_protocol::config_types::Personality;
-use adam_protocol::models::ContentItem;
-use adam_protocol::models::TranscriptItem;
 use adam_protocol::openai_models::ReasoningEffort;
 use adam_protocol::protocol::AskForApproval;
 use adam_protocol::protocol::SandboxPolicy;
@@ -22,7 +19,6 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::path::PathBuf;
-use tokio::sync::watch;
 
 use crate::state_db::StateDbHandle;
 
@@ -67,12 +63,12 @@ impl CodexThread {
         self.codex.next_event().await
     }
 
-    pub async fn agent_status(&self) -> AgentStatus {
-        self.codex.agent_status().await
+    pub async fn session_status(&self) -> SessionStatus {
+        self.codex.session_status().await
     }
 
-    pub(crate) fn subscribe_status(&self) -> watch::Receiver<AgentStatus> {
-        self.codex.agent_status.clone()
+    pub async fn wait_for_shutdown_complete(&self) -> CodexResult<()> {
+        self.codex.wait_for_shutdown_complete().await
     }
 
     pub fn rollout_path(&self) -> Option<PathBuf> {
@@ -92,14 +88,7 @@ impl CodexThread {
         let history = self.codex.session.clone_history().await;
         let mut hasher = DefaultHasher::new();
         self.codex.session.conversation_id.hash(&mut hasher);
-        let status = match self.agent_status().await {
-            AgentStatus::PendingInit | AgentStatus::Running => SessionStatus::Running,
-            AgentStatus::Completed(_)
-            | AgentStatus::Interrupted
-            | AgentStatus::Errored(_)
-            | AgentStatus::Shutdown
-            | AgentStatus::NotFound => SessionStatus::Idle,
-        };
+        let status = self.session_status().await;
 
         SessionSnapshot {
             session_id: hasher.finish(),
@@ -116,21 +105,6 @@ impl CodexThread {
     }
 
     pub async fn flush_rollout(&self) {
-        self.codex.session.flush_rollout().await;
-    }
-
-    pub(crate) async fn inject_user_message_without_turn(&self, message: String) {
-        let turn_context = self.codex.session.new_default_turn().await;
-        let item = TranscriptItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText { text: message }],
-            end_turn: None,
-        };
-        self.codex
-            .session
-            .record_conversation_items(&turn_context, &[item])
-            .await;
         self.codex.session.flush_rollout().await;
     }
 

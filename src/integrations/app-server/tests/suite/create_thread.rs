@@ -57,10 +57,7 @@ async fn test_conversation_create_and_send_message_ok() -> Result<()> {
 
     // Add a listener so we receive notifications for this conversation (not strictly required for this test).
     let add_listener_id = mcp
-        .send_add_conversation_listener_request(AddConversationListenerParams {
-            conversation_id,
-            experimental_raw_events: false,
-        })
+        .send_add_conversation_listener_request(AddConversationListenerParams { conversation_id })
         .await?;
     let _sub: AddConversationSubscriptionResponse =
         to_response::<AddConversationSubscriptionResponse>(

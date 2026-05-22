@@ -99,53 +99,6 @@
       ],
       "type": "object"
     },
-    "CollabAgentState": {
-      "properties": {
-        "message": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "status": {
-          "$ref": "#/definitions/CollabAgentStatus"
-        }
-      },
-      "required": [
-        "status"
-      ],
-      "type": "object"
-    },
-    "CollabAgentStatus": {
-      "enum": [
-        "pendingInit",
-        "running",
-        "interrupted",
-        "completed",
-        "errored",
-        "shutdown",
-        "notFound"
-      ],
-      "type": "string"
-    },
-    "CollabAgentTool": {
-      "enum": [
-        "spawnAgent",
-        "sendInput",
-        "resumeAgent",
-        "wait",
-        "closeAgent"
-      ],
-      "type": "string"
-    },
-    "CollabAgentToolCallStatus": {
-      "enum": [
-        "inProgress",
-        "completed",
-        "failed"
-      ],
-      "type": "string"
-    },
     "CommandAction": {
       "oneOf": [
         {
@@ -878,73 +831,6 @@
             "type"
           ],
           "title": "McpToolCallThreadItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "agentsStates": {
-              "additionalProperties": {
-                "$ref": "#/definitions/CollabAgentState"
-              },
-              "description": "Last known status of the target agents, when available.",
-              "type": "object"
-            },
-            "id": {
-              "description": "Unique identifier for this collab tool call.",
-              "type": "string"
-            },
-            "prompt": {
-              "description": "Prompt text sent as part of the collab tool call, when available.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "receiverThreadIds": {
-              "description": "Thread ID of the receiving agent, when applicable. In case of spawn operation, this corresponds to the newly spawned agent.",
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "senderThreadId": {
-              "description": "Thread ID of the agent issuing the collab request.",
-              "type": "string"
-            },
-            "status": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/CollabAgentToolCallStatus"
-                }
-              ],
-              "description": "Current status of the collab tool call."
-            },
-            "tool": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/CollabAgentTool"
-                }
-              ],
-              "description": "Name of the collab tool that was invoked."
-            },
-            "type": {
-              "enum": [
-                "collabAgentToolCall"
-              ],
-              "title": "CollabAgentToolCallThreadItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "agentsStates",
-            "id",
-            "receiverThreadIds",
-            "senderThreadId",
-            "status",
-            "tool",
-            "type"
-          ],
-          "title": "CollabAgentToolCallThreadItem",
           "type": "object"
         },
         {

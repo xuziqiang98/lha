@@ -1,0 +1,1163 @@
+use crate::client::TurnRuntime;
+use crate::config::model_ref::ModelRef;
+use crate::env::ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR;
+use crate::env::ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR;
+use crate::error::CodexErr;
+use adam_llm::RuntimeEndpoint;
+use adam_protocol::ThreadId;
+use serde::Deserialize;
+use serde::Serialize;
+use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Stdio;
+use std::sync::Arc;
+use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Child;
+use tokio::process::Command;
+use tokio::sync::Mutex;
+use tokio::sync::OwnedSemaphorePermit;
+use tokio::sync::Semaphore;
+use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+const DEFAULT_JOB_MAX_RUNTIME_SECONDS: u64 = 600;
+const STDERR_TAIL_BYTES: usize = 4096;
+const JOBS_DIR: &str = "agent_jobs";
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AgentJobType {
+    Explorer,
+    Reviewer,
+}
+
+impl AgentJobType {
+    fn identity_arg(&self) -> &'static str {
+        match self {
+            Self::Explorer => "explorer",
+            Self::Reviewer => "reviewer",
+        }
+    }
+
+    fn prompt_prefix(&self) -> Option<&'static str> {
+        match self {
+            Self::Explorer => None,
+            Self::Reviewer => Some(crate::REVIEW_PROMPT),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub(crate) enum AgentJobStatus {
+    Running,
+    Completed {
+        result: String,
+        exit_code: Option<i32>,
+    },
+    Failed {
+        message: String,
+        exit_code: Option<i32>,
+    },
+    Cancelled,
+    TimedOut,
+    NotFound,
+}
+
+impl AgentJobStatus {
+    pub(crate) fn is_final(&self) -> bool {
+        !matches!(self, Self::Running)
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct AgentJobSnapshot {
+    pub(crate) id: String,
+    pub(crate) agent_type: AgentJobType,
+    pub(crate) status: AgentJobStatus,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AgentJobExecConfig {
+    pub(crate) adam_home: PathBuf,
+    pub(crate) model_arg: Option<String>,
+    pub(crate) profile_arg: Option<String>,
+    pub(crate) model_provider_id: String,
+    pub(crate) model_provider: RuntimeEndpoint,
+    pub(crate) auth_token: Option<String>,
+}
+
+impl AgentJobExecConfig {
+    pub(crate) fn from_runtime(runtime: &TurnRuntime, model: &str) -> Self {
+        let config = runtime.config();
+        let mut model_provider = runtime.endpoint();
+        let auth_token = model_provider.bearer_token.take();
+        Self {
+            adam_home: config.adam_home.clone(),
+            model_arg: Some(canonical_model_arg(&config.model_provider_id, model)),
+            profile_arg: config.active_profile.clone(),
+            model_provider_id: config.model_provider_id.clone(),
+            model_provider,
+            auth_token,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct AgentJobProviderContext<'a> {
+    model_provider_id: &'a str,
+    model_provider: &'a RuntimeEndpoint,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentJobMetadata<'a> {
+    id: &'a str,
+    parent_thread_id: ThreadId,
+    agent_type: &'a AgentJobType,
+    cwd: &'a Path,
+    created_at_unix_seconds: u64,
+    max_runtime_seconds: u64,
+}
+
+fn canonical_model_arg(model_provider_id: &str, model: &str) -> String {
+    if ModelRef::parse(model).is_ok() {
+        return model.to_string();
+    }
+
+    if model_provider_id.contains('.') {
+        format!("{model_provider_id}:{model}")
+    } else {
+        format!("{model_provider_id}.main:{model}")
+    }
+}
+
+#[derive(Debug)]
+struct ManagedAgentJob {
+    agent_type: AgentJobType,
+    status: Arc<Mutex<AgentJobStatus>>,
+    cancellation_token: CancellationToken,
+    completion: watch::Receiver<bool>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct AgentJobManager {
+    jobs: Arc<Mutex<HashMap<String, ManagedAgentJob>>>,
+    semaphore: Arc<Semaphore>,
+    configured_max_runtime: Duration,
+    exec_bin_override: Option<PathBuf>,
+    adam_home: PathBuf,
+}
+
+impl AgentJobManager {
+    pub(crate) fn new(
+        adam_home: PathBuf,
+        max_jobs: Option<usize>,
+        default_max_runtime_seconds: Option<u64>,
+    ) -> Self {
+        Self {
+            jobs: Arc::new(Mutex::new(HashMap::new())),
+            semaphore: Arc::new(Semaphore::new(max_jobs.unwrap_or(usize::MAX))),
+            configured_max_runtime: Duration::from_secs(
+                default_max_runtime_seconds.unwrap_or(DEFAULT_JOB_MAX_RUNTIME_SECONDS),
+            ),
+            exec_bin_override: None,
+            adam_home,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_exec_bin_for_tests(mut self, exec_bin: PathBuf) -> Self {
+        self.exec_bin_override = Some(exec_bin);
+        self
+    }
+
+    pub(crate) async fn spawn(
+        &self,
+        parent_thread_id: ThreadId,
+        agent_type: AgentJobType,
+        prompt: String,
+        cwd: PathBuf,
+        exec_config: AgentJobExecConfig,
+        max_runtime_seconds: Option<u64>,
+    ) -> Result<AgentJobSnapshot, CodexErr> {
+        let max_runtime = self.resolve_max_runtime(max_runtime_seconds)?;
+        let permit = self.semaphore.clone().try_acquire_owned().map_err(|_| {
+            CodexErr::UnsupportedOperation("agent job concurrency limit reached".to_string())
+        })?;
+        let id = format!("agent-job-{}", Uuid::new_v4());
+        let job_dir = create_job_dir(&self.adam_home, parent_thread_id, &id).await?;
+        let prompt_path = job_dir.join("prompt.txt");
+        let metadata_path = job_dir.join("metadata.json");
+        let status_path = job_dir.join("status.json");
+        let result_path = job_dir.join("result.txt");
+        let stdout_path = job_dir.join("stdout.log");
+        let stderr_path = job_dir.join("stderr.log");
+        drop(create_private_std_file(&result_path, "agent job result")?);
+        let prompt = agent_type
+            .prompt_prefix()
+            .map(|prefix| format!("{prefix}\n\n{prompt}"))
+            .unwrap_or(prompt);
+        write_private_file(&prompt_path, prompt.as_bytes(), "agent job prompt").await?;
+        let metadata = AgentJobMetadata {
+            id: &id,
+            parent_thread_id,
+            agent_type: &agent_type,
+            cwd: cwd.as_path(),
+            created_at_unix_seconds: unix_timestamp_seconds(),
+            max_runtime_seconds: max_runtime.as_secs(),
+        };
+        write_json_private_file(&metadata_path, &metadata, "agent job metadata").await?;
+        let mut command = match build_adam_exec_command(
+            self.exec_bin_override.as_ref(),
+            &agent_type,
+            &cwd,
+            &exec_config,
+            &result_path,
+        ) {
+            Ok(command) => command,
+            Err(err) => {
+                let status = AgentJobStatus::Failed {
+                    message: err.to_string(),
+                    exit_code: None,
+                };
+                persist_status(&status_path, &status).await?;
+                return Err(err);
+            }
+        };
+        persist_status(&status_path, &AgentJobStatus::Running).await?;
+        command.stdin(Stdio::piped());
+        command.stdout(Stdio::from(create_private_std_file(
+            &stdout_path,
+            "agent job stdout log",
+        )?));
+        command.stderr(Stdio::from(create_private_std_file(
+            &stderr_path,
+            "agent job stderr log",
+        )?));
+
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(err) => {
+                let status = AgentJobStatus::Failed {
+                    message: format!("failed to spawn adam exec agent job: {err}"),
+                    exit_code: None,
+                };
+                if let Err(status_err) = persist_status(&status_path, &status).await {
+                    tracing::warn!("failed to persist agent job spawn failure: {status_err}");
+                }
+                return Err(CodexErr::Fatal(format!(
+                    "failed to spawn adam exec agent job: {err}"
+                )));
+            }
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            let prompt_for_stdin = prompt.clone();
+            tokio::spawn(async move {
+                let _ = stdin.write_all(prompt_for_stdin.as_bytes()).await;
+            });
+        }
+
+        let status = Arc::new(Mutex::new(AgentJobStatus::Running));
+        let cancellation_token = CancellationToken::new();
+        let (completion_tx, completion_rx) = watch::channel(false);
+        self.jobs.lock().await.insert(
+            id.clone(),
+            ManagedAgentJob {
+                agent_type: agent_type.clone(),
+                status: Arc::clone(&status),
+                cancellation_token: cancellation_token.clone(),
+                completion: completion_rx,
+            },
+        );
+
+        spawn_job_watcher(AgentJobWatcher {
+            _id: id.clone(),
+            status,
+            child,
+            cancellation_token,
+            result_path,
+            stderr_path,
+            status_path,
+            max_runtime,
+            completion_tx,
+            _permit: permit,
+        });
+
+        Ok(AgentJobSnapshot {
+            id,
+            agent_type,
+            status: AgentJobStatus::Running,
+        })
+    }
+
+    pub(crate) async fn status(&self, id: &str) -> AgentJobSnapshot {
+        let jobs = self.jobs.lock().await;
+        let Some(job) = jobs.get(id) else {
+            return AgentJobSnapshot {
+                id: id.to_string(),
+                agent_type: AgentJobType::Explorer,
+                status: AgentJobStatus::NotFound,
+            };
+        };
+        AgentJobSnapshot {
+            id: id.to_string(),
+            agent_type: job.agent_type.clone(),
+            status: job.status.lock().await.clone(),
+        }
+    }
+
+    pub(crate) async fn wait(&self, ids: &[String], timeout: Duration) -> Vec<AgentJobSnapshot> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let mut snapshots = Vec::with_capacity(ids.len());
+            let mut all_final = true;
+            for id in ids {
+                let snapshot = self.status(id).await;
+                all_final &= snapshot.status.is_final();
+                snapshots.push(snapshot);
+            }
+            if all_final || tokio::time::Instant::now() >= deadline {
+                return snapshots;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    pub(crate) async fn close(&self, id: &str) -> AgentJobSnapshot {
+        let Some(handle) = ({
+            let jobs = self.jobs.lock().await;
+            jobs.get(id).map(JobCloseHandle::from)
+        }) else {
+            return AgentJobSnapshot {
+                id: id.to_string(),
+                agent_type: AgentJobType::Explorer,
+                status: AgentJobStatus::NotFound,
+            };
+        };
+        handle.cancel_and_wait(id.to_string()).await
+    }
+
+    pub(crate) async fn close_all(&self) -> Vec<AgentJobSnapshot> {
+        let handles = {
+            let jobs = self.jobs.lock().await;
+            jobs.iter()
+                .map(|(id, job)| (id.clone(), JobCloseHandle::from(job)))
+                .collect::<Vec<_>>()
+        };
+
+        for (_, handle) in &handles {
+            if !handle.status.lock().await.is_final() {
+                handle.cancellation_token.cancel();
+            }
+        }
+
+        let mut snapshots = Vec::with_capacity(handles.len());
+        for (id, handle) in handles {
+            snapshots.push(handle.wait_for_completion(id).await);
+        }
+        snapshots
+    }
+
+    fn resolve_max_runtime(&self, requested_seconds: Option<u64>) -> Result<Duration, CodexErr> {
+        match requested_seconds {
+            Some(0) => Err(CodexErr::UnsupportedOperation(
+                "max_runtime_seconds must be at least 1".to_string(),
+            )),
+            Some(seconds) => Ok(Duration::from_secs(seconds).min(self.configured_max_runtime)),
+            None => Ok(self.configured_max_runtime),
+        }
+    }
+}
+
+struct JobCloseHandle {
+    agent_type: AgentJobType,
+    status: Arc<Mutex<AgentJobStatus>>,
+    cancellation_token: CancellationToken,
+    completion: watch::Receiver<bool>,
+}
+
+impl From<&ManagedAgentJob> for JobCloseHandle {
+    fn from(job: &ManagedAgentJob) -> Self {
+        Self {
+            agent_type: job.agent_type.clone(),
+            status: Arc::clone(&job.status),
+            cancellation_token: job.cancellation_token.clone(),
+            completion: job.completion.clone(),
+        }
+    }
+}
+
+impl JobCloseHandle {
+    async fn cancel_and_wait(self, id: String) -> AgentJobSnapshot {
+        if !self.status.lock().await.is_final() {
+            self.cancellation_token.cancel();
+        }
+        self.wait_for_completion(id).await
+    }
+
+    async fn wait_for_completion(self, id: String) -> AgentJobSnapshot {
+        if !self.status.lock().await.is_final() {
+            let mut completion = self.completion;
+            while !*completion.borrow_and_update() {
+                if completion.changed().await.is_err() {
+                    break;
+                }
+            }
+        }
+
+        AgentJobSnapshot {
+            id,
+            agent_type: self.agent_type,
+            status: self.status.lock().await.clone(),
+        }
+    }
+}
+
+async fn create_job_dir(
+    adam_home: &Path,
+    parent_thread_id: ThreadId,
+    id: &str,
+) -> Result<PathBuf, CodexErr> {
+    let root = adam_home.join(JOBS_DIR);
+    let session_dir = root.join(parent_thread_id.to_string());
+    let job_dir = session_dir.join(id);
+    for path in [&root, &session_dir, &job_dir] {
+        create_private_dir(path).await?;
+    }
+    Ok(job_dir)
+}
+
+async fn create_private_dir(path: &Path) -> Result<(), CodexErr> {
+    tokio::fs::create_dir_all(path)
+        .await
+        .map_err(|err| CodexErr::Fatal(format!("failed to create agent job dir: {err}")))?;
+    set_private_dir_permissions(path)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_private_dir_permissions(path: &Path) -> Result<(), CodexErr> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        .map_err(|err| CodexErr::Fatal(format!("failed to set agent job dir permissions: {err}")))
+}
+
+#[cfg(not(unix))]
+fn set_private_dir_permissions(_path: &Path) -> Result<(), CodexErr> {
+    Ok(())
+}
+
+fn create_private_std_file(path: &Path, description: &str) -> Result<std::fs::File, CodexErr> {
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o600);
+    }
+    let file = options
+        .open(path)
+        .map_err(|err| CodexErr::Fatal(format!("failed to create {description}: {err}")))?;
+    set_private_file_permissions(path, description)?;
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn set_private_file_permissions(path: &Path, description: &str) -> Result<(), CodexErr> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|err| CodexErr::Fatal(format!("failed to set {description} permissions: {err}")))
+}
+
+#[cfg(not(unix))]
+fn set_private_file_permissions(_path: &Path, _description: &str) -> Result<(), CodexErr> {
+    Ok(())
+}
+
+async fn write_private_file(
+    path: &Path,
+    contents: &[u8],
+    description: &str,
+) -> Result<(), CodexErr> {
+    let file = create_private_std_file(path, description)?;
+    let mut file = tokio::fs::File::from_std(file);
+    file.write_all(contents)
+        .await
+        .map_err(|err| CodexErr::Fatal(format!("failed to write {description}: {err}")))?;
+    file.flush()
+        .await
+        .map_err(|err| CodexErr::Fatal(format!("failed to flush {description}: {err}")))?;
+    Ok(())
+}
+
+async fn write_json_private_file<T: Serialize>(
+    path: &Path,
+    value: &T,
+    description: &str,
+) -> Result<(), CodexErr> {
+    let json = serde_json::to_vec_pretty(value)
+        .map_err(|err| CodexErr::Fatal(format!("failed to serialize {description}: {err}")))?;
+    write_private_file(path, &json, description).await
+}
+
+async fn persist_status(path: &Path, status: &AgentJobStatus) -> Result<(), CodexErr> {
+    write_json_private_file(path, status, "agent job status").await
+}
+
+fn unix_timestamp_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
+}
+
+fn build_adam_exec_command(
+    exec_bin_override: Option<&PathBuf>,
+    agent_type: &AgentJobType,
+    cwd: &PathBuf,
+    exec_config: &AgentJobExecConfig,
+    result_path: &std::path::Path,
+) -> Result<Command, CodexErr> {
+    let program = resolve_adam_exec_program(exec_bin_override)?;
+    let mut command = Command::new(&program);
+    let file_name = program
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if !file_name.contains("adam-exec") {
+        command.arg("exec");
+    }
+    if let Some(profile) = exec_config.profile_arg.as_deref() {
+        command.arg("--profile").arg(profile);
+    }
+    if let Some(model) = exec_config.model_arg.as_deref() {
+        command.arg("--model").arg(model);
+    }
+    let provider_context = AgentJobProviderContext {
+        model_provider_id: &exec_config.model_provider_id,
+        model_provider: &exec_config.model_provider,
+    };
+    let provider_context_json = serde_json::to_string(&provider_context)
+        .map_err(|err| CodexErr::Fatal(format!("failed to serialize agent job context: {err}")))?;
+    command.env("ADAM_HOME", &exec_config.adam_home);
+    command.env(
+        ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR,
+        provider_context_json,
+    );
+    if let Some(auth_token) = exec_config.auth_token.as_deref() {
+        command.env(ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR, auth_token);
+    }
+    command
+        .arg("--identity")
+        .arg(agent_type.identity_arg())
+        .arg("--sandbox")
+        .arg("read-only")
+        .arg("--skip-git-repo-check")
+        .arg("--color")
+        .arg("never")
+        .arg("--output-last-message")
+        .arg(result_path)
+        .arg("--cd")
+        .arg(cwd)
+        .arg("-");
+    Ok(command)
+}
+
+fn resolve_adam_exec_program(exec_bin_override: Option<&PathBuf>) -> Result<PathBuf, CodexErr> {
+    if let Some(path) = exec_bin_override {
+        return Ok(path.clone());
+    }
+    if let Some(path) = std::env::var_os("ADAM_AGENT_EXEC_BIN") {
+        return Ok(PathBuf::from(path));
+    }
+
+    let current_exe = std::env::current_exe()
+        .map_err(|err| CodexErr::Fatal(format!("failed to resolve current executable: {err}")))?;
+    if executable_supports_exec(&current_exe) {
+        return Ok(current_exe);
+    }
+    if let Some(path) = sibling_binary(&current_exe, "adam-exec") {
+        return Ok(path);
+    }
+    if let Some(path) = sibling_binary(&current_exe, "adam") {
+        return Ok(path);
+    }
+    if let Ok(path) = which::which("adam-exec") {
+        return Ok(path);
+    }
+    if let Ok(path) = which::which("adam") {
+        return Ok(path);
+    }
+    Err(CodexErr::Fatal(
+        "adam exec not found; install adam-exec/adam or set ADAM_AGENT_EXEC_BIN".to_string(),
+    ))
+}
+
+fn sibling_binary(current_exe: &std::path::Path, name: &str) -> Option<PathBuf> {
+    let executable_name = executable_name(name);
+    let current_dir = current_exe.parent()?;
+    for dir in [Some(current_dir), current_dir.parent()] {
+        let candidate = dir?.join(&executable_name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn executable_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
+}
+
+fn executable_supports_exec(path: &Path) -> bool {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    file_name == executable_name("adam-exec") || file_name == executable_name("adam")
+}
+
+struct AgentJobWatcher {
+    _id: String,
+    status: Arc<Mutex<AgentJobStatus>>,
+    child: Child,
+    cancellation_token: CancellationToken,
+    result_path: PathBuf,
+    stderr_path: PathBuf,
+    status_path: PathBuf,
+    max_runtime: Duration,
+    completion_tx: watch::Sender<bool>,
+    _permit: OwnedSemaphorePermit,
+}
+
+fn spawn_job_watcher(watcher: AgentJobWatcher) {
+    tokio::spawn(async move {
+        let AgentJobWatcher {
+            _id: _,
+            status,
+            mut child,
+            cancellation_token,
+            result_path,
+            stderr_path,
+            status_path,
+            max_runtime,
+            completion_tx,
+            _permit,
+        } = watcher;
+        let timeout = tokio::time::sleep(max_runtime);
+        tokio::pin!(timeout);
+        let next_status = tokio::select! {
+            wait_result = child.wait() => match wait_result {
+                Ok(exit_status) => {
+                    let exit_code = exit_status.code();
+                    if exit_status.success() {
+                        match tokio::fs::read_to_string(&result_path).await {
+                            Ok(result) if !result.trim().is_empty() => {
+                                AgentJobStatus::Completed { result, exit_code }
+                            }
+                            _ => AgentJobStatus::Failed {
+                                message: "agent job exited successfully but produced no final message"
+                                    .to_string(),
+                                exit_code,
+                            },
+                        }
+                    } else {
+                        AgentJobStatus::Failed {
+                            message: stderr_tail(&stderr_path).await,
+                            exit_code,
+                        }
+                    }
+                }
+                Err(err) => AgentJobStatus::Failed {
+                    message: format!("failed to wait for agent job: {err}"),
+                    exit_code: None,
+                },
+            },
+            () = &mut timeout => {
+                let _ = child.kill().await;
+                AgentJobStatus::TimedOut
+            }
+            () = cancellation_token.cancelled() => {
+                let _ = child.kill().await;
+                AgentJobStatus::Cancelled
+            }
+        };
+        let mut status_guard = status.lock().await;
+        *status_guard = next_status.clone();
+        drop(status_guard);
+        if let Err(err) = persist_status(&status_path, &next_status).await {
+            tracing::warn!("failed to persist agent job status: {err}");
+        }
+        let _ = completion_tx.send(true);
+    });
+}
+
+async fn stderr_tail(path: &std::path::Path) -> String {
+    match tokio::fs::read(path).await {
+        Ok(bytes) if !bytes.is_empty() => {
+            let start = bytes.len().saturating_sub(STDERR_TAIL_BYTES);
+            String::from_utf8_lossy(&bytes[start..]).to_string()
+        }
+        _ => "agent job failed without stderr output".to_string(),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+
+    fn write_script(dir: &tempfile::TempDir, name: &str, body: &str) -> PathBuf {
+        let path = dir.path().join(name);
+        std::fs::write(&path, body).unwrap_or_else(|err| panic!("write fake adam exec: {err}"));
+        let mut permissions = std::fs::metadata(&path)
+            .unwrap_or_else(|err| panic!("metadata: {err}"))
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&path, permissions)
+            .unwrap_or_else(|err| panic!("chmod fake adam exec: {err}"));
+        path
+    }
+
+    fn mode(path: &Path) -> u32 {
+        std::fs::metadata(path)
+            .unwrap_or_else(|err| panic!("metadata {}: {err}", path.display()))
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    fn test_exec_config(adam_home: &Path, model_arg: &str) -> AgentJobExecConfig {
+        AgentJobExecConfig {
+            adam_home: adam_home.to_path_buf(),
+            model_arg: Some(model_arg.to_string()),
+            profile_arg: None,
+            model_provider_id: "test-provider.main".to_string(),
+            model_provider: RuntimeEndpoint::openai_compatible_responses(
+                "test-provider",
+                "http://127.0.0.1:9/v1",
+            ),
+            auth_token: None,
+        }
+    }
+
+    #[test]
+    fn canonical_model_arg_uses_main_endpoint_for_provider_id() {
+        assert_eq!(
+            canonical_model_arg("openai", "gpt-5.2"),
+            "openai.main:gpt-5.2"
+        );
+    }
+
+    #[test]
+    fn canonical_model_arg_preserves_provider_endpoint_id() {
+        assert_eq!(
+            canonical_model_arg("anthropic.messages", "claude-sonnet-4"),
+            "anthropic.messages:claude-sonnet-4"
+        );
+    }
+
+    #[test]
+    fn canonical_model_arg_preserves_existing_model_ref() {
+        assert_eq!(
+            canonical_model_arg("openai", "openrouter.main:anthropic/claude-sonnet-4"),
+            "openrouter.main:anthropic/claude-sonnet-4"
+        );
+    }
+
+    #[test]
+    fn executable_supports_exec_only_accepts_adam_or_adam_exec() {
+        assert!(executable_supports_exec(Path::new(&executable_name(
+            "adam"
+        ))));
+        assert!(executable_supports_exec(Path::new(&executable_name(
+            "adam-exec"
+        ))));
+        assert!(!executable_supports_exec(Path::new("adam-tui")));
+        assert!(!executable_supports_exec(Path::new("adam-app-server")));
+        assert!(!executable_supports_exec(Path::new("adam-agent-tests")));
+    }
+
+    #[tokio::test]
+    async fn job_completes_with_result_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let adam_home = tempfile::tempdir().expect("adam home");
+        let script = write_script(
+            &dir,
+            "adam-exec-fake",
+            r#"#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    out="$2"
+    shift 2
+  else
+    shift
+  fi
+done
+cat >/dev/null
+printf "explorer result" > "$out"
+"#,
+        );
+        let manager = AgentJobManager::new(adam_home.path().to_path_buf(), Some(1), Some(5))
+            .with_exec_bin_for_tests(script);
+        let parent_thread_id = ThreadId::new();
+        let snapshot = manager
+            .spawn(
+                parent_thread_id,
+                AgentJobType::Explorer,
+                "inspect this".to_string(),
+                dir.path().to_path_buf(),
+                test_exec_config(adam_home.path(), "test-provider.main:test-model"),
+                None,
+            )
+            .await
+            .expect("spawn job");
+        let snapshots = manager
+            .wait(std::slice::from_ref(&snapshot.id), Duration::from_secs(5))
+            .await;
+
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].agent_type, AgentJobType::Explorer);
+        assert_eq!(
+            snapshots[0].status,
+            AgentJobStatus::Completed {
+                result: "explorer result".to_string(),
+                exit_code: Some(0)
+            }
+        );
+
+        let job_dir = adam_home
+            .path()
+            .join(JOBS_DIR)
+            .join(parent_thread_id.to_string())
+            .join(&snapshot.id);
+        assert!(job_dir.join("metadata.json").is_file());
+        assert!(job_dir.join("prompt.txt").is_file());
+        assert!(job_dir.join("stdout.log").is_file());
+        assert!(job_dir.join("stderr.log").is_file());
+        assert!(job_dir.join("result.txt").is_file());
+        let persisted_status = serde_json::from_str::<AgentJobStatus>(
+            &std::fs::read_to_string(job_dir.join("status.json")).expect("status json"),
+        )
+        .expect("parse status json");
+        assert_eq!(persisted_status, snapshots[0].status);
+        assert_eq!(mode(&job_dir), 0o700);
+        assert_eq!(mode(&job_dir.join("prompt.txt")), 0o600);
+        assert_eq!(mode(&job_dir.join("stdout.log")), 0o600);
+        assert_eq!(mode(&job_dir.join("stderr.log")), 0o600);
+        assert_eq!(mode(&job_dir.join("result.txt")), 0o600);
+        assert_eq!(mode(&job_dir.join("status.json")), 0o600);
+        assert_eq!(mode(&job_dir.join("metadata.json")), 0o600);
+    }
+
+    #[tokio::test]
+    async fn requested_runtime_is_capped_by_configured_max() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let adam_home = tempfile::tempdir().expect("adam home");
+        let script = write_script(
+            &dir,
+            "adam-exec-fake",
+            r#"#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    out="$2"
+    shift 2
+  else
+    shift
+  fi
+done
+cat >/dev/null
+printf "runtime result" > "$out"
+"#,
+        );
+        let manager = AgentJobManager::new(adam_home.path().to_path_buf(), Some(1), Some(3))
+            .with_exec_bin_for_tests(script);
+        let parent_thread_id = ThreadId::new();
+        let snapshot = manager
+            .spawn(
+                parent_thread_id,
+                AgentJobType::Explorer,
+                "inspect this".to_string(),
+                dir.path().to_path_buf(),
+                test_exec_config(adam_home.path(), "test-provider.main:test-model"),
+                Some(9999),
+            )
+            .await
+            .expect("spawn job");
+        let _ = manager
+            .wait(std::slice::from_ref(&snapshot.id), Duration::from_secs(5))
+            .await;
+
+        let metadata_path = adam_home
+            .path()
+            .join(JOBS_DIR)
+            .join(parent_thread_id.to_string())
+            .join(&snapshot.id)
+            .join("metadata.json");
+        let metadata = serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(metadata_path).unwrap(),
+        )
+        .expect("metadata json");
+
+        assert_eq!(metadata["max_runtime_seconds"], serde_json::json!(3));
+    }
+
+    #[tokio::test]
+    async fn zero_requested_runtime_is_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let adam_home = tempfile::tempdir().expect("adam home");
+        let manager = AgentJobManager::new(adam_home.path().to_path_buf(), Some(1), Some(5));
+
+        let err = manager
+            .spawn(
+                ThreadId::new(),
+                AgentJobType::Explorer,
+                "inspect this".to_string(),
+                dir.path().to_path_buf(),
+                test_exec_config(adam_home.path(), "test-provider.main:test-model"),
+                Some(0),
+            )
+            .await
+            .expect_err("zero max runtime should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "unsupported operation: max_runtime_seconds must be at least 1"
+        );
+    }
+
+    #[tokio::test]
+    async fn job_passes_profile_and_model_ref_to_adam_exec() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let adam_home = tempfile::tempdir().expect("adam home");
+        let script = write_script(
+            &dir,
+            "adam-exec-fake",
+            r#"#!/bin/sh
+script_dir=$(dirname "$0")
+out=""
+: > "$script_dir/args.txt"
+{
+  printf "ADAM_HOME=%s\n" "$ADAM_HOME"
+  printf "AUTH_TOKEN=%s\n" "$ADAM_AGENT_JOB_AUTH_TOKEN"
+  printf "PROVIDER_CONTEXT=%s\n" "$ADAM_AGENT_JOB_PROVIDER_CONTEXT"
+} > "$script_dir/env.txt"
+for arg in "$@"; do
+  printf "%s\n" "$arg" >> "$script_dir/args.txt"
+done
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    out="$2"
+    shift 2
+  else
+    shift
+  fi
+done
+cat >/dev/null
+printf "args result" > "$out"
+"#,
+        );
+        let manager = AgentJobManager::new(adam_home.path().to_path_buf(), Some(1), Some(5))
+            .with_exec_bin_for_tests(script);
+        let parent_thread_id = ThreadId::new();
+        let snapshot = manager
+            .spawn(
+                parent_thread_id,
+                AgentJobType::Explorer,
+                "inspect this".to_string(),
+                dir.path().to_path_buf(),
+                AgentJobExecConfig {
+                    adam_home: adam_home.path().to_path_buf(),
+                    model_arg: Some("provider-a.main:model-a".to_string()),
+                    profile_arg: Some("work".to_string()),
+                    model_provider_id: "provider-a.main".to_string(),
+                    model_provider: RuntimeEndpoint::openai_compatible_responses(
+                        "provider-a",
+                        "http://127.0.0.1:9/v1",
+                    ),
+                    auth_token: Some("secret-token".to_string()),
+                },
+                None,
+            )
+            .await
+            .expect("spawn job");
+        let snapshots = manager
+            .wait(std::slice::from_ref(&snapshot.id), Duration::from_secs(5))
+            .await;
+
+        assert!(matches!(
+            &snapshots[0].status,
+            AgentJobStatus::Completed { .. }
+        ));
+        let args = std::fs::read_to_string(dir.path().join("args.txt")).expect("args log");
+        let args = args.lines().collect::<Vec<_>>();
+        assert!(
+            args.windows(2)
+                .any(|window| window == ["--profile", "work"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|window| window == ["--model", "provider-a.main:model-a"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|window| window == ["--identity", "explorer"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|window| window == ["--sandbox", "read-only"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|window| window == ["--cd", dir.path().to_str().expect("utf-8 path")])
+        );
+
+        let child_env = std::fs::read_to_string(dir.path().join("env.txt")).expect("child env log");
+        assert!(child_env.contains(&format!("ADAM_HOME={}", adam_home.path().display())));
+        assert!(child_env.contains("AUTH_TOKEN=secret-token"));
+        assert!(child_env.contains("provider-a.main"));
+
+        let job_dir = adam_home
+            .path()
+            .join(JOBS_DIR)
+            .join(parent_thread_id.to_string())
+            .join(&snapshot.id);
+        for name in [
+            "metadata.json",
+            "prompt.txt",
+            "stdout.log",
+            "stderr.log",
+            "result.txt",
+            "status.json",
+        ] {
+            let contents = std::fs::read_to_string(job_dir.join(name)).expect("job log file");
+            assert!(
+                !contents.contains("secret-token"),
+                "{name} should not persist delegated job auth token"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn close_cancels_running_job() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let adam_home = tempfile::tempdir().expect("adam home");
+        let script = write_script(
+            &dir,
+            "adam-exec-fake",
+            r#"#!/bin/sh
+exec sleep 30
+"#,
+        );
+        let manager = AgentJobManager::new(adam_home.path().to_path_buf(), Some(1), Some(30))
+            .with_exec_bin_for_tests(script);
+        let parent_thread_id = ThreadId::new();
+        let snapshot = manager
+            .spawn(
+                parent_thread_id,
+                AgentJobType::Explorer,
+                "inspect this".to_string(),
+                dir.path().to_path_buf(),
+                test_exec_config(adam_home.path(), "test-provider.main:test-model"),
+                None,
+            )
+            .await
+            .expect("spawn job");
+
+        let closed = manager.close(&snapshot.id).await;
+
+        assert_eq!(closed.status, AgentJobStatus::Cancelled);
+
+        let persisted_status = serde_json::from_str::<AgentJobStatus>(
+            &std::fs::read_to_string(
+                adam_home
+                    .path()
+                    .join(JOBS_DIR)
+                    .join(parent_thread_id.to_string())
+                    .join(&snapshot.id)
+                    .join("status.json"),
+            )
+            .expect("status json"),
+        )
+        .expect("parse status json");
+        assert_eq!(persisted_status, AgentJobStatus::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn close_all_cancels_running_jobs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let adam_home = tempfile::tempdir().expect("adam home");
+        let script = write_script(
+            &dir,
+            "adam-exec-fake",
+            r#"#!/bin/sh
+exec sleep 30
+"#,
+        );
+        let manager = AgentJobManager::new(adam_home.path().to_path_buf(), Some(2), Some(30))
+            .with_exec_bin_for_tests(script);
+        let parent_thread_id = ThreadId::new();
+        let first = manager
+            .spawn(
+                parent_thread_id,
+                AgentJobType::Explorer,
+                "inspect first".to_string(),
+                dir.path().to_path_buf(),
+                test_exec_config(adam_home.path(), "test-provider.main:test-model"),
+                None,
+            )
+            .await
+            .expect("spawn first job");
+        let second = manager
+            .spawn(
+                parent_thread_id,
+                AgentJobType::Explorer,
+                "inspect second".to_string(),
+                dir.path().to_path_buf(),
+                test_exec_config(adam_home.path(), "test-provider.main:test-model"),
+                None,
+            )
+            .await
+            .expect("spawn second job");
+
+        let closed = manager.close_all().await;
+
+        assert_eq!(closed.len(), 2);
+        assert!(
+            closed
+                .iter()
+                .all(|snapshot| snapshot.status == AgentJobStatus::Cancelled)
+        );
+        for snapshot in [&first, &second] {
+            let persisted_status = serde_json::from_str::<AgentJobStatus>(
+                &std::fs::read_to_string(
+                    adam_home
+                        .path()
+                        .join(JOBS_DIR)
+                        .join(parent_thread_id.to_string())
+                        .join(&snapshot.id)
+                        .join("status.json"),
+                )
+                .expect("status json"),
+            )
+            .expect("parse status json");
+            assert_eq!(persisted_status, AgentJobStatus::Cancelled);
+        }
+    }
+}

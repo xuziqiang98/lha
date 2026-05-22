@@ -21,6 +21,8 @@ use adam_agent::config::load_config_as_toml_with_cli_overrides;
 use adam_agent::config_loader::CloudRequirementsLoader;
 use adam_agent::config_loader::ConfigLoadError;
 use adam_agent::config_loader::format_config_error_with_source;
+use adam_agent::env::ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR;
+use adam_agent::env::ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR;
 use adam_agent::git_info::get_git_repo_root;
 use adam_agent::protocol::AskForApproval;
 use adam_agent::protocol::Event;
@@ -30,8 +32,13 @@ use adam_agent::protocol::ReviewRequest;
 use adam_agent::protocol::ReviewTarget;
 use adam_agent::protocol::SessionSource;
 use adam_llm::CatalogRefreshStrategy;
+use adam_llm::RuntimeEndpoint;
 use adam_protocol::approvals::ElicitationAction;
+use adam_protocol::config_types::Identity;
+use adam_protocol::config_types::IdentityKind;
 use adam_protocol::config_types::SandboxMode;
+use adam_protocol::config_types::Settings;
+use adam_protocol::openai_models::ReasoningEffort;
 use adam_protocol::user_input::UserInput;
 use adam_utils_absolute_path::AbsolutePathBuf;
 pub use cli::Cli;
@@ -39,7 +46,10 @@ pub use cli::Command;
 pub use cli::ReviewArgs;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::io::Read;
@@ -80,6 +90,44 @@ struct ThreadEventEnvelope {
     event: Event,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct AgentJobProviderContext {
+    model_provider_id: String,
+    model_provider: RuntimeEndpoint,
+}
+
+fn take_agent_job_provider_context() -> anyhow::Result<HashMap<String, RuntimeEndpoint>> {
+    let provider_context = std::env::var(ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR).ok();
+    let auth_token = std::env::var(ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR)
+        .ok()
+        .filter(|token| !token.trim().is_empty());
+    clear_agent_job_context_env();
+
+    let Some(provider_context) = provider_context else {
+        return Ok(HashMap::new());
+    };
+    let mut context: AgentJobProviderContext = serde_json::from_str(&provider_context)?;
+    if let Some(auth_token) = auth_token {
+        context.model_provider.bearer_token = Some(auth_token);
+        context.model_provider.env_key = None;
+    }
+
+    Ok(HashMap::from([(
+        context.model_provider_id,
+        context.model_provider,
+    )]))
+}
+
+fn clear_agent_job_context_env() {
+    // SAFETY: `adam-exec` calls this during startup before it creates session
+    // services or any worker threads that could concurrently read the process
+    // environment.
+    unsafe {
+        std::env::remove_var(ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR);
+        std::env::remove_var(ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR);
+    }
+}
+
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     if let Err(err) = set_default_originator("adam_exec".to_string()) {
         tracing::warn!(?err, "Failed to set adam exec originator override {err:?}");
@@ -90,6 +138,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         images,
         model: model_cli_arg,
         config_profile,
+        identity: identity_cli_arg,
         full_auto,
         dangerously_bypass_approvals_and_sandbox,
         cwd,
@@ -143,6 +192,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             std::process::exit(1);
         }
     };
+    let model_provider_overrides = take_agent_job_provider_context()?;
 
     let resolved_cwd = cwd.clone();
     let config_cwd = match resolved_cwd.as_deref() {
@@ -209,6 +259,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         show_raw_agent_reasoning: None,
         tools_web_search_request: None,
         ephemeral: None,
+        model_provider_overrides,
         additional_writable_roots: add_dir,
     };
 
@@ -283,6 +334,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             CatalogRefreshStrategy::OnlineIfUncached,
         )
         .await?;
+    let selected_identity = identity_cli_arg
+        .map(IdentityKind::from)
+        .map(|kind| identity_for_kind(kind, default_model.clone(), default_effort));
 
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.
     let NewThread {
@@ -429,7 +483,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                     effort: default_effort,
                     summary: default_summary,
                     final_output_json_schema: output_schema,
-                    identity: None,
+                    identity: selected_identity.clone(),
                     personality: None,
                     tui_buddy: None,
                 })
@@ -438,6 +492,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             task_id
         }
         InitialOperation::Review { review_request } => {
+            if let Some(op) = review_identity_override_op(selected_identity.clone()) {
+                thread.submit(op).await?;
+            }
             let task_id = thread.submit(Op::Review { review_request }).await?;
             info!("Sent review request with event ID: {task_id}");
             task_id
@@ -594,6 +651,43 @@ fn load_output_schema(path: Option<PathBuf>) -> Option<Value> {
     }
 }
 
+fn identity_for_kind(
+    kind: IdentityKind,
+    model: String,
+    reasoning_effort: Option<ReasoningEffort>,
+) -> Identity {
+    let base = Identity {
+        kind: IdentityKind::Nobody,
+        settings: Settings {
+            model,
+            reasoning_effort,
+            developer_instructions: None,
+        },
+    };
+    let mask = match kind {
+        IdentityKind::Nobody => adam_identity::nobody_preset(),
+        IdentityKind::Planner => adam_identity::planner_preset(),
+        IdentityKind::Programmer => adam_identity::programmer_preset(),
+        IdentityKind::Explorer => adam_identity::explorer_preset(),
+        IdentityKind::Reviewer => adam_identity::reviewer_preset(),
+    };
+    base.apply_mask(&mask)
+}
+
+fn review_identity_override_op(identity: Option<Identity>) -> Option<Op> {
+    identity.map(|identity| Op::OverrideTurnContext {
+        cwd: None,
+        approval_policy: None,
+        sandbox_policy: None,
+        windows_sandbox_level: None,
+        model: None,
+        effort: None,
+        summary: None,
+        identity: Some(identity),
+        personality: None,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PromptDecodeError {
     InvalidUtf8 { valid_up_to: usize },
@@ -741,6 +835,16 @@ fn build_review_request(args: ReviewArgs) -> anyhow::Result<ReviewRequest> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::sync::Mutex as StdMutex;
+
+    static ENV_LOCK: StdMutex<()> = StdMutex::new(());
+
+    fn set_env_var(key: &str, value: &str) {
+        // SAFETY: tests that mutate process env hold `ENV_LOCK`.
+        unsafe {
+            std::env::set_var(key, value);
+        }
+    }
 
     #[test]
     fn builds_uncommitted_review_request() {
@@ -759,6 +863,33 @@ mod tests {
         };
 
         assert_eq!(request, expected);
+    }
+
+    #[test]
+    fn agent_job_provider_context_overrides_provider_and_consumes_env() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_agent_job_context_env();
+        let mut provider =
+            RuntimeEndpoint::openai_compatible_responses("mock", "http://127.0.0.1:9/v1");
+        provider.env_key = Some("SHOULD_NOT_BE_USED".to_string());
+        let context = AgentJobProviderContext {
+            model_provider_id: "mock.main".to_string(),
+            model_provider: provider,
+        };
+        set_env_var(
+            ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR,
+            &serde_json::to_string(&context).expect("provider context json"),
+        );
+        set_env_var(ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR, "secret-token");
+
+        let overrides = take_agent_job_provider_context().expect("provider overrides");
+
+        assert!(std::env::var(ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR).is_err());
+        assert!(std::env::var(ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR).is_err());
+        let provider = overrides.get("mock.main").expect("mock provider");
+        assert_eq!(provider.base_url.as_deref(), Some("http://127.0.0.1:9/v1"));
+        assert_eq!(provider.bearer_token.as_deref(), Some("secret-token"));
+        assert_eq!(provider.env_key, None);
     }
 
     #[test]
@@ -802,6 +933,33 @@ mod tests {
         };
 
         assert_eq!(request, expected);
+    }
+
+    #[test]
+    fn review_identity_override_op_applies_selected_identity() {
+        let identity = identity_for_kind(IdentityKind::Reviewer, "gpt-5.1".to_string(), None);
+        let op = review_identity_override_op(Some(identity.clone()));
+
+        let expected = Some(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            identity: Some(identity),
+            personality: None,
+        });
+
+        assert_eq!(op, expected);
+    }
+
+    #[test]
+    fn review_identity_override_op_is_absent_without_selected_identity() {
+        let op = review_identity_override_op(None);
+
+        assert_eq!(op, None);
     }
 
     #[test]

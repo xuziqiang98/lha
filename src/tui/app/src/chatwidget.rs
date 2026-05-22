@@ -47,7 +47,6 @@ use adam_agent::protocol::ApplyPatchApprovalRequestEvent;
 use adam_agent::protocol::BackgroundEventEvent;
 use adam_agent::protocol::BuddyTurnSnapshot;
 use adam_agent::protocol::CodexErrorInfo;
-use adam_agent::protocol::CollabAgentSpawnBeginEvent;
 use adam_agent::protocol::DeprecationNoticeEvent;
 use adam_agent::protocol::ErrorEvent;
 use adam_agent::protocol::Event;
@@ -160,7 +159,6 @@ use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::clipboard_text::ClipboardTextConfig;
 use crate::clipboard_text::write_text_to_clipboard;
-use crate::collab;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
@@ -180,7 +178,6 @@ use crate::markdown::append_markdown;
 use crate::mouse::MouseScrollState;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
-use crate::sidebar::AgentPanelEntry;
 use crate::sidebar::McpPanelSnapshot;
 use crate::sidebar::SIDEBAR_VISIBLE_FILES_LIMIT;
 use crate::sidebar::SidebarSnapshot;
@@ -208,9 +205,8 @@ use crate::tui::FrameRequester;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
+use self::agent::attach_existing_thread;
 use self::agent::spawn_agent;
-use self::agent::spawn_agent_from_existing;
-pub(crate) use self::agent::spawn_op_forwarder;
 mod session_header;
 use self::session_header::SessionHeader;
 mod skills;
@@ -469,7 +465,6 @@ pub(crate) struct ChatWidget {
     plan_stream_controller: Option<PlanStreamController>,
     running_commands: HashMap<String, RunningCommand>,
     suppressed_exec_calls: HashSet<String>,
-    pending_collab_spawn_requests: HashMap<String, collab::SpawnRequestSummary>,
     skills_all: Vec<ProtocolSkillMetadata>,
     skills_have_loaded: bool,
     skills_request_in_flight: bool,
@@ -564,7 +559,6 @@ pub(crate) struct ChatWidget {
     plan_item_active: bool,
     latest_proposed_plan_title: Option<String>,
     latest_update_plan: Option<UpdatePlanArgs>,
-    sidebar_agents: Vec<AgentPanelEntry>,
     // Status-indicator elapsed seconds captured at the last emitted final-message separator.
     //
     // This lets the separator show per-chunk work time (since the previous separator) rather than
@@ -1251,10 +1245,6 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn set_sidebar_agents(&mut self, agents: Vec<AgentPanelEntry>) {
-        self.sidebar_agents = agents;
-    }
-
     fn apply_token_info(&mut self, info: TokenUsageInfo) {
         let percent = self.context_remaining_percent(&info);
         let used_tokens = self.context_used_tokens(&info, percent.is_some());
@@ -1855,12 +1845,6 @@ impl ChatWidget {
         self.had_work_activity = true;
     }
 
-    fn on_collab_event(&mut self, cell: PlainHistoryCell) {
-        self.flush_answer_stream_with_separator();
-        self.add_to_history(cell);
-        self.request_redraw();
-    }
-
     fn on_get_history_entry_response(
         &mut self,
         event: adam_agent::protocol::GetHistoryEntryResponseEvent,
@@ -2419,7 +2403,6 @@ impl ChatWidget {
             plan_stream_controller: None,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
-            pending_collab_spawn_requests: HashMap::new(),
             last_unified_wait: None,
             unified_exec_wait_streak: None,
             loaded_skills: Vec::new(),
@@ -2460,7 +2443,6 @@ impl ChatWidget {
             plan_item_active: false,
             latest_proposed_plan_title: None,
             latest_update_plan: None,
-            sidebar_agents: Vec::new(),
             last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
             last_transcript_area: std::cell::Cell::new(None),
@@ -2496,152 +2478,6 @@ impl ChatWidget {
         if auto_open_provider_config {
             widget.open_provider_popup();
         }
-
-        widget
-    }
-
-    pub(crate) fn new_with_op_sender(
-        common: ChatWidgetInit,
-        codex_op_tx: UnboundedSender<Op>,
-    ) -> Self {
-        let ChatWidgetInit {
-            config,
-            thread_manager,
-            frame_requester,
-            app_event_tx,
-            initial_user_message,
-            enhanced_keys_supported,
-            auth_manager,
-            feedback,
-            is_first_run,
-            startup,
-            otel_manager,
-        } = common;
-        let app_event_tx = app_event_tx.bind_history_to_widget();
-        let ChatWidgetStartup::Configured { model } = startup else {
-            panic!("new_with_op_sender requires configured startup");
-        };
-        let model = model.filter(|m| !m.trim().is_empty());
-        let mut config = config;
-        config.model = model.clone();
-        let mut rng = rand::rng();
-        let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
-
-        let model_override = model.as_deref();
-        let model_for_header = model
-            .clone()
-            .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
-        let active_identity_mask =
-            Self::initial_identity_mask(&config, thread_manager.as_ref(), model_override);
-        let header_model = active_identity_mask
-            .as_ref()
-            .and_then(|mask| mask.model.clone())
-            .unwrap_or_else(|| model_for_header.clone());
-        let current_identity =
-            Self::initial_custom_mode(header_model.clone(), config.model_reasoning_effort);
-
-        let active_cell = Some(Self::placeholder_session_header_cell(&config));
-        let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
-
-        let mut widget = Self {
-            app_event_tx: app_event_tx.clone(),
-            frame_requester: frame_requester.clone(),
-            codex_op_tx,
-            bottom_pane: BottomPane::new(BottomPaneParams {
-                frame_requester,
-                app_event_tx,
-                has_input_focus: true,
-                enhanced_keys_supported,
-                placeholder_text: placeholder,
-                disable_paste_burst: config.disable_paste_burst,
-                animations_enabled: config.animations,
-                skills: None,
-            }),
-            transcript: RefCell::new(TranscriptView::new(
-                Vec::new(),
-                TranscriptRenderMode::Display,
-            )),
-            mouse_scroll: MouseScrollState::default(),
-            active_cell,
-            active_cell_revision: 0,
-            config,
-            skills_all: Vec::new(),
-            skills_have_loaded: false,
-            skills_request_in_flight: false,
-            skills_refresh_pending: None,
-            skills_initial_state: None,
-            reasoning_effort_overrides: HashMap::new(),
-            current_identity,
-            active_identity_mask,
-            auth_manager,
-            thread_manager,
-            otel_manager,
-            session_header: SessionHeader::new(header_model),
-            initial_user_message,
-            token_info: None,
-            stream_controller: None,
-            plan_stream_controller: None,
-            running_commands: HashMap::new(),
-            suppressed_exec_calls: HashSet::new(),
-            pending_collab_spawn_requests: HashMap::new(),
-            last_unified_wait: None,
-            unified_exec_wait_streak: None,
-            loaded_skills: Vec::new(),
-            turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
-            task_complete_pending: false,
-            unified_exec_processes: Vec::new(),
-            changed_files: VecDeque::new(),
-            changelog_files_count: 0,
-            agent_turn_running: false,
-            mcp_startup_status: None,
-            connectors_cache: ConnectorsCacheState::default(),
-            interrupts: InterruptManager::new(),
-            reasoning_buffer: String::new(),
-            full_reasoning_buffer: String::new(),
-            current_status: StatusIndicatorState::working(),
-            retry_status: None,
-            thread_id: None,
-            thread_name: None,
-            forked_from: None,
-            context_compact_count: 0,
-            counted_context_compaction_item_ids: HashSet::new(),
-            pending_live_legacy_context_compactions: HashMap::new(),
-            pending_replay_legacy_context_compactions: 0,
-            saw_plan_update_this_turn: false,
-            saw_plan_item_this_turn: false,
-            plan_delta_buffer: String::new(),
-            plan_item_active: false,
-            latest_proposed_plan_title: None,
-            latest_update_plan: None,
-            sidebar_agents: Vec::new(),
-            queued_user_messages: VecDeque::new(),
-            show_welcome_banner: is_first_run,
-            suppress_session_configured_redraw: false,
-            pending_notification: None,
-            quit_shortcut_expires_at: None,
-            quit_shortcut_key: None,
-            is_review_mode: false,
-            pre_review_token_info: None,
-            pending_review_start_transition: false,
-            needs_final_message_separator: false,
-            had_work_activity: false,
-            last_separator_elapsed_secs: None,
-            last_rendered_width: std::cell::Cell::new(None),
-            last_transcript_area: std::cell::Cell::new(None),
-            last_bottom_area: std::cell::Cell::new(None),
-            feedback,
-            current_rollout_path: None,
-            external_editor_state: ExternalEditorState::Closed,
-        };
-
-        widget
-            .bottom_pane
-            .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
-        widget
-            .bottom_pane
-            .set_identities_enabled(widget.config.features.enabled(Feature::Identities));
-        widget.sync_personality_command_enabled();
-        widget.sync_buddy_config_from_config();
 
         widget
     }
@@ -2688,7 +2524,7 @@ impl ChatWidget {
             .or(config.model_reasoning_effort);
 
         let codex_op_tx =
-            spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
+            attach_existing_thread(conversation, session_configured, app_event_tx.clone());
 
         let current_identity =
             Self::initial_custom_mode(header_model.clone(), initial_reasoning_effort);
@@ -2734,7 +2570,6 @@ impl ChatWidget {
             plan_stream_controller: None,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
-            pending_collab_spawn_requests: HashMap::new(),
             last_unified_wait: None,
             unified_exec_wait_streak: None,
             loaded_skills: Vec::new(),
@@ -2775,7 +2610,6 @@ impl ChatWidget {
             plan_item_active: false,
             latest_proposed_plan_title: None,
             latest_update_plan: None,
-            sidebar_agents: Vec::new(),
             last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
             last_transcript_area: std::cell::Cell::new(None),
@@ -3180,9 +3014,6 @@ impl ChatWidget {
                     return;
                 }
                 self.open_identity_popup();
-            }
-            SlashCommand::Agent | SlashCommand::MultiAgents => {
-                self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
             SlashCommand::Approvals => {
                 self.app_event_tx.send(AppEvent::OpenApprovalsPopup);
@@ -3804,6 +3635,7 @@ impl ChatWidget {
         self.dispatch_event_msg(Some(id), msg, false);
     }
 
+    #[cfg(test)]
     pub(crate) fn handle_codex_event_replay(&mut self, event: Event) {
         let Event { msg, .. } = event;
         if matches!(msg, EventMsg::ShutdownComplete) {
@@ -3965,34 +3797,6 @@ impl ChatWidget {
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
             EventMsg::ContextCompacted(_) => self.on_context_compacted(id),
-            EventMsg::CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent {
-                call_id,
-                model,
-                reasoning_effort,
-                ..
-            }) => {
-                self.pending_collab_spawn_requests.insert(
-                    call_id,
-                    collab::SpawnRequestSummary {
-                        model,
-                        reasoning_effort,
-                    },
-                );
-            }
-            EventMsg::CollabAgentSpawnEnd(ev) => {
-                let spawn_request = self.pending_collab_spawn_requests.remove(&ev.call_id);
-                self.on_collab_event(collab::spawn_end(ev, spawn_request.as_ref()));
-            }
-            EventMsg::CollabAgentInteractionBegin(_) => {}
-            EventMsg::CollabAgentInteractionEnd(ev) => {
-                self.on_collab_event(collab::interaction_end(ev))
-            }
-            EventMsg::CollabWaitingBegin(ev) => self.on_collab_event(collab::waiting_begin(ev)),
-            EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(collab::waiting_end(ev)),
-            EventMsg::CollabResumeBegin(ev) => self.on_collab_event(collab::resume_begin(ev)),
-            EventMsg::CollabResumeEnd(ev) => self.on_collab_event(collab::resume_end(ev)),
-            EventMsg::CollabCloseBegin(_) => {}
-            EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
             EventMsg::ThreadRolledBack(_) => {}
             EventMsg::RawTranscriptItem(_)
             | EventMsg::ItemStarted(_)
@@ -4347,7 +4151,7 @@ impl ChatWidget {
         session_configured: adam_agent::protocol::SessionConfiguredEvent,
     ) {
         self.codex_op_tx =
-            spawn_agent_from_existing(thread, session_configured, self.app_event_tx.clone());
+            attach_existing_thread(thread, session_configured, self.app_event_tx.clone());
     }
 
     pub(crate) fn open_personality_popup(&mut self) {
@@ -5848,6 +5652,8 @@ impl ChatWidget {
             IdentityKind::Nobody => Some("nobody"),
             IdentityKind::Planner => Some("planner"),
             IdentityKind::Programmer => Some("programmer"),
+            IdentityKind::Explorer => Some("explorer"),
+            IdentityKind::Reviewer => Some("reviewer"),
         }
     }
 
@@ -5859,6 +5665,8 @@ impl ChatWidget {
             IdentityKind::Nobody => Some(IdentityIndicator::Nobody),
             IdentityKind::Planner => Some(IdentityIndicator::Planner),
             IdentityKind::Programmer => Some(IdentityIndicator::Programmer),
+            IdentityKind::Explorer => Some(IdentityIndicator::Programmer),
+            IdentityKind::Reviewer => Some(IdentityIndicator::Programmer),
         }
     }
 
@@ -6567,7 +6375,6 @@ impl ChatWidget {
             files_more_count: self
                 .changelog_files_count
                 .saturating_sub(SIDEBAR_VISIBLE_FILES_LIMIT),
-            agents: self.sidebar_agents.clone(),
             skills: self
                 .loaded_skills
                 .iter()

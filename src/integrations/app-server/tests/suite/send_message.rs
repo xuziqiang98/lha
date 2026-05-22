@@ -8,21 +8,13 @@ use adam_app_server_protocol::NewConversationResponse;
 use adam_app_server_protocol::RequestId;
 use adam_app_server_protocol::SendUserMessageParams;
 use adam_app_server_protocol::SendUserMessageResponse;
-use adam_execpolicy::Policy;
 use adam_protocol::ThreadId;
-use adam_protocol::models::ContentItem;
-use adam_protocol::models::DeveloperInstructions;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::protocol::AskForApproval;
-use adam_protocol::protocol::RawTranscriptItemEvent;
-use adam_protocol::protocol::SandboxPolicy;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use std::path::Path;
-use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -71,10 +63,7 @@ async fn test_send_message_success() -> Result<()> {
 
     // 2) addConversationListener
     let add_listener_id = mcp
-        .send_add_conversation_listener_request(AddConversationListenerParams {
-            conversation_id,
-            experimental_raw_events: false,
-        })
+        .send_add_conversation_listener_request(AddConversationListenerParams { conversation_id })
         .await?;
     let add_listener_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -147,95 +136,6 @@ async fn send_message(
 }
 
 #[tokio::test]
-async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
-    let server = responses::start_mock_server().await;
-    let body = responses::sse(vec![
-        responses::ev_response_created("resp-1"),
-        responses::ev_assistant_message("msg-1", "Done"),
-        responses::ev_completed("resp-1"),
-    ]);
-    let _response_mock = responses::mount_sse_once(&server, body).await;
-
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
-
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let new_conv_id = mcp
-        .send_new_conversation_request(NewConversationParams {
-            developer_instructions: Some("Use the test harness tools.".to_string()),
-            ..Default::default()
-        })
-        .await?;
-    let new_conv_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
-    )
-    .await??;
-    let NewConversationResponse {
-        conversation_id, ..
-    } = to_response::<_>(new_conv_resp)?;
-
-    let add_listener_id = mcp
-        .send_add_conversation_listener_request(AddConversationListenerParams {
-            conversation_id,
-            experimental_raw_events: true,
-        })
-        .await?;
-    let add_listener_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(add_listener_id)),
-    )
-    .await??;
-    let AddConversationSubscriptionResponse { subscription_id: _ } =
-        to_response::<_>(add_listener_resp)?;
-
-    let send_id = mcp
-        .send_send_user_message_request(SendUserMessageParams {
-            conversation_id,
-            items: vec![InputItem::Text {
-                text: "Hello".to_string(),
-                text_elements: Vec::new(),
-            }],
-        })
-        .await?;
-
-    let permissions = read_raw_transcript_item(&mut mcp, conversation_id).await;
-    assert_permissions_message(&permissions);
-
-    let developer = read_raw_transcript_item(&mut mcp, conversation_id).await;
-    assert_developer_message(&developer, "Use the test harness tools.");
-
-    let instructions = read_raw_transcript_item(&mut mcp, conversation_id).await;
-    assert_instructions_message(&instructions);
-
-    let environment = read_raw_transcript_item(&mut mcp, conversation_id).await;
-    assert_environment_message(&environment);
-
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(send_id)),
-    )
-    .await??;
-    let _ok: SendUserMessageResponse = to_response::<SendUserMessageResponse>(response)?;
-
-    let user_message = read_raw_transcript_item(&mut mcp, conversation_id).await;
-    assert_user_message(&user_message, "Hello");
-
-    let assistant_message = read_raw_transcript_item(&mut mcp, conversation_id).await;
-    assert_assistant_message(&assistant_message, "Done");
-
-    let _ = tokio::time::timeout(
-        std::time::Duration::from_millis(250),
-        mcp.read_stream_until_notification_message("adam/event/task_complete"),
-    )
-    .await;
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_send_message_session_not_found() -> Result<()> {
     // Start MCP without creating a Adam session
     let adam_home = TempDir::new()?;
@@ -280,150 +180,4 @@ fn create_config_toml(adam_home: &Path, server_uri: &str) -> std::io::Result<()>
         "never",
         "danger-full-access",
     )
-}
-
-#[expect(clippy::expect_used)]
-async fn read_raw_transcript_item(
-    mcp: &mut McpProcess,
-    conversation_id: ThreadId,
-) -> TranscriptItem {
-    let raw_notification: JSONRPCNotification = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/raw_transcript_item"),
-    )
-    .await
-    .expect("adam/event/raw_transcript_item notification timeout")
-    .expect("adam/event/raw_transcript_item notification resp");
-
-    let serde_json::Value::Object(params) = raw_notification
-        .params
-        .expect("adam/event/raw_transcript_item should have params")
-    else {
-        panic!("adam/event/raw_transcript_item should have params");
-    };
-
-    let conversation_id_value = params
-        .get("conversationId")
-        .and_then(|value| value.as_str())
-        .expect("raw response item should include conversationId");
-
-    assert_eq!(
-        conversation_id_value,
-        conversation_id.to_string(),
-        "raw response item conversation mismatch"
-    );
-
-    let msg_value = params
-        .get("msg")
-        .cloned()
-        .expect("raw response item should include msg payload");
-
-    let event: RawTranscriptItemEvent =
-        serde_json::from_value(msg_value).expect("deserialize raw response item");
-    event.item
-}
-
-fn assert_instructions_message(item: &TranscriptItem) {
-    match item {
-        TranscriptItem::Message { role, content, .. } => {
-            assert_eq!(role, "user");
-            let texts = content_texts(content);
-            let is_instructions = texts
-                .iter()
-                .any(|text| text.starts_with("# AGENTS.md instructions for "));
-            assert!(
-                is_instructions,
-                "expected instructions message, got {texts:?}"
-            );
-        }
-        other => panic!("expected instructions message, got {other:?}"),
-    }
-}
-
-fn assert_permissions_message(item: &TranscriptItem) {
-    match item {
-        TranscriptItem::Message { role, content, .. } => {
-            assert_eq!(role, "developer");
-            let texts = content_texts(content);
-            let expected = DeveloperInstructions::from_policy(
-                &SandboxPolicy::DangerFullAccess,
-                AskForApproval::Never,
-                &Policy::empty(),
-                false,
-                &PathBuf::from("/tmp"),
-            )
-            .into_text();
-            assert_eq!(
-                texts,
-                vec![expected.as_str()],
-                "expected permissions developer message, got {texts:?}"
-            );
-        }
-        other => panic!("expected permissions message, got {other:?}"),
-    }
-}
-
-fn assert_developer_message(item: &TranscriptItem, expected_text: &str) {
-    match item {
-        TranscriptItem::Message { role, content, .. } => {
-            assert_eq!(role, "developer");
-            let texts = content_texts(content);
-            assert_eq!(
-                texts,
-                vec![expected_text],
-                "expected developer instructions message, got {texts:?}"
-            );
-        }
-        other => panic!("expected developer instructions message, got {other:?}"),
-    }
-}
-
-fn assert_environment_message(item: &TranscriptItem) {
-    match item {
-        TranscriptItem::Message { role, content, .. } => {
-            assert_eq!(role, "user");
-            let texts = content_texts(content);
-            assert!(
-                texts
-                    .iter()
-                    .any(|text| text.contains("<environment_context>")),
-                "expected environment context message, got {texts:?}"
-            );
-        }
-        other => panic!("expected environment message, got {other:?}"),
-    }
-}
-
-fn assert_user_message(item: &TranscriptItem, expected_text: &str) {
-    match item {
-        TranscriptItem::Message { role, content, .. } => {
-            assert_eq!(role, "user");
-            let texts = content_texts(content);
-            assert_eq!(texts, vec![expected_text]);
-        }
-        other => panic!("expected user message, got {other:?}"),
-    }
-}
-
-fn assert_assistant_message(item: &TranscriptItem, expected_text: &str) {
-    match item {
-        TranscriptItem::Message { role, content, .. } => {
-            assert_eq!(role, "assistant");
-            let texts = content_texts(content);
-            assert_eq!(texts, vec![expected_text]);
-        }
-        other => panic!("expected assistant message, got {other:?}"),
-    }
-}
-
-fn content_texts(content: &[ContentItem]) -> Vec<&str> {
-    content
-        .iter()
-        .filter_map(|item| match item {
-            ContentItem::InputText { text, .. } | ContentItem::OutputText { text } => {
-                Some(text.as_str())
-            }
-            _ => None,
-        })
-        .collect()
 }

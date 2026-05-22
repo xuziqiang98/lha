@@ -97,8 +97,7 @@ pub use adam_git::GhostSnapshotConfig;
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
-pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
-pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
+pub(crate) const DEFAULT_AGENT_JOB_MAX_CONCURRENCY: Option<usize> = Some(6);
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 pub const GENERATED_PROVIDER_PROFILE_PREFIX: &str = "_provider.";
 pub const MODEL_PROVIDER_VARIANT_SEPARATOR: char = '.';
@@ -385,16 +384,10 @@ pub struct Config {
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
-    /// Maximum number of agent threads that can be open concurrently.
-    pub agent_max_threads: Option<usize>,
+    /// Maximum number of one-shot agent jobs that can run concurrently.
+    pub agent_job_max_concurrency: Option<usize>,
     /// Maximum runtime in seconds for agent job workers before they are failed.
     pub agent_job_max_runtime_seconds: Option<u64>,
-
-    /// Maximum nesting depth allowed for spawned agent threads.
-    pub agent_max_depth: i32,
-
-    /// User-defined role declarations keyed by role name.
-    pub agent_roles: BTreeMap<String, AgentRoleConfig>,
 
     /// Directory containing all Adam state (defaults to `~/.adam` but can be
     /// overridden by the `ADAM_HOME` environment variable).
@@ -1151,53 +1144,13 @@ pub struct ToolsToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct AgentsToml {
-    /// Maximum number of agent threads that can be open concurrently.
+    /// Maximum number of one-shot agent jobs that can run concurrently.
     /// When unset, no limit is enforced.
     #[schemars(range(min = 1))]
-    pub max_threads: Option<usize>,
-    /// Maximum nesting depth allowed for spawned agent threads.
-    /// Root sessions start at depth 0.
-    #[schemars(range(min = 1))]
-    pub max_depth: Option<i32>,
+    pub job_max_concurrency: Option<usize>,
     /// Default maximum runtime in seconds for agent job workers.
     #[schemars(range(min = 1))]
     pub job_max_runtime_seconds: Option<u64>,
-
-    /// User-defined role declarations keyed by role name.
-    ///
-    /// Example:
-    /// ```toml
-    /// [agents.researcher]
-    /// description = "Research-focused role."
-    /// config_file = "./agents/researcher.toml"
-    /// nickname_candidates = ["Herodotus", "Ibn Battuta"]
-    /// ```
-    #[serde(default, flatten)]
-    pub roles: BTreeMap<String, AgentRoleToml>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AgentRoleConfig {
-    /// Human-facing role documentation used in spawn tool guidance.
-    pub description: Option<String>,
-    /// Path to a role-specific config layer.
-    pub config_file: Option<PathBuf>,
-    /// Candidate nicknames for agents spawned with this role.
-    pub nickname_candidates: Option<Vec<String>>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct AgentRoleToml {
-    /// Human-facing role documentation used in spawn tool guidance.
-    pub description: Option<String>,
-
-    /// Path to a role-specific config layer.
-    /// Relative paths are resolved relative to the `config.toml` that defines them.
-    pub config_file: Option<AbsolutePathBuf>,
-
-    /// Candidate nicknames for agents spawned with this role.
-    pub nickname_candidates: Option<Vec<String>>,
 }
 
 impl From<ToolsToml> for Tools {
@@ -1348,6 +1301,7 @@ pub struct ConfigOverrides {
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     pub ephemeral: Option<bool>,
+    pub model_provider_overrides: HashMap<String, RuntimeEndpoint>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -1428,6 +1382,7 @@ impl Config {
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             ephemeral,
+            model_provider_overrides,
             additional_writable_roots,
         } = overrides;
 
@@ -1531,6 +1486,7 @@ impl Config {
         let state_json = load_state(&adam_home)?;
         let mut model_providers = built_in_runtime_endpoints();
         model_providers.extend(models_json.to_runtime_endpoints());
+        model_providers.extend(model_provider_overrides);
 
         let state_model_ref = state_json
             .last_selected_model
@@ -1600,48 +1556,17 @@ impl Config {
 
         let history = cfg.history.unwrap_or_default();
 
-        let agent_max_threads = cfg
+        let agent_job_max_concurrency = cfg
             .agents
             .as_ref()
-            .and_then(|agents| agents.max_threads)
-            .or(DEFAULT_AGENT_MAX_THREADS);
-        if agent_max_threads == Some(0) {
+            .and_then(|agents| agents.job_max_concurrency)
+            .or(DEFAULT_AGENT_JOB_MAX_CONCURRENCY);
+        if agent_job_max_concurrency == Some(0) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "agents.max_threads must be at least 1",
+                "agents.job_max_concurrency must be at least 1",
             ));
         }
-        let agent_max_depth = cfg
-            .agents
-            .as_ref()
-            .and_then(|agents| agents.max_depth)
-            .unwrap_or(DEFAULT_AGENT_MAX_DEPTH);
-        if agent_max_depth < 1 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "agents.max_depth must be at least 1",
-            ));
-        }
-        let agent_roles = cfg
-            .agents
-            .as_ref()
-            .map(|agents| {
-                agents
-                    .roles
-                    .iter()
-                    .map(|(name, role)| {
-                        (
-                            name.clone(),
-                            AgentRoleConfig {
-                                description: role.description.clone(),
-                                config_file: role.config_file.clone().map(PathBuf::from),
-                                nickname_candidates: role.nickname_candidates.clone(),
-                            },
-                        )
-                    })
-                    .collect::<BTreeMap<_, _>>()
-            })
-            .unwrap_or_default();
         let agent_job_max_runtime_seconds = cfg
             .agents
             .as_ref()
@@ -1798,10 +1723,8 @@ impl Config {
                 })
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
-            agent_max_threads,
+            agent_job_max_concurrency,
             agent_job_max_runtime_seconds,
-            agent_max_depth,
-            agent_roles,
             adam_home,
             config_layer_stack,
             history,
@@ -2105,45 +2028,34 @@ persistence = "none"
     }
 
     #[test]
-    fn agents_config_loads_depth_runtime_and_roles() {
+    fn agents_config_loads_job_limits() {
         let config = load_test_config_from_toml(
             r#"
 [agents]
-max_depth = 3
+job_max_concurrency = 3
 job_max_runtime_seconds = 45
-
-[agents.researcher]
-description = "Research-focused role."
-nickname_candidates = ["Herodotus", "Ibn Battuta"]
 "#,
         )
         .expect("config should load");
 
-        assert_eq!(config.agent_max_depth, 3);
+        assert_eq!(config.agent_job_max_concurrency, Some(3));
         assert_eq!(config.agent_job_max_runtime_seconds, Some(45));
-        assert_eq!(
-            config.agent_roles.get("researcher"),
-            Some(&AgentRoleConfig {
-                description: Some("Research-focused role.".to_string()),
-                config_file: None,
-                nickname_candidates: Some(
-                    vec!["Herodotus".to_string(), "Ibn Battuta".to_string(),]
-                ),
-            })
-        );
     }
 
     #[test]
-    fn agents_config_rejects_invalid_depth() {
+    fn agents_config_rejects_invalid_job_concurrency() {
         let err = load_test_config_from_toml(
             r#"
 [agents]
-max_depth = 0
+job_max_concurrency = 0
 "#,
         )
-        .expect_err("max_depth=0 should fail");
+        .expect_err("job_max_concurrency=0 should fail");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-        assert_eq!(err.to_string(), "agents.max_depth must be at least 1");
+        assert_eq!(
+            err.to_string(),
+            "agents.job_max_concurrency must be at least 1"
+        );
     }
 
     #[test]

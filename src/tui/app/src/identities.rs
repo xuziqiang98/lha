@@ -5,7 +5,11 @@ use adam_protocol::config_types::IdentityMask;
 fn is_tui_identity(kind: IdentityKind) -> bool {
     matches!(
         kind,
-        IdentityKind::Nobody | IdentityKind::Planner | IdentityKind::Programmer
+        IdentityKind::Nobody
+            | IdentityKind::Planner
+            | IdentityKind::Programmer
+            | IdentityKind::Explorer
+            | IdentityKind::Reviewer
     )
 }
 
