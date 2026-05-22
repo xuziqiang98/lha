@@ -7,9 +7,11 @@ use adam_protocol::protocol::EventMsg;
 use adam_protocol::protocol::ExitedReviewModeEvent;
 use adam_protocol::protocol::ReviewOutputEvent;
 use async_trait::async_trait;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent_jobs::AgentJobExecConfig;
+use crate::agent_jobs::AgentJobSpawnOptions;
 use crate::agent_jobs::AgentJobStatus;
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -88,6 +90,7 @@ async fn run_review_job(
         .clone()
         .unwrap_or_else(|| ctx.runtime.get_model());
     let exec_config = AgentJobExecConfig::from_runtime(&ctx.runtime, &model);
+    let (progress_tx, mut progress_rx) = mpsc::unbounded_channel();
     // Review model work runs in an isolated CLI-backed job; this task only
     // starts the job, waits for its final result, and folds that result back
     // into the parent session.
@@ -101,7 +104,7 @@ async fn run_review_job(
             prompt,
             ctx.cwd.clone(),
             exec_config,
-            None,
+            AgentJobSpawnOptions::raw_events(None, progress_tx),
         )
         .await
     {
@@ -112,42 +115,103 @@ async fn run_review_job(
             )));
         }
     };
-    while !cancellation_token.is_cancelled() {
-        let snapshot = session.session.services.agent_jobs.status(&job.id).await;
-        match snapshot.status {
-            AgentJobStatus::Completed { result, .. } => {
-                return Some(parse_review_output_event(&result));
-            }
-            AgentJobStatus::Failed { message, .. } => {
-                let message = message.trim();
-                let message = if message.is_empty() {
-                    "Review failed without error output.".to_string()
+    let mut progress_closed = false;
+    loop {
+        tokio::select! {
+            maybe_msg = progress_rx.recv(), if !progress_closed => {
+                if let Some(msg) = maybe_msg {
+                    forward_review_progress_event(&session, &ctx, msg).await;
                 } else {
-                    format!("Review failed: {message}")
-                };
-                return Some(review_failure_output(message));
+                    progress_closed = true;
+                }
             }
-            AgentJobStatus::TimedOut => {
-                return Some(review_failure_output(
-                    "Review timed out before producing a result.",
-                ));
+            () = tokio::time::sleep(Duration::from_millis(100)) => {
+                let snapshot = session.session.services.agent_jobs.status(&job.id).await;
+                match snapshot.status {
+                    AgentJobStatus::Completed { result, .. } => {
+                        drain_review_progress_events(&session, &ctx, &mut progress_rx).await;
+                        return Some(parse_review_output_event(&result));
+                    }
+                    AgentJobStatus::Failed { message, .. } => {
+                        drain_review_progress_events(&session, &ctx, &mut progress_rx).await;
+                        let message = message.trim();
+                        let message = if message.is_empty() {
+                            "Review failed without error output.".to_string()
+                        } else {
+                            format!("Review failed: {message}")
+                        };
+                        return Some(review_failure_output(message));
+                    }
+                    AgentJobStatus::TimedOut => {
+                        return Some(review_failure_output(
+                            "Review timed out before producing a result.",
+                        ));
+                    }
+                    AgentJobStatus::Cancelled => {
+                        return Some(review_failure_output(
+                            "Review was cancelled before producing a result.",
+                        ));
+                    }
+                    AgentJobStatus::NotFound => {
+                        return Some(review_failure_output(
+                            "Review job disappeared before producing a result.",
+                        ));
+                    }
+                    status if status.is_final() => return None,
+                    AgentJobStatus::Running => {}
+                }
             }
-            AgentJobStatus::Cancelled => {
-                return Some(review_failure_output(
-                    "Review was cancelled before producing a result.",
-                ));
-            }
-            AgentJobStatus::NotFound => {
-                return Some(review_failure_output(
-                    "Review job disappeared before producing a result.",
-                ));
-            }
-            status if status.is_final() => return None,
-            AgentJobStatus::Running => tokio::time::sleep(Duration::from_millis(100)).await,
+            () = cancellation_token.cancelled() => break,
         }
     }
     let _ = session.session.services.agent_jobs.close(&job.id).await;
     None
+}
+
+async fn drain_review_progress_events(
+    session: &Arc<SessionTaskContext>,
+    ctx: &Arc<TurnContext>,
+    progress_rx: &mut mpsc::UnboundedReceiver<EventMsg>,
+) {
+    while let Ok(msg) = progress_rx.try_recv() {
+        forward_review_progress_event(session, ctx, msg).await;
+    }
+}
+
+async fn forward_review_progress_event(
+    session: &Arc<SessionTaskContext>,
+    ctx: &Arc<TurnContext>,
+    msg: EventMsg,
+) {
+    if should_forward_review_progress_event(&msg) {
+        session.session.send_event(ctx.as_ref(), msg).await;
+    }
+}
+
+fn should_forward_review_progress_event(msg: &EventMsg) -> bool {
+    matches!(
+        msg,
+        EventMsg::AgentReasoningDelta(_)
+            | EventMsg::AgentReasoning(_)
+            | EventMsg::AgentReasoningSectionBreak(_)
+            | EventMsg::AgentReasoningRawContentDelta(_)
+            | EventMsg::AgentReasoningRawContent(_)
+            | EventMsg::ExecCommandBegin(_)
+            | EventMsg::ExecCommandOutputDelta(_)
+            | EventMsg::TerminalInteraction(_)
+            | EventMsg::ExecCommandEnd(_)
+            | EventMsg::PatchApplyBegin(_)
+            | EventMsg::PatchApplyEnd(_)
+            | EventMsg::McpToolCallBegin(_)
+            | EventMsg::McpToolCallEnd(_)
+            | EventMsg::WebSearchBegin(_)
+            | EventMsg::WebSearchEnd(_)
+            | EventMsg::ViewImageToolCall(_)
+            | EventMsg::Warning(_)
+            | EventMsg::StreamError(_)
+            | EventMsg::BackgroundEvent(_)
+            | EventMsg::TokenCount(_)
+    )
 }
 
 fn review_failure_output(message: impl Into<String>) -> ReviewOutputEvent {

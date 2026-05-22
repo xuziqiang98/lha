@@ -10,7 +10,10 @@ pub(crate) const STATSIG_API_KEY: &str = "client-MkRuleRQBd6qakfnDYqJVR9JuXcY57L
 pub(crate) fn resolve_exporter(exporter: &OtelExporter) -> OtelExporter {
     match exporter {
         OtelExporter::Statsig => {
-            if cfg!(test) || cfg!(feature = "disable-default-metrics-exporter") {
+            if cfg!(test)
+                || cfg!(debug_assertions)
+                || cfg!(feature = "disable-default-metrics-exporter")
+            {
                 return OtelExporter::None;
             }
 
@@ -25,6 +28,19 @@ pub(crate) fn resolve_exporter(exporter: &OtelExporter) -> OtelExporter {
             }
         }
         _ => exporter.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn statsig_exporter_is_disabled_for_tests() {
+        assert!(matches!(
+            resolve_exporter(&OtelExporter::Statsig),
+            OtelExporter::None
+        ));
     }
 }
 

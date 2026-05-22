@@ -501,6 +501,7 @@ pub(crate) struct ChatWidget {
     // Previous status snapshot to restore after a transient stream retry.
     retry_status: Option<StatusIndicatorState>,
     thread_id: Option<ThreadId>,
+    agent_shutdown_complete: bool,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
     context_compact_count: usize,
@@ -863,6 +864,7 @@ impl ChatWidget {
                 .set_connectors_snapshot_without_redraw(None);
         }
         self.thread_id = Some(event.session_id);
+        self.agent_shutdown_complete = false;
         self.app_event_tx
             .set_history_thread_id(Some(event.session_id));
         self.thread_name = event.thread_name.clone();
@@ -1859,6 +1861,7 @@ impl ChatWidget {
     }
 
     fn on_shutdown_complete(&mut self) {
+        self.agent_shutdown_complete = true;
         self.request_immediate_exit();
     }
 
@@ -2420,6 +2423,7 @@ impl ChatWidget {
             current_status: StatusIndicatorState::working(),
             retry_status: None,
             thread_id: None,
+            agent_shutdown_complete: false,
             thread_name: None,
             forked_from: None,
             context_compact_count: 0,
@@ -2587,6 +2591,7 @@ impl ChatWidget {
             current_status: StatusIndicatorState::working(),
             retry_status: None,
             thread_id: None,
+            agent_shutdown_complete: false,
             thread_name: None,
             forked_from: None,
             context_compact_count: 0,
@@ -4150,6 +4155,7 @@ impl ChatWidget {
         thread: std::sync::Arc<adam_agent::CodexThread>,
         session_configured: adam_agent::protocol::SessionConfiguredEvent,
     ) {
+        self.agent_shutdown_complete = false;
         self.codex_op_tx =
             attach_existing_thread(thread, session_configured, self.app_event_tx.clone());
     }
@@ -6122,6 +6128,11 @@ impl ChatWidget {
     }
     /// Forward an `Op` directly to codex.
     pub(crate) fn submit_op(&mut self, op: Op) {
+        if self.agent_shutdown_complete {
+            tracing::debug!("ignoring op submitted after agent shutdown completed");
+            return;
+        }
+
         // Record outbound operation for session replay fidelity.
         crate::session_log::log_outbound_op(&op);
         if let Err(e) = self.codex_op_tx.send(op) {

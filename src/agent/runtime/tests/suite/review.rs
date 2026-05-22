@@ -73,6 +73,7 @@ fn write_fake_reviewer_exec(dir: &TempDir, review_output: &ReviewOutputEvent) ->
     let body = format!(
         r#"#!/bin/sh
 out=""
+raw_events=0
 : > "{args_log}"
 while [ "$#" -gt 0 ]; do
   printf "%s\n" "$1" >> "{args_log}"
@@ -80,11 +81,16 @@ while [ "$#" -gt 0 ]; do
     out="$2"
     printf "%s\n" "$2" >> "{args_log}"
     shift 2
+  elif [ "$1" = "--internal-raw-events" ]; then
+    raw_events=1
+    shift
   else
     shift
   fi
 done
-cat >/dev/null
+if [ "$raw_events" = "1" ]; then
+  printf "%s\n" '{{"id":"fake-reviewer-reasoning","msg":{{"type":"agent_reasoning","text":"checking review target"}}}}'
+fi
 printf '%s' '{review_json}' > "$out"
 "#,
         args_log = args_log.display(),
@@ -285,6 +291,7 @@ async fn review_op_uses_cli_backed_reviewer_job() {
         .unwrap();
 
     let mut saw_entered = false;
+    let mut saw_reasoning = false;
     let review = loop {
         let event = tokio::time::timeout(std::time::Duration::from_secs(5), codex.next_event())
             .await
@@ -292,10 +299,18 @@ async fn review_op_uses_cli_backed_reviewer_job() {
             .expect("event stream should stay open");
         match event.msg {
             EventMsg::EnteredReviewMode(_) => saw_entered = true,
+            EventMsg::AgentReasoning(reasoning) => {
+                assert_eq!("checking review target", reasoning.text);
+                saw_reasoning = true;
+            }
             EventMsg::ExitedReviewMode(ev) => {
                 assert!(
                     saw_entered,
                     "ExitedReviewMode must not arrive before EnteredReviewMode"
+                );
+                assert!(
+                    saw_reasoning,
+                    "reviewer progress must surface before ExitedReviewMode"
                 );
                 break ev
                     .review_output
@@ -316,6 +331,10 @@ async fn review_op_uses_cli_backed_reviewer_job() {
     assert!(
         args.contains(&"--output-last-message"),
         "expected result-file channel args: {args:?}"
+    );
+    assert!(
+        args.contains(&"--internal-raw-events"),
+        "expected raw event channel args: {args:?}"
     );
 
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

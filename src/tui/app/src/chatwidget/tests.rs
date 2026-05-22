@@ -1783,6 +1783,19 @@ async fn pending_review_start_queues_enter_submission_instead_of_submitting_turn
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
 
+#[tokio::test]
+async fn submit_op_after_shutdown_complete_is_ignored() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "shutdown".to_string(),
+        msg: EventMsg::ShutdownComplete,
+    });
+    chat.submit_op(Op::Interrupt);
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
 /// Exiting review restores the pre-review context window indicator.
 #[tokio::test]
 async fn review_restores_context_window_indicator() {
@@ -2179,6 +2192,7 @@ async fn make_chatwidget_manual_inner(
         current_status: StatusIndicatorState::working(),
         retry_status: None,
         thread_id: None,
+        agent_shutdown_complete: false,
         thread_name: None,
         forked_from: None,
         context_compact_count: 0,
@@ -2349,6 +2363,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         current_status: StatusIndicatorState::working(),
         retry_status: None,
         thread_id: None,
+        agent_shutdown_complete: false,
         thread_name: None,
         forked_from: None,
         context_compact_count: 0,

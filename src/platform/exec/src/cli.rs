@@ -87,6 +87,10 @@ pub struct Cli {
     )]
     pub json: bool,
 
+    /// Print raw internal protocol events to stdout as JSONL.
+    #[arg(long = "internal-raw-events", hide = true, default_value_t = false)]
+    pub internal_raw_events: bool,
+
     /// Specifies file where the last message from the agent should be written.
     #[arg(long = "output-last-message", short = 'o', value_name = "FILE")]
     pub last_message_file: Option<PathBuf>,
@@ -301,5 +305,13 @@ mod tests {
         let cli = Cli::parse_from(["adam-exec", "--identity", "explorer", "inspect"]);
 
         assert_eq!(cli.identity, Some(ExecIdentityArg::Explorer));
+    }
+
+    #[test]
+    fn parses_internal_raw_events_flag() {
+        let cli = Cli::parse_from(["adam-exec", "--internal-raw-events", "inspect"]);
+
+        assert!(cli.internal_raw_events);
+        assert!(!cli.json);
     }
 }

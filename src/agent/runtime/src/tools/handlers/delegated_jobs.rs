@@ -1,4 +1,5 @@
 use crate::agent_jobs::AgentJobExecConfig;
+use crate::agent_jobs::AgentJobSpawnOptions;
 use crate::agent_jobs::AgentJobStatus;
 use crate::agent_jobs::AgentJobType;
 use crate::codex::Session;
@@ -103,7 +104,7 @@ async fn spawn_agent(
             args.message,
             turn.cwd.clone(),
             exec_config,
-            args.max_runtime_seconds,
+            AgentJobSpawnOptions::log_only(args.max_runtime_seconds),
         )
         .await
         .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;

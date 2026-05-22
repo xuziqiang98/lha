@@ -32,6 +32,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
+use std::panic::AssertUnwindSafe;
 use std::sync::OnceLock;
 use tracing::debug;
 use tracing::level_filters::LevelFilter;
@@ -84,7 +85,17 @@ impl OtelProvider {
             if settings.runtime_metrics {
                 config = config.with_runtime_reader();
             }
-            Some(MetricsClient::new(config)?)
+            match std::panic::catch_unwind(AssertUnwindSafe(|| MetricsClient::new(config))) {
+                Ok(Ok(metrics)) => Some(metrics),
+                Ok(Err(err)) => {
+                    warn!("failed to initialize OTEL metrics exporter: {err}");
+                    None
+                }
+                Err(_) => {
+                    warn!("failed to initialize OTEL metrics exporter: initialization panicked");
+                    None
+                }
+            }
         };
 
         if let Some(metrics) = metrics.as_ref() {

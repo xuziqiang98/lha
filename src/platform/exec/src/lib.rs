@@ -8,6 +8,7 @@ mod cli;
 mod event_processor;
 mod event_processor_with_human_output;
 pub mod event_processor_with_jsonl_output;
+mod event_processor_with_raw_event_output;
 pub mod exec_events;
 
 use adam_agent::AuthManager;
@@ -46,6 +47,7 @@ pub use cli::Command;
 pub use cli::ReviewArgs;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
+use event_processor_with_raw_event_output::EventProcessorWithRawEventOutput;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -147,11 +149,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         color,
         last_message_file,
         json: json_mode,
+        internal_raw_events,
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         output_schema: output_schema_path,
         config_overrides,
     } = cli;
+
+    if json_mode && internal_raw_events {
+        anyhow::bail!("--json cannot be combined with --internal-raw-events");
+    }
 
     let (stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
@@ -295,13 +302,18 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         .with(otel_logger_layer)
         .try_init();
 
-    let mut event_processor: Box<dyn EventProcessor> = match json_mode {
-        true => Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone())),
-        _ => Box::new(EventProcessorWithHumanOutput::create_with_ansi(
+    let mut event_processor: Box<dyn EventProcessor> = if internal_raw_events {
+        Box::new(EventProcessorWithRawEventOutput::new(
+            last_message_file.clone(),
+        ))
+    } else if json_mode {
+        Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone()))
+    } else {
+        Box::new(EventProcessorWithHumanOutput::create_with_ansi(
             stdout_with_ansi,
             &config,
             last_message_file.clone(),
-        )),
+        ))
     };
     let default_cwd = config.cwd.to_path_buf();
     let default_approval_policy = config.approval_policy.value();

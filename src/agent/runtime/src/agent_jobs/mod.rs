@@ -5,6 +5,8 @@ use crate::env::ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR;
 use crate::error::CodexErr;
 use adam_llm::RuntimeEndpoint;
 use adam_protocol::ThreadId;
+use adam_protocol::protocol::Event;
+use adam_protocol::protocol::EventMsg;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -15,13 +17,17 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
+use tokio::io::BufReader;
 use tokio::process::Child;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
+use tokio::sync::mpsc;
 use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -90,6 +96,37 @@ pub(crate) struct AgentJobExecConfig {
     pub(crate) model_provider_id: String,
     pub(crate) model_provider: RuntimeEndpoint,
     pub(crate) auth_token: Option<String>,
+}
+
+pub(crate) enum AgentJobOutputMode {
+    LogOnly,
+    RawEvents {
+        progress_tx: mpsc::UnboundedSender<EventMsg>,
+    },
+}
+
+pub(crate) struct AgentJobSpawnOptions {
+    max_runtime_seconds: Option<u64>,
+    output_mode: AgentJobOutputMode,
+}
+
+impl AgentJobSpawnOptions {
+    pub(crate) fn log_only(max_runtime_seconds: Option<u64>) -> Self {
+        Self {
+            max_runtime_seconds,
+            output_mode: AgentJobOutputMode::LogOnly,
+        }
+    }
+
+    pub(crate) fn raw_events(
+        max_runtime_seconds: Option<u64>,
+        progress_tx: mpsc::UnboundedSender<EventMsg>,
+    ) -> Self {
+        Self {
+            max_runtime_seconds,
+            output_mode: AgentJobOutputMode::RawEvents { progress_tx },
+        }
+    }
 }
 
 impl AgentJobExecConfig {
@@ -183,8 +220,12 @@ impl AgentJobManager {
         prompt: String,
         cwd: PathBuf,
         exec_config: AgentJobExecConfig,
-        max_runtime_seconds: Option<u64>,
+        options: AgentJobSpawnOptions,
     ) -> Result<AgentJobSnapshot, CodexErr> {
+        let AgentJobSpawnOptions {
+            max_runtime_seconds,
+            output_mode,
+        } = options;
         let max_runtime = self.resolve_max_runtime(max_runtime_seconds)?;
         let permit = self.semaphore.clone().try_acquire_owned().map_err(|_| {
             CodexErr::UnsupportedOperation("agent job concurrency limit reached".to_string())
@@ -218,6 +259,7 @@ impl AgentJobManager {
             &cwd,
             &exec_config,
             &result_path,
+            matches!(output_mode, AgentJobOutputMode::RawEvents { .. }),
         ) {
             Ok(command) => command,
             Err(err) => {
@@ -231,10 +273,21 @@ impl AgentJobManager {
         };
         persist_status(&status_path, &AgentJobStatus::Running).await?;
         command.stdin(Stdio::piped());
-        command.stdout(Stdio::from(create_private_std_file(
-            &stdout_path,
-            "agent job stdout log",
-        )?));
+        match &output_mode {
+            AgentJobOutputMode::LogOnly => {
+                command.stdout(Stdio::from(create_private_std_file(
+                    &stdout_path,
+                    "agent job stdout log",
+                )?));
+            }
+            AgentJobOutputMode::RawEvents { .. } => {
+                drop(create_private_std_file(
+                    &stdout_path,
+                    "agent job stdout log",
+                )?);
+                command.stdout(Stdio::piped());
+            }
+        }
         command.stderr(Stdio::from(create_private_std_file(
             &stderr_path,
             "agent job stderr log",
@@ -261,6 +314,12 @@ impl AgentJobManager {
                 let _ = stdin.write_all(prompt_for_stdin.as_bytes()).await;
             });
         }
+        let stdout_task = match output_mode {
+            AgentJobOutputMode::LogOnly => None,
+            AgentJobOutputMode::RawEvents { progress_tx } => child.stdout.take().map(|stdout| {
+                spawn_raw_event_stdout_reader(stdout, stdout_path.clone(), progress_tx)
+            }),
+        };
 
         let status = Arc::new(Mutex::new(AgentJobStatus::Running));
         let cancellation_token = CancellationToken::new();
@@ -283,6 +342,7 @@ impl AgentJobManager {
             result_path,
             stderr_path,
             status_path,
+            stdout_task,
             max_runtime,
             completion_tx,
             _permit: permit,
@@ -525,6 +585,7 @@ fn build_adam_exec_command(
     cwd: &PathBuf,
     exec_config: &AgentJobExecConfig,
     result_path: &std::path::Path,
+    internal_raw_events: bool,
 ) -> Result<Command, CodexErr> {
     let program = resolve_adam_exec_program(exec_bin_override)?;
     let mut command = Command::new(&program);
@@ -555,6 +616,9 @@ fn build_adam_exec_command(
     if let Some(auth_token) = exec_config.auth_token.as_deref() {
         command.env(ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR, auth_token);
     }
+    if internal_raw_events {
+        command.arg("--internal-raw-events");
+    }
     command
         .arg("--identity")
         .arg(agent_type.identity_arg())
@@ -569,6 +633,52 @@ fn build_adam_exec_command(
         .arg(cwd)
         .arg("-");
     Ok(command)
+}
+
+fn spawn_raw_event_stdout_reader(
+    stdout: tokio::process::ChildStdout,
+    stdout_path: PathBuf,
+    progress_tx: mpsc::UnboundedSender<EventMsg>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let log_file = match create_private_std_file(&stdout_path, "agent job stdout log") {
+            Ok(file) => file,
+            Err(err) => {
+                tracing::warn!("failed to open agent job stdout log: {err}");
+                return;
+            }
+        };
+        let mut log_file = tokio::fs::File::from_std(log_file);
+        let mut lines = BufReader::new(stdout).lines();
+        loop {
+            match lines.next_line().await {
+                Ok(Some(line)) => {
+                    if let Err(err) = log_file.write_all(line.as_bytes()).await {
+                        tracing::warn!("failed to write agent job stdout log: {err}");
+                    }
+                    if let Err(err) = log_file.write_all(b"\n").await {
+                        tracing::warn!("failed to write agent job stdout newline: {err}");
+                    }
+                    match serde_json::from_str::<Event>(&line) {
+                        Ok(event) => {
+                            let _ = progress_tx.send(event.msg);
+                        }
+                        Err(err) => {
+                            tracing::debug!("ignoring non-event agent job stdout line: {err}");
+                        }
+                    }
+                }
+                Ok(None) => break,
+                Err(err) => {
+                    tracing::warn!("failed to read agent job stdout: {err}");
+                    break;
+                }
+            }
+        }
+        if let Err(err) = log_file.flush().await {
+            tracing::warn!("failed to flush agent job stdout log: {err}");
+        }
+    })
 }
 
 fn resolve_adam_exec_program(exec_bin_override: Option<&PathBuf>) -> Result<PathBuf, CodexErr> {
@@ -637,6 +747,7 @@ struct AgentJobWatcher {
     result_path: PathBuf,
     stderr_path: PathBuf,
     status_path: PathBuf,
+    stdout_task: Option<JoinHandle<()>>,
     max_runtime: Duration,
     completion_tx: watch::Sender<bool>,
     _permit: OwnedSemaphorePermit,
@@ -652,6 +763,7 @@ fn spawn_job_watcher(watcher: AgentJobWatcher) {
             result_path,
             stderr_path,
             status_path,
+            stdout_task,
             max_runtime,
             completion_tx,
             _permit,
@@ -694,6 +806,11 @@ fn spawn_job_watcher(watcher: AgentJobWatcher) {
                 AgentJobStatus::Cancelled
             }
         };
+        if let Some(stdout_task) = stdout_task
+            && let Err(err) = stdout_task.await
+        {
+            tracing::warn!("agent job stdout reader failed: {err}");
+        }
         let mut status_guard = status.lock().await;
         *status_guard = next_status.clone();
         drop(status_guard);
@@ -823,7 +940,7 @@ printf "explorer result" > "$out"
                 "inspect this".to_string(),
                 dir.path().to_path_buf(),
                 test_exec_config(adam_home.path(), "test-provider.main:test-model"),
-                None,
+                AgentJobSpawnOptions::log_only(None),
             )
             .await
             .expect("spawn job");
@@ -866,6 +983,92 @@ printf "explorer result" > "$out"
     }
 
     #[tokio::test]
+    async fn raw_event_mode_forwards_events_and_logs_stdout() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let adam_home = tempfile::tempdir().expect("adam home");
+        let args_log = dir.path().join("args.txt");
+        let script = write_script(
+            &dir,
+            "adam-exec-fake",
+            &format!(
+                r#"#!/bin/sh
+out=""
+: > "{args_log}"
+while [ "$#" -gt 0 ]; do
+  printf "%s\n" "$1" >> "{args_log}"
+  if [ "$1" = "--output-last-message" ]; then
+    out="$2"
+    printf "%s\n" "$2" >> "{args_log}"
+    shift 2
+  else
+    shift
+  fi
+done
+cat >/dev/null
+printf "%s\n" "not json"
+printf "%s\n" '{{"id":"child-reasoning","msg":{{"type":"agent_reasoning","text":"checking changes"}}}}'
+printf "raw mode result" > "$out"
+"#,
+                args_log = args_log.display()
+            ),
+        );
+        let manager = AgentJobManager::new(adam_home.path().to_path_buf(), Some(1), Some(5))
+            .with_exec_bin_for_tests(script);
+        let parent_thread_id = ThreadId::new();
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel();
+        let snapshot = manager
+            .spawn(
+                parent_thread_id,
+                AgentJobType::Explorer,
+                "inspect this".to_string(),
+                dir.path().to_path_buf(),
+                test_exec_config(adam_home.path(), "test-provider.main:test-model"),
+                AgentJobSpawnOptions::raw_events(None, progress_tx),
+            )
+            .await
+            .expect("spawn job");
+
+        let event = tokio::time::timeout(Duration::from_secs(5), progress_rx.recv())
+            .await
+            .expect("timed out waiting for raw event")
+            .expect("raw event channel should be open");
+        match event {
+            EventMsg::AgentReasoning(reasoning) => {
+                assert_eq!(reasoning.text, "checking changes");
+            }
+            other => panic!("expected AgentReasoning, got {other:?}"),
+        }
+
+        let snapshots = manager
+            .wait(std::slice::from_ref(&snapshot.id), Duration::from_secs(5))
+            .await;
+        assert_eq!(
+            snapshots[0].status,
+            AgentJobStatus::Completed {
+                result: "raw mode result".to_string(),
+                exit_code: Some(0)
+            }
+        );
+
+        let args = std::fs::read_to_string(args_log).expect("args log");
+        assert!(
+            args.lines().any(|arg| arg == "--internal-raw-events"),
+            "expected raw event mode arg: {args:?}"
+        );
+
+        let stdout_path = adam_home
+            .path()
+            .join(JOBS_DIR)
+            .join(parent_thread_id.to_string())
+            .join(&snapshot.id)
+            .join("stdout.log");
+        let stdout_log = std::fs::read_to_string(&stdout_path).expect("stdout log");
+        assert!(stdout_log.contains("not json"));
+        assert!(stdout_log.contains("checking changes"));
+        assert_eq!(mode(&stdout_path), 0o600);
+    }
+
+    #[tokio::test]
     async fn requested_runtime_is_capped_by_configured_max() {
         let dir = tempfile::tempdir().expect("tempdir");
         let adam_home = tempfile::tempdir().expect("adam home");
@@ -896,7 +1099,7 @@ printf "runtime result" > "$out"
                 "inspect this".to_string(),
                 dir.path().to_path_buf(),
                 test_exec_config(adam_home.path(), "test-provider.main:test-model"),
-                Some(9999),
+                AgentJobSpawnOptions::log_only(Some(9999)),
             )
             .await
             .expect("spawn job");
@@ -931,7 +1134,7 @@ printf "runtime result" > "$out"
                 "inspect this".to_string(),
                 dir.path().to_path_buf(),
                 test_exec_config(adam_home.path(), "test-provider.main:test-model"),
-                Some(0),
+                AgentJobSpawnOptions::log_only(Some(0)),
             )
             .await
             .expect_err("zero max runtime should fail");
@@ -993,7 +1196,7 @@ printf "args result" > "$out"
                     ),
                     auth_token: Some("secret-token".to_string()),
                 },
-                None,
+                AgentJobSpawnOptions::log_only(None),
             )
             .await
             .expect("spawn job");
@@ -1026,6 +1229,10 @@ printf "args result" > "$out"
         assert!(
             args.windows(2)
                 .any(|window| window == ["--cd", dir.path().to_str().expect("utf-8 path")])
+        );
+        assert!(
+            !args.contains(&"--internal-raw-events"),
+            "log-only jobs should not request raw event output: {args:?}"
         );
 
         let child_env = std::fs::read_to_string(dir.path().join("env.txt")).expect("child env log");
@@ -1075,7 +1282,7 @@ exec sleep 30
                 "inspect this".to_string(),
                 dir.path().to_path_buf(),
                 test_exec_config(adam_home.path(), "test-provider.main:test-model"),
-                None,
+                AgentJobSpawnOptions::log_only(None),
             )
             .await
             .expect("spawn job");
@@ -1120,7 +1327,7 @@ exec sleep 30
                 "inspect first".to_string(),
                 dir.path().to_path_buf(),
                 test_exec_config(adam_home.path(), "test-provider.main:test-model"),
-                None,
+                AgentJobSpawnOptions::log_only(None),
             )
             .await
             .expect("spawn first job");
@@ -1131,7 +1338,7 @@ exec sleep 30
                 "inspect second".to_string(),
                 dir.path().to_path_buf(),
                 test_exec_config(adam_home.path(), "test-provider.main:test-model"),
-                None,
+                AgentJobSpawnOptions::log_only(None),
             )
             .await
             .expect("spawn second job");
