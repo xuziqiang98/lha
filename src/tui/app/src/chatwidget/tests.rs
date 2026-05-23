@@ -8,6 +8,7 @@ use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::IdentityIndicator;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::UserHistoryCell;
@@ -4958,6 +4959,28 @@ async fn identity_mask_updates_identity_for_subsequent_messages() {
         other => {
             panic!("expected Op::UserTurn with programmer identity, got {other:?}")
         }
+    }
+}
+
+#[tokio::test]
+async fn identity_indicator_matches_active_identity_kind() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+
+    let cases = [
+        (IdentityKind::Nobody, IdentityIndicator::Nobody),
+        (IdentityKind::Planner, IdentityIndicator::Planner),
+        (IdentityKind::Programmer, IdentityIndicator::Programmer),
+        (IdentityKind::Explorer, IdentityIndicator::Explorer),
+        (IdentityKind::Reviewer, IdentityIndicator::Reviewer),
+    ];
+
+    for (kind, expected_indicator) in cases {
+        let selected_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), kind)
+            .unwrap_or_else(|| panic!("expected {kind:?} identity preset"));
+        chat.set_identity_mask(selected_mask);
+
+        assert_eq!(chat.identity_indicator(), Some(expected_indicator));
     }
 }
 

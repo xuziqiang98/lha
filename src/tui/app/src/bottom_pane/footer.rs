@@ -77,32 +77,37 @@ pub(crate) enum IdentityIndicator {
     Nobody,
     Planner,
     Programmer,
+    Explorer,
+    Reviewer,
 }
 
 const FOOTER_CONTEXT_GAP_COLS: u16 = 1;
 const IDENTITY_CHANGE_HINT: &str = "shift+tab to change";
 
 impl IdentityIndicator {
+    fn name(self) -> &'static str {
+        match self {
+            IdentityIndicator::Nobody => "nobody",
+            IdentityIndicator::Planner => "planner",
+            IdentityIndicator::Programmer => "programmer",
+            IdentityIndicator::Explorer => "explorer",
+            IdentityIndicator::Reviewer => "reviewer",
+        }
+    }
+
     fn label(self, show_cycle_hint: bool) -> String {
         let suffix = if show_cycle_hint {
             format!(" ({IDENTITY_CHANGE_HINT})")
         } else {
             String::new()
         };
-        match self {
-            IdentityIndicator::Nobody => format!("Identity nobody{suffix}"),
-            IdentityIndicator::Planner => format!("Identity planner{suffix}"),
-            IdentityIndicator::Programmer => format!("Identity programmer{suffix}"),
-        }
+        let name = self.name();
+        format!("Identity {name}{suffix}")
     }
 
     fn styled_span(self, show_cycle_hint: bool) -> Span<'static> {
         let label = self.label(show_cycle_hint);
-        match self {
-            IdentityIndicator::Nobody => Span::from(label).magenta(),
-            IdentityIndicator::Planner => Span::from(label).magenta(),
-            IdentityIndicator::Programmer => Span::from(label).magenta(),
-        }
+        Span::from(label).magenta()
     }
 }
 
@@ -1096,6 +1101,14 @@ mod tests {
             (
                 IdentityIndicator::Programmer,
                 "Identity programmer (shift+tab to change)",
+            ),
+            (
+                IdentityIndicator::Explorer,
+                "Identity explorer (shift+tab to change)",
+            ),
+            (
+                IdentityIndicator::Reviewer,
+                "Identity reviewer (shift+tab to change)",
             ),
         ];
 

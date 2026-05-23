@@ -5755,8 +5755,8 @@ impl ChatWidget {
             IdentityKind::Nobody => Some(IdentityIndicator::Nobody),
             IdentityKind::Planner => Some(IdentityIndicator::Planner),
             IdentityKind::Programmer => Some(IdentityIndicator::Programmer),
-            IdentityKind::Explorer => Some(IdentityIndicator::Programmer),
-            IdentityKind::Reviewer => Some(IdentityIndicator::Programmer),
+            IdentityKind::Explorer => Some(IdentityIndicator::Explorer),
+            IdentityKind::Reviewer => Some(IdentityIndicator::Reviewer),
         }
     }
 
