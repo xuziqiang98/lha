@@ -8,6 +8,7 @@ use adam_agent::protocol::Event;
 use adam_agent::protocol::EventMsg;
 use adam_agent::protocol::Op;
 use adam_agent::protocol::SessionConfiguredEvent;
+use adam_protocol::ThreadId;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
@@ -28,6 +29,7 @@ pub(crate) fn spawn_agent(
     tokio::spawn(async move {
         let NewThread {
             thread,
+            thread_id,
             session_configured,
             ..
         } = match server.start_thread(config).await {
@@ -45,7 +47,14 @@ pub(crate) fn spawn_agent(
             }
         };
 
-        run_thread_bridge(thread, session_configured, app_event_tx_clone, codex_op_rx).await;
+        run_thread_bridge(
+            thread,
+            thread_id,
+            session_configured,
+            app_event_tx_clone,
+            codex_op_rx,
+        )
+        .await;
     });
 
     codex_op_tx
@@ -57,6 +66,7 @@ pub(crate) fn spawn_agent(
 /// subsequent events and accepts Ops for submission.
 pub(crate) fn attach_existing_thread(
     thread: std::sync::Arc<CodexThread>,
+    thread_id: ThreadId,
     session_configured: adam_agent::protocol::SessionConfiguredEvent,
     app_event_tx: AppEventSender,
 ) -> UnboundedSender<Op> {
@@ -64,7 +74,14 @@ pub(crate) fn attach_existing_thread(
 
     let app_event_tx_clone = app_event_tx;
     tokio::spawn(async move {
-        run_thread_bridge(thread, session_configured, app_event_tx_clone, codex_op_rx).await;
+        run_thread_bridge(
+            thread,
+            thread_id,
+            session_configured,
+            app_event_tx_clone,
+            codex_op_rx,
+        )
+        .await;
     });
 
     codex_op_tx
@@ -72,6 +89,7 @@ pub(crate) fn attach_existing_thread(
 
 async fn run_thread_bridge(
     thread: Arc<CodexThread>,
+    thread_id: ThreadId,
     session_configured: SessionConfiguredEvent,
     app_event_tx: AppEventSender,
     mut codex_op_rx: UnboundedReceiver<Op>,
@@ -98,7 +116,7 @@ async fn run_thread_bridge(
         match thread.next_event().await {
             Ok(event) => {
                 let is_shutdown_complete = matches!(event.msg, EventMsg::ShutdownComplete);
-                app_event_tx.send(AppEvent::CodexEvent(event));
+                app_event_tx.send(AppEvent::ThreadEventReceived { thread_id, event });
                 if is_shutdown_complete {
                     tracing::debug!("agent event bridge exited after ShutdownComplete");
                     break;

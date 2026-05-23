@@ -59,7 +59,7 @@ pub(crate) struct ConnectorsSnapshot {
 #[derive(Debug)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
-    /// Event emitted by a non-primary thread listener and routed back through the app loop.
+    /// Event emitted by a thread listener and routed back through the app loop.
     ThreadEventReceived {
         thread_id: ThreadId,
         event: Event,

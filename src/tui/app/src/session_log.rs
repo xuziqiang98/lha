@@ -128,6 +128,16 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
         AppEvent::CodexEvent(ev) => {
             write_record("to_tui", "codex_event", ev);
         }
+        AppEvent::ThreadEventReceived { thread_id, event } => {
+            let value = json!({
+                "ts": now_ts(),
+                "dir": "to_tui",
+                "kind": "thread_event_received",
+                "thread_id": thread_id,
+                "payload": event,
+            });
+            LOGGER.write_json_line(value);
+        }
         AppEvent::NewSession => {
             let value = json!({
                 "ts": now_ts(),

@@ -2569,6 +2569,7 @@ impl ChatWidget {
     pub(crate) fn new_from_existing(
         common: ChatWidgetInit,
         conversation: std::sync::Arc<adam_agent::CodexThread>,
+        thread_id: adam_protocol::ThreadId,
         session_configured: adam_agent::protocol::SessionConfiguredEvent,
     ) -> Self {
         let ChatWidgetInit {
@@ -2606,8 +2607,12 @@ impl ChatWidget {
             .reasoning_effort
             .or(config.model_reasoning_effort);
 
-        let codex_op_tx =
-            attach_existing_thread(conversation, session_configured, app_event_tx.clone());
+        let codex_op_tx = attach_existing_thread(
+            conversation,
+            thread_id,
+            session_configured,
+            app_event_tx.clone(),
+        );
 
         let current_identity =
             Self::initial_custom_mode(header_model.clone(), initial_reasoning_effort);
@@ -4237,11 +4242,16 @@ impl ChatWidget {
     pub(crate) fn attach_started_thread(
         &mut self,
         thread: std::sync::Arc<adam_agent::CodexThread>,
+        thread_id: adam_protocol::ThreadId,
         session_configured: adam_agent::protocol::SessionConfiguredEvent,
     ) {
         self.agent_shutdown_complete = false;
-        self.codex_op_tx =
-            attach_existing_thread(thread, session_configured, self.app_event_tx.clone());
+        self.codex_op_tx = attach_existing_thread(
+            thread,
+            thread_id,
+            session_configured,
+            self.app_event_tx.clone(),
+        );
     }
 
     pub(crate) fn open_personality_popup(&mut self) {

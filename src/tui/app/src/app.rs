@@ -582,9 +582,9 @@ pub(crate) struct App {
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
 
-    /// Ignore the next ShutdownComplete event when we're intentionally
-    /// stopping a thread (e.g., before starting a new one).
-    suppress_shutdown_complete: bool,
+    /// ShutdownComplete events for threads intentionally stopped during a
+    /// thread transition.
+    suppressed_shutdown_complete_threads: HashSet<ThreadId>,
 
     windows_sandbox: WindowsSandboxState,
     shift_mouse_bypass_active: bool,
@@ -1042,6 +1042,7 @@ impl App {
                         ..make_init(initial_user_message)
                     },
                     resumed.thread,
+                    resumed.thread_id,
                     resumed.session_configured,
                 )
             }
@@ -1059,6 +1060,7 @@ impl App {
                         ..make_init(initial_user_message)
                     },
                     forked.thread,
+                    forked.thread_id,
                     forked.session_configured,
                 )
             }
@@ -1196,7 +1198,7 @@ impl App {
         if let Some(thread_id) = self.chat_widget.thread_id() {
             // Clear any in-flight rollback guard when switching threads.
             self.backtrack.pending_rollback = None;
-            self.suppress_shutdown_complete = true;
+            self.suppressed_shutdown_complete_threads.insert(thread_id);
             self.chat_widget.submit_op(Op::Shutdown);
             self.server.remove_thread(&thread_id).await;
         }
@@ -1433,6 +1435,7 @@ impl App {
                         Ok(new_thread) => {
                             self.chat_widget.attach_started_thread(
                                 new_thread.thread,
+                                new_thread.thread_id,
                                 new_thread.session_configured,
                             );
                         }
@@ -1498,10 +1501,19 @@ impl App {
     }
 
     async fn enqueue_thread_event(&mut self, thread_id: ThreadId, event: Event) -> Result<()> {
-        let (sender, store) = {
-            let channel = self.ensure_thread_channel(thread_id);
-            (channel.sender.clone(), Arc::clone(&channel.store))
+        if matches!(&event.msg, EventMsg::ShutdownComplete)
+            && self.suppressed_shutdown_complete_threads.remove(&thread_id)
+        {
+            tracing::debug!("suppressed ShutdownComplete for thread {thread_id}");
+            return Ok(());
+        }
+
+        let Some(channel) = self.thread_event_channels.get_mut(&thread_id) else {
+            tracing::debug!("dropping event for stale thread {thread_id}");
+            return Ok(());
         };
+        let sender = channel.sender.clone();
+        let store = Arc::clone(&channel.store);
 
         let should_send = {
             let mut guard = store.lock().await;
@@ -1566,6 +1578,11 @@ impl App {
         self.active_thread_rx = None;
         self.primary_thread_id = None;
         self.pending_primary_events.clear();
+    }
+
+    fn current_thread_id(&self) -> Option<ThreadId> {
+        self.active_thread_id
+            .or_else(|| self.chat_widget.thread_id())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1730,7 +1747,12 @@ impl App {
                     },
                     otel_manager: otel_manager.clone(),
                 };
-                ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
+                ChatWidget::new_from_existing(
+                    init,
+                    resumed.thread,
+                    resumed.thread_id,
+                    resumed.session_configured,
+                )
             }
             SessionSelection::Fork(_) if startup_for_deferred.is_some() => {
                 let init = crate::chatwidget::ChatWidgetInit {
@@ -1771,7 +1793,12 @@ impl App {
                     },
                     otel_manager: otel_manager.clone(),
                 };
-                ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
+                ChatWidget::new_from_existing(
+                    init,
+                    forked.thread,
+                    forked.thread_id,
+                    forked.session_configured,
+                )
             }
         };
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
@@ -1810,7 +1837,7 @@ impl App {
             backtrack_render_pending: false,
             feedback: feedback.clone(),
             pending_update_action: None,
-            suppress_shutdown_complete: false,
+            suppressed_shutdown_complete_threads: HashSet::new(),
             windows_sandbox: WindowsSandboxState::default(),
             shift_mouse_bypass_active: false,
             shift_mouse_bypass_restore_at: None,
@@ -2718,6 +2745,7 @@ impl App {
                                 self.chat_widget = ChatWidget::new_from_existing(
                                     init,
                                     resumed.thread,
+                                    resumed.thread_id,
                                     resumed.session_configured,
                                 );
                                 self.reset_thread_event_state();
@@ -2772,6 +2800,7 @@ impl App {
                             self.chat_widget = ChatWidget::new_from_existing(
                                 init,
                                 forked.thread,
+                                forked.thread_id,
                                 forked.session_configured,
                             );
                             self.reset_thread_event_state();
@@ -3512,6 +3541,9 @@ impl App {
                 if self.chat_widget.agent_shutdown_complete() {
                     return AppRunControl::Exit(ExitReason::UserRequested);
                 }
+                if let Some(thread_id) = self.current_thread_id() {
+                    self.suppressed_shutdown_complete_threads.remove(&thread_id);
+                }
                 self.chat_widget.submit_op(Op::Shutdown);
                 AppRunControl::Continue
             }
@@ -3521,11 +3553,6 @@ impl App {
 
     fn handle_codex_event_now(&mut self, event: Event) -> AppRunControl {
         let is_shutdown_complete = matches!(&event.msg, EventMsg::ShutdownComplete);
-        if self.suppress_shutdown_complete && is_shutdown_complete {
-            tracing::debug!("suppressed ShutdownComplete for thread transition");
-            self.suppress_shutdown_complete = false;
-            return AppRunControl::Continue;
-        }
         if let EventMsg::McpListToolsResponse(response) = &event.msg
             && let Some(request_id) = response.request_id
         {
@@ -5263,7 +5290,7 @@ mod tests {
             backtrack_render_pending: false,
             feedback: adam_feedback::CodexFeedback::new(),
             pending_update_action: None,
-            suppress_shutdown_complete: false,
+            suppressed_shutdown_complete_threads: HashSet::new(),
             windows_sandbox: WindowsSandboxState::default(),
             shift_mouse_bypass_active: false,
             shift_mouse_bypass_restore_at: None,
@@ -5334,7 +5361,7 @@ mod tests {
                 backtrack_render_pending: false,
                 feedback: adam_feedback::CodexFeedback::new(),
                 pending_update_action: None,
-                suppress_shutdown_complete: false,
+                suppressed_shutdown_complete_threads: HashSet::new(),
                 windows_sandbox: WindowsSandboxState::default(),
                 shift_mouse_bypass_active: false,
                 shift_mouse_bypass_restore_at: None,
@@ -5409,15 +5436,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn suppressed_shutdown_complete_does_not_exit_tui() {
+    async fn suppressed_shutdown_complete_survives_thread_switch_cleanup() {
         let mut app = make_test_app().await;
-        app.suppress_shutdown_complete = true;
+        let old_thread_id = ThreadId::new();
+        let new_thread_id = ThreadId::new();
+        app.active_thread_id = Some(old_thread_id);
+        app.suppressed_shutdown_complete_threads
+            .insert(old_thread_id);
+        app.thread_event_channels
+            .insert(old_thread_id, ThreadEventChannel::new(1));
+
+        app.clear_active_thread().await;
+        app.reset_thread_event_state();
+        app.active_thread_id = Some(new_thread_id);
+
+        app.enqueue_thread_event(old_thread_id, shutdown_complete_event())
+            .await
+            .expect("enqueue stale shutdown_complete");
+
+        assert!(app.thread_event_channels.is_empty());
+        assert!(
+            !app.suppressed_shutdown_complete_threads
+                .contains(&old_thread_id)
+        );
+        assert!(!app.chat_widget.agent_shutdown_complete());
+    }
+
+    #[tokio::test]
+    async fn shutdown_first_clears_shutdown_suppression_for_active_thread() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+        app.suppressed_shutdown_complete_threads.insert(thread_id);
+
+        let control = app.handle_exit_event(ExitMode::ShutdownFirst);
+
+        assert!(matches!(control, AppRunControl::Continue));
+        assert!(
+            !app.suppressed_shutdown_complete_threads
+                .contains(&thread_id)
+        );
+        assert!(matches!(op_rx.try_recv(), Ok(Op::Shutdown)));
 
         let control = app.handle_codex_event_now(shutdown_complete_event());
 
-        assert!(matches!(control, AppRunControl::Continue));
-        assert!(!app.suppress_shutdown_complete);
-        assert!(!app.chat_widget.agent_shutdown_complete());
+        assert!(matches!(
+            control,
+            AppRunControl::Exit(ExitReason::UserRequested)
+        ));
     }
 
     #[tokio::test]
@@ -5523,7 +5589,7 @@ show_raw_agent_reasoning = true
             backtrack_render_pending: false,
             feedback: adam_feedback::CodexFeedback::new(),
             pending_update_action: None,
-            suppress_shutdown_complete: false,
+            suppressed_shutdown_complete_threads: HashSet::new(),
             windows_sandbox: WindowsSandboxState::default(),
             shift_mouse_bypass_active: false,
             shift_mouse_bypass_restore_at: None,
@@ -6744,6 +6810,11 @@ show_raw_agent_reasoning = true
             Ok(other) => panic!("expected Op::Shutdown, got {other:?}"),
             Err(_) => panic!("expected shutdown op to be sent"),
         }
+        assert!(
+            app.suppressed_shutdown_complete_threads
+                .contains(&thread_id),
+            "expected the shutting-down thread to be suppressed"
+        );
     }
 
     #[tokio::test]
