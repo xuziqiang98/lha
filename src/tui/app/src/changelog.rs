@@ -100,33 +100,6 @@ pub(crate) async fn get_git_changelog(cwd: &Path) -> io::Result<Option<Changelog
     }))
 }
 
-pub(crate) async fn get_git_changelog_sidebar_file_count(cwd: &Path) -> io::Result<Option<usize>> {
-    let Some(display_root) = git_repo_root(cwd).await? else {
-        return Ok(None);
-    };
-
-    let output = Command::new("git")
-        .args(["status", "--porcelain=v1", "--untracked-files=all", "-z"])
-        .current_dir(cwd)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .await?;
-
-    if !output.status.success() {
-        return Err(io::Error::other(format!(
-            "git status failed with status {}",
-            output.status
-        )));
-    }
-
-    Ok(Some(count_sidebar_changelog_kinds(
-        parse_porcelain_v1_z(&output.stdout, &display_root)
-            .iter()
-            .map(|entry| entry.kind),
-    )))
-}
-
 pub(crate) async fn git_repo_root(cwd: &Path) -> io::Result<Option<PathBuf>> {
     let output = match Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
@@ -173,27 +146,6 @@ pub(crate) async fn get_non_git_changelog(
         display_root,
         entries,
     })
-}
-
-pub(crate) async fn get_non_git_changelog_sidebar_file_count(
-    cwd: &Path,
-    baseline: &DirectorySnapshot,
-) -> io::Result<usize> {
-    let current = capture_directory_snapshot(cwd.to_path_buf()).await?;
-    Ok(count_sidebar_changelog_files(&diff_snapshots(
-        baseline, &current,
-    )))
-}
-
-pub(crate) fn count_sidebar_changelog_files(entries: &[ChangelogEntry]) -> usize {
-    count_sidebar_changelog_kinds(entries.iter().map(|entry| entry.kind))
-}
-
-fn count_sidebar_changelog_kinds(kinds: impl IntoIterator<Item = ChangelogKind>) -> usize {
-    kinds
-        .into_iter()
-        .filter(|kind| matches!(kind, ChangelogKind::Added | ChangelogKind::Modified))
-        .count()
 }
 
 fn capture_directory_snapshot_blocking(root: &Path) -> io::Result<DirectorySnapshot> {
@@ -848,29 +800,6 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_changelog_file_count_excludes_deleted_files() {
-        let entries = vec![
-            ChangelogEntry {
-                kind: ChangelogKind::Added,
-                path: PathBuf::from("/repo/worktree/new.txt"),
-                line_stats: None,
-            },
-            ChangelogEntry {
-                kind: ChangelogKind::Modified,
-                path: PathBuf::from("/repo/worktree/changed.txt"),
-                line_stats: None,
-            },
-            ChangelogEntry {
-                kind: ChangelogKind::Deleted,
-                path: PathBuf::from("/repo/worktree/gone.txt"),
-                line_stats: None,
-            },
-        ];
-
-        assert_eq!(count_sidebar_changelog_files(&entries), 2);
-    }
-
-    #[test]
     fn parse_numstat_reads_regular_paths() {
         let stats = parse_numstat_z(b"12\t3\tsrc/lib.rs\0", Path::new("/repo"));
 
@@ -1235,27 +1164,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn git_sidebar_file_count_excludes_deleted_files() {
-        let dir = tempdir().expect("tempdir");
-        init_git_repo(dir.path());
-        std::fs::write(dir.path().join("changed.txt"), "before").expect("write changed file");
-        std::fs::write(dir.path().join("gone.txt"), "before").expect("write gone file");
-        run_git(dir.path(), ["add", "changed.txt", "gone.txt"]);
-        run_git(dir.path(), ["commit", "-m", "initial"]);
-
-        std::fs::write(dir.path().join("changed.txt"), "after").expect("modify changed file");
-        std::fs::write(dir.path().join("new.txt"), "new").expect("write new file");
-        std::fs::remove_file(dir.path().join("gone.txt")).expect("remove gone file");
-
-        let count = get_git_changelog_sidebar_file_count(dir.path())
-            .await
-            .expect("git changelog count")
-            .expect("git repo");
-
-        assert_eq!(count, 2);
-    }
-
-    #[tokio::test]
     async fn non_git_diff_marks_new_file_as_added() {
         let dir = tempdir().expect("tempdir");
         std::fs::write(dir.path().join("existing.txt"), "hello").expect("write existing file");
@@ -1306,26 +1214,6 @@ mod tests {
                 }],
             }
         );
-    }
-
-    #[tokio::test]
-    async fn non_git_sidebar_file_count_excludes_deleted_files() {
-        let dir = tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("changed.txt"), "before").expect("write changed file");
-        std::fs::write(dir.path().join("gone.txt"), "before").expect("write gone file");
-        let baseline = capture_directory_snapshot(dir.path().to_path_buf())
-            .await
-            .expect("baseline snapshot");
-
-        std::fs::write(dir.path().join("changed.txt"), "after").expect("modify changed file");
-        std::fs::write(dir.path().join("new.txt"), "new").expect("write new file");
-        std::fs::remove_file(dir.path().join("gone.txt")).expect("remove gone file");
-
-        let count = get_non_git_changelog_sidebar_file_count(dir.path(), &baseline)
-            .await
-            .expect("non-git changelog count");
-
-        assert_eq!(count, 2);
     }
 
     #[tokio::test]

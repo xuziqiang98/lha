@@ -489,7 +489,6 @@ pub(crate) struct ChatWidget {
     task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
     changed_files: VecDeque<String>,
-    changelog_files_count: usize,
     cli_agent_jobs: HashMap<String, CliAgentJobEntry>,
     /// Tracks whether adam-agent currently considers an agent turn to be in progress.
     ///
@@ -748,19 +747,61 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
 
 fn paths_from_unified_diff(diff: &str) -> Vec<String> {
     let mut paths = Vec::new();
+    let mut before_hunk = true;
+    let mut old_path = None;
     for line in diff.lines() {
-        let Some(raw) = line.strip_prefix("+++ b/") else {
-            continue;
-        };
-        if raw.is_empty() {
+        if line.starts_with("diff --git ") {
+            before_hunk = true;
+            old_path = None;
             continue;
         }
-        let path = raw.split('\t').next().unwrap_or(raw).to_string();
-        if !paths.iter().any(|existing| existing == &path) {
-            paths.push(path);
+
+        if line.starts_with("@@") {
+            before_hunk = false;
+            old_path = None;
+            continue;
+        }
+
+        if !before_hunk {
+            continue;
+        }
+
+        if let Some(raw) = line.strip_prefix("--- ") {
+            old_path = parse_old_diff_header_path(raw);
+            continue;
+        }
+
+        if let Some(raw) = line.strip_prefix("+++ ") {
+            let path = match (old_path.take(), parse_new_diff_header_path(raw)) {
+                (Some(old_path), Some(new_path)) => new_path.or(old_path),
+                _ => None,
+            };
+            if let Some(path) = path
+                && !paths.iter().any(|existing| existing == &path)
+            {
+                paths.push(path);
+            }
         }
     }
     paths
+}
+
+fn parse_old_diff_header_path(raw: &str) -> Option<Option<String>> {
+    parse_diff_header_path(raw, "a/")
+}
+
+fn parse_new_diff_header_path(raw: &str) -> Option<Option<String>> {
+    parse_diff_header_path(raw, "b/")
+}
+
+fn parse_diff_header_path(raw: &str, prefix: &str) -> Option<Option<String>> {
+    let path = raw.split('\t').next().unwrap_or(raw);
+    if path == "/dev/null" {
+        return Some(None);
+    }
+    path.strip_prefix(prefix)
+        .filter(|path| !path.is_empty())
+        .map(|path| Some(path.to_string()))
 }
 
 impl ChatWidget {
@@ -1913,29 +1954,16 @@ impl ChatWidget {
     fn on_shutdown_complete(&mut self) {
         self.clear_cli_agent_jobs();
         self.agent_shutdown_complete = true;
-        self.request_immediate_exit();
     }
 
     fn on_turn_diff(&mut self, unified_diff: String) {
         debug!("TurnDiffEvent: {unified_diff}");
-        let mut saw_changed_file = false;
         for path in paths_from_unified_diff(&unified_diff) {
-            saw_changed_file = true;
             if self.changed_files.iter().any(|existing| existing == &path) {
                 continue;
             }
-            if self.changed_files.len() < SIDEBAR_VISIBLE_FILES_LIMIT {
-                self.changed_files.push_front(path);
-            }
+            self.changed_files.push_back(path);
         }
-        if saw_changed_file {
-            self.app_event_tx.send(AppEvent::RequestChangelogCount);
-        }
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_changelog_files_count(&mut self, count: usize) {
-        self.changelog_files_count = count;
         self.request_redraw();
     }
 
@@ -2464,7 +2492,6 @@ impl ChatWidget {
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             changed_files: VecDeque::new(),
-            changelog_files_count: 0,
             cli_agent_jobs: HashMap::new(),
             agent_turn_running: false,
             mcp_startup_status: None,
@@ -2633,7 +2660,6 @@ impl ChatWidget {
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             changed_files: VecDeque::new(),
-            changelog_files_count: 0,
             cli_agent_jobs: HashMap::new(),
             agent_turn_running: false,
             mcp_startup_status: None,
@@ -6184,6 +6210,11 @@ impl ChatWidget {
     pub(crate) fn clear_esc_backtrack_hint(&mut self) {
         self.bottom_pane.clear_esc_backtrack_hint();
     }
+
+    pub(crate) fn agent_shutdown_complete(&self) -> bool {
+        self.agent_shutdown_complete
+    }
+
     /// Forward an `Op` directly to codex.
     pub(crate) fn submit_op(&mut self, op: Op) {
         if self.agent_shutdown_complete {
@@ -6440,9 +6471,15 @@ impl ChatWidget {
         SidebarSnapshot {
             task,
             todo,
-            files: self.changed_files.iter().cloned().collect(),
+            files: self
+                .changed_files
+                .iter()
+                .take(SIDEBAR_VISIBLE_FILES_LIMIT)
+                .cloned()
+                .collect(),
             files_more_count: self
-                .changelog_files_count
+                .changed_files
+                .len()
                 .saturating_sub(SIDEBAR_VISIBLE_FILES_LIMIT),
             agents: self.sidebar_agent_entries(),
             skills: self

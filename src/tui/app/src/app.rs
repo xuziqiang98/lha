@@ -14,11 +14,8 @@ use crate::approval_mode_modal::ApprovalModeModalAction;
 use crate::bottom_pane::ApprovalRequest;
 use crate::changelog::ChangelogOutput;
 use crate::changelog::DirectorySnapshot;
-use crate::changelog::count_sidebar_changelog_files;
 use crate::changelog::get_git_changelog;
-use crate::changelog::get_git_changelog_sidebar_file_count;
 use crate::changelog::get_non_git_changelog;
-use crate::changelog::get_non_git_changelog_sidebar_file_count;
 use crate::changelog::git_repo_root;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
@@ -795,57 +792,6 @@ impl App {
         });
     }
 
-    async fn request_changelog_count(&mut self) {
-        let cwd = self.config.cwd.clone();
-        let tx = self.app_event_tx.clone();
-
-        match git_repo_root(&cwd).await {
-            Ok(Some(_)) => {
-                tokio::spawn(async move {
-                    let result = get_git_changelog_sidebar_file_count(&cwd)
-                        .await
-                        .and_then(|count| {
-                            count.ok_or_else(|| io::Error::other("git changelog unavailable"))
-                        })
-                        .map_err(|err| err.to_string());
-                    tx.send(AppEvent::ChangelogCountResult(result));
-                });
-                return;
-            }
-            Ok(None) => {}
-            Err(err) => {
-                self.app_event_tx
-                    .send(AppEvent::ChangelogCountResult(Err(err.to_string())));
-                return;
-            }
-        }
-
-        if let Err(err) = self.ensure_non_git_changelog_baseline(cwd.clone()).await {
-            self.app_event_tx
-                .send(AppEvent::ChangelogCountResult(Err(err)));
-            return;
-        }
-
-        let Some(tracker) = self.non_git_changelog_baselines.get(&cwd).cloned() else {
-            self.app_event_tx
-                .send(AppEvent::ChangelogCountResult(Err(format!(
-                    "missing changelog baseline for {}",
-                    cwd.display()
-                ))));
-            return;
-        };
-
-        tokio::spawn(async move {
-            let result = match tracker.wait_ready().await {
-                Ok(baseline) => get_non_git_changelog_sidebar_file_count(&cwd, baseline.as_ref())
-                    .await
-                    .map_err(|err| err.to_string()),
-                Err(err) => Err(err),
-            };
-            tx.send(AppEvent::ChangelogCountResult(result));
-        });
-    }
-
     fn insert_history_cell(&mut self, cell: Box<dyn HistoryCell>, tui: &mut tui::Tui) {
         let cell: Arc<dyn HistoryCell> = cell.into();
         self.insert_history_cell_arc(cell, tui);
@@ -895,8 +841,6 @@ impl App {
                 display_root,
                 entries,
             }) => {
-                self.chat_widget
-                    .set_changelog_files_count(count_sidebar_changelog_files(&entries));
                 if entries.is_empty() {
                     self.insert_history_cell_state(Arc::new(history_cell::new_info_event(
                         "No changes detected.".to_string(),
@@ -1975,11 +1919,11 @@ impl App {
                     }
                 }, if app.active_thread_rx.is_some() => {
                     if let Some(event) = active {
-                        app.handle_active_thread_event(tui, event)?;
+                        app.handle_active_thread_event(tui, event)?
                     } else {
                         app.clear_active_thread().await;
+                        AppRunControl::Continue
                     }
-                    AppRunControl::Continue
                 }
                 event = tui_events.next() => {
                     if let Some(event) = event {
@@ -2890,12 +2834,11 @@ impl App {
             AppEvent::ThreadEventReceived { thread_id, event } => {
                 self.enqueue_thread_event(thread_id, event).await?;
             }
-            AppEvent::Exit(mode) => match mode {
-                ExitMode::ShutdownFirst => self.chat_widget.submit_op(Op::Shutdown),
-                ExitMode::Immediate => {
-                    return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+            AppEvent::Exit(mode) => {
+                if let AppRunControl::Exit(reason) = self.handle_exit_event(mode) {
+                    return Ok(AppRunControl::Exit(reason));
                 }
-            },
+            }
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
@@ -2908,9 +2851,6 @@ impl App {
             }
             AppEvent::RequestChangelog => {
                 self.request_changelog().await;
-            }
-            AppEvent::RequestChangelogCount => {
-                self.request_changelog_count().await;
             }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
@@ -2929,12 +2869,6 @@ impl App {
             AppEvent::ChangelogResult(result) => {
                 self.insert_changelog_result(result);
                 tui.frame_requester().schedule_frame();
-            }
-            AppEvent::ChangelogCountResult(result) => {
-                if let Ok(count) = result {
-                    self.chat_widget.set_changelog_files_count(count);
-                    tui.frame_requester().schedule_frame();
-                }
             }
             AppEvent::OpenAppLink {
                 title,
@@ -3572,10 +3506,25 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
-    fn handle_codex_event_now(&mut self, event: Event) {
-        if self.suppress_shutdown_complete && matches!(event.msg, EventMsg::ShutdownComplete) {
+    fn handle_exit_event(&mut self, mode: ExitMode) -> AppRunControl {
+        match mode {
+            ExitMode::ShutdownFirst => {
+                if self.chat_widget.agent_shutdown_complete() {
+                    return AppRunControl::Exit(ExitReason::UserRequested);
+                }
+                self.chat_widget.submit_op(Op::Shutdown);
+                AppRunControl::Continue
+            }
+            ExitMode::Immediate => AppRunControl::Exit(ExitReason::UserRequested),
+        }
+    }
+
+    fn handle_codex_event_now(&mut self, event: Event) -> AppRunControl {
+        let is_shutdown_complete = matches!(&event.msg, EventMsg::ShutdownComplete);
+        if self.suppress_shutdown_complete && is_shutdown_complete {
+            tracing::debug!("suppressed ShutdownComplete for thread transition");
             self.suppress_shutdown_complete = false;
-            return;
+            return AppRunControl::Continue;
         }
         if let EventMsg::McpListToolsResponse(response) = &event.msg
             && let Some(request_id) = response.request_id
@@ -3587,7 +3536,7 @@ impl App {
                     self.chat_widget.request_redraw_for_ui();
                 }
             }
-            return;
+            return AppRunControl::Continue;
         }
         let is_list_skills_response = matches!(&event.msg, EventMsg::ListSkillsResponse(_));
         if let EventMsg::ListSkillsResponse(response) = &event.msg {
@@ -3600,14 +3549,23 @@ impl App {
         if is_list_skills_response {
             self.maybe_open_pending_skills_modal();
         }
+        if is_shutdown_complete {
+            tracing::debug!("received ShutdownComplete; exiting TUI");
+            return AppRunControl::Exit(ExitReason::UserRequested);
+        }
+        AppRunControl::Continue
     }
 
-    fn handle_active_thread_event(&mut self, tui: &mut tui::Tui, event: Event) -> Result<()> {
-        self.handle_codex_event_now(event);
+    fn handle_active_thread_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        event: Event,
+    ) -> Result<AppRunControl> {
+        let control = self.handle_codex_event_now(event);
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
         }
-        Ok(())
+        Ok(control)
     }
 
     async fn handle_thread_created(&mut self, thread_id: ThreadId) -> Result<()> {
@@ -5107,43 +5065,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn request_changelog_count_uses_session_baseline_outside_git() {
-        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let temp_dir = tempdir().expect("tempdir");
-        let cwd = temp_dir.path().to_path_buf();
-        let path = cwd.join("tracked.txt");
-        std::fs::write(&path, "before").expect("write initial file");
-        app.config.cwd = cwd.clone();
-
-        while app_event_rx.try_recv().is_ok() {}
-
-        app.ensure_non_git_changelog_baseline(cwd.clone())
-            .await
-            .expect("prepare baseline");
-        let tracker = app
-            .non_git_changelog_baselines
-            .get(&cwd)
-            .cloned()
-            .expect("baseline tracker");
-        tracker.wait_ready().await.expect("baseline ready");
-        std::fs::write(path, "after").expect("update file");
-
-        app.request_changelog_count().await;
-
-        let event = time::timeout(std::time::Duration::from_secs(2), app_event_rx.recv())
-            .await
-            .expect("wait for changelog count result")
-            .expect("result event");
-
-        match event {
-            AppEvent::ChangelogCountResult(Ok(count)) => {
-                assert_eq!(count, 1);
-            }
-            other => panic!("expected changelog count result, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
     async fn request_changelog_missing_cwd_reports_error_event() {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let temp_dir = tempdir().expect("tempdir");
@@ -5465,6 +5386,55 @@ mod tests {
             initial_messages: None,
             rollout_path: Some(PathBuf::new()),
         }
+    }
+
+    fn shutdown_complete_event() -> Event {
+        Event {
+            id: "shutdown".to_string(),
+            msg: EventMsg::ShutdownComplete,
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_complete_exits_tui_from_active_thread_event() {
+        let mut app = make_test_app().await;
+
+        let control = app.handle_codex_event_now(shutdown_complete_event());
+
+        assert!(matches!(
+            control,
+            AppRunControl::Exit(ExitReason::UserRequested)
+        ));
+        assert!(app.chat_widget.agent_shutdown_complete());
+    }
+
+    #[tokio::test]
+    async fn suppressed_shutdown_complete_does_not_exit_tui() {
+        let mut app = make_test_app().await;
+        app.suppress_shutdown_complete = true;
+
+        let control = app.handle_codex_event_now(shutdown_complete_event());
+
+        assert!(matches!(control, AppRunControl::Continue));
+        assert!(!app.suppress_shutdown_complete);
+        assert!(!app.chat_widget.agent_shutdown_complete());
+    }
+
+    #[tokio::test]
+    async fn shutdown_first_after_shutdown_complete_exits_without_submitting_op() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        assert!(matches!(
+            app.handle_codex_event_now(shutdown_complete_event()),
+            AppRunControl::Exit(ExitReason::UserRequested)
+        ));
+
+        let control = app.handle_exit_event(ExitMode::ShutdownFirst);
+
+        assert!(matches!(
+            control,
+            AppRunControl::Exit(ExitReason::UserRequested)
+        ));
+        assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
     }
 
     #[tokio::test]

@@ -1785,7 +1785,7 @@ async fn pending_review_start_queues_enter_submission_instead_of_submitting_turn
 
 #[tokio::test]
 async fn submit_op_after_shutdown_complete_is_ignored() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
     chat.handle_codex_event(Event {
         id: "shutdown".to_string(),
@@ -1793,6 +1793,8 @@ async fn submit_op_after_shutdown_complete_is_ignored() {
     });
     chat.submit_op(Op::Interrupt);
 
+    assert!(chat.agent_shutdown_complete());
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
 
@@ -2256,7 +2258,6 @@ async fn make_chatwidget_manual_inner(
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
         changed_files: VecDeque::new(),
-        changelog_files_count: 0,
         cli_agent_jobs: HashMap::new(),
         agent_turn_running: false,
         mcp_startup_status: None,
@@ -2428,7 +2429,6 @@ async fn make_chatwidget_manual_with_frame_requester(
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
         changed_files: VecDeque::new(),
-        changelog_files_count: 0,
         cli_agent_jobs: HashMap::new(),
         agent_turn_running: false,
         mcp_startup_status: None,
@@ -3290,6 +3290,84 @@ fn unified_diff_for_deleted_file(path: &str) -> String {
     )
 }
 
+#[test]
+fn paths_from_unified_diff_includes_added_modified_and_deleted_files() {
+    let diff = format!(
+        "{}{}{}",
+        unified_diff_for_added_file("new.rs"),
+        unified_diff_for_file_indices([1]),
+        unified_diff_for_deleted_file("gone.rs"),
+    );
+
+    assert_eq!(
+        paths_from_unified_diff(&diff),
+        vec![
+            "new.rs".to_string(),
+            "file-1.rs".to_string(),
+            "gone.rs".to_string(),
+        ],
+    );
+}
+
+#[test]
+fn paths_from_unified_diff_prefers_new_path_for_renames() {
+    let diff =
+        "diff --git a/old.rs b/new.rs\n--- a/old.rs\n+++ b/new.rs\n@@ -1 +1 @@\n-old\n+new\n";
+
+    assert_eq!(paths_from_unified_diff(diff), vec!["new.rs".to_string()]);
+}
+
+#[test]
+fn paths_from_unified_diff_deduplicates_and_strips_tab_metadata() {
+    let diff = concat!(
+        "diff --git a/repeated.rs b/repeated.rs\n",
+        "--- a/repeated.rs\t2026-01-01\n",
+        "+++ b/repeated.rs\t2026-01-02\n",
+        "@@ -1 +1 @@\n",
+        "-old\n",
+        "+new\n",
+        "diff --git a/repeated.rs b/repeated.rs\n",
+        "--- a/repeated.rs\n",
+        "+++ b/repeated.rs\n",
+        "@@ -1 +1 @@\n",
+        "-new\n",
+        "+newer\n",
+    );
+
+    assert_eq!(
+        paths_from_unified_diff(diff),
+        vec!["repeated.rs".to_string()],
+    );
+}
+
+#[test]
+fn paths_from_unified_diff_ignores_added_hunk_content_that_looks_like_header() {
+    let diff = concat!(
+        "diff --git a/file.rs b/file.rs\n",
+        "--- a/file.rs\n",
+        "+++ b/file.rs\n",
+        "@@ -1 +1,2 @@\n",
+        " old\n",
+        "+++ a/example\n",
+    );
+
+    assert_eq!(paths_from_unified_diff(diff), vec!["file.rs".to_string()]);
+}
+
+#[test]
+fn paths_from_unified_diff_ignores_hunk_content_header_pairs() {
+    let diff = concat!(
+        "diff --git a/file.rs b/file.rs\n",
+        "--- a/file.rs\n",
+        "+++ b/file.rs\n",
+        "@@ -1,2 +1,2 @@\n",
+        "--- a/not-a-header.rs\n",
+        "+++ b/not-a-header.rs\n",
+    );
+
+    assert_eq!(paths_from_unified_diff(diff), vec!["file.rs".to_string()]);
+}
+
 #[tokio::test]
 async fn sidebar_files_more_count_stays_zero_through_visible_limit() {
     for count in [3, crate::sidebar::SIDEBAR_VISIBLE_FILES_LIMIT] {
@@ -3305,20 +3383,18 @@ async fn sidebar_files_more_count_stays_zero_through_visible_limit() {
 }
 
 #[tokio::test]
-async fn sidebar_files_ignore_deleted_diff_paths() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    while rx.try_recv().is_ok() {}
+async fn sidebar_files_include_deleted_diff_paths() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
 
     chat.on_turn_diff(unified_diff_for_deleted_file("gone.rs"));
 
     let snapshot = chat.sidebar_snapshot();
-    assert!(snapshot.files.is_empty());
+    assert_eq!(snapshot.files, vec!["gone.rs".to_string()]);
     assert_eq!(snapshot.files_more_count, 0);
-    assert!(rx.try_recv().is_err());
 }
 
 #[tokio::test]
-async fn sidebar_files_counts_added_and_modified_but_not_deleted() {
+async fn sidebar_files_counts_added_modified_and_deleted() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     let unified_diff = format!(
         "{}{}{}",
@@ -3328,34 +3404,34 @@ async fn sidebar_files_counts_added_and_modified_but_not_deleted() {
     );
 
     chat.on_turn_diff(unified_diff);
-    chat.set_changelog_files_count(7);
 
     let snapshot = chat.sidebar_snapshot();
     assert_eq!(snapshot.files.len(), 6);
-    assert_eq!(snapshot.files_more_count, 1);
+    assert_eq!(snapshot.files_more_count, 2);
 
     let rendered = render_sidebar_snapshot(&snapshot);
     assert!(rendered.contains("new.rs"));
     assert!(!rendered.contains("gone.rs"));
-    assert!(rendered.contains("+1 more"));
+    assert!(rendered.contains("+2 more"));
 }
 
 #[tokio::test]
 async fn sidebar_files_keeps_visible_files_and_counts_hidden_files() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     let unified_diff = unified_diff_for_file_indices(0..20);
 
     chat.on_turn_diff(unified_diff);
-    assert_matches!(rx.try_recv(), Ok(AppEvent::RequestChangelogCount));
-    chat.set_changelog_files_count(20);
 
     let snapshot = chat.sidebar_snapshot();
-    assert_eq!(snapshot.files.len(), 6);
+    assert_eq!(
+        snapshot.files,
+        (0..6).map(|i| format!("file-{i}.rs")).collect::<Vec<_>>(),
+    );
     assert_eq!(snapshot.files_more_count, 14);
 
     let rendered = render_sidebar_snapshot(&snapshot);
-    assert!(rendered.contains("file-5.rs"));
     assert!(rendered.contains("file-0.rs"));
+    assert!(rendered.contains("file-5.rs"));
     assert!(!rendered.contains("file-6.rs"));
     assert!(rendered.contains("+14 more"));
 
