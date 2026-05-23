@@ -2032,6 +2032,80 @@ async fn sidebar_status_includes_context_compact_count() {
     assert_eq!(status.context_compact_count, 1);
 }
 
+#[tokio::test]
+async fn sidebar_agent_entries_track_cli_backed_jobs() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "job-1-running".into(),
+        msg: EventMsg::AgentJobStatus(AgentJobStatusEvent {
+            job_id: "agent-job-1".to_string(),
+            agent_type: AgentJobKind::Explorer,
+            status: AgentJobDisplayStatus::Running,
+            message: None,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "job-2-running".into(),
+        msg: EventMsg::AgentJobStatus(AgentJobStatusEvent {
+            job_id: "agent-job-2".to_string(),
+            agent_type: AgentJobKind::Reviewer,
+            status: AgentJobDisplayStatus::Running,
+            message: None,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "job-1-completed".into(),
+        msg: EventMsg::AgentJobStatus(AgentJobStatusEvent {
+            job_id: "agent-job-1".to_string(),
+            agent_type: AgentJobKind::Explorer,
+            status: AgentJobDisplayStatus::Completed,
+            message: None,
+        }),
+    });
+
+    assert_eq!(
+        chat.sidebar_snapshot().agents,
+        vec![
+            AgentPanelEntry {
+                job_id: "agent-job-1".to_string(),
+                label: "Explorer #1".to_string(),
+                status: AgentJobDisplayStatus::Completed,
+            },
+            AgentPanelEntry {
+                job_id: "agent-job-2".to_string(),
+                label: "Reviewer #2".to_string(),
+                status: AgentJobDisplayStatus::Running,
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn sidebar_agent_entries_clear_when_turn_ends() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "job-1-running".into(),
+        msg: EventMsg::AgentJobStatus(AgentJobStatusEvent {
+            job_id: "agent-job-1".to_string(),
+            agent_type: AgentJobKind::Explorer,
+            status: AgentJobDisplayStatus::Running,
+            message: None,
+        }),
+    });
+    assert_eq!(chat.sidebar_snapshot().agents.len(), 1);
+
+    chat.handle_codex_event(Event {
+        id: "turn-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    assert!(chat.sidebar_snapshot().agents.is_empty());
+}
+
 #[cfg_attr(
     target_os = "macos",
     ignore = "system configuration APIs are blocked under macOS seatbelt"
@@ -2183,6 +2257,7 @@ async fn make_chatwidget_manual_inner(
         unified_exec_processes: Vec::new(),
         changed_files: VecDeque::new(),
         changelog_files_count: 0,
+        cli_agent_jobs: HashMap::new(),
         agent_turn_running: false,
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),
@@ -2354,6 +2429,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         unified_exec_processes: Vec::new(),
         changed_files: VecDeque::new(),
         changelog_files_count: 0,
+        cli_agent_jobs: HashMap::new(),
         agent_turn_running: false,
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),

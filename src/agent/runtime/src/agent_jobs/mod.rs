@@ -5,6 +5,9 @@ use crate::env::ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR;
 use crate::error::CodexErr;
 use adam_llm::RuntimeEndpoint;
 use adam_protocol::ThreadId;
+use adam_protocol::protocol::AgentJobDisplayStatus;
+use adam_protocol::protocol::AgentJobKind;
+use adam_protocol::protocol::AgentJobStatusEvent;
 use adam_protocol::protocol::Event;
 use adam_protocol::protocol::EventMsg;
 use serde::Deserialize;
@@ -56,6 +59,13 @@ impl AgentJobType {
             Self::Reviewer => Some(crate::REVIEW_PROMPT),
         }
     }
+
+    fn protocol_kind(&self) -> AgentJobKind {
+        match self {
+            Self::Explorer => AgentJobKind::Explorer,
+            Self::Reviewer => AgentJobKind::Reviewer,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -79,6 +89,29 @@ impl AgentJobStatus {
     pub(crate) fn is_final(&self) -> bool {
         !matches!(self, Self::Running)
     }
+
+    fn display_status(&self) -> AgentJobDisplayStatus {
+        match self {
+            Self::Running => AgentJobDisplayStatus::Running,
+            Self::Completed { .. } => AgentJobDisplayStatus::Completed,
+            Self::Failed { .. } => AgentJobDisplayStatus::Failed,
+            Self::Cancelled => AgentJobDisplayStatus::Cancelled,
+            Self::TimedOut => AgentJobDisplayStatus::TimedOut,
+            Self::NotFound => AgentJobDisplayStatus::NotFound,
+        }
+    }
+
+    fn display_message(&self) -> Option<String> {
+        match self {
+            Self::Failed { message, .. } if !message.trim().is_empty() => Some(message.clone()),
+            Self::Running
+            | Self::Completed { .. }
+            | Self::Failed { .. }
+            | Self::Cancelled
+            | Self::TimedOut
+            | Self::NotFound => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -86,6 +119,17 @@ pub(crate) struct AgentJobSnapshot {
     pub(crate) id: String,
     pub(crate) agent_type: AgentJobType,
     pub(crate) status: AgentJobStatus,
+}
+
+impl AgentJobSnapshot {
+    pub(crate) fn status_event(&self) -> EventMsg {
+        EventMsg::AgentJobStatus(AgentJobStatusEvent {
+            job_id: self.id.clone(),
+            agent_type: self.agent_type.protocol_kind(),
+            status: self.status.display_status(),
+            message: self.status.display_message(),
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -885,6 +929,31 @@ mod tests {
         assert_eq!(
             canonical_model_arg("anthropic.messages", "claude-sonnet-4"),
             "anthropic.messages:claude-sonnet-4"
+        );
+    }
+
+    #[test]
+    fn snapshot_status_event_omits_completed_result() {
+        let snapshot = AgentJobSnapshot {
+            id: "agent-job-1".to_string(),
+            agent_type: AgentJobType::Explorer,
+            status: AgentJobStatus::Completed {
+                result: "large final answer".to_string(),
+                exit_code: Some(0),
+            },
+        };
+
+        let EventMsg::AgentJobStatus(event) = snapshot.status_event() else {
+            panic!("expected agent job status event");
+        };
+        assert_eq!(
+            event,
+            AgentJobStatusEvent {
+                job_id: "agent-job-1".to_string(),
+                agent_type: AgentJobKind::Explorer,
+                status: AgentJobDisplayStatus::Completed,
+                message: None,
+            }
         );
     }
 

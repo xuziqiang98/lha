@@ -52,8 +52,8 @@ impl ToolHandler for DelegatedJobHandler {
         };
         match tool_name.as_str() {
             "spawn_agent" => spawn_agent(session, turn, arguments).await,
-            "wait" => wait(session, arguments).await,
-            "close_agent" => close_agent(session, arguments).await,
+            "wait" => wait(session, turn, arguments).await,
+            "close_agent" => close_agent(session, turn, arguments).await,
             other => Err(FunctionCallError::RespondToModel(format!(
                 "unsupported delegated job tool {other}"
             ))),
@@ -108,6 +108,7 @@ async fn spawn_agent(
         )
         .await
         .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
+    session.send_event(&turn, snapshot.status_event()).await;
     let content = serde_json::to_string(&SpawnAgentResult {
         id: snapshot.id,
         agent_type: snapshot.agent_type,
@@ -139,7 +140,11 @@ struct WaitJobResult {
     status: AgentJobStatus,
 }
 
-async fn wait(session: Arc<Session>, arguments: String) -> Result<ToolOutput, FunctionCallError> {
+async fn wait(
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+    arguments: String,
+) -> Result<ToolOutput, FunctionCallError> {
     let args: WaitArgs = parse_arguments(&arguments)?;
     if args.ids.is_empty() {
         return Err(FunctionCallError::RespondToModel(
@@ -161,18 +166,17 @@ async fn wait(session: Arc<Session>, arguments: String) -> Result<ToolOutput, Fu
         .wait(&args.ids, Duration::from_millis(timeout_ms as u64))
         .await;
     let timed_out = snapshots.iter().any(|snapshot| !snapshot.status.is_final());
-    let jobs = snapshots
-        .into_iter()
-        .map(|snapshot| {
-            (
-                snapshot.id,
-                WaitJobResult {
-                    agent_type: snapshot.agent_type,
-                    status: snapshot.status,
-                },
-            )
-        })
-        .collect();
+    let mut jobs = BTreeMap::new();
+    for snapshot in snapshots {
+        session.send_event(&turn, snapshot.status_event()).await;
+        jobs.insert(
+            snapshot.id,
+            WaitJobResult {
+                agent_type: snapshot.agent_type,
+                status: snapshot.status,
+            },
+        );
+    }
     let content = serde_json::to_string(&WaitResult { jobs, timed_out }).map_err(|err| {
         FunctionCallError::Fatal(format!("failed to serialize wait result: {err}"))
     })?;
@@ -197,10 +201,12 @@ struct CloseAgentResult {
 
 async fn close_agent(
     session: Arc<Session>,
+    turn: Arc<TurnContext>,
     arguments: String,
 ) -> Result<ToolOutput, FunctionCallError> {
     let args: CloseAgentArgs = parse_arguments(&arguments)?;
     let snapshot = session.services.agent_jobs.close(&args.id).await;
+    session.send_event(&turn, snapshot.status_event()).await;
     let content = serde_json::to_string(&CloseAgentResult {
         id: snapshot.id,
         agent_type: snapshot.agent_type,

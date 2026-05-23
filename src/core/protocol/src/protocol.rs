@@ -867,6 +867,9 @@ pub enum EventMsg {
     /// Notification that skill data may have been updated and clients may want to reload.
     SkillsUpdateAvailable,
 
+    /// Status update for a CLI-backed delegated agent job.
+    AgentJobStatus(AgentJobStatusEvent),
+
     PlanUpdate(UpdatePlanArgs),
 
     TurnAborted(TurnAbortedEvent),
@@ -1018,6 +1021,36 @@ pub struct ReasoningRawContentDeltaEvent {
     // load with default value so it's backward compatible with the old format.
     #[serde(default)]
     pub content_index: i64,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum AgentJobKind {
+    Explorer,
+    Reviewer,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum AgentJobDisplayStatus {
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+    TimedOut,
+    NotFound,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, TS, JsonSchema)]
+pub struct AgentJobStatusEvent {
+    pub job_id: String,
+    pub agent_type: AgentJobKind,
+    pub status: AgentJobDisplayStatus,
+    #[ts(optional)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 impl HasLegacyEvent for ReasoningRawContentDeltaEvent {

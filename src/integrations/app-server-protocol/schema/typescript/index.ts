@@ -3,6 +3,9 @@
 export type { AbsolutePathBuf } from "./AbsolutePathBuf";
 export type { AddConversationListenerParams } from "./AddConversationListenerParams";
 export type { AddConversationSubscriptionResponse } from "./AddConversationSubscriptionResponse";
+export type { AgentJobDisplayStatus } from "./AgentJobDisplayStatus";
+export type { AgentJobKind } from "./AgentJobKind";
+export type { AgentJobStatusEvent } from "./AgentJobStatusEvent";
 export type { AgentMessageContent } from "./AgentMessageContent";
 export type { AgentMessageContentDeltaEvent } from "./AgentMessageContentDeltaEvent";
 export type { AgentMessageDeltaEvent } from "./AgentMessageDeltaEvent";

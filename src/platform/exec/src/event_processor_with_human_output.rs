@@ -626,6 +626,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::ThreadRolledBack(_)
             | EventMsg::RequestUserInput(_)
             | EventMsg::DynamicToolCallRequest(_)
+            | EventMsg::AgentJobStatus(_)
             | EventMsg::WorkflowUpdate(_) => {}
         }
         CodexStatus::Running

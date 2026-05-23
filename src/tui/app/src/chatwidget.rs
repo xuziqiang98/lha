@@ -178,6 +178,7 @@ use crate::markdown::append_markdown;
 use crate::mouse::MouseScrollState;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
+use crate::sidebar::AgentPanelEntry;
 use crate::sidebar::McpPanelSnapshot;
 use crate::sidebar::SIDEBAR_VISIBLE_FILES_LIMIT;
 use crate::sidebar::SidebarSnapshot;
@@ -227,6 +228,9 @@ use adam_file_search::FileMatch;
 use adam_protocol::openai_models::ModelPreset;
 use adam_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use adam_protocol::plan_tool::UpdatePlanArgs;
+use adam_protocol::protocol::AgentJobDisplayStatus;
+use adam_protocol::protocol::AgentJobKind;
+use adam_protocol::protocol::AgentJobStatusEvent;
 use strum::IntoEnumIterator;
 
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
@@ -413,6 +417,14 @@ impl StatusIndicatorState {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CliAgentJobEntry {
+    agent_type: AgentJobKind,
+    status: AgentJobDisplayStatus,
+    message: Option<String>,
+    display_order: usize,
+}
+
 /// Maintains the per-session UI state and interaction state machines for the chat screen.
 ///
 /// `ChatWidget` owns the state derived from the protocol event stream (history cells, streaming
@@ -478,6 +490,7 @@ pub(crate) struct ChatWidget {
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
     changed_files: VecDeque<String>,
     changelog_files_count: usize,
+    cli_agent_jobs: HashMap<String, CliAgentJobEntry>,
     /// Tracks whether adam-agent currently considers an agent turn to be in progress.
     ///
     /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
@@ -1084,8 +1097,42 @@ impl ChatWidget {
 
     // Raw reasoning uses the same flow as summarized reasoning
 
+    fn on_agent_job_status(&mut self, event: AgentJobStatusEvent) {
+        let AgentJobStatusEvent {
+            job_id,
+            agent_type,
+            status,
+            message,
+        } = event;
+        let next_display_order = self.cli_agent_jobs.len() + 1;
+        if let Some(entry) = self.cli_agent_jobs.get_mut(&job_id) {
+            entry.agent_type = agent_type;
+            entry.status = status;
+            entry.message = message;
+        } else {
+            self.cli_agent_jobs.insert(
+                job_id,
+                CliAgentJobEntry {
+                    agent_type,
+                    status,
+                    message,
+                    display_order: next_display_order,
+                },
+            );
+        }
+        self.request_redraw();
+    }
+
+    fn clear_cli_agent_jobs(&mut self) {
+        if !self.cli_agent_jobs.is_empty() {
+            self.cli_agent_jobs.clear();
+            self.request_redraw();
+        }
+    }
+
     fn on_task_started(&mut self) {
         let defer_review_redraw = self.pending_review_start_transition;
+        self.clear_cli_agent_jobs();
         self.agent_turn_running = true;
         self.turn_sleep_inhibitor
             .set_turn_running(/* turn_running */ true);
@@ -1117,6 +1164,7 @@ impl ChatWidget {
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
+        self.clear_cli_agent_jobs();
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         if let Some(mut controller) = self.plan_stream_controller.take()
@@ -1320,6 +1368,7 @@ impl ChatWidget {
 
     fn on_error(&mut self, message: String) {
         self.finalize_turn();
+        self.clear_cli_agent_jobs();
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
 
@@ -1406,6 +1455,7 @@ impl ChatWidget {
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
+        self.clear_cli_agent_jobs();
 
         if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(
@@ -1861,6 +1911,7 @@ impl ChatWidget {
     }
 
     fn on_shutdown_complete(&mut self) {
+        self.clear_cli_agent_jobs();
         self.agent_shutdown_complete = true;
         self.request_immediate_exit();
     }
@@ -2414,6 +2465,7 @@ impl ChatWidget {
             unified_exec_processes: Vec::new(),
             changed_files: VecDeque::new(),
             changelog_files_count: 0,
+            cli_agent_jobs: HashMap::new(),
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
@@ -2582,6 +2634,7 @@ impl ChatWidget {
             unified_exec_processes: Vec::new(),
             changed_files: VecDeque::new(),
             changelog_files_count: 0,
+            cli_agent_jobs: HashMap::new(),
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
@@ -3748,6 +3801,11 @@ impl ChatWidget {
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
+            EventMsg::AgentJobStatus(event) => {
+                if !from_replay {
+                    self.on_agent_job_status(event);
+                }
+            }
             EventMsg::ExecApprovalRequest(ev) => {
                 // For replayed events, synthesize an empty id (these should not occur).
                 self.on_exec_approval_request(id.unwrap_or_default(), ev)
@@ -6386,6 +6444,7 @@ impl ChatWidget {
             files_more_count: self
                 .changelog_files_count
                 .saturating_sub(SIDEBAR_VISIBLE_FILES_LIMIT),
+            agents: self.sidebar_agent_entries(),
             skills: self
                 .loaded_skills
                 .iter()
@@ -6397,6 +6456,30 @@ impl ChatWidget {
             mcp,
             status,
         }
+    }
+
+    fn sidebar_agent_entries(&self) -> Vec<AgentPanelEntry> {
+        let mut entries = self.cli_agent_jobs.iter().collect::<Vec<_>>();
+        entries.sort_by_key(|(_, entry)| entry.display_order);
+        entries
+            .into_iter()
+            .map(|(job_id, entry)| AgentPanelEntry {
+                job_id: job_id.clone(),
+                label: format!(
+                    "{} #{}",
+                    agent_job_kind_label(entry.agent_type),
+                    entry.display_order
+                ),
+                status: entry.status,
+            })
+            .collect()
+    }
+}
+
+fn agent_job_kind_label(agent_type: AgentJobKind) -> &'static str {
+    match agent_type {
+        AgentJobKind::Explorer => "Explorer",
+        AgentJobKind::Reviewer => "Reviewer",
     }
 }
 

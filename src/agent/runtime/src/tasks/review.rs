@@ -115,6 +115,10 @@ async fn run_review_job(
             )));
         }
     };
+    session
+        .session
+        .send_event(ctx.as_ref(), job.status_event())
+        .await;
     let mut progress_closed = false;
     loop {
         tokio::select! {
@@ -127,6 +131,12 @@ async fn run_review_job(
             }
             () = tokio::time::sleep(Duration::from_millis(100)) => {
                 let snapshot = session.session.services.agent_jobs.status(&job.id).await;
+                if snapshot.status.is_final() {
+                    session
+                        .session
+                        .send_event(ctx.as_ref(), snapshot.status_event())
+                        .await;
+                }
                 match snapshot.status {
                     AgentJobStatus::Completed { result, .. } => {
                         drain_review_progress_events(&session, &ctx, &mut progress_rx).await;
@@ -157,14 +167,17 @@ async fn run_review_job(
                             "Review job disappeared before producing a result.",
                         ));
                     }
-                    status if status.is_final() => return None,
                     AgentJobStatus::Running => {}
                 }
             }
             () = cancellation_token.cancelled() => break,
         }
     }
-    let _ = session.session.services.agent_jobs.close(&job.id).await;
+    let snapshot = session.session.services.agent_jobs.close(&job.id).await;
+    session
+        .session
+        .send_event(ctx.as_ref(), snapshot.status_event())
+        .await;
     None
 }
 

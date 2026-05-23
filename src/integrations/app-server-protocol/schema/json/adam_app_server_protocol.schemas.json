@@ -31,6 +31,24 @@
       "title": "AddConversationSubscriptionResponse",
       "type": "object"
     },
+    "AgentJobDisplayStatus": {
+      "enum": [
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+        "timed_out",
+        "not_found"
+      ],
+      "type": "string"
+    },
+    "AgentJobKind": {
+      "enum": [
+        "explorer",
+        "reviewer"
+      ],
+      "type": "string"
+    },
     "AgentMessageContent": {
       "oneOf": [
         {
@@ -3692,6 +3710,41 @@
             "type"
           ],
           "title": "SkillsUpdateAvailableEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Status update for a CLI-backed delegated agent job.",
+          "properties": {
+            "agent_type": {
+              "$ref": "#/definitions/AgentJobKind"
+            },
+            "job_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/definitions/AgentJobDisplayStatus"
+            },
+            "type": {
+              "enum": [
+                "agent_job_status"
+              ],
+              "title": "AgentJobStatusEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "agent_type",
+            "job_id",
+            "status",
+            "type"
+          ],
+          "title": "AgentJobStatusEventMsg",
           "type": "object"
         },
         {

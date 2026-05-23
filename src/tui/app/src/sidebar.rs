@@ -2,6 +2,7 @@ use crate::buddy;
 use crate::buddy::state::BuddyState;
 use crate::status::format_tokens_compact;
 use adam_protocol::plan_tool::StepStatus;
+use adam_protocol::protocol::AgentJobDisplayStatus;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
@@ -31,6 +32,7 @@ pub(crate) struct SidebarSnapshot {
     pub(crate) todo: Option<TodoPanelSnapshot>,
     pub(crate) files: Vec<String>,
     pub(crate) files_more_count: usize,
+    pub(crate) agents: Vec<AgentPanelEntry>,
     pub(crate) skills: Vec<SkillPanelEntry>,
     pub(crate) mcp: Option<McpPanelSnapshot>,
     pub(crate) status: Option<StatusPanelSnapshot>,
@@ -50,6 +52,13 @@ pub(crate) struct TodoPanelSnapshot {
 pub(crate) struct TodoPanelItem {
     pub(crate) step: String,
     pub(crate) status: StepStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AgentPanelEntry {
+    pub(crate) job_id: String,
+    pub(crate) label: String,
+    pub(crate) status: AgentJobDisplayStatus,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -124,6 +133,7 @@ impl Widget for SidebarWidget<'_> {
             self.snapshot.files_more_count,
             area.width,
         );
+        push_agents(&mut lines, &self.snapshot.agents, area.width);
         push_skills(&mut lines, &self.snapshot.skills, area.width);
         push_mcp(&mut lines, self.snapshot.mcp.as_ref(), area.width);
         push_status(&mut lines, self.snapshot.status.as_ref(), area.width);
@@ -200,6 +210,25 @@ fn push_files(lines: &mut Vec<Line<'static>>, files: &[String], more_count: usiz
     }
 }
 
+fn push_agents(lines: &mut Vec<Line<'static>>, agents: &[AgentPanelEntry], width: u16) {
+    if agents.is_empty() {
+        return;
+    }
+
+    push_section(lines, "Agents");
+    for agent in agents.iter().take(6) {
+        lines.push(Line::from(vec![
+            "  ".into(),
+            truncate(&agent.label, width).cyan(),
+            " ".dim(),
+            agent_status_label(agent.status),
+        ]));
+    }
+    if agents.len() > 6 {
+        lines.push(format!("  +{} more", agents.len() - 6).dim().into());
+    }
+}
+
 fn push_skills(lines: &mut Vec<Line<'static>>, skills: &[SkillPanelEntry], width: u16) {
     if skills.is_empty() {
         return;
@@ -243,6 +272,17 @@ fn push_mcp(lines: &mut Vec<Line<'static>>, mcp: Option<&McpPanelSnapshot>, _wid
     }
     for failed in mcp.failed.iter().take(3) {
         lines.push(Line::from(vec!["  ● ".red(), failed.clone().red()]));
+    }
+}
+
+fn agent_status_label(status: AgentJobDisplayStatus) -> ratatui::text::Span<'static> {
+    match status {
+        AgentJobDisplayStatus::Running => "running".dim(),
+        AgentJobDisplayStatus::Completed => "completed".dim(),
+        AgentJobDisplayStatus::Failed => "error".red(),
+        AgentJobDisplayStatus::Cancelled => "cancelled".dim(),
+        AgentJobDisplayStatus::TimedOut => "timeout".red(),
+        AgentJobDisplayStatus::NotFound => "missing".red(),
     }
 }
 
@@ -393,6 +433,11 @@ mod tests {
             }),
             files: vec!["src/tui/app/src/sidebar.rs".to_string()],
             files_more_count: 0,
+            agents: vec![AgentPanelEntry {
+                job_id: "agent-job-1".to_string(),
+                label: "Explorer #1".to_string(),
+                status: AgentJobDisplayStatus::Running,
+            }],
             skills: vec![SkillPanelEntry {
                 name: "skill-creator".to_string(),
                 path: PathBuf::from("/tmp/skill-creator/SKILL.md"),
@@ -414,7 +459,7 @@ mod tests {
         };
 
         let rendered = render_sidebar(&snapshot);
-        let sections = ["Task", "Todo", "Files", "Skills", "MCP", "Status"];
+        let sections = ["Task", "Todo", "Files", "Agents", "Skills", "MCP", "Status"];
         let positions = sections
             .iter()
             .map(|section| {
@@ -433,6 +478,12 @@ mod tests {
         assert!(!rendered.contains("[x]"));
         assert!(!rendered.contains("[~]"));
         assert!(!rendered.contains("[ ]"));
+        assert!(rendered.contains("Explorer #1 running"));
+        let agent_line = rendered
+            .lines()
+            .find(|line| line.contains("Explorer #1 running"))
+            .unwrap_or_else(|| panic!("missing agent line: {rendered:?}"));
+        assert!(!agent_line.contains("●"));
         assert!(rendered.contains("skill-creator"));
         assert!(rendered.contains("model gpt-5"));
         assert!(rendered.contains("left 55"));
@@ -492,7 +543,9 @@ mod tests {
     #[test]
     fn hides_empty_sections() {
         let rendered = render_sidebar(&SidebarSnapshot::default());
-        for section in ["Task", "Todo", "Files", "Threads", "Skills", "MCP"] {
+        for section in [
+            "Task", "Todo", "Files", "Threads", "Agents", "Skills", "MCP",
+        ] {
             assert!(!rendered.contains(section));
         }
         assert!(!rendered.contains("Status"));
@@ -537,6 +590,13 @@ mod tests {
                 .map(|i| format!("file-{i}.rs"))
                 .collect(),
             files_more_count: 2,
+            agents: (0..8)
+                .map(|i| AgentPanelEntry {
+                    job_id: format!("agent-job-{i}"),
+                    label: format!("Explorer #{}", i + 1),
+                    status: AgentJobDisplayStatus::Running,
+                })
+                .collect(),
             skills: (0..8)
                 .map(|i| SkillPanelEntry {
                     name: format!("skill-{i}"),
@@ -549,8 +609,58 @@ mod tests {
         let rendered = render_sidebar(&snapshot);
         assert!(rendered.contains("file-5.rs"));
         assert!(!rendered.contains("file-6.rs"));
+        assert!(rendered.contains("Explorer #6"));
+        assert!(!rendered.contains("Explorer #7"));
         assert!(rendered.contains("skill-5"));
         assert!(!rendered.contains("skill-6"));
-        assert_eq!(rendered.matches("+2 more").count(), 2);
+        assert_eq!(rendered.matches("+2 more").count(), 3);
+    }
+
+    #[test]
+    fn agents_render_status_labels() {
+        let snapshot = SidebarSnapshot {
+            agents: vec![
+                AgentPanelEntry {
+                    job_id: "running".to_string(),
+                    label: "Explorer #1".to_string(),
+                    status: AgentJobDisplayStatus::Running,
+                },
+                AgentPanelEntry {
+                    job_id: "completed".to_string(),
+                    label: "Reviewer #2".to_string(),
+                    status: AgentJobDisplayStatus::Completed,
+                },
+                AgentPanelEntry {
+                    job_id: "failed".to_string(),
+                    label: "Explorer #3".to_string(),
+                    status: AgentJobDisplayStatus::Failed,
+                },
+                AgentPanelEntry {
+                    job_id: "cancelled".to_string(),
+                    label: "Explorer #4".to_string(),
+                    status: AgentJobDisplayStatus::Cancelled,
+                },
+                AgentPanelEntry {
+                    job_id: "timed-out".to_string(),
+                    label: "Explorer #5".to_string(),
+                    status: AgentJobDisplayStatus::TimedOut,
+                },
+                AgentPanelEntry {
+                    job_id: "not-found".to_string(),
+                    label: "Explorer #6".to_string(),
+                    status: AgentJobDisplayStatus::NotFound,
+                },
+            ],
+            ..Default::default()
+        };
+
+        let rendered = render_sidebar(&snapshot);
+
+        assert!(rendered.contains("Explorer #1 running"));
+        assert!(rendered.contains("Reviewer #2 completed"));
+        assert!(rendered.contains("Explorer #3 error"));
+        assert!(rendered.contains("Explorer #4 cancelled"));
+        assert!(rendered.contains("Explorer #5 timeout"));
+        assert!(rendered.contains("Explorer #6 missing"));
     }
 }
