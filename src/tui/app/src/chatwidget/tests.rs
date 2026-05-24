@@ -2245,6 +2245,7 @@ async fn make_chatwidget_manual_inner(
         token_info: None,
         stream_controller: None,
         plan_stream_controller: None,
+        answer_stream_started_this_turn: false,
         running_commands: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
         skills_all: Vec::new(),
@@ -2416,6 +2417,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         token_info: None,
         stream_controller: None,
         plan_stream_controller: None,
+        answer_stream_started_this_turn: false,
         running_commands: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
         skills_all: Vec::new(),
@@ -8277,6 +8279,146 @@ async fn deltas_then_same_final_message_are_rendered_snapshot() {
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
     assert_snapshot!(combined);
+}
+
+#[tokio::test]
+async fn late_reasoning_summary_after_answer_delta_is_not_visible() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "Final answer.".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Late reasoning**\n\nShould not be visible.".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "Should not be visible.".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Final answer.".into(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(
+        combined.contains("Final answer."),
+        "missing final answer: {combined}"
+    );
+    assert!(
+        !combined.contains("Should not be visible."),
+        "late reasoning summary was visible: {combined}"
+    );
+}
+
+#[tokio::test]
+async fn late_reasoning_summary_after_final_message_is_not_visible() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Final answer.".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Late reasoning**\n\nShould not be visible.".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "Should not be visible.".into(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(
+        combined.contains("Final answer."),
+        "missing final answer: {combined}"
+    );
+    assert!(
+        !combined.contains("Should not be visible."),
+        "late reasoning summary was visible: {combined}"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_summary_before_answer_remains_visible() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Reasoning**\n\nVisible before answer.".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "Visible before answer.".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Final answer.".into(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    let reasoning_idx = combined
+        .find("Visible before answer.")
+        .expect("missing visible reasoning summary");
+    let answer_idx = combined
+        .find("Final answer.")
+        .expect("missing final answer");
+    assert!(reasoning_idx < answer_idx, "unexpected order: {combined}");
 }
 
 // Combined visual snapshot using vt100 for history + direct buffer overlay for UI.

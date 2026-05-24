@@ -475,6 +475,8 @@ pub(crate) struct ChatWidget {
     stream_controller: Option<StreamController>,
     // Stream lifecycle controller for proposed plan output.
     plan_stream_controller: Option<PlanStreamController>,
+    // Whether the current turn has started streaming visible assistant answer content.
+    answer_stream_started_this_turn: bool,
     running_commands: HashMap<String, RunningCommand>,
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<ProtocolSkillMetadata>,
@@ -1120,8 +1122,13 @@ impl ChatWidget {
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         if !self.full_reasoning_buffer.is_empty() {
-            let cell =
-                history_cell::new_reasoning_summary_block(self.full_reasoning_buffer.clone());
+            let cell = if self.answer_stream_started_this_turn {
+                history_cell::new_reasoning_summary_block_transcript_only(
+                    self.full_reasoning_buffer.clone(),
+                )
+            } else {
+                history_cell::new_reasoning_summary_block(self.full_reasoning_buffer.clone())
+            };
             self.add_boxed_history(cell);
         }
         self.reasoning_buffer.clear();
@@ -1182,6 +1189,7 @@ impl ChatWidget {
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.plan_stream_controller = None;
+        self.answer_stream_started_this_turn = false;
         self.otel_manager.reset_runtime_metrics();
         if defer_review_redraw {
             self.bottom_pane.clear_quit_shortcut_hint_with_redraw(false);
@@ -2093,6 +2101,10 @@ impl ChatWidget {
 
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
+        if !delta.is_empty() {
+            self.answer_stream_started_this_turn = true;
+        }
+
         // Before streaming agent content, flush any active exec cell group.
         self.flush_unified_exec_wait_streak();
         self.flush_active_cell();
@@ -2483,6 +2495,7 @@ impl ChatWidget {
             token_info: None,
             stream_controller: None,
             plan_stream_controller: None,
+            answer_stream_started_this_turn: false,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -2656,6 +2669,7 @@ impl ChatWidget {
             token_info: None,
             stream_controller: None,
             plan_stream_controller: None,
+            answer_stream_started_this_turn: false,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,

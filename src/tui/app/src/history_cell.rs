@@ -2397,6 +2397,19 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
 }
 
 pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<dyn HistoryCell> {
+    new_reasoning_summary_block_with_visibility(full_reasoning_buffer, true)
+}
+
+pub(crate) fn new_reasoning_summary_block_transcript_only(
+    full_reasoning_buffer: String,
+) -> Box<dyn HistoryCell> {
+    new_reasoning_summary_block_with_visibility(full_reasoning_buffer, false)
+}
+
+fn new_reasoning_summary_block_with_visibility(
+    full_reasoning_buffer: String,
+    visible_when_summary_present: bool,
+) -> Box<dyn HistoryCell> {
     let full_reasoning_buffer = full_reasoning_buffer.trim();
     if let Some(open) = full_reasoning_buffer.find("**") {
         let after_open = &full_reasoning_buffer[(open + 2)..];
@@ -2410,7 +2423,7 @@ pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<
                 return Box::new(ReasoningSummaryCell::new(
                     header_buffer,
                     summary_buffer,
-                    false,
+                    !visible_when_summary_present,
                 ));
             }
         }
@@ -4057,6 +4070,19 @@ mod tests {
 
         let rendered_transcript = render_transcript(cell.as_ref());
         assert_eq!(rendered_transcript, vec!["• We should fix the bug next."]);
+    }
+
+    #[test]
+    fn reasoning_summary_block_transcript_only_hides_display_lines() {
+        let cell = new_reasoning_summary_block_transcript_only(
+            "**Late reasoning**\n\nThis should stay hidden.".to_string(),
+        );
+
+        let rendered_display = render_lines(&cell.display_lines(80));
+        assert_eq!(rendered_display, Vec::<String>::new());
+
+        let rendered_transcript = render_transcript(cell.as_ref());
+        assert_eq!(rendered_transcript, vec!["• This should stay hidden."]);
     }
 
     #[test]
