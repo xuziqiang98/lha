@@ -24,6 +24,8 @@ use adam_agent::config_loader::ConfigLoadError;
 use adam_agent::config_loader::format_config_error_with_source;
 use adam_agent::env::ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR;
 use adam_agent::env::ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR;
+use adam_agent::env::ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR;
+use adam_agent::env::ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR;
 use adam_agent::git_info::get_git_repo_root;
 use adam_agent::protocol::AskForApproval;
 use adam_agent::protocol::Event;
@@ -31,6 +33,7 @@ use adam_agent::protocol::EventMsg;
 use adam_agent::protocol::Op;
 use adam_agent::protocol::ReviewRequest;
 use adam_agent::protocol::ReviewTarget;
+use adam_agent::protocol::SandboxPolicy;
 use adam_agent::protocol::SessionSource;
 use adam_llm::CatalogRefreshStrategy;
 use adam_llm::RuntimeEndpoint;
@@ -39,6 +42,7 @@ use adam_protocol::config_types::Identity;
 use adam_protocol::config_types::IdentityKind;
 use adam_protocol::config_types::SandboxMode;
 use adam_protocol::config_types::Settings;
+use adam_protocol::config_types::WindowsSandboxLevel;
 use adam_protocol::openai_models::ReasoningEffort;
 use adam_protocol::user_input::UserInput;
 use adam_utils_absolute_path::AbsolutePathBuf;
@@ -98,26 +102,60 @@ struct AgentJobProviderContext {
     model_provider: RuntimeEndpoint,
 }
 
-fn take_agent_job_provider_context() -> anyhow::Result<HashMap<String, RuntimeEndpoint>> {
+#[derive(Debug, Default)]
+struct AgentJobStartupContext {
+    model_provider_overrides: HashMap<String, RuntimeEndpoint>,
+    sandbox_policy: Option<SandboxPolicy>,
+    windows_sandbox_level: Option<WindowsSandboxLevel>,
+}
+
+fn take_agent_job_startup_context() -> anyhow::Result<AgentJobStartupContext> {
     let provider_context = std::env::var(ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR).ok();
     let auth_token = std::env::var(ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR)
         .ok()
         .filter(|token| !token.trim().is_empty());
+    let sandbox_policy = std::env::var(ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR).ok();
+    let windows_sandbox_level = std::env::var(ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR).ok();
     clear_agent_job_context_env();
 
-    let Some(provider_context) = provider_context else {
-        return Ok(HashMap::new());
+    let model_provider_overrides = match provider_context {
+        Some(provider_context) => {
+            let mut context: AgentJobProviderContext = serde_json::from_str(&provider_context)?;
+            if let Some(auth_token) = auth_token {
+                context.model_provider.bearer_token = Some(auth_token);
+                context.model_provider.env_key = None;
+            }
+            HashMap::from([(context.model_provider_id, context.model_provider)])
+        }
+        None => HashMap::new(),
     };
-    let mut context: AgentJobProviderContext = serde_json::from_str(&provider_context)?;
-    if let Some(auth_token) = auth_token {
-        context.model_provider.bearer_token = Some(auth_token);
-        context.model_provider.env_key = None;
-    }
 
-    Ok(HashMap::from([(
-        context.model_provider_id,
-        context.model_provider,
-    )]))
+    let sandbox_policy = parse_agent_job_env_json::<SandboxPolicy>(
+        ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR,
+        sandbox_policy,
+    )?;
+    let windows_sandbox_level = parse_agent_job_env_json::<WindowsSandboxLevel>(
+        ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR,
+        windows_sandbox_level,
+    )?;
+
+    Ok(AgentJobStartupContext {
+        model_provider_overrides,
+        sandbox_policy,
+        windows_sandbox_level,
+    })
+}
+
+fn parse_agent_job_env_json<T>(key: &str, value: Option<String>) -> anyhow::Result<Option<T>>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    value
+        .map(|value| {
+            serde_json::from_str(&value)
+                .map_err(|err| anyhow::anyhow!("invalid {key} value: {err}"))
+        })
+        .transpose()
 }
 
 fn clear_agent_job_context_env() {
@@ -127,6 +165,25 @@ fn clear_agent_job_context_env() {
     unsafe {
         std::env::remove_var(ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR);
         std::env::remove_var(ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR);
+        std::env::remove_var(ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR);
+        std::env::remove_var(ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR);
+    }
+}
+
+fn startup_sandbox_overrides(
+    full_auto: bool,
+    dangerously_bypass_approvals_and_sandbox: bool,
+    inherited_sandbox_policy: Option<&SandboxPolicy>,
+    sandbox_mode_cli_arg: Option<adam_common::SandboxModeCliArg>,
+) -> (Option<SandboxPolicy>, Option<SandboxMode>) {
+    if full_auto {
+        (None, Some(SandboxMode::WorkspaceWrite))
+    } else if dangerously_bypass_approvals_and_sandbox {
+        (None, Some(SandboxMode::DangerFullAccess))
+    } else if let Some(policy) = inherited_sandbox_policy {
+        (Some(policy.clone()), None)
+    } else {
+        (None, sandbox_mode_cli_arg.map(Into::<SandboxMode>::into))
     }
 }
 
@@ -182,14 +239,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         .with_writer(std::io::stderr)
         .with_filter(env_filter);
 
-    let sandbox_mode = if full_auto {
-        Some(SandboxMode::WorkspaceWrite)
-    } else if dangerously_bypass_approvals_and_sandbox {
-        Some(SandboxMode::DangerFullAccess)
-    } else {
-        sandbox_mode_cli_arg.map(Into::<SandboxMode>::into)
-    };
-
     // Parse `-c` overrides from the CLI.
     let cli_kv_overrides = match config_overrides.parse_overrides() {
         Ok(v) => v,
@@ -199,7 +248,18 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             std::process::exit(1);
         }
     };
-    let model_provider_overrides = take_agent_job_provider_context()?;
+    let AgentJobStartupContext {
+        model_provider_overrides,
+        sandbox_policy: inherited_sandbox_policy,
+        windows_sandbox_level: inherited_windows_sandbox_level,
+    } = take_agent_job_startup_context()?;
+
+    let (sandbox_policy, sandbox_mode) = startup_sandbox_overrides(
+        full_auto,
+        dangerously_bypass_approvals_and_sandbox,
+        inherited_sandbox_policy.as_ref(),
+        sandbox_mode_cli_arg,
+    );
 
     let resolved_cwd = cwd.clone();
     let config_cwd = match resolved_cwd.as_deref() {
@@ -254,6 +314,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         config_profile,
         // Default to never ask for approvals in headless mode. Feature flags can override.
         approval_policy: Some(AskForApproval::Never),
+        sandbox_policy,
         sandbox_mode,
         cwd: resolved_cwd,
         model_provider: None,
@@ -317,7 +378,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
     let default_cwd = config.cwd.to_path_buf();
     let default_approval_policy = config.approval_policy.value();
-    let default_sandbox_policy = config.sandbox_policy.get();
+    let default_sandbox_policy = inherited_sandbox_policy
+        .clone()
+        .unwrap_or_else(|| config.sandbox_policy.get().clone());
     let default_effort = config.model_reasoning_effort;
     let default_summary = config.model_reasoning_summary;
 
@@ -480,6 +543,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         });
     }
 
+    if let Some(op) = agent_job_context_override_op(
+        inherited_sandbox_policy.clone(),
+        inherited_windows_sandbox_level,
+    ) {
+        // Agent jobs inherit write sandbox scope, but approvals intentionally
+        // remain headless (`Never`) because child approval requests cannot be
+        // answered by the parent process yet.
+        thread.submit(op).await?;
+    }
+
     match initial_operation {
         InitialOperation::UserTurn {
             items,
@@ -490,7 +563,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                     items,
                     cwd: default_cwd,
                     approval_policy: default_approval_policy,
-                    sandbox_policy: default_sandbox_policy.clone(),
+                    sandbox_policy: default_sandbox_policy,
                     model: default_model,
                     effort: default_effort,
                     summary: default_summary,
@@ -700,6 +773,27 @@ fn review_identity_override_op(identity: Option<Identity>) -> Option<Op> {
     })
 }
 
+fn agent_job_context_override_op(
+    sandbox_policy: Option<SandboxPolicy>,
+    windows_sandbox_level: Option<WindowsSandboxLevel>,
+) -> Option<Op> {
+    if sandbox_policy.is_none() && windows_sandbox_level.is_none() {
+        return None;
+    }
+
+    Some(Op::OverrideTurnContext {
+        cwd: None,
+        approval_policy: None,
+        sandbox_policy,
+        windows_sandbox_level,
+        model: None,
+        effort: None,
+        summary: None,
+        identity: None,
+        personality: None,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PromptDecodeError {
     InvalidUtf8 { valid_up_to: usize },
@@ -846,6 +940,7 @@ fn build_review_request(args: ReviewArgs) -> anyhow::Result<ReviewRequest> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adam_agent::protocol::NetworkAccess;
     use pretty_assertions::assert_eq;
     use std::sync::Mutex as StdMutex;
 
@@ -894,14 +989,138 @@ mod tests {
         );
         set_env_var(ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR, "secret-token");
 
-        let overrides = take_agent_job_provider_context().expect("provider overrides");
+        let context = take_agent_job_startup_context().expect("startup context");
 
         assert!(std::env::var(ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR).is_err());
         assert!(std::env::var(ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR).is_err());
-        let provider = overrides.get("mock.main").expect("mock provider");
+        let provider = context
+            .model_provider_overrides
+            .get("mock.main")
+            .expect("mock provider");
         assert_eq!(provider.base_url.as_deref(), Some("http://127.0.0.1:9/v1"));
         assert_eq!(provider.bearer_token.as_deref(), Some("secret-token"));
         assert_eq!(provider.env_key, None);
+    }
+
+    #[test]
+    fn agent_job_startup_context_defaults_without_sandbox_env() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_agent_job_context_env();
+
+        let context = take_agent_job_startup_context().expect("startup context");
+
+        assert!(context.model_provider_overrides.is_empty());
+        assert_eq!(context.sandbox_policy, None);
+        assert_eq!(context.windows_sandbox_level, None);
+    }
+
+    #[test]
+    fn agent_job_startup_context_consumes_sandbox_env() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_agent_job_context_env();
+        let expected_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+        set_env_var(
+            ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR,
+            &serde_json::to_string(&expected_policy).expect("sandbox policy json"),
+        );
+        set_env_var(
+            ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR,
+            &serde_json::to_string(&WindowsSandboxLevel::RestrictedToken)
+                .expect("windows sandbox level json"),
+        );
+
+        let context = take_agent_job_startup_context().expect("startup context");
+
+        assert!(std::env::var(ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR).is_err());
+        assert!(std::env::var(ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR).is_err());
+        assert_eq!(context.sandbox_policy, Some(expected_policy));
+        assert_eq!(
+            context.windows_sandbox_level,
+            Some(WindowsSandboxLevel::RestrictedToken)
+        );
+    }
+
+    #[test]
+    fn agent_job_startup_context_rejects_invalid_sandbox_env() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        clear_agent_job_context_env();
+        set_env_var(ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR, "not json");
+
+        let err = take_agent_job_startup_context().expect_err("invalid sandbox env");
+
+        assert!(std::env::var(ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR).is_err());
+        assert!(
+            err.to_string()
+                .contains("invalid ADAM_AGENT_JOB_SANDBOX_POLICY value")
+        );
+    }
+
+    #[test]
+    fn startup_sandbox_overrides_preserve_inherited_external_sandbox() {
+        let policy = SandboxPolicy::ExternalSandbox {
+            network_access: NetworkAccess::Restricted,
+        };
+
+        let overrides = startup_sandbox_overrides(
+            false,
+            false,
+            Some(&policy),
+            Some(adam_common::SandboxModeCliArg::DangerFullAccess),
+        );
+
+        assert_eq!(overrides, (Some(policy), None));
+    }
+
+    #[test]
+    fn startup_sandbox_overrides_preserve_inherited_workspace_policy() {
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            network_access: true,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let overrides = startup_sandbox_overrides(
+            false,
+            false,
+            Some(&policy),
+            Some(adam_common::SandboxModeCliArg::ReadOnly),
+        );
+
+        assert_eq!(overrides, (Some(policy), None));
+    }
+
+    #[test]
+    fn startup_sandbox_overrides_use_cli_mode_without_inherited_policy() {
+        let overrides = startup_sandbox_overrides(
+            false,
+            false,
+            None,
+            Some(adam_common::SandboxModeCliArg::WorkspaceWrite),
+        );
+
+        assert_eq!(overrides, (None, Some(SandboxMode::WorkspaceWrite)));
+    }
+
+    #[test]
+    fn startup_sandbox_overrides_keep_explicit_mode_flags_highest_priority() {
+        let policy = SandboxPolicy::ExternalSandbox {
+            network_access: NetworkAccess::Restricted,
+        };
+
+        assert_eq!(
+            startup_sandbox_overrides(false, true, Some(&policy), None),
+            (None, Some(SandboxMode::DangerFullAccess))
+        );
+        assert_eq!(
+            startup_sandbox_overrides(true, false, Some(&policy), None),
+            (None, Some(SandboxMode::WorkspaceWrite))
+        );
     }
 
     #[test]

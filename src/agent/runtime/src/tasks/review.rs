@@ -89,7 +89,12 @@ async fn run_review_job(
         .review_model
         .clone()
         .unwrap_or_else(|| ctx.runtime.get_model());
-    let exec_config = AgentJobExecConfig::from_runtime(&ctx.runtime, &model);
+    let exec_config = AgentJobExecConfig::from_runtime(
+        &ctx.runtime,
+        &model,
+        ctx.sandbox_policy.clone(),
+        ctx.windows_sandbox_level,
+    );
     let (progress_tx, mut progress_rx) = mpsc::unbounded_channel();
     // Review model work runs in an isolated CLI-backed job; this task only
     // starts the job, waits for its final result, and folds that result back

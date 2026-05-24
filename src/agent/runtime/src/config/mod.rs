@@ -1289,6 +1289,9 @@ pub struct ConfigOverrides {
     pub review_model: Option<String>,
     pub cwd: Option<PathBuf>,
     pub approval_policy: Option<AskForApproval>,
+    /// Fully resolved sandbox policy override. Takes precedence over
+    /// `sandbox_mode` when both are provided.
+    pub sandbox_policy: Option<SandboxPolicy>,
     pub sandbox_mode: Option<SandboxMode>,
     pub model_provider: Option<String>,
     pub config_profile: Option<String>,
@@ -1370,6 +1373,7 @@ impl Config {
             review_model: override_review_model,
             cwd,
             approval_policy: approval_policy_override,
+            sandbox_policy: sandbox_policy_override,
             sandbox_mode,
             model_provider,
             config_profile: config_profile_key,
@@ -1438,14 +1442,18 @@ impl Config {
 
         let windows_sandbox_level = WindowsSandboxLevel::from_features(&features);
         let SandboxPolicyResolution {
-            policy: mut sandbox_policy,
-            forced_auto_mode_downgraded_on_windows,
+            policy: derived_sandbox_policy,
+            forced_auto_mode_downgraded_on_windows: forced_auto_mode_downgraded_by_mode,
         } = cfg.derive_sandbox_policy(
             sandbox_mode,
             config_profile.sandbox_mode,
             windows_sandbox_level,
             &resolved_cwd,
         );
+        let has_sandbox_policy_override = sandbox_policy_override.is_some();
+        let mut sandbox_policy = sandbox_policy_override.unwrap_or(derived_sandbox_policy);
+        let forced_auto_mode_downgraded_on_windows =
+            forced_auto_mode_downgraded_by_mode && !has_sandbox_policy_override;
         if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
             for path in additional_writable_roots {
                 if !writable_roots.iter().any(|existing| existing == &path) {
@@ -1472,6 +1480,7 @@ impl Config {
             .is_some()
             || config_profile.approval_policy.is_some()
             || cfg.approval_policy.is_some()
+            || has_sandbox_policy_override
             || sandbox_mode.is_some()
             || config_profile.sandbox_mode.is_some()
             || cfg.sandbox_mode.is_some();

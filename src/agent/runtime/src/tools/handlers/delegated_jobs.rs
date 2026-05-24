@@ -94,7 +94,12 @@ async fn spawn_agent(
             )));
         }
     };
-    let exec_config = AgentJobExecConfig::from_runtime(&turn.runtime, &turn.runtime.get_model());
+    let exec_config = AgentJobExecConfig::from_runtime(
+        &turn.runtime,
+        &turn.runtime.get_model(),
+        turn.sandbox_policy.clone(),
+        turn.windows_sandbox_level,
+    );
     let snapshot = session
         .services
         .agent_jobs

@@ -2,14 +2,18 @@ use crate::client::TurnRuntime;
 use crate::config::model_ref::ModelRef;
 use crate::env::ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR;
 use crate::env::ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR;
+use crate::env::ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR;
+use crate::env::ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR;
 use crate::error::CodexErr;
 use adam_llm::RuntimeEndpoint;
 use adam_protocol::ThreadId;
+use adam_protocol::config_types::WindowsSandboxLevel;
 use adam_protocol::protocol::AgentJobDisplayStatus;
 use adam_protocol::protocol::AgentJobKind;
 use adam_protocol::protocol::AgentJobStatusEvent;
 use adam_protocol::protocol::Event;
 use adam_protocol::protocol::EventMsg;
+use adam_protocol::protocol::SandboxPolicy;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -140,6 +144,8 @@ pub(crate) struct AgentJobExecConfig {
     pub(crate) model_provider_id: String,
     pub(crate) model_provider: RuntimeEndpoint,
     pub(crate) auth_token: Option<String>,
+    pub(crate) sandbox_policy: SandboxPolicy,
+    pub(crate) windows_sandbox_level: WindowsSandboxLevel,
 }
 
 pub(crate) enum AgentJobOutputMode {
@@ -174,7 +180,12 @@ impl AgentJobSpawnOptions {
 }
 
 impl AgentJobExecConfig {
-    pub(crate) fn from_runtime(runtime: &TurnRuntime, model: &str) -> Self {
+    pub(crate) fn from_runtime(
+        runtime: &TurnRuntime,
+        model: &str,
+        sandbox_policy: SandboxPolicy,
+        windows_sandbox_level: WindowsSandboxLevel,
+    ) -> Self {
         let config = runtime.config();
         let mut model_provider = runtime.endpoint();
         let auth_token = model_provider.bearer_token.take();
@@ -185,6 +196,8 @@ impl AgentJobExecConfig {
             model_provider_id: config.model_provider_id.clone(),
             model_provider,
             auth_token,
+            sandbox_policy,
+            windows_sandbox_level,
         }
     }
 }
@@ -660,14 +673,25 @@ fn build_adam_exec_command(
     if let Some(auth_token) = exec_config.auth_token.as_deref() {
         command.env(ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR, auth_token);
     }
+    let sandbox_policy_json = serde_json::to_string(&exec_config.sandbox_policy)
+        .map_err(|err| CodexErr::Fatal(format!("failed to serialize agent job sandbox: {err}")))?;
+    let windows_sandbox_level_json = serde_json::to_string(&exec_config.windows_sandbox_level)
+        .map_err(|err| {
+            CodexErr::Fatal(format!(
+                "failed to serialize agent job windows sandbox level: {err}"
+            ))
+        })?;
+    command.env(ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR, sandbox_policy_json);
+    command.env(
+        ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR,
+        windows_sandbox_level_json,
+    );
     if internal_raw_events {
         command.arg("--internal-raw-events");
     }
     command
         .arg("--identity")
         .arg(agent_type.identity_arg())
-        .arg("--sandbox")
-        .arg("read-only")
         .arg("--skip-git-repo-check")
         .arg("--color")
         .arg("never")
@@ -913,6 +937,8 @@ mod tests {
                 "http://127.0.0.1:9/v1",
             ),
             auth_token: None,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
         }
     }
 
@@ -1229,6 +1255,8 @@ out=""
   printf "ADAM_HOME=%s\n" "$ADAM_HOME"
   printf "AUTH_TOKEN=%s\n" "$ADAM_AGENT_JOB_AUTH_TOKEN"
   printf "PROVIDER_CONTEXT=%s\n" "$ADAM_AGENT_JOB_PROVIDER_CONTEXT"
+  printf "SANDBOX_POLICY=%s\n" "$ADAM_AGENT_JOB_SANDBOX_POLICY"
+  printf "WINDOWS_SANDBOX_LEVEL=%s\n" "$ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL"
 } > "$script_dir/env.txt"
 for arg in "$@"; do
   printf "%s\n" "$arg" >> "$script_dir/args.txt"
@@ -1264,6 +1292,13 @@ printf "args result" > "$out"
                         "http://127.0.0.1:9/v1",
                     ),
                     auth_token: Some("secret-token".to_string()),
+                    sandbox_policy: SandboxPolicy::WorkspaceWrite {
+                        writable_roots: vec![],
+                        network_access: false,
+                        exclude_tmpdir_env_var: false,
+                        exclude_slash_tmp: false,
+                    },
+                    windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 },
                 AgentJobSpawnOptions::log_only(None),
             )
@@ -1292,8 +1327,12 @@ printf "args result" > "$out"
                 .any(|window| window == ["--identity", "explorer"])
         );
         assert!(
-            args.windows(2)
-                .any(|window| window == ["--sandbox", "read-only"])
+            !args.contains(&"--sandbox"),
+            "agent jobs should inherit sandbox via env, not CLI args: {args:?}"
+        );
+        assert!(
+            !args.contains(&"read-only"),
+            "agent jobs should not force read-only sandbox args: {args:?}"
         );
         assert!(
             args.windows(2)
@@ -1308,6 +1347,8 @@ printf "args result" > "$out"
         assert!(child_env.contains(&format!("ADAM_HOME={}", adam_home.path().display())));
         assert!(child_env.contains("AUTH_TOKEN=secret-token"));
         assert!(child_env.contains("provider-a.main"));
+        assert!(child_env.contains("SANDBOX_POLICY={\"type\":\"workspace-write\""));
+        assert!(child_env.contains("WINDOWS_SANDBOX_LEVEL=\"disabled\""));
 
         let job_dir = adam_home
             .path()

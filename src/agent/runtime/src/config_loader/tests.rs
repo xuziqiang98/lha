@@ -11,13 +11,14 @@ use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLoadError;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
+use crate::config_loader::SandboxModeRequirement;
 use crate::config_loader::config_requirements::ConfigRequirementsWithSources;
 use crate::config_loader::config_requirements::RequirementSource;
 use crate::config_loader::fingerprint::version_for_toml;
 use crate::config_loader::load_requirements_toml;
 use adam_protocol::config_types::TrustLevel;
 use adam_protocol::protocol::AskForApproval;
-#[cfg(target_os = "macos")]
+use adam_protocol::protocol::NetworkAccess;
 use adam_protocol::protocol::SandboxPolicy;
 use adam_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -482,6 +483,80 @@ enforce_residency = "us"
         Some(crate::config_loader::ResidencyRequirement::Us)
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn sandbox_policy_override_preserves_external_sandbox_for_requirements() -> anyhow::Result<()>
+{
+    let tmp = tempdir()?;
+    let adam_home = tmp.path().join("home");
+    let cwd = tmp.path().join("work");
+    tokio::fs::create_dir_all(&adam_home).await?;
+    tokio::fs::create_dir_all(&cwd).await?;
+    let sandbox_policy = SandboxPolicy::ExternalSandbox {
+        network_access: NetworkAccess::Restricted,
+    };
+
+    let config = ConfigBuilder::default()
+        .adam_home(adam_home)
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(cwd),
+            sandbox_policy: Some(sandbox_policy.clone()),
+            ..ConfigOverrides::default()
+        })
+        .cloud_requirements(CloudRequirementsLoader::new(async {
+            Some(ConfigRequirementsToml {
+                allowed_sandbox_modes: Some(vec![
+                    SandboxModeRequirement::ReadOnly,
+                    SandboxModeRequirement::ExternalSandbox,
+                ]),
+                ..ConfigRequirementsToml::default()
+            })
+        }))
+        .build()
+        .await?;
+
+    assert_eq!(config.sandbox_policy.get(), &sandbox_policy);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sandbox_policy_override_rejects_danger_full_access_when_only_external_allowed() {
+    let tmp = tempdir().expect("tempdir");
+    let adam_home = tmp.path().join("home");
+    let cwd = tmp.path().join("work");
+    tokio::fs::create_dir_all(&adam_home)
+        .await
+        .expect("adam home");
+    tokio::fs::create_dir_all(&cwd).await.expect("cwd");
+
+    let err = ConfigBuilder::default()
+        .adam_home(adam_home)
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(cwd),
+            sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+            ..ConfigOverrides::default()
+        })
+        .cloud_requirements(CloudRequirementsLoader::new(async {
+            Some(ConfigRequirementsToml {
+                allowed_sandbox_modes: Some(vec![
+                    SandboxModeRequirement::ReadOnly,
+                    SandboxModeRequirement::ExternalSandbox,
+                ]),
+                ..ConfigRequirementsToml::default()
+            })
+        }))
+        .build()
+        .await
+        .expect_err("danger-full-access should be rejected");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("invalid value for `sandbox_mode`"),
+        "{message}"
+    );
+    assert!(message.contains("DangerFullAccess"), "{message}");
+    assert!(message.contains("[ReadOnly, ExternalSandbox]"), "{message}");
 }
 
 #[tokio::test(flavor = "current_thread")]

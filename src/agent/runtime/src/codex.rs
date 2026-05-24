@@ -6514,6 +6514,8 @@ mod tests {
         let exec_config = crate::agent_jobs::AgentJobExecConfig::from_runtime(
             &turn_context.runtime,
             &turn_context.runtime.get_model(),
+            turn_context.sandbox_policy.clone(),
+            turn_context.windows_sandbox_level,
         );
 
         assert_eq!(exec_config.auth_token.as_deref(), Some("provider-token"));
@@ -6529,6 +6531,8 @@ mod tests {
         let exec_config = crate::agent_jobs::AgentJobExecConfig::from_runtime(
             &turn_context.runtime,
             &turn_context.runtime.get_model(),
+            turn_context.sandbox_policy.clone(),
+            turn_context.windows_sandbox_level,
         );
 
         assert_eq!(exec_config.auth_token, None);

@@ -2,6 +2,7 @@ use adam_agent::CodexThread;
 use adam_agent::ContentItem;
 use adam_agent::REVIEW_PROMPT;
 use adam_agent::config::Config;
+use adam_agent::config::Constrained;
 use adam_agent::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use adam_agent::protocol::EventMsg;
 use adam_agent::protocol::ExitedReviewModeEvent;
@@ -14,6 +15,7 @@ use adam_agent::protocol::ReviewRequest;
 use adam_agent::protocol::ReviewTarget;
 use adam_agent::protocol::RolloutItem;
 use adam_agent::protocol::RolloutLine;
+use adam_agent::protocol::SandboxPolicy;
 use adam_agent::review_format::render_review_output_text;
 use adam_protocol::models::TranscriptItem;
 use adam_protocol::user_input::UserInput;
@@ -68,6 +70,7 @@ fn write_fake_reviewer_exec(dir: &TempDir, review_output: &ReviewOutputEvent) ->
 
     let script = dir.path().join("adam-exec-fake");
     let args_log = dir.path().join("args.log");
+    let env_log = dir.path().join("env.log");
     let review_json = serde_json::to_string(review_output)
         .unwrap_or_else(|err| panic!("review output json: {err}"));
     let body = format!(
@@ -75,6 +78,10 @@ fn write_fake_reviewer_exec(dir: &TempDir, review_output: &ReviewOutputEvent) ->
 out=""
 raw_events=0
 : > "{args_log}"
+{{
+  printf "SANDBOX_POLICY=%s\n" "$ADAM_AGENT_JOB_SANDBOX_POLICY"
+  printf "WINDOWS_SANDBOX_LEVEL=%s\n" "$ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL"
+}} > "{env_log}"
 while [ "$#" -gt 0 ]; do
   printf "%s\n" "$1" >> "{args_log}"
   if [ "$1" = "--output-last-message" ]; then
@@ -94,6 +101,7 @@ fi
 printf '%s' '{review_json}' > "$out"
 "#,
         args_log = args_log.display(),
+        env_log = env_log.display(),
         review_json = review_json.replace('\'', "'\\''"),
     );
     std::fs::write(&script, body).unwrap_or_else(|err| panic!("write fake reviewer exec: {err}"));
@@ -276,7 +284,15 @@ async fn review_op_uses_cli_backed_reviewer_job() {
 
     let server = MockServer::start().await;
     let adam_home = Arc::new(TempDir::new().unwrap());
-    let codex = new_conversation_for_server(&server, adam_home.clone(), |_| {}).await;
+    let codex = new_conversation_for_server(&server, adam_home.clone(), |config| {
+        config.sandbox_policy = Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        });
+    })
+    .await;
 
     codex
         .submit(Op::Review {
@@ -335,6 +351,19 @@ async fn review_op_uses_cli_backed_reviewer_job() {
     assert!(
         args.contains(&"--internal-raw-events"),
         "expected raw event channel args: {args:?}"
+    );
+    assert!(
+        !args.contains(&"--sandbox"),
+        "reviewer job should inherit sandbox through env, not CLI args: {args:?}"
+    );
+    let child_env = std::fs::read_to_string(fake_exec_dir.path().join("env.log")).expect("env log");
+    assert!(
+        child_env.contains("SANDBOX_POLICY={\"type\":\"workspace-write\""),
+        "expected inherited workspace-write sandbox: {child_env:?}"
+    );
+    assert!(
+        child_env.contains("WINDOWS_SANDBOX_LEVEL=\"disabled\""),
+        "expected inherited windows sandbox level: {child_env:?}"
     );
 
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

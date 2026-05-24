@@ -8,6 +8,16 @@ pub const ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR: &str = "ADAM_AGENT_JOB_PROVID
 /// `adam exec` job. The child consumes and removes this during startup.
 pub const ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR: &str = "ADAM_AGENT_JOB_AUTH_TOKEN";
 
+/// Serialized sandbox policy passed from a parent Adam session to a delegated
+/// `adam exec` job. The child consumes and removes this during startup.
+pub const ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR: &str = "ADAM_AGENT_JOB_SANDBOX_POLICY";
+
+/// Serialized Windows sandbox level passed from a parent Adam session to a
+/// delegated `adam exec` job. The child consumes and removes this during
+/// startup.
+pub const ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR: &str =
+    "ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL";
+
 fn env_var_set(key: &str) -> bool {
     std::env::var(key).is_ok_and(|v| !v.trim().is_empty())
 }
