@@ -3986,6 +3986,49 @@ mod tests {
     }
 
     #[test]
+    fn proposed_plan_stream_background_fills_blank_body_rows() {
+        let Some(plan_bg) = proposed_plan_style().bg else {
+            return;
+        };
+        let cell: Box<dyn HistoryCell> = Box::new(new_proposed_plan_stream(
+            vec![
+                vec!["• ".dim(), "Proposed Plan".bold()].into(),
+                Line::from("  # Title").style(proposed_plan_style()),
+                Line::default().style(proposed_plan_style()),
+                Line::from("  body").style(proposed_plan_style()),
+            ],
+            false,
+        ));
+        let width = 40;
+        let height = cell.desired_height(width);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        cell.render(buf.area, &mut buf);
+
+        let title_row = (0..height)
+            .find(|y| {
+                (0..width)
+                    .map(|x| buf[(x, *y)].symbol())
+                    .collect::<String>()
+                    .contains("# Title")
+            })
+            .expect("expected rendered proposed plan title row");
+        let blank_row = title_row + 1;
+
+        for x in 0..width {
+            assert_eq!(
+                buf[(x, blank_row)].symbol(),
+                " ",
+                "expected blank proposed plan row at x={x}, y={blank_row}"
+            );
+            assert_eq!(
+                buf[(x, blank_row)].style().bg,
+                Some(plan_bg),
+                "expected proposed plan background at x={x}, y={blank_row}"
+            );
+        }
+    }
+
+    #[test]
     fn proposed_plan_stream_reflows_background_after_resize() {
         let lines = vec![Line::from("  short plan line").style(proposed_plan_style())];
         assert_cell_background_fills_text_row(

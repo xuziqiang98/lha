@@ -490,22 +490,28 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
         let bg = row.last().map(|cell| cell.bg).unwrap_or(Color::Reset);
 
         // Scan the row to find the rightmost column that still matters: any non-space glyph,
-        // any cell whose bg differs from the row’s trailing bg, or any cell with modifiers.
+        // any cell whose bg differs from the row's trailing bg, or any cell with modifiers.
         // Multi-width glyphs extend that region through their full displayed width.
-        // After that point the rest of the row can be cleared with a single ClearToEnd, a perf win
-        // versus emitting multiple space Put commands.
-        let mut last_nonblank_column = 0usize;
+        // Default-background rows can clear the rest of the row with a single ClearToEnd. Rows
+        // with explicit background colors are repainted cell-by-cell because some terminals and
+        // multiplexers handle colored erase inconsistently for blank rows.
+        let paints_explicit_background = bg != Color::Reset;
+        let mut last_nonblank_column = if paints_explicit_background {
+            row.len().saturating_sub(1)
+        } else {
+            0
+        };
         let mut column = 0usize;
         while column < row.len() {
             let cell = &row[column];
             let width = cell.symbol().width();
             if cell.symbol() != " " || cell.bg != bg || cell.modifier != Modifier::empty() {
-                last_nonblank_column = column + (width.saturating_sub(1));
+                last_nonblank_column = last_nonblank_column.max(column + (width.saturating_sub(1)));
             }
             column += width.max(1); // treat zero-width symbols as width 1
         }
 
-        if last_nonblank_column + 1 < row.len() {
+        if !paints_explicit_background && last_nonblank_column + 1 < row.len() {
             let (x, y) = a.pos_of(row_start + last_nonblank_column + 1);
             updates.push(DrawCommand::ClearToEnd { x, y, bg });
         }
@@ -670,6 +676,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use ratatui::layout::Rect;
+    use ratatui::style::Color;
     use ratatui::style::Style;
 
     #[test]
@@ -715,6 +722,79 @@ mod tests {
                 .iter()
                 .any(|command| matches!(command, DrawCommand::ClearToEnd { x: 2, y: 0, .. })),
             "expected clear-to-end to start after the remaining wide char; commands: {commands:?}"
+        );
+    }
+
+    #[test]
+    fn diff_buffers_repaints_non_reset_background_blank_row_with_puts() {
+        let area = Rect::new(0, 0, 6, 1);
+        let previous = Buffer::empty(area);
+        let mut next = Buffer::empty(area);
+        let row_bg = Color::Blue;
+
+        for x in 0..area.width {
+            next.cell_mut((x, 0))
+                .expect("cell should exist")
+                .set_style(Style::default().bg(row_bg));
+        }
+
+        let commands = diff_buffers(&previous, &next);
+
+        assert!(
+            commands
+                .iter()
+                .all(|command| !matches!(command, DrawCommand::ClearToEnd { y: 0, .. })),
+            "expected explicit background row to avoid ClearToEnd; commands: {commands:?}"
+        );
+        assert!(
+            commands.iter().any(|command| {
+                matches!(
+                    command,
+                    DrawCommand::Put {
+                        x: 5,
+                        y: 0,
+                        cell
+                    } if cell.bg == row_bg
+                )
+            }),
+            "expected the final background cell to be repainted; commands: {commands:?}"
+        );
+    }
+
+    #[test]
+    fn diff_buffers_repaints_non_reset_background_text_row_to_end() {
+        let area = Rect::new(0, 0, 8, 1);
+        let previous = Buffer::empty(area);
+        let mut next = Buffer::empty(area);
+        let row_bg = Color::Blue;
+
+        next.set_string(0, 0, "Plan", Style::default().bg(row_bg));
+        for x in 0..area.width {
+            next.cell_mut((x, 0))
+                .expect("cell should exist")
+                .set_style(Style::default().bg(row_bg));
+        }
+
+        let commands = diff_buffers(&previous, &next);
+
+        assert!(
+            commands
+                .iter()
+                .all(|command| !matches!(command, DrawCommand::ClearToEnd { y: 0, .. })),
+            "expected explicit background row to avoid ClearToEnd; commands: {commands:?}"
+        );
+        assert!(
+            commands.iter().any(|command| {
+                matches!(
+                    command,
+                    DrawCommand::Put {
+                        x: 7,
+                        y: 0,
+                        cell
+                    } if cell.bg == row_bg
+                )
+            }),
+            "expected trailing background cells to be repainted; commands: {commands:?}"
         );
     }
 

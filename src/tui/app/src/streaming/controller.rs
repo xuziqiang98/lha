@@ -318,6 +318,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn plan_heading_separator_blank_line_is_styled_when_streamed() {
+        let mut ctrl = PlanStreamController::new(None);
+        assert!(ctrl.push("# Title\n"));
+        let (cell, idle) = ctrl.on_commit_tick();
+        let cell = cell.expect("expected heading plan line");
+        assert_eq!(
+            lines_to_plain_strings(&cell.display_lines(u16::MAX)),
+            vec![
+                "• Proposed Plan".to_string(),
+                "".to_string(),
+                "".to_string(),
+                "  # Title".to_string(),
+            ]
+        );
+        assert!(idle);
+
+        assert!(ctrl.push("\nbody\n"));
+        let (cell, idle) = ctrl.on_commit_tick();
+        let cell = cell.expect("expected blank separator plan line");
+        let lines = cell.display_lines(u16::MAX);
+        assert_eq!(lines_to_plain_strings(&lines), vec!["".to_string()]);
+        assert_eq!(lines[0].style.bg, proposed_plan_style().bg);
+        assert!(cell.is_stream_continuation());
+        assert!(!idle);
+
+        let (cell, idle) = ctrl.on_commit_tick();
+        let cell = cell.expect("expected body plan line");
+        assert_eq!(
+            lines_to_plain_strings(&cell.display_lines(u16::MAX)),
+            vec!["  body".to_string()]
+        );
+        assert!(idle);
+    }
+
+    #[tokio::test]
     async fn plan_finalize_without_streamed_content_returns_none() {
         let mut ctrl = PlanStreamController::new(None);
         assert!(ctrl.finalize().is_none());
