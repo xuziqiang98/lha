@@ -1,6 +1,7 @@
 pub mod apply_patch;
 pub(crate) mod delegated_jobs;
 mod dynamic;
+mod goal;
 mod grep_files;
 mod list_dir;
 mod mcp;
@@ -21,6 +22,7 @@ use crate::function_tool::FunctionCallError;
 pub use apply_patch::ApplyPatchHandler;
 pub use delegated_jobs::DelegatedJobHandler;
 pub use dynamic::DynamicToolHandler;
+pub use goal::GoalHandler;
 pub use grep_files::GrepFilesHandler;
 pub use list_dir::ListDirHandler;
 pub use mcp::McpHandler;

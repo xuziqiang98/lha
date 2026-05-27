@@ -27,14 +27,14 @@ use uuid::Uuid;
 /// Core-facing handle to the optional SQLite-backed state runtime.
 pub type StateDbHandle = Arc<adam_state::StateRuntime>;
 
-/// Initialize the state runtime when the `sqlite` feature flag is enabled. To only be used
+/// Initialize the state runtime when persistence-backed features are enabled. To only be used
 /// inside `core`. The initialization should not be done anywhere else.
 pub(crate) async fn init_if_enabled(
     config: &Config,
     otel: Option<&OtelManager>,
 ) -> Option<StateDbHandle> {
     let state_path = config.adam_home.join(STATE_DB_FILENAME);
-    if !config.features.enabled(Feature::Sqlite) {
+    if !state_db_feature_enabled(config) {
         return None;
     }
     let existed = tokio::fs::try_exists(&state_path).await.unwrap_or(false);
@@ -76,7 +76,7 @@ pub(crate) async fn init_if_enabled(
 /// Get the DB if the feature is enabled and the DB exists.
 pub async fn get_state_db(config: &Config, otel: Option<&OtelManager>) -> Option<StateDbHandle> {
     let state_path = config.adam_home.join(STATE_DB_FILENAME);
-    if !config.features.enabled(Feature::Sqlite)
+    if !state_db_feature_enabled(config)
         || !tokio::fs::try_exists(&state_path).await.unwrap_or(false)
     {
         return None;
@@ -88,6 +88,10 @@ pub async fn get_state_db(config: &Config, otel: Option<&OtelManager>) -> Option
     )
     .await
     .ok()
+}
+
+fn state_db_feature_enabled(config: &Config) -> bool {
+    config.features.enabled(Feature::Sqlite) || config.features.enabled(Feature::Goals)
 }
 
 /// Open the state runtime when the SQLite file exists, without feature gating.

@@ -2209,7 +2209,10 @@ impl ChatComposer {
                 )
                 && matches!(
                     cmd,
-                    SlashCommand::Review | SlashCommand::Rename | SlashCommand::Buddy
+                    SlashCommand::Review
+                        | SlashCommand::Rename
+                        | SlashCommand::Buddy
+                        | SlashCommand::Goal
                 )
             {
                 self.textarea.set_text_clearing_elements("");
@@ -5121,6 +5124,52 @@ mod tests {
                 panic!("expected command dispatch, but composer queued literal text")
             }
             InputResult::None => panic!("expected Command result for '/init'"),
+        }
+        assert!(composer.textarea.is_empty(), "composer should be cleared");
+    }
+
+    #[test]
+    fn slash_goal_with_args_dispatches_command_and_does_not_submit_literal_text() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Adam to do anything".to_string(),
+            false,
+        );
+
+        type_chars_humanlike(
+            &mut composer,
+            &[
+                '/', 'g', 'o', 'a', 'l', ' ', 'f', 'i', 'n', 'i', 's', 'h', ' ', 'm', 'i', 'g',
+                'r', 'a', 't', 'i', 'o', 'n',
+            ],
+        );
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::CommandWithArgs(cmd, args) => {
+                assert_eq!(cmd, SlashCommand::Goal);
+                assert_eq!(args, "finish migration");
+            }
+            InputResult::Command(cmd) => {
+                panic!("expected command dispatch with args for '/goal', got {cmd:?}")
+            }
+            InputResult::Submitted { text, .. } => {
+                panic!("expected command dispatch, but composer submitted literal text: {text}")
+            }
+            InputResult::Queued { .. } => {
+                panic!("expected command dispatch, but composer queued literal text")
+            }
+            InputResult::None => panic!("expected CommandWithArgs result for '/goal'"),
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
     }

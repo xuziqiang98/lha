@@ -2301,6 +2301,8 @@ async fn make_chatwidget_manual_inner(
         last_bottom_area: std::cell::Cell::new(None),
         feedback: adam_feedback::CodexFeedback::new(),
         current_rollout_path: None,
+        current_goal: None,
+        current_goal_state_known: false,
         external_editor_state: ExternalEditorState::Closed,
     };
     widget.set_model(&resolved_model);
@@ -2473,6 +2475,8 @@ async fn make_chatwidget_manual_with_frame_requester(
         last_bottom_area: std::cell::Cell::new(None),
         feedback: adam_feedback::CodexFeedback::new(),
         current_rollout_path: None,
+        current_goal: None,
+        current_goal_state_known: false,
         external_editor_state: ExternalEditorState::Closed,
     };
     widget.set_model(&resolved_model);
@@ -3017,6 +3021,169 @@ async fn disabled_slash_command_error_scrolls_transcript_to_bottom() {
         !cells.is_empty(),
         "expected disabled slash command to insert an error cell"
     );
+}
+
+#[tokio::test]
+async fn goal_edit_refreshes_unknown_goal_state() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.config.features.enable(Feature::Goals);
+    chat.current_identity.kind = IdentityKind::Programmer;
+    chat.current_goal = None;
+    chat.current_goal_state_known = false;
+
+    chat.dispatch_goal_command("edit");
+
+    let events = drain_events(&mut rx);
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::CodexOp(Op::ThreadGoalGet)))
+    );
+    let text = events
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .flat_map(|cell| cell.display_lines(80))
+        .map(|line| lines_to_single_string(&[line]))
+        .collect::<String>();
+    assert!(text.contains("Goal state is refreshing."));
+    assert!(!text.contains("No goal is currently set."));
+}
+
+#[tokio::test]
+async fn goal_edit_reports_no_goal_after_known_empty_state() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.config.features.enable(Feature::Goals);
+    chat.current_identity.kind = IdentityKind::Programmer;
+    chat.current_goal = None;
+    chat.current_goal_state_known = true;
+
+    chat.dispatch_goal_command("edit");
+
+    let events = drain_events(&mut rx);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AppEvent::CodexOp(Op::ThreadGoalGet)))
+    );
+    let text = events
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .flat_map(|cell| cell.display_lines(80))
+        .map(|line| lines_to_single_string(&[line]))
+        .collect::<String>();
+    assert!(text.contains("No goal is currently set."));
+}
+
+#[tokio::test]
+async fn goal_edit_submits_expected_goal_id() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.config.features.enable(Feature::Goals);
+    chat.current_identity.kind = IdentityKind::Programmer;
+    let thread_id = ThreadId::new();
+    chat.current_goal = Some(ThreadGoal {
+        thread_id,
+        goal_id: "goal-123".to_string(),
+        objective: "old objective".to_string(),
+        status: ThreadGoalStatus::Paused,
+        token_budget: Some(1_000),
+        tokens_used: 12,
+        time_used_seconds: 34,
+        created_at: 1_700_000_000,
+        updated_at: 1_700_000_100,
+    });
+    chat.current_goal_state_known = true;
+
+    chat.dispatch_goal_command("edit");
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut submitted = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::CodexOp(Op::ThreadGoalSetObjective { objective, mode }) = event {
+            submitted = Some((objective, mode));
+            break;
+        }
+    }
+    let (objective, mode) = submitted.expect("goal edit should submit an op");
+    assert_eq!(objective, "old objective");
+    match mode {
+        ThreadGoalSetMode::UpdateExisting {
+            expected_goal_id,
+            status,
+            token_budget,
+        } => {
+            assert_eq!(expected_goal_id, "goal-123");
+            assert_eq!(status, ThreadGoalStatus::Paused);
+            assert_eq!(token_budget, Some(1_000));
+        }
+        other => panic!("expected update-existing goal mode, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn goal_replace_confirmation_submits_expected_goal_id() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.config.features.enable(Feature::Goals);
+    chat.current_identity.kind = IdentityKind::Programmer;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    chat.on_thread_goal_replace_confirmation_required(ThreadGoalReplaceConfirmationRequiredEvent {
+        thread_id,
+        existing_goal: ThreadGoal {
+            thread_id,
+            goal_id: "goal-123".to_string(),
+            objective: "old objective".to_string(),
+            status: ThreadGoalStatus::Active,
+            token_budget: Some(1_000),
+            tokens_used: 12,
+            time_used_seconds: 34,
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_100,
+        },
+        objective: "new objective".to_string(),
+    });
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut submitted = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::CodexOp(Op::ThreadGoalSetObjective { objective, mode }) = event {
+            submitted = Some((objective, mode));
+            break;
+        }
+    }
+    let (objective, mode) = submitted.expect("goal replacement should submit an op");
+    assert_eq!(objective, "new objective");
+    match mode {
+        ThreadGoalSetMode::ReplaceExisting { expected_goal_id } => {
+            assert_eq!(expected_goal_id, "goal-123");
+        }
+        other => panic!("expected replace-existing goal mode, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn ctrl_c_interrupt_does_not_pause_goal_from_tui_cache() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.config.features.enable(Feature::Goals);
+    chat.current_identity.kind = IdentityKind::Programmer;
+    chat.current_goal = Some(ThreadGoal {
+        thread_id: ThreadId::new(),
+        goal_id: "goal-123".to_string(),
+        objective: "cached active goal".to_string(),
+        status: ThreadGoalStatus::Active,
+        token_budget: Some(1_000),
+        tokens_used: 12,
+        time_used_seconds: 34,
+        created_at: 1_700_000_000,
+        updated_at: 1_700_000_100,
+    });
+    chat.current_goal_state_known = true;
+    chat.bottom_pane.set_task_running(true);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::Interrupt));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[tokio::test]

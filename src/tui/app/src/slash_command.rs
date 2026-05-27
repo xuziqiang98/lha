@@ -35,6 +35,7 @@ pub enum SlashCommand {
     Mention,
     Status,
     Plan,
+    Goal,
     Bottom,
     Mcp,
     Logout,
@@ -68,6 +69,7 @@ impl SlashCommand {
             SlashCommand::Skills => "use skills to improve how Adam performs specific tasks",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Plan => "jump to the latest proposed plan",
+            SlashCommand::Goal => "set or view the programmer goal for a long-running task",
             SlashCommand::Bottom => "scroll transcript to the bottom",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Stop => "stop all background terminals",
@@ -120,6 +122,7 @@ impl SlashCommand {
             | SlashCommand::Skills
             | SlashCommand::Status
             | SlashCommand::Plan
+            | SlashCommand::Goal
             | SlashCommand::Bottom
             | SlashCommand::Ps
             | SlashCommand::Stop

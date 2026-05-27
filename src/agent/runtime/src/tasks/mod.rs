@@ -5,8 +5,10 @@ mod review;
 mod undo;
 mod user_shell;
 
+use std::convert::TryFrom;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -21,8 +23,11 @@ use tracing::warn;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::codex::protocol_goal_from_state;
+use crate::features::Feature;
 use crate::protocol::BuddyReactionEvent;
 use crate::protocol::EventMsg;
+use crate::protocol::ThreadGoalUpdatedEvent;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
 use crate::protocol::TurnCompleteEvent;
@@ -31,13 +36,18 @@ use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::SessionServices;
 use crate::state::TaskKind;
+use crate::state::TaskUsageSnapshot;
 use adam_llm::TurnEvent;
 use adam_llm::TurnRequest;
+use adam_protocol::config_types::IdentityKind;
 use adam_protocol::models::BaseInstructions;
 use adam_protocol::models::ContentItem;
 use adam_protocol::models::TranscriptItem;
 use adam_protocol::protocol::RolloutItem;
 use adam_protocol::user_input::UserInput;
+use adam_state::GoalAccountingMode;
+use adam_state::GoalAccountingOutcome;
+use adam_state::ThreadGoalStatus;
 
 pub(crate) use compact::CompactTask;
 pub(crate) use ghost_snapshot::GhostSnapshotTask;
@@ -48,6 +58,18 @@ pub(crate) use user_shell::UserShellCommandTask;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
+
+fn goal_accounting_mode_for_status(status: ThreadGoalStatus) -> GoalAccountingMode {
+    match status {
+        ThreadGoalStatus::Active | ThreadGoalStatus::BudgetLimited => {
+            GoalAccountingMode::ActiveOnly
+        }
+        ThreadGoalStatus::Paused | ThreadGoalStatus::Blocked | ThreadGoalStatus::UsageLimited => {
+            GoalAccountingMode::ActiveOrStopped
+        }
+        ThreadGoalStatus::Complete => GoalAccountingMode::ActiveOrComplete,
+    }
+}
 
 /// Thin wrapper that exposes the parts of [`Session`] task runners need.
 #[derive(Clone)]
@@ -113,14 +135,39 @@ impl Session {
         task: T,
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
+        let _ = self.spawn_task_if_idle(turn_context, input, task).await;
+    }
+
+    pub(crate) async fn spawn_task_if_idle<T: SessionTask>(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        input: Vec<UserInput>,
+        task: T,
+    ) -> bool {
         self.seed_initial_context_if_needed(turn_context.as_ref())
             .await;
+        self.spawn_task_if_idle_without_initial_context_seed(turn_context, input, task)
+            .await
+    }
 
+    pub(crate) async fn spawn_task_if_idle_without_initial_context_seed<T: SessionTask>(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        input: Vec<UserInput>,
+        task: T,
+    ) -> bool {
         let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
 
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
+        let starting_total_tokens = self.reported_total_token_usage().await;
+        let started_at = Instant::now();
+
+        let mut active = self.active_turn.lock().await;
+        if active.is_some() {
+            return false;
+        }
 
         let done_clone = Arc::clone(&done);
         let handle = {
@@ -166,9 +213,14 @@ impl Session {
             task,
             cancellation_token,
             turn_context: Arc::clone(&turn_context),
+            started_at,
+            starting_total_tokens,
             _timer: timer,
         };
-        self.register_new_active_task(running_task).await;
+        let mut turn = ActiveTurn::default();
+        turn.add_task(running_task);
+        *active = Some(turn);
+        true
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
@@ -183,18 +235,25 @@ impl Session {
         last_agent_message: Option<String>,
     ) {
         let mut active = self.active_turn.lock().await;
-        let should_close_processes = if let Some(at) = active.as_mut()
-            && at.remove_task(&turn_context.sub_id)
-        {
+        let (finished_task, should_close_processes) = active
+            .as_mut()
+            .map(|at| at.remove_task(&turn_context.sub_id))
+            .unwrap_or((None, false));
+        if should_close_processes {
             *active = None;
-            true
-        } else {
-            false
-        };
+        }
         drop(active);
         if should_close_processes {
             self.close_unified_exec_processes().await;
         }
+        let accounting_outcome = if let Some(finished_task) = finished_task.as_ref() {
+            self.account_goal_usage_for_task(&turn_context, finished_task.accounting_snapshot())
+                .await
+        } else {
+            None
+        };
+        self.emit_goal_accounting_update_if_needed(&turn_context, accounting_outcome)
+            .await;
         let assistant_message_for_buddy = last_agent_message.clone();
         let event = EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message });
         self.send_event(turn_context.as_ref(), event).await;
@@ -220,6 +279,103 @@ impl Session {
                 }
             });
         }
+        if should_close_processes {
+            self.request_goal_continuation();
+        }
+    }
+
+    async fn account_goal_usage_for_task(
+        &self,
+        turn_context: &TurnContext,
+        task_usage: TaskUsageSnapshot,
+    ) -> Option<GoalAccountingOutcome> {
+        let goal_id = turn_context.goal_context.accounting_goal_id().await?;
+        let state_db = self.state_db()?;
+        let goal = match state_db.get_thread_goal(self.conversation_id).await {
+            Ok(Some(goal)) if goal.goal_id == goal_id => goal,
+            Ok(_) => return None,
+            Err(err) => {
+                warn!("failed to load goal before accounting usage: {err}");
+                return None;
+            }
+        };
+        let token_delta = self
+            .reported_total_token_usage()
+            .await
+            .saturating_sub(task_usage.starting_total_tokens);
+        let elapsed_seconds = task_usage
+            .started_at
+            .elapsed()
+            .as_millis()
+            .div_ceil(1000)
+            .max(1);
+        let time_delta_seconds = i64::try_from(elapsed_seconds).unwrap_or(i64::MAX);
+        match state_db
+            .account_thread_goal_usage(
+                self.conversation_id,
+                time_delta_seconds,
+                token_delta,
+                goal_accounting_mode_for_status(goal.status),
+                Some(goal_id.as_str()),
+            )
+            .await
+        {
+            Ok(outcome) => Some(outcome),
+            Err(err) => {
+                warn!("failed to account goal usage: {err}");
+                None
+            }
+        }
+    }
+
+    async fn emit_goal_accounting_update_if_needed(
+        &self,
+        turn_context: &TurnContext,
+        accounting_outcome: Option<GoalAccountingOutcome>,
+    ) {
+        if let Some(GoalAccountingOutcome::Updated(goal)) = accounting_outcome {
+            self.emit_thread_goal_updated(turn_context, goal).await;
+        }
+    }
+
+    async fn emit_thread_goal_updated(
+        &self,
+        turn_context: &TurnContext,
+        goal: adam_state::ThreadGoal,
+    ) {
+        self.send_event(
+            turn_context,
+            EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
+                thread_id: self.conversation_id,
+                turn_id: Some(turn_context.sub_id.clone()),
+                goal: protocol_goal_from_state(goal),
+            }),
+        )
+        .await;
+    }
+
+    async fn pause_active_goal_for_interrupt(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Option<adam_state::ThreadGoal> {
+        if !self.enabled(Feature::Goals) || turn_context.identity.kind != IdentityKind::Programmer {
+            return None;
+        }
+        let state_db = self.state_db()?;
+        let mut expected_goal_id = turn_context.goal_context.expected_goal_id().await;
+        if expected_goal_id.is_none() {
+            expected_goal_id = turn_context.goal_context.accounting_goal_id().await;
+        }
+        match state_db
+            .pause_active_thread_goal_if_goal_id(self.conversation_id, expected_goal_id.as_deref())
+            .await
+        {
+            Ok(goal) => goal,
+            Err(err) => {
+                warn!("failed to pause active goal after interrupt: {err}");
+                None
+            }
+        }
     }
 
     async fn should_start_buddy_observer(
@@ -242,19 +398,14 @@ impl Session {
         true
     }
 
-    async fn register_new_active_task(&self, task: RunningTask) {
-        let mut active = self.active_turn.lock().await;
-        let mut turn = ActiveTurn::default();
-        turn.add_task(task);
-        *active = Some(turn);
-    }
-
     async fn take_all_running_tasks(&self) -> Vec<RunningTask> {
-        let mut active = self.active_turn.lock().await;
-        match active.take() {
+        let active_turn = {
+            let mut active = self.active_turn.lock().await;
+            active.take()
+        };
+        match active_turn {
             Some(mut at) => {
                 at.clear_pending().await;
-
                 at.drain_tasks()
             }
             None => Vec::new(),
@@ -269,14 +420,16 @@ impl Session {
     }
 
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
-        let sub_id = task.turn_context.sub_id.clone();
+        let turn_context = Arc::clone(&task.turn_context);
+        let task_usage = task.accounting_snapshot();
+        let sub_id = turn_context.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
             return;
         }
 
         trace!(task_kind = ?task.kind, sub_id, "aborting running task");
         task.cancellation_token.cancel();
-        let session_task = task.task;
+        let session_task = Arc::clone(&task.task);
 
         select! {
             _ = task.done.notified() => {
@@ -290,8 +443,23 @@ impl Session {
 
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         session_task
-            .abort(session_ctx, Arc::clone(&task.turn_context))
+            .abort(session_ctx, Arc::clone(&turn_context))
             .await;
+
+        let accounting_outcome = self
+            .account_goal_usage_for_task(&turn_context, task_usage)
+            .await;
+        let paused_goal = if reason == TurnAbortReason::Interrupted {
+            self.pause_active_goal_for_interrupt(&turn_context).await
+        } else {
+            None
+        };
+        if let Some(goal) = paused_goal {
+            self.emit_thread_goal_updated(&turn_context, goal).await;
+        } else {
+            self.emit_goal_accounting_update_if_needed(&turn_context, accounting_outcome)
+                .await;
+        }
 
         if reason == TurnAbortReason::Interrupted {
             let marker = TranscriptItem::Message {
@@ -304,7 +472,7 @@ impl Session {
                 }],
                 end_turn: None,
             };
-            self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
+            self.record_into_history(std::slice::from_ref(&marker), turn_context.as_ref())
                 .await;
             self.persist_rollout_items(&[RolloutItem::TranscriptItem(marker)])
                 .await;
@@ -314,7 +482,7 @@ impl Session {
         }
 
         let event = EventMsg::TurnAborted(TurnAbortedEvent { reason });
-        self.send_event(task.turn_context.as_ref(), event).await;
+        self.send_event(turn_context.as_ref(), event).await;
     }
 }
 

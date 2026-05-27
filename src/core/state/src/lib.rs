@@ -14,8 +14,14 @@ mod runtime;
 pub use model::LogEntry;
 pub use model::LogQuery;
 pub use model::LogRow;
+pub use model::ThreadGoal;
+pub use model::ThreadGoalStatus;
 /// Preferred entrypoint: owns configuration and metrics.
+pub use runtime::GoalAccountingMode;
+pub use runtime::GoalAccountingOutcome;
+pub use runtime::GoalUpdate;
 pub use runtime::StateRuntime;
+pub use runtime::ThreadGoalSeed;
 
 /// Low-level storage engine: useful for focused tests.
 ///

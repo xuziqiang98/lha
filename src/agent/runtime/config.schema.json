@@ -226,6 +226,9 @@
             "force_http1_streaming": {
               "type": "boolean"
             },
+            "goals": {
+              "type": "boolean"
+            },
             "identities": {
               "type": "boolean"
             },
@@ -1211,6 +1214,9 @@
           "type": "boolean"
         },
         "force_http1_streaming": {
+          "type": "boolean"
+        },
+        "goals": {
           "type": "boolean"
         },
         "identities": {

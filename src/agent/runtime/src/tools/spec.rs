@@ -40,6 +40,7 @@ pub(crate) struct ToolsConfig {
     pub web_search_mode: Option<WebSearchMode>,
     pub delegated_job_tools: bool,
     pub identity_tools: bool,
+    pub goal_tools: bool,
     pub request_rule_enabled: bool,
     pub experimental_supported_tools: Vec<String>,
     pub workflow_tools: bool,
@@ -68,6 +69,7 @@ impl ToolsConfig {
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_delegated_job_tools = features.enabled(Feature::AgentJobs);
         let include_identity_tools = features.enabled(Feature::Identities);
+        let include_goal_tools = features.enabled(Feature::Goals);
         let request_rule_enabled = features.enabled(Feature::RequestRule);
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -102,6 +104,7 @@ impl ToolsConfig {
             web_search_mode: *web_search_mode,
             delegated_job_tools: include_delegated_job_tools,
             identity_tools: include_identity_tools,
+            goal_tools: include_goal_tools,
             request_rule_enabled,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             workflow_tools: false,
@@ -137,6 +140,11 @@ fn tool_name_is_allowed_for_runtime(config: &ToolsConfig, name: &str) -> bool {
 }
 
 fn tool_name_is_allowed_by_identity(config: &ToolsConfig, name: &str) -> bool {
+    if matches!(name, "get_goal" | "create_goal" | "update_goal")
+        && config.identity_kind != IdentityKind::Programmer
+    {
+        return false;
+    }
     match config.identity_kind {
         IdentityKind::Explorer => matches!(name, "read_file" | "list_dir" | "grep_files"),
         IdentityKind::Reviewer => matches!(
@@ -549,6 +557,49 @@ fn create_spawn_agent_tool(_config: &ToolsConfig) -> ToolDescriptor {
             additional_properties: Some(false.into()),
         },
     })
+}
+
+fn create_goal_tools() -> Vec<ToolDescriptor> {
+    let objective_schema = JsonSchema::String {
+        description: Some("The goal objective.".to_string()),
+    };
+    let status_schema = JsonSchema::String {
+        description: Some("One of: complete, blocked.".to_string()),
+    };
+    vec![
+        ToolDescriptor::Function(ResponsesApiTool {
+            name: "get_goal".to_string(),
+            description: "Get the current long-running programmer goal for this thread."
+                .to_string(),
+            strict: false,
+            parameters: JsonSchema::Object {
+                properties: BTreeMap::new(),
+                required: Some(Vec::new()),
+                additional_properties: Some(false.into()),
+            },
+        }),
+        ToolDescriptor::Function(ResponsesApiTool {
+            name: "create_goal".to_string(),
+            description: "Create a long-running programmer goal when no unfinished goal exists."
+                .to_string(),
+            strict: false,
+            parameters: JsonSchema::Object {
+                properties: BTreeMap::from([("objective".to_string(), objective_schema)]),
+                required: Some(vec!["objective".to_string()]),
+                additional_properties: Some(false.into()),
+            },
+        }),
+        ToolDescriptor::Function(ResponsesApiTool {
+            name: "update_goal".to_string(),
+            description: "Mark the current programmer goal complete or blocked.".to_string(),
+            strict: false,
+            parameters: JsonSchema::Object {
+                properties: BTreeMap::from([("status".to_string(), status_schema)]),
+                required: Some(vec!["status".to_string()]),
+                additional_properties: Some(false.into()),
+            },
+        }),
+    ]
 }
 
 fn create_wait_tool() -> ToolDescriptor {
@@ -1315,6 +1366,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::DelegatedJobHandler;
     use crate::tools::handlers::DynamicToolHandler;
+    use crate::tools::handlers::GoalHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
@@ -1341,6 +1393,7 @@ pub(crate) fn build_specs(
     let shell_command_handler = Arc::new(ShellCommandHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler);
     let workflow_handler = Arc::new(WorkflowHandler);
+    let goal_handler = Arc::new(GoalHandler);
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
@@ -1471,6 +1524,19 @@ pub(crate) fn build_specs(
             "workflow_submit_artifact",
             workflow_handler,
         );
+    }
+
+    if config.goal_tools {
+        for spec in create_goal_tools() {
+            let name = spec.name().to_string();
+            maybe_push_spec_and_register_handler(
+                &mut builder,
+                config,
+                spec,
+                name,
+                goal_handler.clone(),
+            );
+        }
     }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {

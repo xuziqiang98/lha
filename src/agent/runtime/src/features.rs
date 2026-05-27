@@ -76,6 +76,8 @@ pub enum Feature {
     GhostCommit,
     /// Enable the default shell tool.
     ShellTool,
+    /// Enable long-running programmer goals.
+    Goals,
 
     // Experimental
     /// Use the single unified PTY-backed exec tool.
@@ -420,6 +422,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ShellTool,
         key: "shell_tool",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::Goals,
+        key: "goals",
         stage: Stage::Stable,
         default_enabled: true,
     },

@@ -72,6 +72,13 @@ use adam_agent::protocol::ReviewTarget;
 use adam_agent::protocol::SkillMetadata as ProtocolSkillMetadata;
 use adam_agent::protocol::StreamErrorEvent;
 use adam_agent::protocol::TerminalInteractionEvent;
+use adam_agent::protocol::ThreadGoal;
+use adam_agent::protocol::ThreadGoalClearedEvent;
+use adam_agent::protocol::ThreadGoalReplaceConfirmationRequiredEvent;
+use adam_agent::protocol::ThreadGoalSetMode;
+use adam_agent::protocol::ThreadGoalSnapshotEvent;
+use adam_agent::protocol::ThreadGoalStatus;
+use adam_agent::protocol::ThreadGoalUpdatedEvent;
 use adam_agent::protocol::TokenUsage;
 use adam_agent::protocol::TokenUsageInfo;
 use adam_agent::protocol::TurnAbortReason;
@@ -360,6 +367,53 @@ fn rate_limit_error_kind(info: &CodexErrorInfo) -> Option<RateLimitErrorKind> {
     }
 }
 
+fn goal_status_label(status: ThreadGoalStatus) -> &'static str {
+    match status {
+        ThreadGoalStatus::Active => "active",
+        ThreadGoalStatus::Paused => "paused",
+        ThreadGoalStatus::Blocked => "blocked",
+        ThreadGoalStatus::UsageLimited => "usage limited",
+        ThreadGoalStatus::BudgetLimited => "limited by budget",
+        ThreadGoalStatus::Complete => "complete",
+    }
+}
+
+fn goal_usage_summary(goal: &ThreadGoal) -> String {
+    let budget = goal
+        .token_budget
+        .map(|budget| format!(" / {budget} token budget"))
+        .unwrap_or_default();
+    format!(
+        "Used {} tokens{budget}; elapsed {}.",
+        goal.tokens_used,
+        format_goal_elapsed_seconds(goal.time_used_seconds)
+    )
+}
+
+fn format_goal_elapsed_seconds(seconds: i64) -> String {
+    let seconds = seconds.max(0);
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    let seconds = seconds % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
+fn edited_goal_status(status: ThreadGoalStatus) -> ThreadGoalStatus {
+    match status {
+        ThreadGoalStatus::Active => ThreadGoalStatus::Active,
+        ThreadGoalStatus::Paused | ThreadGoalStatus::Blocked | ThreadGoalStatus::UsageLimited => {
+            status
+        }
+        ThreadGoalStatus::BudgetLimited | ThreadGoalStatus::Complete => ThreadGoalStatus::Active,
+    }
+}
+
 /// Common initialization parameters shared by all `ChatWidget` constructors.
 pub(crate) struct ChatWidgetInit {
     pub(crate) config: Config,
@@ -587,6 +641,8 @@ pub(crate) struct ChatWidget {
     feedback: adam_feedback::CodexFeedback,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
+    current_goal: Option<ThreadGoal>,
+    current_goal_state_known: bool,
     external_editor_state: ExternalEditorState,
 }
 
@@ -930,6 +986,8 @@ impl ChatWidget {
         self.pending_live_legacy_context_compactions.clear();
         self.pending_replay_legacy_context_compactions = 0;
         self.current_rollout_path = event.rollout_path.clone();
+        self.current_goal = None;
+        self.current_goal_state_known = false;
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
@@ -971,6 +1029,84 @@ impl ChatWidget {
             self.thread_name = event.thread_name;
             self.request_redraw();
         }
+    }
+
+    fn on_thread_goal_updated(&mut self, event: ThreadGoalUpdatedEvent) {
+        if self.thread_id != Some(event.thread_id) {
+            return;
+        }
+        self.current_goal = Some(event.goal.clone());
+        self.current_goal_state_known = true;
+        self.show_goal_summary(&event.goal);
+        self.request_redraw();
+    }
+
+    fn on_thread_goal_cleared(&mut self, event: ThreadGoalClearedEvent) {
+        if self.thread_id != Some(event.thread_id) {
+            return;
+        }
+        self.current_goal = None;
+        self.current_goal_state_known = true;
+        self.add_info_message("Goal cleared.".to_string(), None);
+        self.request_redraw();
+    }
+
+    fn on_thread_goal_snapshot(&mut self, event: ThreadGoalSnapshotEvent) {
+        if self.thread_id != Some(event.thread_id) {
+            return;
+        }
+        self.current_goal = event.goal;
+        self.current_goal_state_known = true;
+        if let Some(goal) = self.current_goal.clone() {
+            self.show_goal_summary(&goal);
+        } else {
+            self.show_no_goal_usage();
+        }
+        self.request_redraw();
+    }
+
+    fn on_thread_goal_replace_confirmation_required(
+        &mut self,
+        event: ThreadGoalReplaceConfirmationRequiredEvent,
+    ) {
+        if self.thread_id != Some(event.thread_id) {
+            return;
+        }
+        let expected_goal_id = event.existing_goal.goal_id.clone();
+        self.current_goal = Some(event.existing_goal);
+        self.current_goal_state_known = true;
+        let objective = event.objective;
+        let replace_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            tx.send(AppEvent::CodexOp(Op::ThreadGoalSetObjective {
+                objective: objective.clone(),
+                mode: ThreadGoalSetMode::ReplaceExisting {
+                    expected_goal_id: expected_goal_id.clone(),
+                },
+            }));
+        })];
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Replace current goal?".to_string()),
+            subtitle: Some("A goal is already in progress.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items: vec![
+                SelectionItem {
+                    name: "Replace goal".to_string(),
+                    description: Some("Start the new objective.".to_string()),
+                    actions: replace_actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "Keep current goal".to_string(),
+                    description: Some("Cancel the replacement.".to_string()),
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+            ],
+            allow_background_transcript_interaction: true,
+            ..Default::default()
+        });
+        self.request_redraw();
     }
 
     fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
@@ -2545,6 +2681,8 @@ impl ChatWidget {
             last_bottom_area: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
+            current_goal: None,
+            current_goal_state_known: false,
             external_editor_state: ExternalEditorState::Closed,
         };
 
@@ -2719,6 +2857,8 @@ impl ChatWidget {
             last_bottom_area: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
+            current_goal: None,
+            current_goal_state_known: false,
             external_editor_state: ExternalEditorState::Closed,
         };
 
@@ -3236,6 +3376,19 @@ impl ChatWidget {
                     );
                 }
             }
+            SlashCommand::Goal => {
+                self.prepare_slash_command_transcript_output();
+                if !self.ensure_programmer_goal_allowed() {
+                    return;
+                }
+                if let Some(goal) = self.current_goal.clone() {
+                    self.show_goal_summary(&goal);
+                } else if self.current_goal_state_known {
+                    self.show_no_goal_usage();
+                } else {
+                    self.app_event_tx.send(AppEvent::CodexOp(Op::ThreadGoalGet));
+                }
+            }
             SlashCommand::Bottom => {
                 self.scroll_transcript_to_bottom();
             }
@@ -3337,6 +3490,10 @@ impl ChatWidget {
                 self.prepare_slash_command_transcript_output();
                 self.dispatch_buddy_command(trimmed);
             }
+            SlashCommand::Goal => {
+                self.prepare_slash_command_transcript_output();
+                self.dispatch_goal_command(trimmed);
+            }
             SlashCommand::Review if !trimmed.is_empty() => {
                 self.prepare_slash_command_transcript_output();
                 self.app_event_tx.send(AppEvent::StartReview {
@@ -3354,6 +3511,134 @@ impl ChatWidget {
 
     fn prepare_slash_command_transcript_output(&mut self) {
         self.scroll_transcript_to_bottom();
+    }
+
+    fn ensure_programmer_goal_allowed(&mut self) -> bool {
+        if !self.config.features.enabled(Feature::Goals) {
+            self.add_info_message(
+                "Goals are disabled.".to_string(),
+                Some("Enable the goals feature to use /goal.".to_string()),
+            );
+            return false;
+        }
+        if self.effective_identity().kind != IdentityKind::Programmer {
+            self.add_info_message(
+                "Goal requires programmer identity.".to_string(),
+                Some("Use /identity and choose Programmer before running /goal.".to_string()),
+            );
+            return false;
+        }
+        true
+    }
+
+    fn dispatch_goal_command(&mut self, trimmed: &str) {
+        if !self.ensure_programmer_goal_allowed() {
+            return;
+        }
+        match trimmed {
+            "" => self.dispatch_command(SlashCommand::Goal),
+            "clear" => self
+                .app_event_tx
+                .send(AppEvent::CodexOp(Op::ThreadGoalClear)),
+            "pause" => self
+                .app_event_tx
+                .send(AppEvent::CodexOp(Op::ThreadGoalSetStatus {
+                    status: ThreadGoalStatus::Paused,
+                })),
+            "resume" => self
+                .app_event_tx
+                .send(AppEvent::CodexOp(Op::ThreadGoalSetStatus {
+                    status: ThreadGoalStatus::Active,
+                })),
+            "edit" => {
+                if !self.current_goal_state_known {
+                    self.request_goal_state_refresh_for_edit();
+                    return;
+                }
+                let Some(goal) = self.current_goal.clone() else {
+                    self.add_info_message(
+                        "No goal is currently set.".to_string(),
+                        Some("Use /goal <objective> to create one.".to_string()),
+                    );
+                    return;
+                };
+                if goal.goal_id.is_empty() {
+                    self.request_goal_state_refresh_for_edit();
+                    return;
+                }
+                self.show_goal_edit_prompt(goal);
+            }
+            objective => {
+                if let Err(message) =
+                    adam_agent::protocol::validate_thread_goal_objective(objective)
+                {
+                    self.add_error_message(message);
+                    return;
+                }
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::ThreadGoalSetObjective {
+                        objective: objective.to_string(),
+                        mode: ThreadGoalSetMode::ConfirmIfExists,
+                    }));
+            }
+        }
+    }
+
+    fn request_goal_state_refresh_for_edit(&mut self) {
+        self.app_event_tx.send(AppEvent::CodexOp(Op::ThreadGoalGet));
+        self.add_info_message(
+            "Goal state is refreshing.".to_string(),
+            Some("Run /goal edit again after it updates.".to_string()),
+        );
+    }
+
+    fn show_no_goal_usage(&mut self) {
+        self.add_info_message(
+            "No goal is currently set.".to_string(),
+            Some("Use /goal <objective> to start a programmer goal.".to_string()),
+        );
+    }
+
+    fn show_goal_summary(&mut self, goal: &ThreadGoal) {
+        self.add_info_message(
+            format!(
+                "Goal ({}) - {}",
+                goal_status_label(goal.status),
+                goal.objective
+            ),
+            Some(goal_usage_summary(goal)),
+        );
+    }
+
+    fn show_goal_edit_prompt(&mut self, goal: ThreadGoal) {
+        let expected_goal_id = goal.goal_id.clone();
+        let status = edited_goal_status(goal.status);
+        let token_budget = goal.token_budget;
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new_with_initial_text(
+            "Edit goal".to_string(),
+            "Update the objective and press Enter".to_string(),
+            None,
+            goal.objective,
+            Box::new(move |objective: String| {
+                if let Err(message) =
+                    adam_agent::protocol::validate_thread_goal_objective(&objective)
+                {
+                    tx.send_history_cell(Box::new(history_cell::new_error_event(message)));
+                    return;
+                }
+                tx.send(AppEvent::CodexOp(Op::ThreadGoalSetObjective {
+                    objective,
+                    mode: ThreadGoalSetMode::UpdateExisting {
+                        expected_goal_id: expected_goal_id.clone(),
+                        status,
+                        token_budget,
+                    },
+                }));
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
     }
 
     pub(crate) fn set_buddy_config(&mut self, config: TuiBuddy) {
@@ -3791,6 +4076,12 @@ impl ChatWidget {
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
+            EventMsg::ThreadGoalUpdated(e) => self.on_thread_goal_updated(e),
+            EventMsg::ThreadGoalCleared(e) => self.on_thread_goal_cleared(e),
+            EventMsg::ThreadGoalSnapshot(e) => self.on_thread_goal_snapshot(e),
+            EventMsg::ThreadGoalReplaceConfirmationRequired(e) => {
+                self.on_thread_goal_replace_confirmation_required(e)
+            }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => self.on_agent_message(message),
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)

@@ -11,7 +11,8 @@ asking the model to interpret the request.
 - Tab completion can leave a trailing space, for example `/diff `. Pressing
   Enter still runs the bare command.
 - Most built-in commands do not accept arguments. Only `/review <instructions>`,
-  `/rename <name>`, and `/buddy ...` accept built-in command arguments.
+  `/rename <name>`, `/goal ...`, and `/buddy ...` accept built-in command
+  arguments.
 - Commands marked "No" in the "Available During Task" column are disabled while
   an agent task is running.
 
@@ -40,6 +41,7 @@ asking the model to interpret the request.
 | `/mention` | None | Yes | Insert `@` to start mentioning a file. |
 | `/status` | None | Yes | Show session configuration and token usage. |
 | `/plan` | None | Yes | Jump to the latest proposed plan in the transcript. |
+| `/goal` | Optional objective or subcommand | Yes | Set, view, edit, pause, resume, or clear the current programmer goal. |
 | `/bottom` | None | Yes | Scroll the transcript to the bottom. |
 | `/mcp` | None | Yes | List configured MCP tools. |
 | `/logout` | None | No | Log out of Adam and exit the session. |
@@ -66,6 +68,20 @@ asking the model to interpret the request.
 
 `/buddy hatch` and `/buddy rename` are accepted, but they only show
 informational messages because buddy generation and naming are automatic.
+
+## Goal Commands
+
+`/goal` is only available in the `programmer` identity. In any other identity,
+Adam shows a prompt to switch with `/identity` and does not mutate goal state.
+
+| Command | Usage |
+| --- | --- |
+| `/goal` | Show the current programmer goal, or usage if none is set. |
+| `/goal <objective>` | Create an active goal. If an unfinished goal exists, confirm before replacing it. |
+| `/goal edit` | Open an editor for the current goal objective. |
+| `/goal pause` | Pause the current goal. |
+| `/goal resume` | Resume the current goal. |
+| `/goal clear` | Clear the current goal. |
 
 ## Aliases And Hidden Popup Entries
 

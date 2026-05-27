@@ -108,6 +108,13 @@ impl SessionState {
         self.history.token_info()
     }
 
+    pub(crate) fn total_reported_token_usage(&self) -> i64 {
+        self.history
+            .token_info()
+            .map(|info| info.total_token_usage.total_tokens)
+            .unwrap_or(0)
+    }
+
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
         self.history.set_token_usage_full(context_window);
     }

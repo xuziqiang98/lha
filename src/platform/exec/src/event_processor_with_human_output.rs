@@ -623,6 +623,10 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::SkillsUpdateAvailable
             | EventMsg::UndoCompleted(_)
             | EventMsg::UndoStarted(_)
+            | EventMsg::ThreadGoalUpdated(_)
+            | EventMsg::ThreadGoalCleared(_)
+            | EventMsg::ThreadGoalSnapshot(_)
+            | EventMsg::ThreadGoalReplaceConfirmationRequired(_)
             | EventMsg::ThreadRolledBack(_)
             | EventMsg::RequestUserInput(_)
             | EventMsg::DynamicToolCallRequest(_)

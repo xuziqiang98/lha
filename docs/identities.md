@@ -50,6 +50,10 @@ identity turns.
 Use `programmer` when you want Adam to implement changes, edit files, run
 formatters, run tests, or carry out an already-decided plan.
 
+`programmer` is also the only identity that can run `/goal` long-running goals.
+Active goals remain stored if you switch away, but they do not continue until
+you switch back to `programmer`.
+
 General repository instructions, sandboxing rules, and approval requirements
 still apply in `programmer` mode.
 
@@ -107,6 +111,8 @@ identity.
   plan.
 - `programmer` does not override sandboxing, approval requirements, or
   repository instructions.
+- `/goal` requires `programmer`; planner, explorer, reviewer, and nobody turns
+  should switch identities before creating or continuing a goal.
 - `explorer` and `reviewer` are one-shot, read-only identities. They do not
   support ongoing child-agent conversations.
 - Workflow identities are a separate planned/experimental design and do not

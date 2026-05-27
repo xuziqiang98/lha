@@ -3,6 +3,7 @@
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -39,6 +40,12 @@ pub(crate) enum TaskKind {
     Compact,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TaskUsageSnapshot {
+    pub(crate) started_at: Instant,
+    pub(crate) starting_total_tokens: i64,
+}
+
 pub(crate) struct RunningTask {
     pub(crate) done: Arc<Notify>,
     pub(crate) kind: TaskKind,
@@ -46,6 +53,8 @@ pub(crate) struct RunningTask {
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) handle: Arc<AbortOnDropHandle<()>>,
     pub(crate) turn_context: Arc<TurnContext>,
+    pub(crate) started_at: Instant,
+    pub(crate) starting_total_tokens: i64,
     // Timer recorded when the task drops to capture the full turn duration.
     pub(crate) _timer: Option<adam_otel::Timer>,
 }
@@ -56,9 +65,9 @@ impl ActiveTurn {
         self.tasks.insert(sub_id, task);
     }
 
-    pub(crate) fn remove_task(&mut self, sub_id: &str) -> bool {
-        self.tasks.swap_remove(sub_id);
-        self.tasks.is_empty()
+    pub(crate) fn remove_task(&mut self, sub_id: &str) -> (Option<RunningTask>, bool) {
+        let task = self.tasks.swap_remove(sub_id);
+        (task, self.tasks.is_empty())
     }
 
     pub(crate) fn drain_tasks(&mut self) -> Vec<RunningTask> {
@@ -152,5 +161,14 @@ impl ActiveTurn {
     pub(crate) async fn clear_pending(&self) {
         let mut ts = self.turn_state.lock().await;
         ts.clear_pending();
+    }
+}
+
+impl RunningTask {
+    pub(crate) fn accounting_snapshot(&self) -> TaskUsageSnapshot {
+        TaskUsageSnapshot {
+            started_at: self.started_at,
+            starting_total_tokens: self.starting_total_tokens,
+        }
     }
 }

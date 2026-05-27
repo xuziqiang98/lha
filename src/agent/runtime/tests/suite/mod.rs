@@ -26,6 +26,7 @@ mod deprecation_notice;
 mod exec;
 mod exec_policy;
 mod fork_thread;
+mod goals;
 mod grep_files;
 mod hierarchical_agents;
 mod identity_instructions;
