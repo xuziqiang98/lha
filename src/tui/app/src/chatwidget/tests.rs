@@ -2236,6 +2236,7 @@ async fn make_chatwidget_manual_inner(
         config: cfg,
         current_identity,
         active_identity_mask: None,
+        pending_initial_identity_sync: false,
         reasoning_effort_overrides: HashMap::new(),
         auth_manager,
         thread_manager,
@@ -2410,6 +2411,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         config: cfg,
         current_identity,
         active_identity_mask: None,
+        pending_initial_identity_sync: false,
         reasoning_effort_overrides: HashMap::new(),
         auth_manager,
         thread_manager,
@@ -2576,6 +2578,36 @@ fn drain_events(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> Vec<
         out.push(event);
     }
     out
+}
+
+fn drain_ops(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Vec<Op> {
+    let mut ops = Vec::new();
+    while let Ok(op) = op_rx.try_recv() {
+        ops.push(op);
+    }
+    ops
+}
+
+fn configured_event_with_identity(identity_kind: IdentityKind) -> Event {
+    Event {
+        id: "session".to_string(),
+        msg: EventMsg::SessionConfigured(adam_agent::protocol::SessionConfiguredEvent {
+            session_id: ThreadId::new(),
+            forked_from_id: None,
+            thread_name: None,
+            model: "test-model".to_string(),
+            identity_kind,
+            model_provider_id: "test-provider".to_string(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            cwd: PathBuf::from("/home/user/project"),
+            reasoning_effort: Some(ReasoningEffortConfig::default()),
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            rollout_path: Some(PathBuf::new()),
+        }),
+    }
 }
 
 fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
@@ -5129,6 +5161,142 @@ async fn identity_mask_updates_identity_for_subsequent_messages() {
             panic!("expected Op::UserTurn with programmer identity, got {other:?}")
         }
     }
+}
+
+#[tokio::test]
+async fn fresh_session_configured_syncs_initial_identity_to_runtime() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    chat.pending_initial_identity_sync = true;
+    let programmer_mask =
+        identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Programmer)
+            .expect("expected programmer identity mask");
+    chat.set_identity_mask(programmer_mask);
+    drain_ops(&mut op_rx);
+
+    chat.handle_codex_event(configured_event_with_identity(IdentityKind::Nobody));
+
+    let ops = drain_ops(&mut op_rx);
+    let override_pos = ops
+        .iter()
+        .position(|op| {
+            matches!(
+                op,
+                Op::OverrideTurnContext {
+                    identity: Some(identity),
+                    ..
+                } if identity.kind == IdentityKind::Programmer
+            )
+        })
+        .expect("expected programmer identity runtime sync");
+    let list_prompts_pos = ops
+        .iter()
+        .position(|op| matches!(op, Op::ListCustomPrompts))
+        .expect("expected custom prompts refresh");
+    assert!(
+        override_pos < list_prompts_pos,
+        "expected identity sync before startup refresh ops, got {ops:?}"
+    );
+}
+
+#[tokio::test]
+async fn session_configured_does_not_override_resumed_identity_when_identity_differs() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let programmer_mask =
+        identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Programmer)
+            .expect("expected programmer identity mask");
+    chat.set_identity_mask(programmer_mask);
+    drain_ops(&mut op_rx);
+
+    chat.handle_codex_event(configured_event_with_identity(IdentityKind::Nobody));
+
+    let ops = drain_ops(&mut op_rx);
+    assert!(
+        !ops.iter().any(|op| matches!(
+            op,
+            Op::OverrideTurnContext {
+                identity: Some(_),
+                ..
+            }
+        )),
+        "did not expect resumed session identity override, got {ops:?}"
+    );
+    assert!(
+        ops.iter().any(|op| matches!(op, Op::ListCustomPrompts)),
+        "expected normal startup refresh ops, got {ops:?}"
+    );
+    assert_eq!(chat.active_identity_kind(), IdentityKind::Nobody);
+}
+
+#[tokio::test]
+async fn session_configured_skips_identity_sync_when_identity_matches() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    drain_ops(&mut op_rx);
+
+    chat.handle_codex_event(configured_event_with_identity(IdentityKind::Nobody));
+
+    let ops = drain_ops(&mut op_rx);
+    assert!(
+        !ops.iter().any(|op| matches!(
+            op,
+            Op::OverrideTurnContext {
+                identity: Some(_),
+                ..
+            }
+        )),
+        "did not expect identity runtime sync when identities match, got {ops:?}"
+    );
+    assert!(
+        ops.iter().any(|op| matches!(op, Op::ListCustomPrompts)),
+        "expected normal startup refresh ops, got {ops:?}"
+    );
+}
+
+#[tokio::test]
+async fn goal_after_identity_sync_requests_goal_without_identity_warning() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::Identities, true);
+    chat.set_feature_enabled(Feature::Goals, true);
+    let programmer_mask =
+        identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Programmer)
+            .expect("expected programmer identity mask");
+    chat.set_identity_mask(programmer_mask);
+    chat.sync_active_identity_to_runtime();
+
+    chat.dispatch_command(SlashCommand::Goal);
+
+    let ops = drain_ops(&mut op_rx);
+    assert!(
+        ops.iter().any(|op| matches!(
+            op,
+            Op::OverrideTurnContext {
+                identity: Some(identity),
+                ..
+            } if identity.kind == IdentityKind::Programmer
+        )),
+        "expected programmer identity runtime sync, got {ops:?}"
+    );
+
+    let events = drain_events(&mut rx);
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::CodexOp(Op::ThreadGoalGet))),
+        "expected goal refresh request, got {events:?}"
+    );
+    let text = events
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .flat_map(|cell| cell.display_lines(80))
+        .map(|line| lines_to_single_string(&[line]))
+        .collect::<String>();
+    assert!(
+        !text.contains("Goal requires programmer identity."),
+        "did not expect local identity warning, got {text}"
+    );
 }
 
 #[tokio::test]

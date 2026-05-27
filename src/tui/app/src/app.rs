@@ -3683,6 +3683,7 @@ impl App {
         let selected_kind = mask.kind;
         let selected_name = mask.name.clone();
         self.chat_widget.set_identity_mask(mask);
+        self.chat_widget.sync_active_identity_to_runtime();
         if let Some(kind) = selected_kind {
             match AdamStateStore::new(&self.config.adam_home).set_last_selected_identity(kind) {
                 Ok(()) => {
@@ -4862,6 +4863,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn identity_modal_selection_syncs_runtime_identity() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        app.chat_widget
+            .set_feature_enabled(Feature::Identities, true);
+        app.config = app.chat_widget.config_ref().clone();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(test_session_configured_event()),
+        });
+        drain_ops(&mut op_rx);
+
+        app.open_identity_modal();
+        app.handle_identity_modal_key_event(KeyEvent::from(KeyCode::Char('3')));
+
+        assert!(app.identity_modal.is_none());
+        assert_eq!(
+            app.chat_widget.active_identity_kind_for_ui(),
+            IdentityKind::Programmer
+        );
+        assert_eq!(
+            app.config.last_selected_identity,
+            Some(IdentityKind::Programmer)
+        );
+        let ops = drain_ops(&mut op_rx);
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::OverrideTurnContext {
+                    identity: Some(identity),
+                    ..
+                } if identity.kind == IdentityKind::Programmer
+            )),
+            "expected programmer identity runtime sync, got {ops:?}"
+        );
+
+        app.open_identity_modal();
+        app.handle_identity_modal_key_event(KeyEvent::from(KeyCode::Char('1')));
+
+        assert_eq!(
+            app.chat_widget.active_identity_kind_for_ui(),
+            IdentityKind::Nobody
+        );
+        let ops = drain_ops(&mut op_rx);
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::OverrideTurnContext {
+                    identity: Some(identity),
+                    ..
+                } if identity.kind == IdentityKind::Nobody
+            )),
+            "expected nobody identity runtime sync, got {ops:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn open_provider_config_modal_event_creates_centered_modal() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
 
@@ -5413,6 +5470,14 @@ mod tests {
             initial_messages: None,
             rollout_path: Some(PathBuf::new()),
         }
+    }
+
+    fn drain_ops(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Vec<Op> {
+        let mut ops = Vec::new();
+        while let Ok(op) = op_rx.try_recv() {
+            ops.push(op);
+        }
+        ops
     }
 
     fn shutdown_complete_event() -> Event {

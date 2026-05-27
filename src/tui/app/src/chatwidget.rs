@@ -515,6 +515,9 @@ pub(crate) struct ChatWidget {
     current_identity: Identity,
     /// The currently active identity mask, if any.
     active_identity_mask: Option<IdentityMask>,
+    /// Fresh sessions start runtime as Nobody, so the TUI's persisted identity
+    /// should be pushed once after the runtime session exists.
+    pending_initial_identity_sync: bool,
     /// User-selected reasoning effort overrides keyed by identity.
     ///
     /// A missing key means "use the preset default for this identity".
@@ -965,6 +968,7 @@ impl ChatWidget {
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: adam_agent::protocol::SessionConfiguredEvent) {
         let request_redraw = !self.suppress_session_configured_redraw;
+        let session_identity_kind = event.identity_kind;
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         if request_redraw {
@@ -1009,6 +1013,19 @@ impl ChatWidget {
 
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
+        }
+        let had_pending_initial_identity_sync = self.pending_initial_identity_sync;
+        let should_sync_initial_identity = had_pending_initial_identity_sync
+            && self.identities_enabled()
+            && self.active_identity_kind() != session_identity_kind;
+        self.pending_initial_identity_sync = false;
+        if should_sync_initial_identity {
+            self.sync_active_identity_to_runtime();
+        } else if !had_pending_initial_identity_sync
+            && self.identities_enabled()
+            && self.active_identity_kind() != session_identity_kind
+        {
+            self.set_active_identity_kind_from_session(session_identity_kind);
         }
         // Ask adam-agent to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
@@ -2623,6 +2640,7 @@ impl ChatWidget {
             reasoning_effort_overrides: HashMap::new(),
             current_identity,
             active_identity_mask,
+            pending_initial_identity_sync: true,
             auth_manager,
             thread_manager,
             otel_manager,
@@ -2748,8 +2766,12 @@ impl ChatWidget {
         let header_model = model
             .clone()
             .unwrap_or_else(|| session_configured.model.clone());
-        let active_identity_mask =
-            Self::initial_identity_mask(&config, thread_manager.as_ref(), model_override);
+        let active_identity_mask = Self::identity_mask_for_kind(
+            &config,
+            thread_manager.as_ref(),
+            session_configured.identity_kind,
+            model_override,
+        );
         let header_model = active_identity_mask
             .as_ref()
             .and_then(|mask| mask.model.clone())
@@ -2799,6 +2821,7 @@ impl ChatWidget {
             reasoning_effort_overrides: HashMap::new(),
             current_identity,
             active_identity_mask,
+            pending_initial_identity_sync: false,
             auth_manager,
             thread_manager,
             otel_manager,
@@ -4551,6 +4574,7 @@ impl ChatWidget {
         session_configured: adam_agent::protocol::SessionConfiguredEvent,
     ) {
         self.agent_shutdown_complete = false;
+        self.pending_initial_identity_sync = true;
         self.codex_op_tx = attach_existing_thread(
             thread,
             thread_id,
@@ -5981,6 +6005,31 @@ impl ChatWidget {
         Some(mask)
     }
 
+    fn identity_mask_for_kind(
+        config: &Config,
+        thread_manager: &ThreadManager,
+        kind: IdentityKind,
+        model_override: Option<&str>,
+    ) -> Option<IdentityMask> {
+        if !config.features.enabled(Feature::Identities) {
+            return None;
+        }
+        let mut mask = identities::mask_for_kind(thread_manager, kind)
+            .or_else(|| identities::default_mask(thread_manager))?;
+        if let Some(model_override) = model_override {
+            mask.model = Some(model_override.to_string());
+        }
+        Some(mask)
+    }
+
+    fn set_active_identity_kind_from_session(&mut self, kind: IdentityKind) {
+        if let Some(mask) =
+            Self::identity_mask_for_kind(&self.config, self.thread_manager.as_ref(), kind, None)
+        {
+            self.set_identity_mask(mask);
+        }
+    }
+
     fn active_identity_kind(&self) -> IdentityKind {
         self.active_identity_mask
             .as_ref()
@@ -6120,6 +6169,27 @@ impl ChatWidget {
         self.refresh_model_display();
         self.update_footer_info();
         self.request_redraw();
+    }
+
+    pub(crate) fn sync_active_identity_to_runtime(&mut self) {
+        if !self.is_session_configured() || !self.identities_enabled() {
+            return;
+        }
+        if self.active_identity_mask.is_none() {
+            return;
+        }
+
+        self.submit_op(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            identity: Some(self.effective_identity()),
+            personality: None,
+        });
     }
 
     pub(crate) fn request_redraw_for_ui(&mut self) {
