@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use crate::AuthManager;
 use crate::SandboxState;
@@ -1451,6 +1452,17 @@ impl Session {
             return;
         };
         match state_db.get_thread_goal(self.conversation_id).await {
+            Ok(Some(goal)) if goal.status == adam_state::ThreadGoalStatus::Active => {
+                let goal_id = goal.goal_id;
+                turn_context
+                    .goal_context
+                    .set_expected_goal_id(goal_id.clone())
+                    .await;
+                turn_context
+                    .goal_context
+                    .set_accounting_goal_id(goal_id)
+                    .await;
+            }
             Ok(Some(goal)) => {
                 turn_context
                     .goal_context
@@ -2164,6 +2176,18 @@ impl Session {
     pub(crate) async fn reported_total_token_usage(&self) -> i64 {
         let state = self.state.lock().await;
         state.total_reported_token_usage()
+    }
+
+    pub(crate) async fn reset_goal_accounting_baseline_for_turn(&self, turn_context: &TurnContext) {
+        let starting_total_tokens = self.reported_total_token_usage().await;
+        let mut active = self.active_turn.lock().await;
+        if let Some(active_turn) = active.as_mut() {
+            active_turn.reset_task_usage_baseline(
+                &turn_context.sub_id,
+                Instant::now(),
+                starting_total_tokens,
+            );
+        }
     }
 
     pub(crate) async fn get_base_instructions(&self) -> BaseInstructions {

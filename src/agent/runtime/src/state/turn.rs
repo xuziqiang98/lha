@@ -65,6 +65,18 @@ impl ActiveTurn {
         self.tasks.insert(sub_id, task);
     }
 
+    pub(crate) fn reset_task_usage_baseline(
+        &mut self,
+        sub_id: &str,
+        started_at: Instant,
+        starting_total_tokens: i64,
+    ) {
+        if let Some(task) = self.tasks.get_mut(sub_id) {
+            task.started_at = started_at;
+            task.starting_total_tokens = starting_total_tokens;
+        }
+    }
+
     pub(crate) fn remove_task(&mut self, sub_id: &str) -> (Option<RunningTask>, bool) {
         let task = self.tasks.swap_remove(sub_id);
         (task, self.tasks.is_empty())

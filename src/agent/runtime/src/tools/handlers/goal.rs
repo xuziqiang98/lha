@@ -126,6 +126,13 @@ async fn create_goal(
         .goal_context
         .set_expected_goal_id(goal.goal_id.clone())
         .await;
+    turn_context
+        .goal_context
+        .set_accounting_goal_id(goal.goal_id.clone())
+        .await;
+    session
+        .reset_goal_accounting_baseline_for_turn(turn_context)
+        .await;
     emit_goal_updated(session, turn_context, &goal).await;
     serde_json::to_string(&json!({ "goal": protocol_goal_from_state(goal) })).map_err(|err| {
         FunctionCallError::RespondToModel(format!("failed to serialize goal: {err}"))

@@ -458,6 +458,132 @@ async fn active_goal_accounts_usage_before_continuing() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn active_goal_accounts_usage_for_user_turn() -> Result<()> {
+    let server = start_mock_server().await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-user-goal", "worked on active goal"),
+            ev_completed_with_tokens("resp-user-goal", 18),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::Goals);
+    });
+    let test = builder.build(&server).await?;
+    let db = test.codex.state_db().expect("state db enabled");
+    db.replace_thread_goal(
+        test.session_configured.session_id,
+        "manually continue active goal",
+        adam_state::ThreadGoalStatus::Active,
+        None,
+    )
+    .await?;
+
+    submit_user_turn(&test, "continue the current goal").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let goal = db
+        .get_thread_goal(test.session_configured.session_id)
+        .await?
+        .expect("goal should exist");
+    assert_eq!(goal.objective, "manually continue active goal");
+    assert_eq!(goal.status, adam_state::ThreadGoalStatus::Active);
+    assert_eq!(goal.tokens_used, 18);
+    assert!(goal.time_used_seconds >= 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_goal_accounts_usage_after_goal_creation_in_same_turn() -> Result<()> {
+    let server = start_mock_server().await;
+    mount_sse_sequence(
+        &server,
+        vec![
+            create_goal_response("create-goal", "resp-create-goal", "finish same turn"),
+            update_goal_response("complete-goal", "resp-complete-goal", "complete"),
+            sse(vec![
+                ev_assistant_message("msg-created-goal", "goal complete"),
+                ev_completed_with_tokens("resp-created-goal", 25),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::Goals);
+    });
+    let test = builder.build(&server).await?;
+
+    submit_user_turn(&test, "create and finish a goal").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let db = test.codex.state_db().expect("state db enabled");
+    let goal = db
+        .get_thread_goal(test.session_configured.session_id)
+        .await?
+        .expect("goal should exist");
+    assert_eq!(goal.objective, "finish same turn");
+    assert_eq!(goal.status, adam_state::ThreadGoalStatus::Complete);
+    assert_eq!(goal.tokens_used, 25);
+    assert!(goal.time_used_seconds >= 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stopped_goal_does_not_account_usage_for_user_turn() -> Result<()> {
+    let server = start_mock_server().await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-stopped-goal", "ordinary response"),
+            ev_completed_with_tokens("resp-stopped-goal", 18),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::Goals);
+    });
+    let test = builder.build(&server).await?;
+    let db = test.codex.state_db().expect("state db enabled");
+    db.replace_thread_goal(
+        test.session_configured.session_id,
+        "paused goal",
+        adam_state::ThreadGoalStatus::Paused,
+        None,
+    )
+    .await?;
+
+    submit_user_turn(&test, "answer unrelated question").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let goal = db
+        .get_thread_goal(test.session_configured.session_id)
+        .await?
+        .expect("goal should exist");
+    assert_eq!(goal.objective, "paused goal");
+    assert_eq!(goal.status, adam_state::ThreadGoalStatus::Paused);
+    assert_eq!(goal.tokens_used, 0);
+    assert_eq!(goal.time_used_seconds, 0);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resumed_goal_continuation_seeds_initial_context() -> Result<()> {
     let server = start_mock_server().await;
     let mut initial_builder = test_codex();
