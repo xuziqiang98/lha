@@ -1,6 +1,7 @@
 mod log;
 mod thread_goal;
 mod thread_metadata;
+mod thread_plan_run;
 
 pub use log::LogEntry;
 pub use log::LogQuery;
@@ -15,6 +16,9 @@ pub use thread_metadata::SortKey;
 pub use thread_metadata::ThreadMetadata;
 pub use thread_metadata::ThreadMetadataBuilder;
 pub use thread_metadata::ThreadsPage;
+pub use thread_plan_run::ThreadPlanRun;
+pub(crate) use thread_plan_run::ThreadPlanRunRow;
+pub use thread_plan_run::ThreadPlanRunStatus;
 
 pub(crate) use thread_metadata::ThreadRow;
 pub(crate) use thread_metadata::anchor_from_item;

@@ -337,6 +337,18 @@ pub enum Op {
 
     /// Clear the current long-running goal.
     ThreadGoalClear,
+
+    /// Read the current YOLO plan completion run for this thread.
+    ThreadPlanRunGet,
+
+    /// Start a YOLO plan completion run from a planner-proposed plan.
+    ThreadPlanRunStart { plan_text: String },
+
+    /// Set the current YOLO plan completion run status.
+    ThreadPlanRunSetStatus { status: ThreadPlanRunStatus },
+
+    /// Clear the current YOLO plan completion run.
+    ThreadPlanRunClear,
 }
 
 /// Snapshot of the active TUI buddy to attach to a user turn.
@@ -815,6 +827,15 @@ pub enum EventMsg {
 
     /// Replacing the existing long-running goal requires confirmation.
     ThreadGoalReplaceConfirmationRequired(ThreadGoalReplaceConfirmationRequiredEvent),
+
+    /// Updated YOLO plan completion run metadata for the thread.
+    ThreadPlanRunUpdated(ThreadPlanRunUpdatedEvent),
+
+    /// Cleared the YOLO plan completion run for the thread.
+    ThreadPlanRunCleared(ThreadPlanRunClearedEvent),
+
+    /// Snapshot of the current YOLO plan completion run for the thread.
+    ThreadPlanRunSnapshot(ThreadPlanRunSnapshotEvent),
 
     /// Incremental MCP startup progress updates.
     McpStartupUpdate(McpStartupUpdateEvent),
@@ -1309,6 +1330,78 @@ pub struct ThreadGoalReplaceConfirmationRequiredEvent {
     pub thread_id: ThreadId,
     pub existing_goal: ThreadGoal,
     pub objective: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "protocol/")]
+pub enum ThreadPlanRunStatus {
+    Active,
+    Paused,
+    Blocked,
+    UsageLimited,
+    BudgetLimited,
+    Complete,
+}
+
+pub const MAX_THREAD_PLAN_RUN_TEXT_CHARS: usize = 20_000;
+
+pub fn validate_thread_plan_run_text(value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err("plan text must not be empty".to_string());
+    }
+    if value.chars().count() > MAX_THREAD_PLAN_RUN_TEXT_CHARS {
+        return Err(format!(
+            "plan text must be at most {MAX_THREAD_PLAN_RUN_TEXT_CHARS} characters"
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "protocol/")]
+pub struct ThreadPlanRun {
+    pub thread_id: ThreadId,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub plan_run_id: String,
+    pub plan_text: String,
+    pub status: ThreadPlanRunStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub token_budget: Option<i64>,
+    pub tokens_used: i64,
+    pub time_used_seconds: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "protocol/")]
+pub struct ThreadPlanRunUpdatedEvent {
+    pub thread_id: ThreadId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub turn_id: Option<String>,
+    pub plan_run: ThreadPlanRun,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "protocol/")]
+pub struct ThreadPlanRunClearedEvent {
+    pub thread_id: ThreadId,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "protocol/")]
+pub struct ThreadPlanRunSnapshotEvent {
+    pub thread_id: ThreadId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plan_run: Option<ThreadPlanRun>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]

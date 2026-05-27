@@ -76,12 +76,24 @@ impl ActiveTurn {
 }
 
 /// Mutable state for a single turn.
-#[derive(Default)]
 pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<TranscriptItem>,
+    accepting_pending_input: bool,
+}
+
+impl Default for TurnState {
+    fn default() -> Self {
+        Self {
+            pending_approvals: HashMap::new(),
+            pending_user_input: HashMap::new(),
+            pending_dynamic_tools: HashMap::new(),
+            pending_input: Vec::new(),
+            accepting_pending_input: true,
+        }
+    }
 }
 
 impl TurnState {
@@ -139,6 +151,14 @@ impl TurnState {
 
     pub(crate) fn push_pending_input(&mut self, input: TranscriptItem) {
         self.pending_input.push(input);
+    }
+
+    pub(crate) fn accepting_pending_input(&self) -> bool {
+        self.accepting_pending_input
+    }
+
+    pub(crate) fn stop_accepting_pending_input(&mut self) {
+        self.accepting_pending_input = false;
     }
 
     pub(crate) fn take_pending_input(&mut self) -> Vec<TranscriptItem> {

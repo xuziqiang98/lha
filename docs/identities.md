@@ -43,6 +43,11 @@ on product/design tradeoffs. In planner mode, Adam should:
 Clients that support planner output may show a separate `plan` item for planner
 identity turns.
 
+When the experimental `plan_completion` feature is enabled, the TUI can start
+YOLO plan completion from a planner plan. Adam stores the plan separately from
+`/goal` and hands it to `programmer` until the plan is marked complete or
+blocked.
+
 ## `programmer`
 
 `programmer` is code/execution mode.
@@ -50,9 +55,10 @@ identity turns.
 Use `programmer` when you want Adam to implement changes, edit files, run
 formatters, run tests, or carry out an already-decided plan.
 
-`programmer` is also the only identity that can run `/goal` long-running goals.
-Active goals remain stored if you switch away, but they do not continue until
-you switch back to `programmer`.
+`programmer` is also the only identity that can run `/goal` long-running goals
+and continue active YOLO plan completion runs. Active goals and plan completion
+runs remain stored if you switch away, but they do not continue until you switch
+back to `programmer`.
 
 General repository instructions, sandboxing rules, and approval requirements
 still apply in `programmer` mode.

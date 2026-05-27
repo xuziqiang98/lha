@@ -40,7 +40,7 @@ asking the model to interpret the request.
 | `/diff` | None | Yes | Show git diff, including untracked files. |
 | `/mention` | None | Yes | Insert `@` to start mentioning a file. |
 | `/status` | None | Yes | Show session configuration and token usage. |
-| `/plan` | None | Yes | Jump to the latest proposed plan in the transcript. |
+| `/plan` | Optional subcommand | Yes | Jump to the latest proposed plan, or manage YOLO plan completion when enabled. |
 | `/goal` | Optional objective or subcommand | Yes | Set, view, edit, pause, resume, or clear the current programmer goal. |
 | `/bottom` | None | Yes | Scroll the transcript to the bottom. |
 | `/mcp` | None | Yes | List configured MCP tools. |
@@ -82,6 +82,23 @@ Adam shows a prompt to switch with `/identity` and does not mutate goal state.
 | `/goal pause` | Pause the current goal. |
 | `/goal resume` | Resume the current goal. |
 | `/goal clear` | Clear the current goal. |
+
+## Plan Completion Commands
+
+`/plan` with no arguments still jumps to the latest proposed plan in the
+transcript.
+
+When `[features].plan_completion = true`, Adam can start YOLO plan completion
+from the planner implementation prompt. YOLO plan completion is independent
+from `/goal`; it stores the planner plan and continues in `programmer` until the
+plan is marked complete or blocked.
+
+| Command | Usage |
+| --- | --- |
+| `/plan status` | Show the current YOLO plan completion status. |
+| `/plan pause` | Pause the current YOLO plan completion. |
+| `/plan resume` | Resume the current YOLO plan completion. It continues when the `programmer` identity is active. |
+| `/plan clear` | Clear the current YOLO plan completion. |
 
 ## Aliases And Hidden Popup Entries
 

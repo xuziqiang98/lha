@@ -78,6 +78,8 @@ pub enum Feature {
     ShellTool,
     /// Enable long-running programmer goals.
     Goals,
+    /// Enable YOLO completion of planner-proposed plans.
+    PlanCompletion,
 
     // Experimental
     /// Use the single unified PTY-backed exec tool.
@@ -430,6 +432,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "goals",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::PlanCompletion,
+        key: "plan_completion",
+        stage: Stage::Experimental {
+            name: "YOLO plan completion",
+            menu_description: "Keep implementing the latest planner plan until it is marked complete or blocked.",
+            announcement: "NEW: YOLO plan completion can keep executing planner plans until done.",
+        },
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::UnifiedExec,

@@ -3498,6 +3498,12 @@ impl App {
                 self.chat_widget
                     .submit_user_message_with_mode(text, identity);
             }
+            AppEvent::StartPlanCompletion {
+                plan_text,
+                identity,
+            } => {
+                self.chat_widget.start_plan_completion(plan_text, identity);
+            }
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
                     let diff_summary = DiffSummary::new(changes, cwd);

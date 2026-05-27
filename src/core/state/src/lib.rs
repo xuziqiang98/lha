@@ -16,12 +16,18 @@ pub use model::LogQuery;
 pub use model::LogRow;
 pub use model::ThreadGoal;
 pub use model::ThreadGoalStatus;
+pub use model::ThreadPlanRun;
+pub use model::ThreadPlanRunStatus;
 /// Preferred entrypoint: owns configuration and metrics.
 pub use runtime::GoalAccountingMode;
 pub use runtime::GoalAccountingOutcome;
 pub use runtime::GoalUpdate;
+pub use runtime::PlanRunAccountingMode;
+pub use runtime::PlanRunAccountingOutcome;
+pub use runtime::PlanRunUpdate;
 pub use runtime::StateRuntime;
 pub use runtime::ThreadGoalSeed;
+pub use runtime::ThreadPlanRunSeed;
 
 /// Low-level storage engine: useful for focused tests.
 ///

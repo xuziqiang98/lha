@@ -1250,6 +1250,28 @@ impl ChatComposer {
                     );
                 }
 
+                if let Some((name, rest, _rest_offset)) = parse_slash_name(first_line)
+                    && !rest.is_empty()
+                    && !name.contains('/')
+                    && let Some(cmd) = slash_commands::find_builtin_command(
+                        name,
+                        self.identities_enabled,
+                        self.personality_command_enabled,
+                        self.windows_degraded_sandbox_active,
+                    )
+                    && matches!(
+                        cmd,
+                        SlashCommand::Review
+                            | SlashCommand::Rename
+                            | SlashCommand::Buddy
+                            | SlashCommand::Plan
+                            | SlashCommand::Goal
+                    )
+                {
+                    self.textarea.set_text_clearing_elements("");
+                    return (InputResult::CommandWithArgs(cmd, rest.to_string()), true);
+                }
+
                 if let Some(sel) = popup.selected_item() {
                     match sel {
                         CommandItem::Builtin(cmd) => {
@@ -2212,6 +2234,7 @@ impl ChatComposer {
                     SlashCommand::Review
                         | SlashCommand::Rename
                         | SlashCommand::Buddy
+                        | SlashCommand::Plan
                         | SlashCommand::Goal
                 )
             {
@@ -5170,6 +5193,49 @@ mod tests {
                 panic!("expected command dispatch, but composer queued literal text")
             }
             InputResult::None => panic!("expected CommandWithArgs result for '/goal'"),
+        }
+        assert!(composer.textarea.is_empty(), "composer should be cleared");
+    }
+
+    #[test]
+    fn slash_plan_with_args_dispatches_command_and_does_not_submit_literal_text() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Adam to do anything".to_string(),
+            false,
+        );
+
+        type_chars_humanlike(
+            &mut composer,
+            &['/', 'p', 'l', 'a', 'n', ' ', 's', 't', 'a', 't', 'u', 's'],
+        );
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::CommandWithArgs(cmd, args) => {
+                assert_eq!(cmd, SlashCommand::Plan);
+                assert_eq!(args, "status");
+            }
+            InputResult::Command(cmd) => {
+                panic!("expected command dispatch with args for '/plan', got {cmd:?}")
+            }
+            InputResult::Submitted { text, .. } => {
+                panic!("expected command dispatch, but composer submitted literal text: {text}")
+            }
+            InputResult::Queued { .. } => {
+                panic!("expected command dispatch, but composer queued literal text")
+            }
+            InputResult::None => panic!("expected CommandWithArgs result for '/plan'"),
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
     }

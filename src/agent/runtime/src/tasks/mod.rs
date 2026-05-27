@@ -24,10 +24,12 @@ use tracing::warn;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::protocol_goal_from_state;
+use crate::codex::protocol_plan_run_from_state;
 use crate::features::Feature;
 use crate::protocol::BuddyReactionEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::ThreadGoalUpdatedEvent;
+use crate::protocol::ThreadPlanRunUpdatedEvent;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
 use crate::protocol::TurnCompleteEvent;
@@ -47,7 +49,10 @@ use adam_protocol::protocol::RolloutItem;
 use adam_protocol::user_input::UserInput;
 use adam_state::GoalAccountingMode;
 use adam_state::GoalAccountingOutcome;
+use adam_state::PlanRunAccountingMode;
+use adam_state::PlanRunAccountingOutcome;
 use adam_state::ThreadGoalStatus;
+use adam_state::ThreadPlanRunStatus;
 
 pub(crate) use compact::CompactTask;
 pub(crate) use ghost_snapshot::GhostSnapshotTask;
@@ -68,6 +73,18 @@ fn goal_accounting_mode_for_status(status: ThreadGoalStatus) -> GoalAccountingMo
             GoalAccountingMode::ActiveOrStopped
         }
         ThreadGoalStatus::Complete => GoalAccountingMode::ActiveOrComplete,
+    }
+}
+
+fn plan_run_accounting_mode_for_status(status: ThreadPlanRunStatus) -> PlanRunAccountingMode {
+    match status {
+        ThreadPlanRunStatus::Active | ThreadPlanRunStatus::BudgetLimited => {
+            PlanRunAccountingMode::ActiveOnly
+        }
+        ThreadPlanRunStatus::Paused
+        | ThreadPlanRunStatus::Blocked
+        | ThreadPlanRunStatus::UsageLimited => PlanRunAccountingMode::ActiveOrStopped,
+        ThreadPlanRunStatus::Complete => PlanRunAccountingMode::ActiveOrComplete,
     }
 }
 
@@ -246,13 +263,21 @@ impl Session {
         if should_close_processes {
             self.close_unified_exec_processes().await;
         }
-        let accounting_outcome = if let Some(finished_task) = finished_task.as_ref() {
-            self.account_goal_usage_for_task(&turn_context, finished_task.accounting_snapshot())
-                .await
-        } else {
-            None
-        };
-        self.emit_goal_accounting_update_if_needed(&turn_context, accounting_outcome)
+        let (goal_accounting_outcome, plan_run_accounting_outcome) =
+            if let Some(finished_task) = finished_task.as_ref() {
+                let snapshot = finished_task.accounting_snapshot();
+                (
+                    self.account_goal_usage_for_task(&turn_context, snapshot)
+                        .await,
+                    self.account_plan_run_usage_for_task(&turn_context, snapshot)
+                        .await,
+                )
+            } else {
+                (None, None)
+            };
+        self.emit_goal_accounting_update_if_needed(&turn_context, goal_accounting_outcome)
+            .await;
+        self.emit_plan_run_accounting_update_if_needed(&turn_context, plan_run_accounting_outcome)
             .await;
         let assistant_message_for_buddy = last_agent_message.clone();
         let event = EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message });
@@ -354,6 +379,80 @@ impl Session {
         .await;
     }
 
+    async fn account_plan_run_usage_for_task(
+        &self,
+        turn_context: &TurnContext,
+        task_usage: TaskUsageSnapshot,
+    ) -> Option<PlanRunAccountingOutcome> {
+        let plan_run_id = turn_context
+            .plan_run_context
+            .accounting_plan_run_id()
+            .await?;
+        let state_db = self.state_db()?;
+        let plan_run = match state_db.get_thread_plan_run(self.conversation_id).await {
+            Ok(Some(plan_run)) if plan_run.plan_run_id == plan_run_id => plan_run,
+            Ok(_) => return None,
+            Err(err) => {
+                warn!("failed to load plan run before accounting usage: {err}");
+                return None;
+            }
+        };
+        let token_delta = self
+            .reported_total_token_usage()
+            .await
+            .saturating_sub(task_usage.starting_total_tokens);
+        let elapsed_seconds = task_usage
+            .started_at
+            .elapsed()
+            .as_millis()
+            .div_ceil(1000)
+            .max(1);
+        let time_delta_seconds = i64::try_from(elapsed_seconds).unwrap_or(i64::MAX);
+        match state_db
+            .account_thread_plan_run_usage(
+                self.conversation_id,
+                time_delta_seconds,
+                token_delta,
+                plan_run_accounting_mode_for_status(plan_run.status),
+                Some(plan_run_id.as_str()),
+            )
+            .await
+        {
+            Ok(outcome) => Some(outcome),
+            Err(err) => {
+                warn!("failed to account plan run usage: {err}");
+                None
+            }
+        }
+    }
+
+    async fn emit_plan_run_accounting_update_if_needed(
+        &self,
+        turn_context: &TurnContext,
+        accounting_outcome: Option<PlanRunAccountingOutcome>,
+    ) {
+        if let Some(PlanRunAccountingOutcome::Updated(plan_run)) = accounting_outcome {
+            self.emit_thread_plan_run_updated(turn_context, plan_run)
+                .await;
+        }
+    }
+
+    async fn emit_thread_plan_run_updated(
+        &self,
+        turn_context: &TurnContext,
+        plan_run: adam_state::ThreadPlanRun,
+    ) {
+        self.send_event(
+            turn_context,
+            EventMsg::ThreadPlanRunUpdated(ThreadPlanRunUpdatedEvent {
+                thread_id: self.conversation_id,
+                turn_id: Some(turn_context.sub_id.clone()),
+                plan_run: protocol_plan_run_from_state(plan_run),
+            }),
+        )
+        .await;
+    }
+
     async fn pause_active_goal_for_interrupt(
         &self,
         turn_context: &TurnContext,
@@ -373,6 +472,35 @@ impl Session {
             Ok(goal) => goal,
             Err(err) => {
                 warn!("failed to pause active goal after interrupt: {err}");
+                None
+            }
+        }
+    }
+
+    async fn pause_active_plan_run_for_interrupt(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Option<adam_state::ThreadPlanRun> {
+        if !self.enabled(Feature::PlanCompletion)
+            || turn_context.identity.kind != IdentityKind::Programmer
+        {
+            return None;
+        }
+        let state_db = self.state_db()?;
+        let mut expected_plan_run_id = turn_context.plan_run_context.expected_plan_run_id().await;
+        if expected_plan_run_id.is_none() {
+            expected_plan_run_id = turn_context.plan_run_context.accounting_plan_run_id().await;
+        }
+        match state_db
+            .pause_active_thread_plan_run_if_plan_run_id(
+                self.conversation_id,
+                expected_plan_run_id.as_deref(),
+            )
+            .await
+        {
+            Ok(plan_run) => plan_run,
+            Err(err) => {
+                warn!("failed to pause active plan run after interrupt: {err}");
                 None
             }
         }
@@ -449,16 +577,33 @@ impl Session {
         let accounting_outcome = self
             .account_goal_usage_for_task(&turn_context, task_usage)
             .await;
+        let plan_run_accounting_outcome = self
+            .account_plan_run_usage_for_task(&turn_context, task_usage)
+            .await;
         let paused_goal = if reason == TurnAbortReason::Interrupted {
             self.pause_active_goal_for_interrupt(&turn_context).await
         } else {
             None
         };
+        let paused_plan_run = if reason == TurnAbortReason::Interrupted && paused_goal.is_none() {
+            self.pause_active_plan_run_for_interrupt(&turn_context)
+                .await
+        } else {
+            None
+        };
         if let Some(goal) = paused_goal {
             self.emit_thread_goal_updated(&turn_context, goal).await;
+        } else if let Some(plan_run) = paused_plan_run {
+            self.emit_thread_plan_run_updated(&turn_context, plan_run)
+                .await;
         } else {
             self.emit_goal_accounting_update_if_needed(&turn_context, accounting_outcome)
                 .await;
+            self.emit_plan_run_accounting_update_if_needed(
+                &turn_context,
+                plan_run_accounting_outcome,
+            )
+            .await;
         }
 
         if reason == TurnAbortReason::Interrupted {

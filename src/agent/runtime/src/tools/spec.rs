@@ -41,6 +41,7 @@ pub(crate) struct ToolsConfig {
     pub delegated_job_tools: bool,
     pub identity_tools: bool,
     pub goal_tools: bool,
+    pub plan_run_tools: bool,
     pub request_rule_enabled: bool,
     pub experimental_supported_tools: Vec<String>,
     pub workflow_tools: bool,
@@ -70,6 +71,7 @@ impl ToolsConfig {
         let include_delegated_job_tools = features.enabled(Feature::AgentJobs);
         let include_identity_tools = features.enabled(Feature::Identities);
         let include_goal_tools = features.enabled(Feature::Goals);
+        let include_plan_run_tools = features.enabled(Feature::PlanCompletion);
         let request_rule_enabled = features.enabled(Feature::RequestRule);
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -105,6 +107,7 @@ impl ToolsConfig {
             delegated_job_tools: include_delegated_job_tools,
             identity_tools: include_identity_tools,
             goal_tools: include_goal_tools,
+            plan_run_tools: include_plan_run_tools,
             request_rule_enabled,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             workflow_tools: false,
@@ -140,8 +143,10 @@ fn tool_name_is_allowed_for_runtime(config: &ToolsConfig, name: &str) -> bool {
 }
 
 fn tool_name_is_allowed_by_identity(config: &ToolsConfig, name: &str) -> bool {
-    if matches!(name, "get_goal" | "create_goal" | "update_goal")
-        && config.identity_kind != IdentityKind::Programmer
+    if matches!(
+        name,
+        "get_goal" | "create_goal" | "update_goal" | "get_plan_run" | "update_plan_run"
+    ) && config.identity_kind != IdentityKind::Programmer
     {
         return false;
     }
@@ -592,6 +597,35 @@ fn create_goal_tools() -> Vec<ToolDescriptor> {
         ToolDescriptor::Function(ResponsesApiTool {
             name: "update_goal".to_string(),
             description: "Mark the current programmer goal complete or blocked.".to_string(),
+            strict: false,
+            parameters: JsonSchema::Object {
+                properties: BTreeMap::from([("status".to_string(), status_schema)]),
+                required: Some(vec!["status".to_string()]),
+                additional_properties: Some(false.into()),
+            },
+        }),
+    ]
+}
+
+fn create_plan_run_tools() -> Vec<ToolDescriptor> {
+    let status_schema = JsonSchema::String {
+        description: Some("One of: complete, blocked.".to_string()),
+    };
+    vec![
+        ToolDescriptor::Function(ResponsesApiTool {
+            name: "get_plan_run".to_string(),
+            description: "Get the current YOLO plan completion run for this thread.".to_string(),
+            strict: false,
+            parameters: JsonSchema::Object {
+                properties: BTreeMap::new(),
+                required: Some(Vec::new()),
+                additional_properties: Some(false.into()),
+            },
+        }),
+        ToolDescriptor::Function(ResponsesApiTool {
+            name: "update_plan_run".to_string(),
+            description: "Mark the current YOLO plan completion run complete or blocked."
+                .to_string(),
             strict: false,
             parameters: JsonSchema::Object {
                 properties: BTreeMap::from([("status".to_string(), status_schema)]),
@@ -1372,6 +1406,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
+    use crate::tools::handlers::PlanRunHandler;
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::ShellCommandHandler;
@@ -1394,6 +1429,7 @@ pub(crate) fn build_specs(
     let request_user_input_handler = Arc::new(RequestUserInputHandler);
     let workflow_handler = Arc::new(WorkflowHandler);
     let goal_handler = Arc::new(GoalHandler);
+    let plan_run_handler = Arc::new(PlanRunHandler);
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
@@ -1535,6 +1571,19 @@ pub(crate) fn build_specs(
                 spec,
                 name,
                 goal_handler.clone(),
+            );
+        }
+    }
+
+    if config.plan_run_tools {
+        for spec in create_plan_run_tools() {
+            let name = spec.name().to_string();
+            maybe_push_spec_and_register_handler(
+                &mut builder,
+                config,
+                spec,
+                name,
+                plan_run_handler.clone(),
             );
         }
     }
@@ -2102,6 +2151,74 @@ mod tests {
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert_contains_tool_names(&tools, &["request_user_input"]);
+    }
+
+    #[test]
+    fn plan_run_tools_require_plan_completion_feature() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let features = Features::with_defaults();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            declared_tool_contract: false,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        })
+        .with_identity_kind(IdentityKind::Programmer);
+
+        let (tools, registry) = build_specs(&tools_config, None, &[]).build();
+
+        assert!(!tools.iter().any(|tool| tool.spec.name() == "get_plan_run"));
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.spec.name() == "update_plan_run")
+        );
+        assert!(registry.handler("get_plan_run").is_none());
+        assert!(registry.handler("update_plan_run").is_none());
+    }
+
+    #[test]
+    fn plan_run_tools_are_programmer_only() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::PlanCompletion);
+
+        for identity_kind in [
+            IdentityKind::Nobody,
+            IdentityKind::Planner,
+            IdentityKind::Explorer,
+            IdentityKind::Reviewer,
+            IdentityKind::Programmer,
+        ] {
+            let tools_config = ToolsConfig::new(&ToolsConfigParams {
+                model_info: &model_info,
+                declared_tool_contract: false,
+                features: &features,
+                web_search_mode: Some(WebSearchMode::Cached),
+                session_source: SessionSource::Cli,
+            })
+            .with_identity_kind(identity_kind);
+            let (tools, registry) = build_specs(&tools_config, None, &[]).build();
+            let has_get = tools.iter().any(|tool| tool.spec.name() == "get_plan_run");
+            let has_update = tools
+                .iter()
+                .any(|tool| tool.spec.name() == "update_plan_run");
+            let expected = identity_kind == IdentityKind::Programmer;
+
+            assert_eq!(
+                expected, has_get,
+                "get_plan_run visibility for {identity_kind:?}"
+            );
+            assert_eq!(
+                expected, has_update,
+                "update_plan_run visibility for {identity_kind:?}"
+            );
+            assert_eq!(expected, registry.handler("get_plan_run").is_some());
+            assert_eq!(expected, registry.handler("update_plan_run").is_some());
+        }
     }
 
     fn assert_model_tools(

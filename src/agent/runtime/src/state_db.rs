@@ -91,7 +91,9 @@ pub async fn get_state_db(config: &Config, otel: Option<&OtelManager>) -> Option
 }
 
 fn state_db_feature_enabled(config: &Config) -> bool {
-    config.features.enabled(Feature::Sqlite) || config.features.enabled(Feature::Goals)
+    config.features.enabled(Feature::Sqlite)
+        || config.features.enabled(Feature::Goals)
+        || config.features.enabled(Feature::PlanCompletion)
 }
 
 /// Open the state runtime when the SQLite file exists, without feature gating.

@@ -45,6 +45,8 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::ThreadGoalUpdated(_)
         | EventMsg::ThreadGoalCleared(_)
+        | EventMsg::ThreadPlanRunUpdated(_)
+        | EventMsg::ThreadPlanRunCleared(_)
         | EventMsg::UndoCompleted(_)
         | EventMsg::TurnAborted(_) => true,
         EventMsg::ItemCompleted(event) => {
@@ -71,6 +73,7 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::ThreadNameUpdated(_)
         | EventMsg::ThreadGoalSnapshot(_)
         | EventMsg::ThreadGoalReplaceConfirmationRequired(_)
+        | EventMsg::ThreadPlanRunSnapshot(_)
         | EventMsg::McpToolCallBegin(_)
         | EventMsg::McpToolCallEnd(_)
         | EventMsg::WebSearchBegin(_)
