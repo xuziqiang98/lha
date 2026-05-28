@@ -3348,61 +3348,7 @@ impl App {
                 if updates.is_empty() {
                     return Ok(AppRunControl::Continue);
                 }
-                let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
-                    matches!(
-                        feature,
-                        Feature::WindowsSandbox | Feature::WindowsSandboxElevated
-                    )
-                });
-                let mut builder = ConfigEditsBuilder::new(&self.config.adam_home)
-                    .with_profile(self.active_profile.as_deref());
-                for (feature, enabled) in &updates {
-                    let feature_key = feature.key();
-                    if *enabled {
-                        // Update the in-memory configs.
-                        self.config.features.enable(*feature);
-                        self.chat_widget.set_feature_enabled(*feature, true);
-                        builder = builder.set_feature_enabled(feature_key, true);
-                    } else {
-                        // Update the in-memory configs.
-                        self.config.features.disable(*feature);
-                        self.chat_widget.set_feature_enabled(*feature, false);
-                        if feature.default_enabled() {
-                            builder = builder.set_feature_enabled(feature_key, false);
-                        } else {
-                            // If the feature already default to `false`, we drop the key
-                            // in the config file so that the user does not miss the feature
-                            // once it gets globally released.
-                            builder = builder.with_edits(vec![ConfigEdit::ClearPath {
-                                segments: vec!["features".to_string(), feature_key.to_string()],
-                            }]);
-                        }
-                    }
-                }
-                if windows_sandbox_changed {
-                    #[cfg(target_os = "windows")]
-                    {
-                        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
-                        self.app_event_tx
-                            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                                cwd: None,
-                                approval_policy: None,
-                                sandbox_policy: None,
-                                windows_sandbox_level: Some(windows_sandbox_level),
-                                model: None,
-                                effort: None,
-                                summary: None,
-                                identity: None,
-                                personality: None,
-                            }));
-                    }
-                }
-                if let Err(err) = builder.apply().await {
-                    tracing::error!(error = %err, "failed to persist feature flags");
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to update experimental features: {err}"
-                    ));
-                }
+                self.update_feature_flags(updates).await;
             }
             AppEvent::SkipNextWorldWritableScan => {
                 self.windows_sandbox.skip_world_writable_scan_once = true;
@@ -3865,6 +3811,79 @@ impl App {
                 Err(format!(
                     "Failed to update skill config for {path_display}: {err}"
                 ))
+            }
+        }
+    }
+
+    async fn update_feature_flags(&mut self, updates: Vec<(Feature, bool)>) {
+        let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
+            matches!(
+                feature,
+                Feature::WindowsSandbox | Feature::WindowsSandboxElevated
+            )
+        });
+        let plan_completion_enabled = updates
+            .iter()
+            .any(|(feature, enabled)| *feature == Feature::PlanCompletion && *enabled);
+        let mut builder = ConfigEditsBuilder::new(&self.config.adam_home)
+            .with_profile(self.active_profile.as_deref());
+        for (feature, enabled) in &updates {
+            let feature_key = feature.key();
+            if *enabled {
+                // Update the in-memory configs.
+                self.config.features.enable(*feature);
+                self.chat_widget.set_feature_enabled(*feature, true);
+                builder = builder.set_feature_enabled(feature_key, true);
+            } else {
+                // Update the in-memory configs.
+                self.config.features.disable(*feature);
+                self.chat_widget.set_feature_enabled(*feature, false);
+                if feature.default_enabled() {
+                    builder = builder.set_feature_enabled(feature_key, false);
+                } else {
+                    // If the feature already default to `false`, we drop the key
+                    // in the config file so that the user does not miss the feature
+                    // once it gets globally released.
+                    builder = builder.with_edits(vec![ConfigEdit::ClearPath {
+                        segments: vec!["features".to_string(), feature_key.to_string()],
+                    }]);
+                }
+            }
+        }
+        if windows_sandbox_changed {
+            #[cfg(target_os = "windows")]
+            {
+                let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                        cwd: None,
+                        approval_policy: None,
+                        sandbox_policy: None,
+                        windows_sandbox_level: Some(windows_sandbox_level),
+                        model: None,
+                        effort: None,
+                        summary: None,
+                        identity: None,
+                        personality: None,
+                    }));
+            }
+        }
+        match builder.apply().await {
+            Ok(()) => {
+                if plan_completion_enabled {
+                    self.chat_widget.add_info_message(
+                        "YOLO plan completion was enabled.".to_string(),
+                        Some(
+                            "Restart Adam TUI for this change to take effect in the current session."
+                                .to_string(),
+                        ),
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::error!(error = %err, "failed to persist feature flags");
+                self.chat_widget
+                    .add_error_message(format!("Failed to update experimental features: {err}"));
             }
         }
     }
@@ -4694,6 +4713,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::prelude::Line;
+    use ratatui::text::Line as TextLine;
     use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -5942,6 +5962,57 @@ show_raw_agent_reasoning = true
     }
 
     #[tokio::test]
+    async fn enabling_plan_completion_shows_restart_hint() {
+        let (mut app, mut rx, _op_rx) = make_test_app_with_channels().await;
+        drain_insert_history(&mut rx);
+
+        app.update_feature_flags(vec![(Feature::PlanCompletion, true)])
+            .await;
+
+        let history = drain_insert_history_text(&mut rx);
+        assert!(history.contains("YOLO plan completion was enabled."));
+        assert!(
+            history.contains(
+                "Restart Adam TUI for this change to take effect in the current session."
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn disabling_plan_completion_does_not_show_restart_hint() {
+        let (mut app, mut rx, _op_rx) = make_test_app_with_channels().await;
+        drain_insert_history(&mut rx);
+
+        app.update_feature_flags(vec![(Feature::PlanCompletion, false)])
+            .await;
+
+        let history = drain_insert_history_text(&mut rx);
+        assert!(!history.contains("YOLO plan completion was enabled."));
+        assert!(
+            !history.contains(
+                "Restart Adam TUI for this change to take effect in the current session."
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn enabling_other_feature_does_not_show_plan_completion_restart_hint() {
+        let (mut app, mut rx, _op_rx) = make_test_app_with_channels().await;
+        drain_insert_history(&mut rx);
+
+        app.update_feature_flags(vec![(Feature::ShellSnapshot, true)])
+            .await;
+
+        let history = drain_insert_history_text(&mut rx);
+        assert!(!history.contains("YOLO plan completion was enabled."));
+        assert!(
+            !history.contains(
+                "Restart Adam TUI for this change to take effect in the current session."
+            )
+        );
+    }
+
+    #[tokio::test]
     async fn open_personality_selection_modal_sets_centered_modal() {
         let mut app = make_test_app().await;
         app.open_personality_selection_modal(Personality::Friendly);
@@ -6135,6 +6206,38 @@ show_raw_agent_reasoning = true
         app.handle_codex_event_now(mcp_tools_event());
 
         assert!(matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_))));
+    }
+
+    fn drain_insert_history(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    ) -> Vec<Vec<TextLine<'static>>> {
+        let mut out = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            let cell = match event {
+                AppEvent::InsertHistoryCell(cell)
+                | AppEvent::InsertThreadHistoryCell { cell, .. } => cell,
+                _ => continue,
+            };
+            out.push(cell.display_lines(80));
+        }
+        out
+    }
+
+    fn drain_insert_history_text(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    ) -> String {
+        drain_insert_history(rx)
+            .into_iter()
+            .flat_map(|lines| {
+                lines.into_iter().map(|line| {
+                    line.spans
+                        .into_iter()
+                        .map(|span| span.content)
+                        .collect::<String>()
+                })
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn test_skill(name: &str) -> adam_agent::protocol::SkillMetadata {
