@@ -213,6 +213,7 @@ use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
+use crate::state::TaskUsageSnapshot;
 use crate::state_db;
 use crate::tasks::GhostSnapshotTask;
 use crate::tasks::RegularTask;
@@ -725,6 +726,7 @@ impl TurnContext {
 pub(crate) struct GoalTurnContext {
     expected_goal_id: Arc<Mutex<Option<String>>>,
     accounting_goal_id: Arc<Mutex<Option<String>>>,
+    accounting_usage_snapshot: Arc<Mutex<Option<TaskUsageSnapshot>>>,
 }
 
 impl GoalTurnContext {
@@ -742,6 +744,14 @@ impl GoalTurnContext {
 
     pub(crate) async fn set_accounting_goal_id(&self, goal_id: impl Into<String>) {
         *self.accounting_goal_id.lock().await = Some(goal_id.into());
+    }
+
+    pub(crate) async fn accounting_usage_snapshot(&self) -> Option<TaskUsageSnapshot> {
+        *self.accounting_usage_snapshot.lock().await
+    }
+
+    pub(crate) async fn set_accounting_usage_snapshot(&self, snapshot: TaskUsageSnapshot) {
+        *self.accounting_usage_snapshot.lock().await = Some(snapshot);
     }
 }
 
@@ -2178,16 +2188,18 @@ impl Session {
         state.total_reported_token_usage()
     }
 
-    pub(crate) async fn reset_goal_accounting_baseline_for_turn(&self, turn_context: &TurnContext) {
-        let starting_total_tokens = self.reported_total_token_usage().await;
-        let mut active = self.active_turn.lock().await;
-        if let Some(active_turn) = active.as_mut() {
-            active_turn.reset_task_usage_baseline(
-                &turn_context.sub_id,
-                Instant::now(),
-                starting_total_tokens,
-            );
-        }
+    pub(crate) async fn capture_goal_accounting_baseline_for_turn(
+        &self,
+        turn_context: &TurnContext,
+    ) {
+        let snapshot = TaskUsageSnapshot {
+            started_at: Instant::now(),
+            starting_total_tokens: self.reported_total_token_usage().await,
+        };
+        turn_context
+            .goal_context
+            .set_accounting_usage_snapshot(snapshot)
+            .await;
     }
 
     pub(crate) async fn get_base_instructions(&self) -> BaseInstructions {
@@ -8676,6 +8688,120 @@ mod tests {
             },
             model_context_window: None,
         }));
+    }
+
+    #[derive(Clone)]
+    struct CreateGoalMidTurnTask {
+        start: Arc<Notify>,
+        state_db: Arc<adam_state::StateRuntime>,
+    }
+
+    #[async_trait::async_trait]
+    impl SessionTask for CreateGoalMidTurnTask {
+        fn kind(&self) -> TaskKind {
+            TaskKind::Regular
+        }
+
+        async fn run(
+            self: Arc<Self>,
+            session: Arc<SessionTaskContext>,
+            ctx: Arc<TurnContext>,
+            _input: Vec<UserInput>,
+            _cancellation_token: CancellationToken,
+        ) -> Option<String> {
+            self.start.notified().await;
+            let session = session.clone_session();
+            set_reported_total_tokens(&session, 10).await;
+            let goal = self
+                .state_db
+                .insert_thread_goal(
+                    session.conversation_id,
+                    "created mid turn",
+                    adam_state::ThreadGoalStatus::Active,
+                    None,
+                )
+                .await
+                .expect("goal insert should succeed")
+                .expect("goal should be inserted");
+            ctx.goal_context
+                .set_expected_goal_id(goal.goal_id.clone())
+                .await;
+            ctx.goal_context.set_accounting_goal_id(goal.goal_id).await;
+            session
+                .capture_goal_accounting_baseline_for_turn(&ctx)
+                .await;
+            set_reported_total_tokens(&session, 17).await;
+            None
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn goal_created_mid_turn_does_not_reset_plan_run_accounting_baseline() {
+        let (mut sess, state_db, rx, _state_home) = make_goal_session_with_state().await;
+        {
+            let session = Arc::get_mut(&mut sess).expect("session should not be shared");
+            session.features.enable(Feature::PlanCompletion);
+        }
+        set_programmer_identity(&sess).await;
+        let plan_run = state_db
+            .replace_thread_plan_run(
+                sess.conversation_id,
+                "# Plan\n- keep working",
+                adam_state::ThreadPlanRunStatus::Active,
+                None,
+            )
+            .await
+            .expect("plan run replacement should succeed");
+        let turn_context = sess
+            .new_default_turn_with_sub_id("mid-turn-goal-plan-run-accounting".to_string())
+            .await;
+        turn_context
+            .plan_run_context
+            .set_expected_plan_run_id(plan_run.plan_run_id.clone())
+            .await;
+        turn_context
+            .plan_run_context
+            .set_accounting_plan_run_id(plan_run.plan_run_id)
+            .await;
+        let start = Arc::new(Notify::new());
+        sess.spawn_task(
+            Arc::clone(&turn_context),
+            vec![UserInput::Text {
+                text: "work the plan".to_string(),
+                text_elements: Vec::new(),
+            }],
+            CreateGoalMidTurnTask {
+                start: Arc::clone(&start),
+                state_db: Arc::clone(&state_db),
+            },
+        )
+        .await;
+        start.notify_one();
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let evt = tokio::time::timeout(remaining, rx.recv())
+                .await
+                .expect("timeout waiting for turn complete")
+                .expect("event");
+            if matches!(evt.msg, EventMsg::TurnComplete(_)) {
+                break;
+            }
+        }
+
+        let goal = state_db
+            .get_thread_goal(sess.conversation_id)
+            .await
+            .expect("goal read should succeed")
+            .expect("goal should exist");
+        let plan_run = state_db
+            .get_thread_plan_run(sess.conversation_id)
+            .await
+            .expect("plan run read should succeed")
+            .expect("plan run should exist");
+        assert_eq!(7, goal.tokens_used);
+        assert_eq!(17, plan_run.tokens_used);
     }
 
     async fn wait_for_abort_goal_update(rx: &async_channel::Receiver<Event>) -> Option<ThreadGoal> {

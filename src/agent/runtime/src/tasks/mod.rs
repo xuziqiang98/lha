@@ -265,11 +265,16 @@ impl Session {
         }
         let (goal_accounting_outcome, plan_run_accounting_outcome) =
             if let Some(finished_task) = finished_task.as_ref() {
-                let snapshot = finished_task.accounting_snapshot();
+                let task_snapshot = finished_task.accounting_snapshot();
+                let goal_snapshot = turn_context
+                    .goal_context
+                    .accounting_usage_snapshot()
+                    .await
+                    .unwrap_or(task_snapshot);
                 (
-                    self.account_goal_usage_for_task(&turn_context, snapshot)
+                    self.account_goal_usage_for_task(&turn_context, goal_snapshot)
                         .await,
-                    self.account_plan_run_usage_for_task(&turn_context, snapshot)
+                    self.account_plan_run_usage_for_task(&turn_context, task_snapshot)
                         .await,
                 )
             } else {
@@ -550,6 +555,11 @@ impl Session {
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
         let turn_context = Arc::clone(&task.turn_context);
         let task_usage = task.accounting_snapshot();
+        let goal_usage = turn_context
+            .goal_context
+            .accounting_usage_snapshot()
+            .await
+            .unwrap_or(task_usage);
         let sub_id = turn_context.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
             return;
@@ -575,7 +585,7 @@ impl Session {
             .await;
 
         let accounting_outcome = self
-            .account_goal_usage_for_task(&turn_context, task_usage)
+            .account_goal_usage_for_task(&turn_context, goal_usage)
             .await;
         let plan_run_accounting_outcome = self
             .account_plan_run_usage_for_task(&turn_context, task_usage)
