@@ -726,7 +726,44 @@ impl TurnContext {
 pub(crate) struct GoalTurnContext {
     expected_goal_id: Arc<Mutex<Option<String>>>,
     accounting_goal_id: Arc<Mutex<Option<String>>>,
-    accounting_usage_snapshot: Arc<Mutex<Option<TaskUsageSnapshot>>>,
+    accounting_usage_checkpoint: Arc<Mutex<Option<GoalUsageCheckpoint>>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct GoalUsageCheckpoint {
+    snapshot: TaskUsageSnapshot,
+    has_accounted_time: bool,
+}
+
+impl GoalUsageCheckpoint {
+    fn new(snapshot: TaskUsageSnapshot) -> Self {
+        Self {
+            snapshot,
+            has_accounted_time: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GoalUsageSettlementMode {
+    RefreshForDisplay,
+    FinalTask,
+}
+
+fn goal_accounting_mode_for_status(
+    status: adam_state::ThreadGoalStatus,
+) -> adam_state::GoalAccountingMode {
+    match status {
+        adam_state::ThreadGoalStatus::Active | adam_state::ThreadGoalStatus::BudgetLimited => {
+            adam_state::GoalAccountingMode::ActiveOnly
+        }
+        adam_state::ThreadGoalStatus::Paused
+        | adam_state::ThreadGoalStatus::Blocked
+        | adam_state::ThreadGoalStatus::UsageLimited => {
+            adam_state::GoalAccountingMode::ActiveOrStopped
+        }
+        adam_state::ThreadGoalStatus::Complete => adam_state::GoalAccountingMode::ActiveOrComplete,
+    }
 }
 
 impl GoalTurnContext {
@@ -746,12 +783,15 @@ impl GoalTurnContext {
         *self.accounting_goal_id.lock().await = Some(goal_id.into());
     }
 
-    pub(crate) async fn accounting_usage_snapshot(&self) -> Option<TaskUsageSnapshot> {
-        *self.accounting_usage_snapshot.lock().await
+    pub(crate) async fn ensure_accounting_usage_checkpoint(&self, snapshot: TaskUsageSnapshot) {
+        let mut checkpoint = self.accounting_usage_checkpoint.lock().await;
+        if checkpoint.is_none() {
+            *checkpoint = Some(GoalUsageCheckpoint::new(snapshot));
+        }
     }
 
-    pub(crate) async fn set_accounting_usage_snapshot(&self, snapshot: TaskUsageSnapshot) {
-        *self.accounting_usage_snapshot.lock().await = Some(snapshot);
+    pub(crate) async fn reset_accounting_usage_checkpoint(&self, snapshot: TaskUsageSnapshot) {
+        *self.accounting_usage_checkpoint.lock().await = Some(GoalUsageCheckpoint::new(snapshot));
     }
 }
 
@@ -1530,6 +1570,7 @@ impl Session {
             .await;
             return;
         }
+        self.settle_active_goal_usage_for_display().await;
         match state_db.get_thread_goal(self.conversation_id).await {
             Ok(goal) => {
                 self.send_event_raw(Event {
@@ -1577,6 +1618,7 @@ impl Session {
             self.send_goal_error(sub_id, message).await;
             return false;
         }
+        self.settle_active_goal_usage_for_display().await;
         let state_goal = match mode {
             ThreadGoalSetMode::ConfirmIfExists => match state_db
                 .insert_thread_goal_or_replace_completed(
@@ -1713,6 +1755,7 @@ impl Session {
             .await;
             return false;
         }
+        self.settle_active_goal_usage_for_display().await;
         match state_db
             .update_thread_goal(
                 self.conversation_id,
@@ -2188,6 +2231,24 @@ impl Session {
         state.total_reported_token_usage()
     }
 
+    pub(crate) async fn initialize_goal_accounting_checkpoint_for_turn(
+        &self,
+        turn_context: &TurnContext,
+        snapshot: TaskUsageSnapshot,
+    ) {
+        if turn_context
+            .goal_context
+            .accounting_goal_id()
+            .await
+            .is_some()
+        {
+            turn_context
+                .goal_context
+                .ensure_accounting_usage_checkpoint(snapshot)
+                .await;
+        }
+    }
+
     pub(crate) async fn capture_goal_accounting_baseline_for_turn(
         &self,
         turn_context: &TurnContext,
@@ -2198,8 +2259,111 @@ impl Session {
         };
         turn_context
             .goal_context
-            .set_accounting_usage_snapshot(snapshot)
+            .reset_accounting_usage_checkpoint(snapshot)
             .await;
+    }
+
+    pub(crate) async fn settle_active_goal_usage_for_display(
+        &self,
+    ) -> Option<adam_state::ThreadGoal> {
+        let turn_contexts = {
+            let active_turn = self.active_turn.lock().await;
+            active_turn
+                .as_ref()
+                .map(|active_turn| {
+                    active_turn
+                        .tasks
+                        .values()
+                        .map(|task| Arc::clone(&task.turn_context))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+
+        for turn_context in turn_contexts {
+            self.settle_goal_usage_for_turn_context(
+                turn_context.as_ref(),
+                GoalUsageSettlementMode::RefreshForDisplay,
+            )
+            .await;
+        }
+
+        let state_db = self.state_db()?;
+        match state_db.get_thread_goal(self.conversation_id).await {
+            Ok(goal) => goal,
+            Err(err) => {
+                warn!("failed to load goal after display usage settlement: {err}");
+                None
+            }
+        }
+    }
+
+    pub(crate) async fn settle_goal_usage_for_turn_context(
+        &self,
+        turn_context: &TurnContext,
+        mode: GoalUsageSettlementMode,
+    ) -> Option<adam_state::GoalAccountingOutcome> {
+        let goal_id = turn_context.goal_context.accounting_goal_id().await?;
+        let state_db = self.state_db()?;
+        let current_total_tokens = self.reported_total_token_usage().await;
+        let mut checkpoint = turn_context
+            .goal_context
+            .accounting_usage_checkpoint
+            .lock()
+            .await;
+        let checkpoint = checkpoint.as_mut()?;
+        let goal = match state_db.get_thread_goal(self.conversation_id).await {
+            Ok(Some(goal)) if goal.goal_id == goal_id => goal,
+            Ok(_) => return None,
+            Err(err) => {
+                warn!("failed to load goal before accounting usage: {err}");
+                return None;
+            }
+        };
+
+        let token_delta =
+            current_total_tokens.saturating_sub(checkpoint.snapshot.starting_total_tokens);
+        let elapsed_seconds = checkpoint.snapshot.started_at.elapsed().as_secs();
+        let mut time_delta_seconds = i64::try_from(elapsed_seconds).unwrap_or(i64::MAX);
+        if matches!(mode, GoalUsageSettlementMode::FinalTask)
+            && !checkpoint.has_accounted_time
+            && time_delta_seconds == 0
+        {
+            time_delta_seconds = 1;
+        }
+
+        if time_delta_seconds == 0 && token_delta == 0 {
+            return Some(adam_state::GoalAccountingOutcome::Unchanged(Some(goal)));
+        }
+
+        match state_db
+            .account_thread_goal_usage(
+                self.conversation_id,
+                time_delta_seconds,
+                token_delta,
+                goal_accounting_mode_for_status(goal.status),
+                Some(goal_id.as_str()),
+            )
+            .await
+        {
+            Ok(outcome) => {
+                if matches!(outcome, adam_state::GoalAccountingOutcome::Updated(_)) {
+                    let seconds_to_advance =
+                        elapsed_seconds.min(u64::try_from(time_delta_seconds).unwrap_or(u64::MAX));
+                    checkpoint.snapshot = TaskUsageSnapshot {
+                        started_at: checkpoint.snapshot.started_at
+                            + std::time::Duration::from_secs(seconds_to_advance),
+                        starting_total_tokens: current_total_tokens,
+                    };
+                    checkpoint.has_accounted_time |= time_delta_seconds > 0;
+                }
+                Some(outcome)
+            }
+            Err(err) => {
+                warn!("failed to account goal usage: {err}");
+                None
+            }
+        }
     }
 
     pub(crate) async fn get_base_instructions(&self) -> BaseInstructions {
@@ -8596,6 +8760,29 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct WaitForFinishTask {
+        finish: Arc<Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl SessionTask for WaitForFinishTask {
+        fn kind(&self) -> TaskKind {
+            TaskKind::Regular
+        }
+
+        async fn run(
+            self: Arc<Self>,
+            _session: Arc<SessionTaskContext>,
+            _ctx: Arc<TurnContext>,
+            _input: Vec<UserInput>,
+            _cancellation_token: CancellationToken,
+        ) -> Option<String> {
+            self.finish.notified().await;
+            None
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[test_log::test]
     async fn abort_regular_task_emits_turn_aborted_only() {
@@ -8688,6 +8875,189 @@ mod tests {
             },
             model_context_window: None,
         }));
+    }
+
+    async fn wait_for_goal_snapshot(
+        rx: &async_channel::Receiver<Event>,
+    ) -> ThreadGoalSnapshotEvent {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let evt = tokio::time::timeout(remaining, rx.recv())
+                .await
+                .expect("timeout waiting for goal snapshot")
+                .expect("event");
+            if let EventMsg::ThreadGoalSnapshot(snapshot) = evt.msg {
+                return snapshot;
+            }
+        }
+    }
+
+    async fn wait_for_goal_updated(rx: &async_channel::Receiver<Event>) -> ThreadGoal {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let evt = tokio::time::timeout(remaining, rx.recv())
+                .await
+                .expect("timeout waiting for goal update")
+                .expect("event");
+            if let EventMsg::ThreadGoalUpdated(updated) = evt.msg {
+                return updated.goal;
+            }
+        }
+    }
+
+    async fn wait_for_turn_complete(rx: &async_channel::Receiver<Event>) {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let evt = tokio::time::timeout(remaining, rx.recv())
+                .await
+                .expect("timeout waiting for turn complete")
+                .expect("event");
+            if matches!(evt.msg, EventMsg::TurnComplete(_)) {
+                return;
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn goal_snapshot_refresh_accounts_known_usage_once() {
+        let (sess, state_db, rx, _state_home) = make_goal_session_with_state().await;
+        set_programmer_identity(&sess).await;
+        state_db
+            .replace_thread_goal(
+                sess.conversation_id,
+                "track display usage",
+                adam_state::ThreadGoalStatus::Active,
+                None,
+            )
+            .await
+            .expect("goal replacement should succeed");
+
+        let turn_context = sess
+            .new_default_turn_with_sub_id("display-goal-refresh".to_string())
+            .await;
+        sess.spawn_task(
+            Arc::clone(&turn_context),
+            vec![UserInput::Text {
+                text: "keep working".to_string(),
+                text_elements: Vec::new(),
+            }],
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+        set_reported_total_tokens(&sess, 12).await;
+
+        sess.emit_goal_snapshot("goal-snapshot-1".to_string()).await;
+        let snapshot = wait_for_goal_snapshot(&rx).await;
+        let goal = snapshot.goal.expect("goal should be present");
+        assert_eq!(goal.tokens_used, 12);
+
+        sess.emit_goal_snapshot("goal-snapshot-2".to_string()).await;
+        let snapshot = wait_for_goal_snapshot(&rx).await;
+        let goal = snapshot.goal.expect("goal should be present");
+        assert_eq!(goal.tokens_used, 12);
+
+        let stored = state_db
+            .get_thread_goal(sess.conversation_id)
+            .await
+            .expect("goal read should succeed")
+            .expect("goal should exist");
+        assert_eq!(stored.tokens_used, 12);
+        sess.abort_all_tasks(TurnAbortReason::Replaced).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn goal_completion_accounts_only_remaining_usage_after_display_refresh() {
+        let (sess, state_db, rx, _state_home) = make_goal_session_with_state().await;
+        set_programmer_identity(&sess).await;
+        state_db
+            .replace_thread_goal(
+                sess.conversation_id,
+                "finish after display refresh",
+                adam_state::ThreadGoalStatus::Active,
+                None,
+            )
+            .await
+            .expect("goal replacement should succeed");
+
+        let turn_context = sess
+            .new_default_turn_with_sub_id("display-then-finish".to_string())
+            .await;
+        let finish = Arc::new(Notify::new());
+        sess.spawn_task(
+            Arc::clone(&turn_context),
+            vec![UserInput::Text {
+                text: "keep working".to_string(),
+                text_elements: Vec::new(),
+            }],
+            WaitForFinishTask {
+                finish: Arc::clone(&finish),
+            },
+        )
+        .await;
+        set_reported_total_tokens(&sess, 12).await;
+        sess.emit_goal_snapshot("goal-snapshot-before-finish".to_string())
+            .await;
+        let snapshot = wait_for_goal_snapshot(&rx).await;
+        let goal = snapshot.goal.expect("goal should be present");
+        assert_eq!(goal.tokens_used, 12);
+
+        set_reported_total_tokens(&sess, 20).await;
+        finish.notify_one();
+        wait_for_turn_complete(&rx).await;
+
+        let stored = state_db
+            .get_thread_goal(sess.conversation_id)
+            .await
+            .expect("goal read should succeed")
+            .expect("goal should exist");
+        assert_eq!(stored.tokens_used, 20);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn goal_status_update_refreshes_known_usage_before_emit() {
+        let (sess, state_db, rx, _state_home) = make_goal_session_with_state().await;
+        set_programmer_identity(&sess).await;
+        state_db
+            .replace_thread_goal(
+                sess.conversation_id,
+                "complete with usage",
+                adam_state::ThreadGoalStatus::Active,
+                None,
+            )
+            .await
+            .expect("goal replacement should succeed");
+
+        let turn_context = sess
+            .new_default_turn_with_sub_id("complete-goal-refresh".to_string())
+            .await;
+        sess.spawn_task(
+            Arc::clone(&turn_context),
+            vec![UserInput::Text {
+                text: "keep working".to_string(),
+                text_elements: Vec::new(),
+            }],
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+        set_reported_total_tokens(&sess, 18).await;
+
+        assert!(
+            sess.set_thread_goal_status("complete-goal".to_string(), ThreadGoalStatus::Complete)
+                .await
+        );
+        let updated = wait_for_goal_updated(&rx).await;
+        assert_eq!(ThreadGoalStatus::Complete, updated.status);
+        assert_eq!(18, updated.tokens_used);
+        sess.abort_all_tasks(TurnAbortReason::Replaced).await;
     }
 
     #[derive(Clone)]

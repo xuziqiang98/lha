@@ -3671,13 +3671,7 @@ impl ChatWidget {
                 if !self.ensure_programmer_goal_allowed() {
                     return;
                 }
-                if let Some(goal) = self.current_goal.clone() {
-                    self.show_goal_summary(&goal);
-                } else if self.current_goal_state_known {
-                    self.show_no_goal_usage();
-                } else {
-                    self.app_event_tx.send(AppEvent::CodexOp(Op::ThreadGoalGet));
-                }
+                self.app_event_tx.send(AppEvent::CodexOp(Op::ThreadGoalGet));
             }
             SlashCommand::Bottom => {
                 self.scroll_transcript_to_bottom();

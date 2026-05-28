@@ -1,3 +1,4 @@
+use crate::codex::GoalUsageSettlementMode;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
@@ -77,6 +78,12 @@ async fn get_goal(
     turn_context: &TurnContext,
 ) -> Result<String, FunctionCallError> {
     ensure_goal_tool_allowed(session, turn_context).await?;
+    session
+        .settle_goal_usage_for_turn_context(
+            turn_context,
+            GoalUsageSettlementMode::RefreshForDisplay,
+        )
+        .await;
     let state_db = state_db(session)?;
     let goal = state_db
         .get_thread_goal(session.conversation_id)
@@ -156,6 +163,12 @@ async fn update_goal(
         }
     };
     let state_db = state_db(session)?;
+    session
+        .settle_goal_usage_for_turn_context(
+            turn_context,
+            GoalUsageSettlementMode::RefreshForDisplay,
+        )
+        .await;
     let expected_goal_id = turn_context.goal_context.expected_goal_id().await;
     let Some(expected_goal_id) = expected_goal_id else {
         let goal = state_db

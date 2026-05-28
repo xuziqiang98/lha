@@ -3250,6 +3250,41 @@ async fn goal_edit_reports_no_goal_after_known_empty_state() {
 }
 
 #[tokio::test]
+async fn slash_goal_refreshes_cached_goal_instead_of_rendering_it() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.config.features.enable(Feature::Goals);
+    chat.current_identity.kind = IdentityKind::Programmer;
+    chat.current_goal = Some(ThreadGoal {
+        thread_id: ThreadId::new(),
+        goal_id: "goal-123".to_string(),
+        objective: "cached active goal".to_string(),
+        status: ThreadGoalStatus::Active,
+        token_budget: Some(1_000),
+        tokens_used: 12,
+        time_used_seconds: 34,
+        created_at: 1_700_000_000,
+        updated_at: 1_700_000_100,
+    });
+    chat.current_goal_state_known = true;
+
+    chat.dispatch_command(SlashCommand::Goal);
+
+    let events = drain_events(&mut rx);
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::CodexOp(Op::ThreadGoalGet)))
+    );
+    let text = events
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .flat_map(|cell| cell.display_lines(80))
+        .map(|line| lines_to_single_string(&[line]))
+        .collect::<String>();
+    assert!(!text.contains("Goal (active) - cached active goal"));
+}
+
+#[tokio::test]
 async fn goal_edit_submits_expected_goal_id() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.config.features.enable(Feature::Goals);
