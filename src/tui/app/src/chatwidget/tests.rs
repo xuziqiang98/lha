@@ -508,23 +508,16 @@ async fn assistant_stream_exposes_only_completed_lines_before_finalize() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.on_agent_message_delta("one\ntwo\npartial".to_string());
-    assert!(
-        chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
-            .is_none()
-    );
     chat.on_commit_tick();
-    let before_finalize = drain_insert_history(&mut rx)
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
-        .collect::<String>();
+    let before_finalize = chat
+        .transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
+        .map(|tail| lines_to_single_string(&tail.lines))
+        .unwrap_or_default();
     assert!(before_finalize.contains("one"));
     assert!(before_finalize.contains("two"));
     assert!(!before_finalize.contains("partial"));
 
-    assert!(
-        chat.transcript_live_tail_for_mode(80, TranscriptRenderMode::Display)
-            .is_none()
-    );
+    assert!(drain_insert_history(&mut rx).is_empty());
 
     chat.flush_answer_stream_with_separator();
     let after_finalize = drain_insert_history(&mut rx)
@@ -2625,6 +2618,18 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
         s.push('\n');
     }
     s
+}
+
+fn lines_to_strings(lines: &[ratatui::text::Line<'static>]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect()
 }
 
 fn buffer_to_string(buf: &Buffer) -> String {
@@ -8850,6 +8855,79 @@ async fn deltas_then_same_final_message_are_rendered_snapshot() {
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
     assert_snapshot!(combined);
+}
+
+#[tokio::test]
+async fn streamed_agent_answer_reflows_after_narrow_stream_width() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.last_rendered_width.set(Some(32));
+
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+    let source =
+        "This streamed assistant answer should become a single wide line after the terminal grows.";
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: source.into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    let cells = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(into_insert_history_cell)
+        .collect::<Vec<_>>();
+    let answer = cells
+        .into_iter()
+        .find(|cell| cell.as_any().is::<AgentMessageCell>())
+        .expect("streamed agent answer cell");
+
+    let narrow = lines_to_strings(&answer.display_lines(32));
+    let wide = lines_to_strings(&answer.display_lines(120));
+
+    assert!(
+        narrow.len() > wide.len(),
+        "expected narrow render to wrap more than wide render; narrow={narrow:?}, wide={wide:?}"
+    );
+    assert_eq!(wide, vec![format!("• {source}")]);
+}
+
+#[tokio::test]
+async fn direct_agent_message_uses_reflowable_answer_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.last_rendered_width.set(Some(30));
+
+    let source =
+        "Direct assistant messages should also reflow when displayed at a wider terminal width.";
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: source.into(),
+        }),
+    });
+
+    let answer = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(into_insert_history_cell)
+        .find(|cell| cell.as_any().is::<AgentMessageCell>())
+        .expect("direct agent answer cell");
+    let narrow = lines_to_strings(&answer.display_lines(30));
+    let wide = lines_to_strings(&answer.display_lines(120));
+
+    assert!(
+        narrow.len() > wide.len(),
+        "expected direct answer to reflow; narrow={narrow:?}, wide={wide:?}"
+    );
+    assert_eq!(wide, vec![format!("• {source}")]);
 }
 
 #[tokio::test]

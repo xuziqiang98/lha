@@ -1,5 +1,5 @@
+use crate::history_cell;
 use crate::history_cell::HistoryCell;
-use crate::history_cell::{self};
 use crate::style::proposed_plan_style;
 use ratatui::prelude::Stylize;
 use ratatui::text::Line;
@@ -8,12 +8,14 @@ use super::StreamState;
 
 /// Controller that manages newline-gated streaming, header emission, and
 /// commit animation across streams.
+#[cfg(test)]
 pub(crate) struct StreamController {
     state: StreamState,
     finishing_after_drain: bool,
     header_emitted: bool,
 }
 
+#[cfg(test)]
 impl StreamController {
     pub(crate) fn new(width: Option<usize>) -> Self {
         Self {
@@ -76,6 +78,95 @@ impl StreamController {
             self.header_emitted = true;
             !header_emitted
         })))
+    }
+}
+
+/// Controller for assistant markdown streams.
+///
+/// The committed history cell keeps the raw markdown so it can reflow when the
+/// terminal width changes. While streaming, this controller only tracks how
+/// many rendered lines should be visible to preserve the existing reveal
+/// animation.
+pub(crate) struct AgentMarkdownStreamController {
+    buffer: String,
+    completed_source_len: usize,
+    visible_rendered_lines: usize,
+    queued_reveal_lines: usize,
+}
+
+impl AgentMarkdownStreamController {
+    pub(crate) fn new() -> Self {
+        Self {
+            buffer: String::new(),
+            completed_source_len: 0,
+            visible_rendered_lines: 0,
+            queued_reveal_lines: 0,
+        }
+    }
+
+    /// Push a delta and queue newly completed rendered lines when a newline
+    /// closes one or more logical markdown lines.
+    pub(crate) fn push(&mut self, delta: &str, width: Option<usize>) -> bool {
+        self.buffer.push_str(delta);
+        if !delta.contains('\n') {
+            return false;
+        }
+
+        let Some(last_newline_idx) = self.buffer.rfind('\n') else {
+            return false;
+        };
+        let completed_source_len = last_newline_idx + 1;
+        if completed_source_len <= self.completed_source_len {
+            return false;
+        }
+
+        self.completed_source_len = completed_source_len;
+        let completed_source = &self.buffer[..self.completed_source_len];
+        let completed_rendered_lines = rendered_line_count(completed_source, width);
+        let pending_target = self
+            .visible_rendered_lines
+            .saturating_add(self.queued_reveal_lines);
+        if completed_rendered_lines > pending_target {
+            self.queued_reveal_lines = self
+                .queued_reveal_lines
+                .saturating_add(completed_rendered_lines - pending_target);
+        }
+
+        self.queued_reveal_lines > 0
+    }
+
+    pub(crate) fn on_commit_tick(&mut self) -> (bool, bool) {
+        if self.queued_reveal_lines == 0 {
+            return (false, true);
+        }
+        self.visible_rendered_lines = self.visible_rendered_lines.saturating_add(1);
+        self.queued_reveal_lines -= 1;
+        (true, self.queued_reveal_lines == 0)
+    }
+
+    pub(crate) fn completed_source(&self) -> &str {
+        &self.buffer[..self.completed_source_len]
+    }
+
+    pub(crate) fn visible_rendered_lines(&self) -> usize {
+        self.visible_rendered_lines
+    }
+
+    pub(crate) fn finalize(self) -> String {
+        self.buffer
+    }
+}
+
+fn rendered_line_count(source: &str, width: Option<usize>) -> usize {
+    let mut rendered: Vec<Line<'static>> = Vec::new();
+    crate::markdown::append_markdown(source, width, &mut rendered);
+    if rendered
+        .last()
+        .is_some_and(crate::render::line_utils::is_blank_line_spaces_only)
+    {
+        rendered.len().saturating_sub(1)
+    } else {
+        rendered.len()
     }
 }
 
@@ -244,6 +335,54 @@ mod tests {
             lines_to_plain_strings(&cell.display_lines(u16::MAX)),
             vec!["  partial".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn assistant_markdown_stream_reveals_only_after_newline() {
+        let mut ctrl = AgentMarkdownStreamController::new();
+
+        assert!(!ctrl.push("partial", Some(20)));
+        assert_eq!(ctrl.completed_source(), "");
+        assert_eq!(ctrl.visible_rendered_lines(), 0);
+        assert_eq!(ctrl.on_commit_tick(), (false, true));
+
+        assert!(ctrl.push("\n", Some(20)));
+        assert_eq!(ctrl.completed_source(), "partial\n");
+        assert_eq!(ctrl.on_commit_tick(), (true, true));
+        assert_eq!(ctrl.visible_rendered_lines(), 1);
+    }
+
+    #[tokio::test]
+    async fn assistant_markdown_stream_reveals_one_rendered_line_per_tick() {
+        let mut ctrl = AgentMarkdownStreamController::new();
+
+        assert!(ctrl.push(
+            "This is a simple sentence that wraps across several rendered lines.\n",
+            Some(16),
+        ));
+        assert_eq!(ctrl.visible_rendered_lines(), 0);
+
+        assert_eq!(ctrl.on_commit_tick(), (true, false));
+        assert_eq!(ctrl.visible_rendered_lines(), 1);
+        assert_eq!(ctrl.on_commit_tick(), (true, false));
+        assert_eq!(ctrl.visible_rendered_lines(), 2);
+
+        while !ctrl.on_commit_tick().1 {}
+        assert_eq!(
+            ctrl.visible_rendered_lines(),
+            rendered_line_count(ctrl.completed_source(), Some(16))
+        );
+    }
+
+    #[tokio::test]
+    async fn assistant_markdown_stream_finalize_keeps_partial_tail() {
+        let mut ctrl = AgentMarkdownStreamController::new();
+
+        assert!(ctrl.push("complete\n", Some(80)));
+        assert_eq!(ctrl.on_commit_tick(), (true, true));
+        assert!(!ctrl.push("partial tail", Some(80)));
+
+        assert_eq!(ctrl.finalize(), "complete\npartial tail");
     }
 
     #[tokio::test]

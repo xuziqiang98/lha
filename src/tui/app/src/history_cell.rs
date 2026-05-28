@@ -471,23 +471,186 @@ impl HistoryCell for ReasoningSummaryCell {
 
 #[derive(Debug)]
 pub(crate) struct AgentMessageCell {
-    lines: Vec<Line<'static>>,
+    content: AgentMessageContent,
     is_first_line: bool,
+    revision: u64,
+    lines_cache: Mutex<Option<AgentMessageLinesCache>>,
+}
+
+#[derive(Debug)]
+enum AgentMessageContent {
+    RenderedLines(Vec<Line<'static>>),
+    Markdown {
+        source: String,
+        visible_rendered_lines: Option<usize>,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct AgentMessageLinesCache {
+    width: u16,
+    revision: u64,
+    visible_rendered_lines: Option<usize>,
+    lines: Vec<Line<'static>>,
 }
 
 impl AgentMessageCell {
     pub(crate) fn new(lines: Vec<Line<'static>>, is_first_line: bool) -> Self {
         Self {
-            lines,
+            content: AgentMessageContent::RenderedLines(lines),
             is_first_line,
+            revision: 0,
+            lines_cache: Mutex::new(None),
         }
     }
-}
 
-impl HistoryCell for AgentMessageCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+    pub(crate) fn new_markdown(source: String, is_first_line: bool) -> Self {
+        Self {
+            content: AgentMessageContent::Markdown {
+                source,
+                visible_rendered_lines: None,
+            },
+            is_first_line,
+            revision: 0,
+            lines_cache: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn new_streaming_markdown(is_first_line: bool) -> Self {
+        Self {
+            content: AgentMessageContent::Markdown {
+                source: String::new(),
+                visible_rendered_lines: Some(0),
+            },
+            is_first_line,
+            revision: 0,
+            lines_cache: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn is_streaming_markdown(&self) -> bool {
+        matches!(
+            &self.content,
+            AgentMessageContent::Markdown {
+                visible_rendered_lines: Some(_),
+                ..
+            }
+        )
+    }
+
+    pub(crate) fn set_markdown_stream_state(
+        &mut self,
+        source: String,
+        visible_lines: usize,
+    ) -> bool {
+        let AgentMessageContent::Markdown {
+            source: current_source,
+            visible_rendered_lines: current_visible_lines,
+        } = &mut self.content
+        else {
+            return false;
+        };
+
+        let changed = *current_source != source || *current_visible_lines != Some(visible_lines);
+        if changed {
+            *current_source = source;
+            *current_visible_lines = Some(visible_lines);
+            self.revision = self.revision.wrapping_add(1);
+            self.clear_lines_cache();
+        }
+        changed
+    }
+
+    pub(crate) fn set_visible_rendered_lines(&mut self, visible_lines: usize) -> bool {
+        let AgentMessageContent::Markdown {
+            visible_rendered_lines,
+            ..
+        } = &mut self.content
+        else {
+            return false;
+        };
+
+        if *visible_rendered_lines == Some(visible_lines) {
+            return false;
+        }
+
+        *visible_rendered_lines = Some(visible_lines);
+        self.revision = self.revision.wrapping_add(1);
+        self.clear_lines_cache();
+        true
+    }
+
+    pub(crate) fn show_all_markdown(&mut self, source: String) -> bool {
+        let AgentMessageContent::Markdown {
+            source: current_source,
+            visible_rendered_lines,
+        } = &mut self.content
+        else {
+            return false;
+        };
+
+        let changed = *current_source != source || visible_rendered_lines.is_some();
+        if changed {
+            *current_source = source;
+            *visible_rendered_lines = None;
+            self.revision = self.revision.wrapping_add(1);
+            self.clear_lines_cache();
+        }
+        changed
+    }
+
+    fn clear_lines_cache(&self) {
+        if let Ok(mut cache) = self.lines_cache.lock() {
+            *cache = None;
+        }
+    }
+
+    fn markdown_lines(
+        &self,
+        source: &str,
+        visible_rendered_lines: Option<usize>,
+        width: u16,
+    ) -> Vec<Line<'static>> {
+        if let Ok(cache) = self.lines_cache.lock()
+            && let Some(cache) = cache.as_ref()
+            && cache.width == width
+            && cache.revision == self.revision
+            && cache.visible_rendered_lines == visible_rendered_lines
+        {
+            return cache.lines.clone();
+        }
+
+        let mut source = source.to_string();
+        if !source.ends_with('\n') {
+            source.push('\n');
+        }
+
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        append_markdown(
+            &source,
+            Some((width as usize).saturating_sub(2).max(1)),
+            &mut lines,
+        );
+        if let Some(visible_rendered_lines) = visible_rendered_lines {
+            lines.truncate(visible_rendered_lines);
+        }
+        let wrapped = self.wrap_agent_lines(&lines, width);
+
+        if let Ok(mut cache) = self.lines_cache.lock() {
+            *cache = Some(AgentMessageLinesCache {
+                width,
+                revision: self.revision,
+                visible_rendered_lines,
+                lines: wrapped.clone(),
+            });
+        }
+
+        wrapped
+    }
+
+    fn wrap_agent_lines(&self, lines: &[Line<'static>], width: u16) -> Vec<Line<'static>> {
         word_wrap_lines(
-            &self.lines,
+            lines,
             RtOptions::new(width as usize)
                 .initial_indent(if self.is_first_line {
                     "• ".dim().into()
@@ -496,6 +659,18 @@ impl HistoryCell for AgentMessageCell {
                 })
                 .subsequent_indent("  ".into()),
         )
+    }
+}
+
+impl HistoryCell for AgentMessageCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        match &self.content {
+            AgentMessageContent::RenderedLines(lines) => self.wrap_agent_lines(lines, width),
+            AgentMessageContent::Markdown {
+                source,
+                visible_rendered_lines,
+            } => self.markdown_lines(source, *visible_rendered_lines, width),
+        }
     }
 
     fn is_stream_continuation(&self) -> bool {
@@ -2977,6 +3152,42 @@ mod tests {
         let cell = AgentMessageCell::new(vec![Line::default()], false);
         assert_eq!(cell.transcript_lines(80), vec![Line::default()]);
         assert_eq!(cell.desired_transcript_height(80), 1);
+    }
+
+    #[test]
+    fn markdown_agent_message_cell_reflows_from_narrow_to_wide() {
+        let cell = AgentMessageCell::new_markdown(
+            "This assistant answer should flow back into one line when the terminal becomes wide again."
+                .to_string(),
+            true,
+        );
+
+        let narrow = render_lines(&cell.display_lines(32));
+        let wide = render_lines(&cell.display_lines(100));
+
+        assert!(narrow.len() > wide.len());
+        assert_eq!(
+            wide,
+            vec![
+                "• This assistant answer should flow back into one line when the terminal becomes wide again."
+            ]
+        );
+    }
+
+    #[test]
+    fn markdown_agent_message_cell_preserves_list_continuation_indent() {
+        let cell = AgentMessageCell::new_markdown(
+            "- first second third fourth fifth sixth seventh eighth ninth tenth".to_string(),
+            true,
+        );
+
+        let rendered = render_lines(&cell.display_lines(32));
+
+        assert!(rendered[0].starts_with("• - first"));
+        assert!(
+            rendered.iter().skip(1).any(|line| line.starts_with("    ")),
+            "expected continuation lines to keep list indentation: {rendered:?}"
+        );
     }
 
     #[test]

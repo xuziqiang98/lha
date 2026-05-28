@@ -227,8 +227,8 @@ pub(crate) use self::skills::SkillsModalItems;
 use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
+use crate::streaming::controller::AgentMarkdownStreamController;
 use crate::streaming::controller::PlanStreamController;
-use crate::streaming::controller::StreamController;
 
 use adam_agent::AuthManager;
 use adam_agent::ThreadManager;
@@ -558,7 +558,7 @@ pub(crate) struct ChatWidget {
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
     // Stream lifecycle controller
-    stream_controller: Option<StreamController>,
+    stream_controller: Option<AgentMarkdownStreamController>,
     // Stream lifecycle controller for proposed plan output.
     plan_stream_controller: Option<PlanStreamController>,
     // Whether the current turn has started streaming visible assistant answer content.
@@ -936,10 +936,91 @@ impl ChatWidget {
     }
 
     fn flush_answer_stream_with_separator(&mut self) {
-        if let Some(mut controller) = self.stream_controller.take()
-            && let Some(cell) = controller.finalize()
-        {
-            self.add_boxed_history(cell);
+        let Some(controller) = self.stream_controller.take() else {
+            return;
+        };
+
+        let source = controller.finalize();
+        if source.is_empty() {
+            return;
+        }
+
+        if !self.active_cell_is_answer_stream() {
+            self.flush_active_cell();
+            self.active_cell = Some(Box::new(AgentMessageCell::new_streaming_markdown(true)));
+        }
+
+        let updated = if let Some(cell) = self.active_answer_stream_cell_mut() {
+            cell.show_all_markdown(source)
+        } else {
+            self.add_boxed_history(Box::new(AgentMessageCell::new_markdown(source, true)));
+            return;
+        };
+
+        if updated {
+            self.bump_active_cell_revision();
+        }
+        self.flush_active_cell();
+    }
+
+    fn active_cell_is_answer_stream(&self) -> bool {
+        self.active_cell
+            .as_ref()
+            .and_then(|cell| cell.as_any().downcast_ref::<AgentMessageCell>())
+            .is_some_and(AgentMessageCell::is_streaming_markdown)
+    }
+
+    fn active_answer_stream_cell_mut(&mut self) -> Option<&mut AgentMessageCell> {
+        let cell = self
+            .active_cell
+            .as_mut()?
+            .as_any_mut()
+            .downcast_mut::<AgentMessageCell>()?;
+        if cell.is_streaming_markdown() {
+            Some(cell)
+        } else {
+            None
+        }
+    }
+
+    fn ensure_answer_stream_active_cell(&mut self) {
+        if self.active_cell_is_answer_stream() {
+            return;
+        }
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(AgentMessageCell::new_streaming_markdown(true)));
+        self.bump_active_cell_revision();
+    }
+
+    fn sync_answer_stream_active_cell_from_controller(&mut self) {
+        let Some((source, visible_lines)) = self.stream_controller.as_ref().map(|controller| {
+            (
+                controller.completed_source().to_string(),
+                controller.visible_rendered_lines(),
+            )
+        }) else {
+            return;
+        };
+        if source.is_empty() {
+            return;
+        }
+
+        self.ensure_answer_stream_active_cell();
+        let changed = self
+            .active_answer_stream_cell_mut()
+            .is_some_and(|cell| cell.set_markdown_stream_state(source, visible_lines));
+        if changed {
+            self.bump_active_cell_revision();
+        }
+    }
+
+    fn set_answer_stream_visible_lines(&mut self, visible_lines: usize) {
+        let changed = self
+            .active_answer_stream_cell_mut()
+            .is_some_and(|cell| cell.set_visible_rendered_lines(visible_lines));
+        if changed {
+            self.bump_active_cell_revision();
+            self.request_redraw();
         }
     }
 
@@ -2279,10 +2360,11 @@ impl ChatWidget {
         let mut all_idle = true;
         if let Some(controller) = self.stream_controller.as_mut() {
             has_controller = true;
-            let (cell, is_idle) = controller.on_commit_tick();
-            if let Some(cell) = cell {
+            let (advanced, is_idle) = controller.on_commit_tick();
+            let visible_lines = controller.visible_rendered_lines();
+            if advanced {
                 self.bottom_pane.hide_status_indicator();
-                self.add_boxed_history(cell);
+                self.set_answer_stream_visible_lines(visible_lines);
             }
             all_idle &= is_idle;
         }
@@ -2352,7 +2434,9 @@ impl ChatWidget {
 
         // Before streaming agent content, flush any active exec cell group.
         self.flush_unified_exec_wait_streak();
-        self.flush_active_cell();
+        if !self.active_cell_is_answer_stream() {
+            self.flush_active_cell();
+        }
 
         if self.stream_controller.is_none() {
             // If the previous turn inserted non-stream history (exec output, patch status, MCP
@@ -2373,13 +2457,15 @@ impl ChatWidget {
                 // Reset the flag even if we don't show separator (no work was done)
                 self.needs_final_message_separator = false;
             }
-            self.stream_controller = Some(StreamController::new(
-                self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
-            ));
+            self.stream_controller = Some(AgentMarkdownStreamController::new());
         }
-        if let Some(controller) = self.stream_controller.as_mut()
-            && controller.push(&delta)
-        {
+        let stream_width = self.last_rendered_width.get().map(|w| w.saturating_sub(2));
+        let should_start_animation = self
+            .stream_controller
+            .as_mut()
+            .is_some_and(|controller| controller.push(&delta, stream_width));
+        self.sync_answer_stream_active_cell_from_controller();
+        if should_start_animation {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
             self.on_commit_tick();
         }
