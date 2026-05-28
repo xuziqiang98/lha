@@ -2341,13 +2341,16 @@ pub(crate) fn new_proposed_plan(plan_markdown: String) -> ProposedPlanCell {
     ProposedPlanCell { plan_markdown }
 }
 
+#[allow(dead_code)]
 pub(crate) fn new_proposed_plan_stream(
     lines: Vec<Line<'static>>,
     is_stream_continuation: bool,
 ) -> ProposedPlanStreamCell {
     ProposedPlanStreamCell {
-        lines,
+        content: ProposedPlanStreamContent::RenderedLines(lines),
         is_stream_continuation,
+        revision: 0,
+        lines_cache: Mutex::new(None),
     }
 }
 
@@ -2401,8 +2404,30 @@ pub(crate) struct ProposedPlanCell {
 
 #[derive(Debug)]
 pub(crate) struct ProposedPlanStreamCell {
-    lines: Vec<Line<'static>>,
+    content: ProposedPlanStreamContent,
     is_stream_continuation: bool,
+    revision: u64,
+    lines_cache: Mutex<Option<ProposedPlanStreamLinesCache>>,
+}
+
+#[derive(Debug)]
+enum ProposedPlanStreamContent {
+    #[allow(dead_code)]
+    RenderedLines(Vec<Line<'static>>),
+    Markdown {
+        source: String,
+        visible_rendered_lines: Option<usize>,
+        include_trailing_gap: bool,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct ProposedPlanStreamLinesCache {
+    width: u16,
+    revision: u64,
+    visible_rendered_lines: Option<usize>,
+    include_trailing_gap: bool,
+    lines: Vec<Line<'static>>,
 }
 
 impl HistoryCell for ProposedPlanCell {
@@ -2433,9 +2458,175 @@ impl HistoryCell for ProposedPlanCell {
     }
 }
 
+impl ProposedPlanStreamCell {
+    pub(crate) fn new_streaming_markdown() -> Self {
+        Self {
+            content: ProposedPlanStreamContent::Markdown {
+                source: String::new(),
+                visible_rendered_lines: Some(0),
+                include_trailing_gap: false,
+            },
+            is_stream_continuation: false,
+            revision: 0,
+            lines_cache: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn is_streaming_markdown(&self) -> bool {
+        matches!(
+            &self.content,
+            ProposedPlanStreamContent::Markdown {
+                visible_rendered_lines: Some(_),
+                ..
+            }
+        )
+    }
+
+    pub(crate) fn set_markdown_stream_state(
+        &mut self,
+        source: String,
+        visible_lines: usize,
+    ) -> bool {
+        let ProposedPlanStreamContent::Markdown {
+            source: current_source,
+            visible_rendered_lines: current_visible_lines,
+            include_trailing_gap,
+        } = &mut self.content
+        else {
+            return false;
+        };
+
+        let changed = *current_source != source
+            || *current_visible_lines != Some(visible_lines)
+            || *include_trailing_gap;
+        if changed {
+            *current_source = source;
+            *current_visible_lines = Some(visible_lines);
+            *include_trailing_gap = false;
+            self.revision = self.revision.wrapping_add(1);
+            self.clear_lines_cache();
+        }
+        changed
+    }
+
+    pub(crate) fn set_visible_rendered_lines(&mut self, visible_lines: usize) -> bool {
+        let ProposedPlanStreamContent::Markdown {
+            visible_rendered_lines,
+            include_trailing_gap,
+            ..
+        } = &mut self.content
+        else {
+            return false;
+        };
+
+        let changed = *visible_rendered_lines != Some(visible_lines) || *include_trailing_gap;
+        if !changed {
+            return false;
+        }
+
+        *visible_rendered_lines = Some(visible_lines);
+        *include_trailing_gap = false;
+        self.revision = self.revision.wrapping_add(1);
+        self.clear_lines_cache();
+        true
+    }
+
+    pub(crate) fn show_all_markdown(&mut self, source: String) -> bool {
+        let ProposedPlanStreamContent::Markdown {
+            source: current_source,
+            visible_rendered_lines,
+            include_trailing_gap,
+        } = &mut self.content
+        else {
+            return false;
+        };
+
+        let changed =
+            *current_source != source || visible_rendered_lines.is_some() || !*include_trailing_gap;
+        if changed {
+            *current_source = source;
+            *visible_rendered_lines = None;
+            *include_trailing_gap = true;
+            self.revision = self.revision.wrapping_add(1);
+            self.clear_lines_cache();
+        }
+        changed
+    }
+
+    fn clear_lines_cache(&self) {
+        if let Ok(mut cache) = self.lines_cache.lock() {
+            *cache = None;
+        }
+    }
+
+    fn markdown_lines(
+        &self,
+        source: &str,
+        visible_rendered_lines: Option<usize>,
+        include_trailing_gap: bool,
+        width: u16,
+    ) -> Vec<Line<'static>> {
+        if let Ok(cache) = self.lines_cache.lock()
+            && let Some(cache) = cache.as_ref()
+            && cache.width == width
+            && cache.revision == self.revision
+            && cache.visible_rendered_lines == visible_rendered_lines
+            && cache.include_trailing_gap == include_trailing_gap
+        {
+            return cache.lines.clone();
+        }
+
+        let mut source = source.to_string();
+        if !source.ends_with('\n') {
+            source.push('\n');
+        }
+
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(vec!["• ".dim(), "Proposed Plan".bold()].into());
+        lines.extend(proposed_plan_header_gap_lines());
+
+        let wrap_width = width.saturating_sub(4).max(1) as usize;
+        let mut body: Vec<Line<'static>> = Vec::new();
+        append_markdown(&source, Some(wrap_width), &mut body);
+        if let Some(visible_rendered_lines) = visible_rendered_lines {
+            body.truncate(visible_rendered_lines);
+        }
+
+        let plan_lines = prefix_proposed_plan_body_lines(body);
+        lines.extend(style_proposed_plan_body_lines(plan_lines));
+        if include_trailing_gap {
+            lines.push(proposed_plan_trailing_body_gap_line());
+        }
+
+        if let Ok(mut cache) = self.lines_cache.lock() {
+            *cache = Some(ProposedPlanStreamLinesCache {
+                width,
+                revision: self.revision,
+                visible_rendered_lines,
+                include_trailing_gap,
+                lines: lines.clone(),
+            });
+        }
+
+        lines
+    }
+}
+
 impl HistoryCell for ProposedPlanStreamCell {
-    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        self.lines.clone()
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        match &self.content {
+            ProposedPlanStreamContent::RenderedLines(lines) => lines.clone(),
+            ProposedPlanStreamContent::Markdown {
+                source,
+                visible_rendered_lines,
+                include_trailing_gap,
+            } => self.markdown_lines(
+                source,
+                *visible_rendered_lines,
+                *include_trailing_gap,
+                width,
+            ),
+        }
     }
 
     fn fill_line_backgrounds(&self) -> bool {
@@ -4252,6 +4443,42 @@ mod tests {
             60,
             "short plan line",
         );
+    }
+
+    #[test]
+    fn proposed_plan_stream_markdown_reflows_from_narrow_to_wide() {
+        let source = "This proposed plan should flow back into one line when the terminal becomes wide again.";
+        let mut cell = ProposedPlanStreamCell::new_streaming_markdown();
+        assert!(cell.show_all_markdown(source.to_string()));
+
+        let narrow = render_lines(&cell.display_lines(32));
+        let wide = render_lines(&cell.display_lines(120));
+
+        assert!(
+            narrow.len() > wide.len(),
+            "expected narrow render to wrap more than wide render; narrow={narrow:?}, wide={wide:?}"
+        );
+        assert_eq!(
+            wide,
+            vec![
+                "• Proposed Plan".to_string(),
+                String::new(),
+                String::new(),
+                format!("  {source}"),
+                String::new(),
+            ]
+        );
+    }
+
+    #[test]
+    fn proposed_plan_stream_markdown_background_fills_after_resize() {
+        let mut narrow = ProposedPlanStreamCell::new_streaming_markdown();
+        assert!(narrow.show_all_markdown("short plan line".to_string()));
+        assert_cell_background_fills_text_row(Box::new(narrow), 20, "short plan line");
+
+        let mut wide = ProposedPlanStreamCell::new_streaming_markdown();
+        assert!(wide.show_all_markdown("short plan line".to_string()));
+        assert_cell_background_fills_text_row(Box::new(wide), 60, "short plan line");
     }
 
     #[test]

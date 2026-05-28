@@ -3653,6 +3653,76 @@ async fn streamed_proposed_plan_background_fills_rendered_row() {
 }
 
 #[tokio::test]
+async fn streamed_proposed_plan_reflows_after_narrow_stream_width() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+    chat.last_rendered_width.set(Some(32));
+
+    chat.on_task_started();
+    let source =
+        "This streamed proposed plan should become a single wide line after the terminal grows.";
+    chat.on_plan_delta(format!("{source}\n"));
+    chat.on_plan_item_completed(format!("{source}\n"));
+
+    let cells = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(into_insert_history_cell)
+        .collect::<Vec<_>>();
+    let plan = cells
+        .into_iter()
+        .find(|cell| cell.as_any().is::<ProposedPlanStreamCell>())
+        .expect("streamed proposed plan cell");
+
+    let narrow = lines_to_strings(&plan.display_lines(32));
+    let wide = lines_to_strings(&plan.display_lines(120));
+
+    assert!(
+        narrow.len() > wide.len(),
+        "expected narrow render to wrap more than wide render; narrow={narrow:?}, wide={wide:?}"
+    );
+    assert!(
+        wide.iter().any(|line| line == &format!("  {source}")),
+        "expected wide render to contain the full proposed plan line; wide={wide:?}"
+    );
+}
+
+#[tokio::test]
+async fn streamed_proposed_plan_live_tail_reflows_after_width_change() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+    chat.last_rendered_width.set(Some(32));
+
+    chat.on_task_started();
+    let source =
+        "This live proposed plan tail should reflow when display width grows during streaming.";
+    chat.on_plan_delta(format!("{source}\n"));
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    let narrow = chat
+        .transcript_live_tail_for_mode(32, TranscriptRenderMode::Display)
+        .map(|tail| lines_to_strings(&tail.lines))
+        .expect("narrow live tail");
+    let wide = chat
+        .transcript_live_tail_for_mode(120, TranscriptRenderMode::Display)
+        .map(|tail| lines_to_strings(&tail.lines))
+        .expect("wide live tail");
+
+    assert!(
+        !narrow.iter().any(|line| line == &format!("  {source}")),
+        "expected narrow live tail to wrap the proposed plan line; narrow={narrow:?}"
+    );
+    assert!(
+        wide.iter().any(|line| line == &format!("  {source}")),
+        "expected wide live tail to contain the full proposed plan line; wide={wide:?}"
+    );
+}
+
+#[tokio::test]
 async fn sidebar_task_waits_for_completed_proposed_plan_heading() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::Identities, true);

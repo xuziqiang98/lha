@@ -1,15 +1,20 @@
+#[cfg(test)]
 use std::collections::VecDeque;
 
+#[cfg(test)]
 use ratatui::text::Line;
 
+#[cfg(test)]
 use crate::markdown_stream::MarkdownStreamCollector;
 pub(crate) mod controller;
 
+#[cfg(test)]
 pub(crate) struct StreamState {
     pub(crate) collector: MarkdownStreamCollector,
     queued_lines: VecDeque<Line<'static>>,
 }
 
+#[cfg(test)]
 impl StreamState {
     pub(crate) fn new(width: Option<usize>) -> Self {
         Self {

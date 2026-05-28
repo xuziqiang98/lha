@@ -73,6 +73,7 @@ mod line_truncation;
 pub mod live_wrap;
 mod markdown;
 mod markdown_render;
+#[cfg(test)]
 mod markdown_stream;
 mod mcp_tools_modal;
 mod model_migration;

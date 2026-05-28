@@ -182,6 +182,7 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
+use crate::history_cell::ProposedPlanStreamCell;
 use crate::history_cell::WebSearchCell;
 use crate::identities;
 use crate::key_hint;
@@ -1024,6 +1025,90 @@ impl ChatWidget {
         }
     }
 
+    fn active_cell_is_plan_stream(&self) -> bool {
+        self.active_cell
+            .as_ref()
+            .and_then(|cell| cell.as_any().downcast_ref::<ProposedPlanStreamCell>())
+            .is_some_and(ProposedPlanStreamCell::is_streaming_markdown)
+    }
+
+    fn active_plan_stream_cell_mut(&mut self) -> Option<&mut ProposedPlanStreamCell> {
+        let cell = self
+            .active_cell
+            .as_mut()?
+            .as_any_mut()
+            .downcast_mut::<ProposedPlanStreamCell>()?;
+        if cell.is_streaming_markdown() {
+            Some(cell)
+        } else {
+            None
+        }
+    }
+
+    fn ensure_plan_stream_active_cell(&mut self) {
+        if self.active_cell_is_plan_stream() {
+            return;
+        }
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(ProposedPlanStreamCell::new_streaming_markdown()));
+        self.bump_active_cell_revision();
+    }
+
+    fn sync_plan_stream_active_cell_from_controller(&mut self) {
+        let Some((source, visible_lines)) =
+            self.plan_stream_controller.as_ref().map(|controller| {
+                (
+                    controller.completed_source().to_string(),
+                    controller.visible_rendered_lines(),
+                )
+            })
+        else {
+            return;
+        };
+        if source.is_empty() {
+            return;
+        }
+
+        self.ensure_plan_stream_active_cell();
+        let changed = self
+            .active_plan_stream_cell_mut()
+            .is_some_and(|cell| cell.set_markdown_stream_state(source, visible_lines));
+        if changed {
+            self.bump_active_cell_revision();
+        }
+    }
+
+    fn set_plan_stream_visible_lines(&mut self, visible_lines: usize) {
+        let changed = self
+            .active_plan_stream_cell_mut()
+            .is_some_and(|cell| cell.set_visible_rendered_lines(visible_lines));
+        if changed {
+            self.bump_active_cell_revision();
+            self.request_redraw();
+        }
+    }
+
+    fn flush_plan_stream(&mut self) -> bool {
+        let Some(controller) = self.plan_stream_controller.take() else {
+            return false;
+        };
+
+        let source = controller.finalize();
+        if source.is_empty() {
+            return false;
+        }
+
+        self.ensure_plan_stream_active_cell();
+        let updated = self
+            .active_plan_stream_cell_mut()
+            .is_some_and(|cell| cell.show_all_markdown(source));
+        if updated {
+            self.bump_active_cell_revision();
+        }
+        self.flush_active_cell();
+        true
+    }
+
     /// Update the status indicator header and details.
     ///
     /// Passing `None` clears any existing details.
@@ -1360,16 +1445,20 @@ impl ChatWidget {
         self.plan_delta_buffer.push_str(&delta);
         // Before streaming plan content, flush any active exec cell group.
         self.flush_unified_exec_wait_streak();
-        self.flush_active_cell();
+        if !self.active_cell_is_plan_stream() {
+            self.flush_active_cell();
+        }
 
         if self.plan_stream_controller.is_none() {
-            self.plan_stream_controller = Some(PlanStreamController::new(
-                self.last_rendered_width.get().map(|w| w.saturating_sub(4)),
-            ));
+            self.plan_stream_controller = Some(PlanStreamController::new());
         }
-        if let Some(controller) = self.plan_stream_controller.as_mut()
-            && controller.push(&delta)
-        {
+        let stream_width = self.last_rendered_width.get().map(|w| w.saturating_sub(4));
+        let should_start_animation = self
+            .plan_stream_controller
+            .as_mut()
+            .is_some_and(|controller| controller.push(&delta, stream_width));
+        self.sync_plan_stream_active_cell_from_controller();
+        if should_start_animation {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
             self.on_commit_tick();
         }
@@ -1389,10 +1478,7 @@ impl ChatWidget {
         self.latest_proposed_plan_title = extract_first_markdown_heading(&plan_text);
         self.latest_proposed_plan_text =
             (!plan_text.trim().is_empty()).then_some(plan_text.clone());
-        if let Some(mut controller) = self.plan_stream_controller.take()
-            && let Some(cell) = controller.finalize()
-        {
-            self.add_boxed_history(cell);
+        if self.flush_plan_stream() {
             // TODO: Replace streamed output with the final plan item text if plan streaming is
             // removed or if we need to reconcile mismatches between streamed and final content.
             return;
@@ -1522,11 +1608,7 @@ impl ChatWidget {
         self.clear_cli_agent_jobs();
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
-        if let Some(mut controller) = self.plan_stream_controller.take()
-            && let Some(cell) = controller.finalize()
-        {
-            self.add_boxed_history(cell);
-        }
+        self.flush_plan_stream();
         self.flush_unified_exec_wait_streak();
         if !from_replay {
             let runtime_metrics = self.otel_manager.runtime_metrics_summary();
@@ -2370,10 +2452,11 @@ impl ChatWidget {
         }
         if let Some(controller) = self.plan_stream_controller.as_mut() {
             has_controller = true;
-            let (cell, is_idle) = controller.on_commit_tick();
-            if let Some(cell) = cell {
+            let (advanced, is_idle) = controller.on_commit_tick();
+            let visible_lines = controller.visible_rendered_lines();
+            if advanced {
                 self.bottom_pane.hide_status_indicator();
-                self.add_boxed_history(cell);
+                self.set_plan_stream_visible_lines(visible_lines);
             }
             all_idle &= is_idle;
         }
