@@ -2306,12 +2306,15 @@ impl Session {
         let goal_id = turn_context.goal_context.accounting_goal_id().await?;
         let state_db = self.state_db()?;
         let current_total_tokens = self.reported_total_token_usage().await;
-        let mut checkpoint = turn_context
+        let mut checkpoint_guard = turn_context
             .goal_context
             .accounting_usage_checkpoint
             .lock()
             .await;
-        let checkpoint = checkpoint.as_mut()?;
+        let (snapshot, has_accounted_time) = {
+            let checkpoint = checkpoint_guard.as_ref()?;
+            (checkpoint.snapshot, checkpoint.has_accounted_time)
+        };
         let goal = match state_db.get_thread_goal(self.conversation_id).await {
             Ok(Some(goal)) if goal.goal_id == goal_id => goal,
             Ok(_) => return None,
@@ -2321,18 +2324,27 @@ impl Session {
             }
         };
 
-        let token_delta =
-            current_total_tokens.saturating_sub(checkpoint.snapshot.starting_total_tokens);
-        let elapsed_seconds = checkpoint.snapshot.started_at.elapsed().as_secs();
-        let mut time_delta_seconds = i64::try_from(elapsed_seconds).unwrap_or(i64::MAX);
+        let token_delta = current_total_tokens.saturating_sub(snapshot.starting_total_tokens);
+        let elapsed = snapshot.started_at.elapsed();
+        let elapsed_whole_seconds = elapsed.as_secs();
+        let mut billable_elapsed_seconds = match mode {
+            GoalUsageSettlementMode::RefreshForDisplay => elapsed_whole_seconds,
+            GoalUsageSettlementMode::FinalTask => {
+                elapsed_whole_seconds.saturating_add(u64::from(elapsed.subsec_nanos() > 0))
+            }
+        };
         if matches!(mode, GoalUsageSettlementMode::FinalTask)
-            && !checkpoint.has_accounted_time
-            && time_delta_seconds == 0
+            && !has_accounted_time
+            && billable_elapsed_seconds == 0
         {
-            time_delta_seconds = 1;
+            billable_elapsed_seconds = 1;
         }
+        let time_delta_seconds = i64::try_from(billable_elapsed_seconds).unwrap_or(i64::MAX);
 
         if time_delta_seconds == 0 && token_delta == 0 {
+            if matches!(mode, GoalUsageSettlementMode::FinalTask) {
+                *checkpoint_guard = None;
+            }
             return Some(adam_state::GoalAccountingOutcome::Unchanged(Some(goal)));
         }
 
@@ -2347,11 +2359,14 @@ impl Session {
             .await
         {
             Ok(outcome) => {
-                if matches!(outcome, adam_state::GoalAccountingOutcome::Updated(_)) {
-                    let seconds_to_advance =
-                        elapsed_seconds.min(u64::try_from(time_delta_seconds).unwrap_or(u64::MAX));
+                if matches!(mode, GoalUsageSettlementMode::FinalTask) {
+                    *checkpoint_guard = None;
+                } else if matches!(outcome, adam_state::GoalAccountingOutcome::Updated(_)) {
+                    let seconds_to_advance = elapsed_whole_seconds
+                        .min(u64::try_from(time_delta_seconds).unwrap_or(u64::MAX));
+                    let checkpoint = checkpoint_guard.as_mut()?;
                     checkpoint.snapshot = TaskUsageSnapshot {
-                        started_at: checkpoint.snapshot.started_at
+                        started_at: snapshot.started_at
                             + std::time::Duration::from_secs(seconds_to_advance),
                         starting_total_tokens: current_total_tokens,
                     };
@@ -9017,6 +9032,81 @@ mod tests {
             .expect("goal read should succeed")
             .expect("goal should exist");
         assert_eq!(stored.tokens_used, 20);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn goal_final_settlement_counts_partial_second_after_display_refresh() {
+        let (sess, state_db, _rx, _state_home) = make_goal_session_with_state().await;
+        set_programmer_identity(&sess).await;
+        let goal = state_db
+            .replace_thread_goal(
+                sess.conversation_id,
+                "finish after partial refresh",
+                adam_state::ThreadGoalStatus::Active,
+                None,
+            )
+            .await
+            .expect("goal replacement should succeed");
+
+        let turn_context = sess
+            .new_default_turn_with_sub_id("display-partial-then-finish".to_string())
+            .await;
+        turn_context
+            .goal_context
+            .set_expected_goal_id(goal.goal_id.clone())
+            .await;
+        turn_context
+            .goal_context
+            .set_accounting_goal_id(goal.goal_id)
+            .await;
+        turn_context
+            .goal_context
+            .reset_accounting_usage_checkpoint(TaskUsageSnapshot {
+                started_at: Instant::now() - Duration::from_millis(1100),
+                starting_total_tokens: 0,
+            })
+            .await;
+
+        let refresh_outcome = sess
+            .settle_goal_usage_for_turn_context(
+                turn_context.as_ref(),
+                GoalUsageSettlementMode::RefreshForDisplay,
+            )
+            .await
+            .expect("refresh should settle goal usage");
+        let adam_state::GoalAccountingOutcome::Updated(refreshed) = refresh_outcome else {
+            panic!("refresh should update goal usage");
+        };
+        assert_eq!(1, refreshed.time_used_seconds);
+        assert_eq!(0, refreshed.tokens_used);
+
+        let final_outcome = sess
+            .settle_goal_usage_for_turn_context(
+                turn_context.as_ref(),
+                GoalUsageSettlementMode::FinalTask,
+            )
+            .await
+            .expect("final settlement should settle goal usage");
+        let adam_state::GoalAccountingOutcome::Updated(finished) = final_outcome else {
+            panic!("final settlement should update goal usage");
+        };
+        assert_eq!(2, finished.time_used_seconds);
+        assert_eq!(0, finished.tokens_used);
+
+        let repeated_final_outcome = sess
+            .settle_goal_usage_for_turn_context(
+                turn_context.as_ref(),
+                GoalUsageSettlementMode::FinalTask,
+            )
+            .await;
+        assert!(repeated_final_outcome.is_none());
+
+        let stored = state_db
+            .get_thread_goal(sess.conversation_id)
+            .await
+            .expect("goal read should succeed")
+            .expect("goal should exist");
+        assert_eq!(finished, stored);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
