@@ -722,6 +722,30 @@ impl TurnContext {
     }
 }
 
+/// Turn settings that have already been reflected in prompt history.
+#[derive(Clone, Debug)]
+pub(crate) struct PromptSettingsSnapshot {
+    cwd: PathBuf,
+    approval_policy: AskForApproval,
+    sandbox_policy: SandboxPolicy,
+    identity: Identity,
+    personality: Option<Personality>,
+    tui_buddy: crate::config::types::TuiBuddy,
+}
+
+impl From<&TurnContext> for PromptSettingsSnapshot {
+    fn from(turn_context: &TurnContext) -> Self {
+        Self {
+            cwd: turn_context.cwd.clone(),
+            approval_policy: turn_context.approval_policy,
+            sandbox_policy: turn_context.sandbox_policy.clone(),
+            identity: turn_context.identity.clone(),
+            personality: turn_context.personality,
+            tui_buddy: turn_context.tui_buddy.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct GoalTurnContext {
     expected_goal_id: Arc<Mutex<Option<String>>>,
@@ -2122,6 +2146,8 @@ impl Session {
             .goal_context
             .set_accounting_goal_id(goal_id)
             .await;
+        self.prepare_model_prompt_context(turn_context.as_ref())
+            .await;
         self.spawn_task_if_idle(
             turn_context,
             vec![UserInput::Text {
@@ -2189,6 +2215,8 @@ impl Session {
         turn_context
             .plan_run_context
             .set_accounting_plan_run_id(plan_run_id)
+            .await;
+        self.prepare_model_prompt_context(turn_context.as_ref())
             .await;
         self.spawn_task_if_idle(
             turn_context,
@@ -2467,6 +2495,8 @@ impl Session {
                 {
                     let mut state = self.state.lock().await;
                     state.initial_context_seeded = true;
+                    state.prompt_settings_snapshot =
+                        Some(PromptSettingsSnapshot::from(turn_context.as_ref()));
                 }
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
                 self.flush_rollout().await;
@@ -2476,6 +2506,7 @@ impl Session {
                 {
                     let mut state = self.state.lock().await;
                     state.initial_context_seeded = false;
+                    state.prompt_settings_snapshot = None;
                 }
 
                 // If resuming, warn when the last recorded model differs from the current one.
@@ -2562,6 +2593,8 @@ impl Session {
                 {
                     let mut state = self.state.lock().await;
                     state.initial_context_seeded = true;
+                    state.prompt_settings_snapshot =
+                        Some(PromptSettingsSnapshot::from(turn_context.as_ref()));
                 }
                 // Flush after seeding history and any persisted rollout copy.
                 self.flush_rollout().await;
@@ -2769,29 +2802,33 @@ impl Session {
         result
     }
 
-    fn build_environment_update_item(
+    fn build_environment_update_item_from_snapshot(
         &self,
-        previous: Option<&Arc<TurnContext>>,
+        previous: Option<&PromptSettingsSnapshot>,
         next: &TurnContext,
     ) -> Option<TranscriptItem> {
         let prev = previous?;
 
         let shell = self.user_shell();
-        let prev_context = EnvironmentContext::from_turn_context(prev.as_ref(), shell.as_ref());
-        let next_context = EnvironmentContext::from_turn_context(next, shell.as_ref());
+        let prev_context = EnvironmentContext::new(Some(prev.cwd.clone()), shell.as_ref().clone());
+        let next_context = EnvironmentContext::new(Some(next.cwd.clone()), shell.as_ref().clone());
         if prev_context.equals_except_shell(&next_context) {
             return None;
         }
-        Some(TranscriptItem::from(EnvironmentContext::diff(
-            prev.as_ref(),
-            next,
-            shell.as_ref(),
+        let cwd = if prev.cwd != next.cwd {
+            Some(next.cwd.clone())
+        } else {
+            None
+        };
+        Some(TranscriptItem::from(EnvironmentContext::new(
+            cwd,
+            shell.as_ref().clone(),
         )))
     }
 
-    fn build_permissions_update_item(
+    fn build_permissions_update_item_from_snapshot(
         &self,
-        previous: Option<&Arc<TurnContext>>,
+        previous: Option<&PromptSettingsSnapshot>,
         next: &TurnContext,
     ) -> Option<TranscriptItem> {
         let prev = previous?;
@@ -2813,9 +2850,9 @@ impl Session {
         )
     }
 
-    fn build_personality_update_item(
+    fn build_personality_update_item_from_snapshot(
         &self,
-        previous: Option<&Arc<TurnContext>>,
+        previous: Option<&PromptSettingsSnapshot>,
         next: &TurnContext,
     ) -> Option<TranscriptItem> {
         if !self.features.enabled(Feature::Personality) {
@@ -2845,9 +2882,9 @@ impl Session {
             .filter(|message| !message.is_empty())
     }
 
-    fn build_identity_update_item(
+    fn build_identity_update_item_from_snapshot(
         &self,
-        previous: Option<&Arc<TurnContext>>,
+        previous: Option<&PromptSettingsSnapshot>,
         next: &TurnContext,
     ) -> Option<TranscriptItem> {
         let prev = previous?;
@@ -2860,9 +2897,9 @@ impl Session {
         }
     }
 
-    fn build_buddy_update_item(
+    fn build_buddy_update_item_from_snapshot(
         &self,
-        previous: Option<&Arc<TurnContext>>,
+        previous: Option<&PromptSettingsSnapshot>,
         next: &TurnContext,
     ) -> Option<TranscriptItem> {
         let prev = previous?;
@@ -2877,36 +2914,49 @@ impl Session {
         Some(DeveloperInstructions::new(instructions).into())
     }
 
+    fn build_settings_update_items_from_snapshot(
+        &self,
+        previous_context: Option<&PromptSettingsSnapshot>,
+        current_context: &TurnContext,
+    ) -> Vec<TranscriptItem> {
+        let mut update_items = Vec::new();
+        if let Some(env_item) =
+            self.build_environment_update_item_from_snapshot(previous_context, current_context)
+        {
+            update_items.push(env_item);
+        }
+        if let Some(permissions_item) =
+            self.build_permissions_update_item_from_snapshot(previous_context, current_context)
+        {
+            update_items.push(permissions_item);
+        }
+        if let Some(identity_item) =
+            self.build_identity_update_item_from_snapshot(previous_context, current_context)
+        {
+            update_items.push(identity_item);
+        }
+        if let Some(personality_item) =
+            self.build_personality_update_item_from_snapshot(previous_context, current_context)
+        {
+            update_items.push(personality_item);
+        }
+        if let Some(buddy_item) =
+            self.build_buddy_update_item_from_snapshot(previous_context, current_context)
+        {
+            update_items.push(buddy_item);
+        }
+        update_items
+    }
+
+    #[cfg(test)]
     fn build_settings_update_items(
         &self,
         previous_context: Option<&Arc<TurnContext>>,
         current_context: &TurnContext,
     ) -> Vec<TranscriptItem> {
-        let mut update_items = Vec::new();
-        if let Some(env_item) =
-            self.build_environment_update_item(previous_context, current_context)
-        {
-            update_items.push(env_item);
-        }
-        if let Some(permissions_item) =
-            self.build_permissions_update_item(previous_context, current_context)
-        {
-            update_items.push(permissions_item);
-        }
-        if let Some(identity_item) =
-            self.build_identity_update_item(previous_context, current_context)
-        {
-            update_items.push(identity_item);
-        }
-        if let Some(personality_item) =
-            self.build_personality_update_item(previous_context, current_context)
-        {
-            update_items.push(personality_item);
-        }
-        if let Some(buddy_item) = self.build_buddy_update_item(previous_context, current_context) {
-            update_items.push(buddy_item);
-        }
-        update_items
+        let previous_snapshot =
+            previous_context.map(|context| PromptSettingsSnapshot::from(context.as_ref()));
+        self.build_settings_update_items_from_snapshot(previous_snapshot.as_ref(), current_context)
     }
 
     /// Persist the event to rollout and send it to clients.
@@ -3362,11 +3412,11 @@ impl Session {
         state.replace_history(transcript_items);
     }
 
-    pub(crate) async fn seed_initial_context_if_needed(&self, turn_context: &TurnContext) {
+    pub(crate) async fn seed_initial_context_if_needed(&self, turn_context: &TurnContext) -> bool {
         {
             let mut state = self.state.lock().await;
             if state.initial_context_seeded {
-                return;
+                return false;
             }
             state.initial_context_seeded = true;
         }
@@ -3374,7 +3424,32 @@ impl Session {
         let initial_context = self.build_initial_context(turn_context).await;
         self.record_conversation_items(turn_context, &initial_context)
             .await;
+        self.set_prompt_settings_snapshot(turn_context).await;
         self.flush_rollout().await;
+        true
+    }
+
+    async fn set_prompt_settings_snapshot(&self, turn_context: &TurnContext) {
+        let mut state = self.state.lock().await;
+        state.prompt_settings_snapshot = Some(PromptSettingsSnapshot::from(turn_context));
+    }
+
+    async fn prepare_model_prompt_context(&self, turn_context: &TurnContext) {
+        if self.seed_initial_context_if_needed(turn_context).await {
+            return;
+        }
+
+        let previous = {
+            let state = self.state.lock().await;
+            state.prompt_settings_snapshot.clone()
+        };
+        let update_items =
+            self.build_settings_update_items_from_snapshot(previous.as_ref(), turn_context);
+        if !update_items.is_empty() {
+            self.record_conversation_items(turn_context, &update_items)
+                .await;
+        }
+        self.set_prompt_settings_snapshot(turn_context).await;
     }
 
     async fn persist_rollout_response_items(&self, items: &[TranscriptItem]) {
@@ -3986,9 +4061,6 @@ async fn next_submission_loop_action(
 }
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
-    // Seed with context in case there is an OverrideTurnContext first.
-    let mut previous_context: Option<Arc<TurnContext>> = Some(sess.new_default_turn().await);
-
     // To break out of this loop, send Op::Shutdown.
     loop {
         let sub = match next_submission_loop_action(&rx_sub, &sess.goal_continuation_notify).await {
@@ -4044,8 +4116,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 .await;
             }
             Op::UserInput { .. } | Op::UserTurn { .. } => {
-                handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op, &mut previous_context)
-                    .await;
+                handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
             }
             Op::ExecApproval { id, decision } => {
                 handlers::exec_approval(&sess, id, decision).await;
@@ -4091,13 +4162,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 handlers::set_thread_name(&sess, sub.id.clone(), name).await;
             }
             Op::RunUserShellCommand { command } => {
-                handlers::run_user_shell_command(
-                    &sess,
-                    sub.id.clone(),
-                    command,
-                    &mut previous_context,
-                )
-                .await;
+                handlers::run_user_shell_command(&sess, sub.id.clone(), command).await;
             }
             Op::ResolveElicitation {
                 server_name,
@@ -4148,7 +4213,6 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
 mod handlers {
     use crate::codex::Session;
     use crate::codex::SessionSettingsUpdate;
-    use crate::codex::TurnContext;
     use crate::codex::buddy_turn_snapshot_to_config;
 
     use crate::agent_jobs::AgentJobStatus;
@@ -4235,12 +4299,7 @@ mod handlers {
         }
     }
 
-    pub async fn user_input_or_turn(
-        sess: &Arc<Session>,
-        sub_id: String,
-        op: Op,
-        previous_context: &mut Option<Arc<TurnContext>>,
-    ) {
+    pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
         let (items, updates) = match op {
             Op::UserTurn {
                 cwd,
@@ -4304,28 +4363,16 @@ mod handlers {
 
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
-            sess.seed_initial_context_if_needed(&current_context).await;
-            let update_items =
-                sess.build_settings_update_items(previous_context.as_ref(), &current_context);
-            if !update_items.is_empty() {
-                sess.record_conversation_items(&current_context, &update_items)
-                    .await;
-            }
+            sess.prepare_model_prompt_context(&current_context).await;
 
             sess.refresh_mcp_servers_if_requested(&current_context)
                 .await;
             sess.spawn_task(Arc::clone(&current_context), items, RegularTask)
                 .await;
-            *previous_context = Some(current_context);
         }
     }
 
-    pub async fn run_user_shell_command(
-        sess: &Arc<Session>,
-        sub_id: String,
-        command: String,
-        previous_context: &mut Option<Arc<TurnContext>>,
-    ) {
+    pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command: String) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
         sess.spawn_task(
             Arc::clone(&turn_context),
@@ -4333,7 +4380,6 @@ mod handlers {
             UserShellCommandTask::new(command),
         )
         .await;
-        *previous_context = Some(turn_context);
     }
 
     pub async fn resolve_elicitation(

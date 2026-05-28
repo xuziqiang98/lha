@@ -8,6 +8,7 @@ use adam_protocol::protocol::GhostSnapshotRecord;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use crate::codex::PromptSettingsSnapshot;
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
 use crate::dynamic_context_window::DynamicContextWindowKey;
@@ -33,6 +34,8 @@ pub(crate) struct SessionState {
     /// TODO(owen): This is a temporary solution to avoid updating a thread's updated_at
     /// timestamp when resuming a session. Remove this once SQLite is in place.
     pub(crate) initial_context_seeded: bool,
+    /// Last turn settings that have been reflected in prompt history.
+    pub(crate) prompt_settings_snapshot: Option<PromptSettingsSnapshot>,
 }
 
 impl SessionState {
@@ -49,6 +52,7 @@ impl SessionState {
             ghost_snapshots: Vec::new(),
             workflow: None,
             initial_context_seeded: false,
+            prompt_settings_snapshot: None,
         }
     }
 

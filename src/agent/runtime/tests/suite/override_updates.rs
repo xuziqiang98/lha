@@ -1,18 +1,18 @@
-use anyhow::Result;
 use adam_agent::config::Constrained;
 use adam_agent::protocol::AskForApproval;
+use adam_agent::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
+use adam_agent::protocol::EventMsg;
 use adam_agent::protocol::IDENTITY_CLOSE_TAG;
 use adam_agent::protocol::IDENTITY_OPEN_TAG;
-use adam_agent::protocol::EventMsg;
 use adam_agent::protocol::Op;
 use adam_agent::protocol::RolloutItem;
 use adam_agent::protocol::RolloutLine;
-use adam_agent::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use adam_protocol::config_types::Identity;
 use adam_protocol::config_types::IdentityKind;
 use adam_protocol::config_types::Settings;
 use adam_protocol::models::ContentItem;
 use adam_protocol::models::TranscriptItem;
+use anyhow::Result;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
@@ -61,10 +61,11 @@ fn rollout_developer_texts(text: &str) -> Vec<String> {
             Ok(rollout) => rollout,
             Err(_) => continue,
         };
-        if let RolloutItem::TranscriptItem(TranscriptItem::Message(message)) = rollout.item
-            && message.role == "developer"
+        if let RolloutItem::TranscriptItem(TranscriptItem::Message { role, content, .. }) =
+            rollout.item
+            && role == "developer"
         {
-            for item in message.content {
+            for item in content {
                 if let ContentItem::InputText { text } = item {
                     texts.push(text);
                 }
@@ -85,10 +86,11 @@ fn rollout_environment_texts(text: &str) -> Vec<String> {
             Ok(rollout) => rollout,
             Err(_) => continue,
         };
-        if let RolloutItem::TranscriptItem(TranscriptItem::Message(message)) = rollout.item
-            && message.role == "user"
+        if let RolloutItem::TranscriptItem(TranscriptItem::Message { role, content, .. }) =
+            rollout.item
+            && role == "user"
         {
-            for item in message.content {
+            for item in content {
                 if let ContentItem::InputText { text } = item
                     && text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG)
                 {
@@ -101,7 +103,8 @@ fn rollout_environment_texts(text: &str) -> Vec<String> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn override_turn_context_without_user_turn_does_not_record_permissions_update() -> Result<()> {
+async fn override_turn_context_without_user_turn_does_not_record_permissions_update() -> Result<()>
+{
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -143,7 +146,8 @@ async fn override_turn_context_without_user_turn_does_not_record_permissions_upd
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn override_turn_context_without_user_turn_does_not_record_environment_update() -> Result<()> {
+async fn override_turn_context_without_user_turn_does_not_record_environment_update() -> Result<()>
+{
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;

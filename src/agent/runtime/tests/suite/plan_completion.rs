@@ -1,5 +1,7 @@
 use adam_agent::features::Feature;
 use adam_agent::protocol::EventMsg;
+use adam_agent::protocol::IDENTITY_CLOSE_TAG;
+use adam_agent::protocol::IDENTITY_OPEN_TAG;
 use adam_agent::protocol::Op;
 use adam_protocol::config_types::Identity;
 use adam_protocol::config_types::IdentityKind;
@@ -45,6 +47,25 @@ async fn switch_to_programmer(test: &TestCodex) -> Result<()> {
     Ok(())
 }
 
+fn identity_with_instructions(
+    kind: IdentityKind,
+    model: impl Into<String>,
+    instructions: &str,
+) -> Identity {
+    Identity {
+        kind,
+        settings: Settings {
+            model: model.into(),
+            reasoning_effort: None,
+            developer_instructions: Some(instructions.to_string()),
+        },
+    }
+}
+
+fn identity_xml(text: &str) -> String {
+    format!("{IDENTITY_OPEN_TAG}{text}{IDENTITY_CLOSE_TAG}")
+}
+
 async fn wait_for_request_count(mock: &ResponseMock, expected: usize) {
     for _ in 0..100 {
         if mock.requests().len() >= expected {
@@ -75,6 +96,130 @@ async fn wait_for_plan_run_update(test: &TestCodex, status: ThreadPlanRunStatus)
         )
     })
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plan_completion_injects_programmer_identity_after_planner_switch() -> Result<()> {
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("msg-planner", "plan captured"),
+                ev_completed("resp-planner"),
+            ]),
+            update_plan_run_response("complete-plan", "resp-complete", "complete"),
+            sse(vec![
+                ev_assistant_message("msg-complete-plan", "plan complete"),
+                ev_completed("resp-after-complete"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::PlanCompletion);
+    });
+    let test = builder.build(&server).await?;
+    let planner_text = "planner instructions";
+    let programmer_text = "programmer instructions";
+    let model = test.session_configured.model.clone();
+
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            identity: Some(identity_with_instructions(
+                IdentityKind::Planner,
+                model.clone(),
+                planner_text,
+            )),
+            personality: None,
+        })
+        .await?;
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![adam_protocol::user_input::UserInput::Text {
+                text: "draft a plan".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            identity: Some(identity_with_instructions(
+                IdentityKind::Programmer,
+                model,
+                programmer_text,
+            )),
+            personality: None,
+        })
+        .await?;
+    test.codex
+        .submit(Op::ThreadPlanRunStart {
+            plan_text: "# Test plan\n- implement it".to_string(),
+        })
+        .await?;
+
+    wait_for_request_count(&mock, 2).await;
+    let requests = mock.requests();
+    let request = requests
+        .iter()
+        .find(|request| {
+            request
+                .message_input_texts("user")
+                .iter()
+                .any(|text| text.contains("<plan_completion_context>"))
+        })
+        .expect("continuation request should include plan context");
+    let developer_texts = request.message_input_texts("developer");
+    let planner_identity = identity_xml(planner_text);
+    let programmer_identity = identity_xml(programmer_text);
+
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.as_str() == planner_identity),
+        "expected prior planner identity in history, got: {developer_texts:?}"
+    );
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.as_str() == programmer_identity),
+        "expected programmer identity update before plan continuation, got: {developer_texts:?}"
+    );
+    let last_identity = developer_texts
+        .iter()
+        .rev()
+        .find(|text| text.starts_with(IDENTITY_OPEN_TAG))
+        .expect("expected at least one identity developer message");
+    assert_eq!(last_identity, &programmer_identity);
+
+    wait_for_plan_run_update(&test, ThreadPlanRunStatus::Complete).await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

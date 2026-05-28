@@ -1,4 +1,3 @@
-use crate::codex::TurnContext;
 use crate::shell::Shell;
 use adam_protocol::models::ContentItem;
 use adam_protocol::models::TranscriptItem;
@@ -31,19 +30,6 @@ impl EnvironmentContext {
         } = other;
 
         self.cwd == *cwd
-    }
-
-    pub fn diff(before: &TurnContext, after: &TurnContext, shell: &Shell) -> Self {
-        let cwd = if before.cwd != after.cwd {
-            Some(after.cwd.clone())
-        } else {
-            None
-        };
-        EnvironmentContext::new(cwd, shell.clone())
-    }
-
-    pub fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
-        Self::new(Some(turn_context.cwd.clone()), shell.clone())
     }
 }
 
