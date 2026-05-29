@@ -1,3 +1,4 @@
+use crate::codex::PlanRunUsageSettlementMode;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::features::Feature;
@@ -73,6 +74,12 @@ async fn get_plan_run(
     turn_context: &TurnContext,
 ) -> Result<String, FunctionCallError> {
     ensure_plan_run_tool_allowed(session, turn_context).await?;
+    session
+        .settle_plan_run_usage_for_turn_context(
+            turn_context,
+            PlanRunUsageSettlementMode::RefreshForDisplay,
+        )
+        .await;
     let state_db = state_db(session)?;
     let plan_run = state_db
         .get_thread_plan_run(session.conversation_id)
@@ -111,6 +118,12 @@ async fn update_plan_run(
         }
     };
     let state_db = state_db(session)?;
+    session
+        .settle_plan_run_usage_for_turn_context(
+            turn_context,
+            PlanRunUsageSettlementMode::RefreshForDisplay,
+        )
+        .await;
     let expected_plan_run_id = turn_context.plan_run_context.expected_plan_run_id().await;
     let Some(expected_plan_run_id) = expected_plan_run_id else {
         let plan_run = state_db
@@ -221,5 +234,130 @@ fn protocol_plan_run_status_from_state(
         adam_state::ThreadPlanRunStatus::UsageLimited => ThreadPlanRunStatus::UsageLimited,
         adam_state::ThreadPlanRunStatus::BudgetLimited => ThreadPlanRunStatus::BudgetLimited,
         adam_state::ThreadPlanRunStatus::Complete => ThreadPlanRunStatus::Complete,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codex::make_session_and_context_with_plan_completion;
+    use crate::protocol::TokenUsage;
+    use crate::state::TaskUsageSnapshot;
+    use pretty_assertions::assert_eq;
+    use std::time::Instant;
+
+    async fn make_plan_run_tool_context() -> (
+        Session,
+        TurnContext,
+        crate::state_db::StateDbHandle,
+        tempfile::TempDir,
+    ) {
+        let (mut session, mut turn_context) = make_session_and_context_with_plan_completion().await;
+        let state_home = tempfile::tempdir().expect("create state temp dir");
+        let state_db = adam_state::StateRuntime::init(
+            state_home.path().to_path_buf(),
+            "test".to_string(),
+            None,
+        )
+        .await
+        .expect("state runtime should initialize");
+        session.services.state_db = Some(std::sync::Arc::clone(&state_db));
+        turn_context.identity.kind = IdentityKind::Programmer;
+        (session, turn_context, state_db, state_home)
+    }
+
+    async fn set_reported_total_tokens(
+        session: &Session,
+        turn_context: &TurnContext,
+        total_tokens: i64,
+    ) {
+        session
+            .update_token_usage_info(
+                turn_context,
+                Some(&TokenUsage {
+                    total_tokens,
+                    ..Default::default()
+                }),
+            )
+            .await;
+    }
+
+    async fn seed_active_plan_run_accounting(
+        session: &Session,
+        turn_context: &TurnContext,
+        state_db: &crate::state_db::StateDbHandle,
+    ) -> adam_state::ThreadPlanRun {
+        let plan_run = state_db
+            .replace_thread_plan_run(
+                session.conversation_id,
+                "# Plan\n- keep working",
+                adam_state::ThreadPlanRunStatus::Active,
+                None,
+            )
+            .await
+            .expect("plan run replacement should succeed");
+        turn_context
+            .plan_run_context
+            .set_expected_plan_run_id(plan_run.plan_run_id.clone())
+            .await;
+        turn_context
+            .plan_run_context
+            .set_accounting_plan_run_id(plan_run.plan_run_id.clone())
+            .await;
+        turn_context
+            .plan_run_context
+            .reset_accounting_usage_checkpoint(TaskUsageSnapshot {
+                started_at: Instant::now(),
+                starting_total_tokens: 0,
+            })
+            .await;
+        plan_run
+    }
+
+    fn response_plan_run(content: &str) -> ThreadPlanRun {
+        let value: serde_json::Value =
+            serde_json::from_str(content).expect("tool output should be JSON");
+        serde_json::from_value(value["plan_run"].clone()).expect("plan run should deserialize")
+    }
+
+    #[tokio::test]
+    async fn get_plan_run_refreshes_usage_before_serializing() {
+        let (session, turn_context, state_db, _state_home) = make_plan_run_tool_context().await;
+        seed_active_plan_run_accounting(&session, &turn_context, &state_db).await;
+        set_reported_total_tokens(&session, &turn_context, 12).await;
+
+        let plan_run = response_plan_run(
+            &get_plan_run(&session, &turn_context)
+                .await
+                .expect("get_plan_run should succeed"),
+        );
+
+        assert_eq!(12, plan_run.tokens_used);
+        let stored = state_db
+            .get_thread_plan_run(session.conversation_id)
+            .await
+            .expect("plan run read should succeed")
+            .expect("plan run should exist");
+        assert_eq!(12, stored.tokens_used);
+    }
+
+    #[tokio::test]
+    async fn update_plan_run_refreshes_usage_before_status_update() {
+        let (session, turn_context, state_db, _state_home) = make_plan_run_tool_context().await;
+        seed_active_plan_run_accounting(&session, &turn_context, &state_db).await;
+        set_reported_total_tokens(&session, &turn_context, 18).await;
+
+        let plan_run = response_plan_run(
+            &update_plan_run(
+                &session,
+                &turn_context,
+                json!({ "status": "complete" }).to_string(),
+            )
+            .await
+            .expect("update_plan_run should succeed"),
+        );
+
+        assert_eq!(ThreadPlanRunStatus::Complete, plan_run.status);
+        assert_eq!(18, plan_run.tokens_used);
     }
 }

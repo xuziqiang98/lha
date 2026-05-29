@@ -5,7 +5,6 @@ mod review;
 mod undo;
 mod user_shell;
 
-use std::convert::TryFrom;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -19,9 +18,9 @@ use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
 use tracing::Span;
 use tracing::trace;
-use tracing::warn;
 
 use crate::codex::GoalUsageSettlementMode;
+use crate::codex::PlanRunUsageSettlementMode;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::protocol_goal_from_state;
@@ -49,9 +48,8 @@ use adam_protocol::models::TranscriptItem;
 use adam_protocol::protocol::RolloutItem;
 use adam_protocol::user_input::UserInput;
 use adam_state::GoalAccountingOutcome;
-use adam_state::PlanRunAccountingMode;
 use adam_state::PlanRunAccountingOutcome;
-use adam_state::ThreadPlanRunStatus;
+use tracing::warn;
 
 pub(crate) use compact::CompactTask;
 pub(crate) use ghost_snapshot::GhostSnapshotTask;
@@ -62,18 +60,6 @@ pub(crate) use user_shell::UserShellCommandTask;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
-
-fn plan_run_accounting_mode_for_status(status: ThreadPlanRunStatus) -> PlanRunAccountingMode {
-    match status {
-        ThreadPlanRunStatus::Active | ThreadPlanRunStatus::BudgetLimited => {
-            PlanRunAccountingMode::ActiveOnly
-        }
-        ThreadPlanRunStatus::Paused
-        | ThreadPlanRunStatus::Blocked
-        | ThreadPlanRunStatus::UsageLimited => PlanRunAccountingMode::ActiveOrStopped,
-        ThreadPlanRunStatus::Complete => PlanRunAccountingMode::ActiveOrComplete,
-    }
-}
 
 /// Thin wrapper that exposes the parts of [`Session`] task runners need.
 #[derive(Clone)]
@@ -167,12 +153,15 @@ impl Session {
         let done = Arc::new(Notify::new());
         let starting_total_tokens = self.reported_total_token_usage().await;
         let started_at = Instant::now();
-        self.initialize_goal_accounting_checkpoint_for_turn(
+        let usage_snapshot = TaskUsageSnapshot {
+            started_at,
+            starting_total_tokens,
+        };
+        self.initialize_goal_accounting_checkpoint_for_turn(turn_context.as_ref(), usage_snapshot)
+            .await;
+        self.initialize_plan_run_accounting_checkpoint_for_turn(
             turn_context.as_ref(),
-            TaskUsageSnapshot {
-                started_at,
-                starting_total_tokens,
-            },
+            usage_snapshot,
         )
         .await;
 
@@ -225,8 +214,6 @@ impl Session {
             task,
             cancellation_token,
             turn_context: Arc::clone(&turn_context),
-            started_at,
-            starting_total_tokens,
             _timer: timer,
         };
         let mut turn = ActiveTurn::default();
@@ -258,21 +245,22 @@ impl Session {
         if should_close_processes {
             self.close_unified_exec_processes().await;
         }
-        let (goal_accounting_outcome, plan_run_accounting_outcome) =
-            if let Some(finished_task) = finished_task.as_ref() {
-                let task_snapshot = finished_task.accounting_snapshot();
-                (
-                    self.settle_goal_usage_for_turn_context(
-                        &turn_context,
-                        GoalUsageSettlementMode::FinalTask,
-                    )
-                    .await,
-                    self.account_plan_run_usage_for_task(&turn_context, task_snapshot)
-                        .await,
+        let (goal_accounting_outcome, plan_run_accounting_outcome) = if finished_task.is_some() {
+            (
+                self.settle_goal_usage_for_turn_context(
+                    &turn_context,
+                    GoalUsageSettlementMode::FinalTask,
                 )
-            } else {
-                (None, None)
-            };
+                .await,
+                self.settle_plan_run_usage_for_turn_context(
+                    &turn_context,
+                    PlanRunUsageSettlementMode::FinalTask,
+                )
+                .await,
+            )
+        } else {
+            (None, None)
+        };
         self.emit_goal_accounting_update_if_needed(&turn_context, goal_accounting_outcome)
             .await;
         self.emit_plan_run_accounting_update_if_needed(&turn_context, plan_run_accounting_outcome)
@@ -331,53 +319,6 @@ impl Session {
             }),
         )
         .await;
-    }
-
-    async fn account_plan_run_usage_for_task(
-        &self,
-        turn_context: &TurnContext,
-        task_usage: TaskUsageSnapshot,
-    ) -> Option<PlanRunAccountingOutcome> {
-        let plan_run_id = turn_context
-            .plan_run_context
-            .accounting_plan_run_id()
-            .await?;
-        let state_db = self.state_db()?;
-        let plan_run = match state_db.get_thread_plan_run(self.conversation_id).await {
-            Ok(Some(plan_run)) if plan_run.plan_run_id == plan_run_id => plan_run,
-            Ok(_) => return None,
-            Err(err) => {
-                warn!("failed to load plan run before accounting usage: {err}");
-                return None;
-            }
-        };
-        let token_delta = self
-            .reported_total_token_usage()
-            .await
-            .saturating_sub(task_usage.starting_total_tokens);
-        let elapsed_seconds = task_usage
-            .started_at
-            .elapsed()
-            .as_millis()
-            .div_ceil(1000)
-            .max(1);
-        let time_delta_seconds = i64::try_from(elapsed_seconds).unwrap_or(i64::MAX);
-        match state_db
-            .account_thread_plan_run_usage(
-                self.conversation_id,
-                time_delta_seconds,
-                token_delta,
-                plan_run_accounting_mode_for_status(plan_run.status),
-                Some(plan_run_id.as_str()),
-            )
-            .await
-        {
-            Ok(outcome) => Some(outcome),
-            Err(err) => {
-                warn!("failed to account plan run usage: {err}");
-                None
-            }
-        }
     }
 
     async fn emit_plan_run_accounting_update_if_needed(
@@ -503,7 +444,6 @@ impl Session {
 
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
         let turn_context = Arc::clone(&task.turn_context);
-        let task_usage = task.accounting_snapshot();
         let sub_id = turn_context.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
             return;
@@ -532,7 +472,10 @@ impl Session {
             .settle_goal_usage_for_turn_context(&turn_context, GoalUsageSettlementMode::FinalTask)
             .await;
         let plan_run_accounting_outcome = self
-            .account_plan_run_usage_for_task(&turn_context, task_usage)
+            .settle_plan_run_usage_for_turn_context(
+                &turn_context,
+                PlanRunUsageSettlementMode::FinalTask,
+            )
             .await;
         let paused_goal = if reason == TurnAbortReason::Interrupted {
             self.pause_active_goal_for_interrupt(&turn_context).await

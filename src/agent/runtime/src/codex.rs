@@ -827,6 +827,47 @@ impl GoalTurnContext {
 pub(crate) struct PlanRunTurnContext {
     expected_plan_run_id: Arc<Mutex<Option<String>>>,
     accounting_plan_run_id: Arc<Mutex<Option<String>>>,
+    accounting_usage_checkpoint: Arc<Mutex<Option<PlanRunUsageCheckpoint>>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PlanRunUsageCheckpoint {
+    snapshot: TaskUsageSnapshot,
+    has_accounted_time: bool,
+}
+
+impl PlanRunUsageCheckpoint {
+    fn new(snapshot: TaskUsageSnapshot) -> Self {
+        Self {
+            snapshot,
+            has_accounted_time: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlanRunUsageSettlementMode {
+    RefreshForDisplay,
+    FinalTask,
+}
+
+fn plan_run_accounting_mode_for_status(
+    status: adam_state::ThreadPlanRunStatus,
+) -> adam_state::PlanRunAccountingMode {
+    match status {
+        adam_state::ThreadPlanRunStatus::Active
+        | adam_state::ThreadPlanRunStatus::BudgetLimited => {
+            adam_state::PlanRunAccountingMode::ActiveOnly
+        }
+        adam_state::ThreadPlanRunStatus::Paused
+        | adam_state::ThreadPlanRunStatus::Blocked
+        | adam_state::ThreadPlanRunStatus::UsageLimited => {
+            adam_state::PlanRunAccountingMode::ActiveOrStopped
+        }
+        adam_state::ThreadPlanRunStatus::Complete => {
+            adam_state::PlanRunAccountingMode::ActiveOrComplete
+        }
+    }
 }
 
 impl PlanRunTurnContext {
@@ -844,6 +885,18 @@ impl PlanRunTurnContext {
 
     pub(crate) async fn set_accounting_plan_run_id(&self, plan_run_id: impl Into<String>) {
         *self.accounting_plan_run_id.lock().await = Some(plan_run_id.into());
+    }
+
+    pub(crate) async fn ensure_accounting_usage_checkpoint(&self, snapshot: TaskUsageSnapshot) {
+        let should_reset = self.accounting_usage_checkpoint.lock().await.is_none();
+        if should_reset {
+            self.reset_accounting_usage_checkpoint(snapshot).await;
+        }
+    }
+
+    pub(crate) async fn reset_accounting_usage_checkpoint(&self, snapshot: TaskUsageSnapshot) {
+        *self.accounting_usage_checkpoint.lock().await =
+            Some(PlanRunUsageCheckpoint::new(snapshot));
     }
 }
 
@@ -1747,10 +1800,17 @@ impl Session {
         };
         match state_db.get_thread_plan_run(self.conversation_id).await {
             Ok(Some(plan_run)) => {
+                let plan_run_id = plan_run.plan_run_id;
                 turn_context
                     .plan_run_context
-                    .set_expected_plan_run_id(plan_run.plan_run_id)
+                    .set_expected_plan_run_id(plan_run_id.clone())
                     .await;
+                if plan_run.status == adam_state::ThreadPlanRunStatus::Active {
+                    turn_context
+                        .plan_run_context
+                        .set_accounting_plan_run_id(plan_run_id)
+                        .await;
+                }
             }
             Ok(None) => {}
             Err(err) => warn!("failed to load plan run for turn context: {err}"),
@@ -2065,6 +2125,7 @@ impl Session {
                 .await;
             return;
         }
+        self.settle_active_plan_run_usage_for_display().await;
         match state_db.get_thread_plan_run(self.conversation_id).await {
             Ok(plan_run) => {
                 self.send_event_raw(Event {
@@ -2182,6 +2243,7 @@ impl Session {
                 .await;
             return false;
         }
+        self.settle_active_plan_run_usage_for_display().await;
         match state_db
             .update_thread_plan_run(
                 self.conversation_id,
@@ -2464,6 +2526,24 @@ impl Session {
         }
     }
 
+    pub(crate) async fn initialize_plan_run_accounting_checkpoint_for_turn(
+        &self,
+        turn_context: &TurnContext,
+        snapshot: TaskUsageSnapshot,
+    ) {
+        if turn_context
+            .plan_run_context
+            .accounting_plan_run_id()
+            .await
+            .is_some()
+        {
+            turn_context
+                .plan_run_context
+                .ensure_accounting_usage_checkpoint(snapshot)
+                .await;
+        }
+    }
+
     pub(crate) async fn capture_goal_accounting_baseline_for_turn(
         &self,
         turn_context: &TurnContext,
@@ -2508,6 +2588,129 @@ impl Session {
             Ok(goal) => goal,
             Err(err) => {
                 warn!("failed to load goal after display usage settlement: {err}");
+                None
+            }
+        }
+    }
+
+    pub(crate) async fn settle_active_plan_run_usage_for_display(
+        &self,
+    ) -> Option<adam_state::ThreadPlanRun> {
+        let turn_contexts = {
+            let active_turn = self.active_turn.lock().await;
+            active_turn
+                .as_ref()
+                .map(|active_turn| {
+                    active_turn
+                        .tasks
+                        .values()
+                        .map(|task| Arc::clone(&task.turn_context))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+
+        for turn_context in turn_contexts {
+            self.settle_plan_run_usage_for_turn_context(
+                turn_context.as_ref(),
+                PlanRunUsageSettlementMode::RefreshForDisplay,
+            )
+            .await;
+        }
+
+        let state_db = self.state_db()?;
+        match state_db.get_thread_plan_run(self.conversation_id).await {
+            Ok(plan_run) => plan_run,
+            Err(err) => {
+                warn!("failed to load plan run after display usage settlement: {err}");
+                None
+            }
+        }
+    }
+
+    pub(crate) async fn settle_plan_run_usage_for_turn_context(
+        &self,
+        turn_context: &TurnContext,
+        mode: PlanRunUsageSettlementMode,
+    ) -> Option<adam_state::PlanRunAccountingOutcome> {
+        let plan_run_id = turn_context
+            .plan_run_context
+            .accounting_plan_run_id()
+            .await?;
+        let state_db = self.state_db()?;
+        let current_total_tokens = self.reported_total_token_usage().await;
+        let mut checkpoint_guard = turn_context
+            .plan_run_context
+            .accounting_usage_checkpoint
+            .lock()
+            .await;
+        let (snapshot, has_accounted_time) = {
+            let checkpoint = checkpoint_guard.as_ref()?;
+            (checkpoint.snapshot, checkpoint.has_accounted_time)
+        };
+        let plan_run = match state_db.get_thread_plan_run(self.conversation_id).await {
+            Ok(Some(plan_run)) if plan_run.plan_run_id == plan_run_id => plan_run,
+            Ok(_) => return None,
+            Err(err) => {
+                warn!("failed to load plan run before accounting usage: {err}");
+                return None;
+            }
+        };
+
+        let token_delta = current_total_tokens.saturating_sub(snapshot.starting_total_tokens);
+        let elapsed = snapshot.started_at.elapsed();
+        let elapsed_whole_seconds = elapsed.as_secs();
+        let mut billable_elapsed_seconds = match mode {
+            PlanRunUsageSettlementMode::RefreshForDisplay => elapsed_whole_seconds,
+            PlanRunUsageSettlementMode::FinalTask => {
+                elapsed_whole_seconds.saturating_add(u64::from(elapsed.subsec_nanos() > 0))
+            }
+        };
+        if matches!(mode, PlanRunUsageSettlementMode::FinalTask)
+            && !has_accounted_time
+            && billable_elapsed_seconds == 0
+        {
+            billable_elapsed_seconds = 1;
+        }
+        let time_delta_seconds = i64::try_from(billable_elapsed_seconds).unwrap_or(i64::MAX);
+
+        if time_delta_seconds == 0 && token_delta == 0 {
+            if matches!(mode, PlanRunUsageSettlementMode::FinalTask) {
+                *checkpoint_guard = None;
+            }
+            return Some(adam_state::PlanRunAccountingOutcome::Unchanged(Some(
+                plan_run,
+            )));
+        }
+
+        match state_db
+            .account_thread_plan_run_usage(
+                self.conversation_id,
+                time_delta_seconds,
+                token_delta,
+                plan_run_accounting_mode_for_status(plan_run.status),
+                Some(plan_run_id.as_str()),
+            )
+            .await
+        {
+            Ok(outcome) => {
+                if matches!(mode, PlanRunUsageSettlementMode::FinalTask) {
+                    *checkpoint_guard = None;
+                } else if matches!(outcome, adam_state::PlanRunAccountingOutcome::Updated(_)) {
+                    let seconds_to_advance = elapsed_whole_seconds
+                        .min(u64::try_from(time_delta_seconds).unwrap_or(u64::MAX));
+                    let checkpoint = checkpoint_guard.as_mut()?;
+                    checkpoint.snapshot = TaskUsageSnapshot {
+                        started_at: snapshot.started_at
+                            + std::time::Duration::from_secs(seconds_to_advance),
+                        starting_total_tokens: current_total_tokens,
+                    };
+                    checkpoint.has_accounted_time |= time_delta_seconds > 0;
+                }
+                Some(outcome)
+            }
+            Err(err) => {
+                warn!("failed to account plan run usage: {err}");
                 None
             }
         }
@@ -6831,6 +7034,8 @@ pub(super) fn get_last_assistant_message_from_turn(
 
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
+#[cfg(test)]
+pub(crate) use tests::make_session_and_context_with_plan_completion;
 
 use crate::git_info::get_git_repo_root;
 
@@ -8359,6 +8564,12 @@ mod tests {
         make_session_and_context_for_config(config).await
     }
 
+    pub(crate) async fn make_session_and_context_with_plan_completion() -> (Session, TurnContext) {
+        let (mut session, turn_context) = make_session_and_context().await;
+        session.features.enable(Feature::PlanCompletion);
+        (session, turn_context)
+    }
+
     #[tokio::test]
     async fn agent_job_exec_config_uses_endpoint_bearer_token() {
         let adam_home = tempfile::tempdir().expect("create temp dir");
@@ -8418,6 +8629,29 @@ mod tests {
         {
             let session = Arc::get_mut(&mut session).expect("session should not be shared");
             session.features.enable(Feature::Goals);
+            session.services.state_db = Some(Arc::clone(&state_db));
+        }
+        (session, state_db, rx, state_home)
+    }
+
+    async fn make_plan_run_session_with_state() -> (
+        Arc<Session>,
+        Arc<adam_state::StateRuntime>,
+        async_channel::Receiver<Event>,
+        tempfile::TempDir,
+    ) {
+        let (mut session, _turn_context, rx) = make_session_and_context_with_rx().await;
+        let state_home = tempfile::tempdir().expect("create state temp dir");
+        let state_db = adam_state::StateRuntime::init(
+            state_home.path().to_path_buf(),
+            "test".to_string(),
+            None,
+        )
+        .await
+        .expect("state runtime should initialize");
+        {
+            let session = Arc::get_mut(&mut session).expect("session should not be shared");
+            session.features.enable(Feature::PlanCompletion);
             session.services.state_db = Some(Arc::clone(&state_db));
         }
         (session, state_db, rx, state_home)
@@ -9412,6 +9646,36 @@ mod tests {
         }
     }
 
+    async fn wait_for_plan_run_snapshot(
+        rx: &async_channel::Receiver<Event>,
+    ) -> ThreadPlanRunSnapshotEvent {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let evt = tokio::time::timeout(remaining, rx.recv())
+                .await
+                .expect("timeout waiting for plan run snapshot")
+                .expect("event");
+            if let EventMsg::ThreadPlanRunSnapshot(snapshot) = evt.msg {
+                return snapshot;
+            }
+        }
+    }
+
+    async fn wait_for_plan_run_updated(rx: &async_channel::Receiver<Event>) -> ThreadPlanRun {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let evt = tokio::time::timeout(remaining, rx.recv())
+                .await
+                .expect("timeout waiting for plan run update")
+                .expect("event");
+            if let EventMsg::ThreadPlanRunUpdated(updated) = evt.msg {
+                return updated.plan_run;
+            }
+        }
+    }
+
     async fn wait_for_turn_complete(rx: &async_channel::Receiver<Event>) {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
         loop {
@@ -9640,6 +9904,225 @@ mod tests {
         sess.abort_all_tasks(TurnAbortReason::Replaced).await;
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plan_run_snapshot_refresh_accounts_known_usage_once() {
+        let (sess, state_db, rx, _state_home) = make_plan_run_session_with_state().await;
+        set_programmer_identity(&sess).await;
+        state_db
+            .replace_thread_plan_run(
+                sess.conversation_id,
+                "# Plan\n- track display usage",
+                adam_state::ThreadPlanRunStatus::Active,
+                None,
+            )
+            .await
+            .expect("plan run replacement should succeed");
+
+        let turn_context = sess
+            .new_default_turn_with_sub_id("display-plan-run-refresh".to_string())
+            .await;
+        sess.spawn_task(
+            Arc::clone(&turn_context),
+            vec![UserInput::Text {
+                text: "keep working".to_string(),
+                text_elements: Vec::new(),
+            }],
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+        set_reported_total_tokens(&sess, 12).await;
+
+        sess.emit_plan_run_snapshot("plan-run-snapshot-1".to_string())
+            .await;
+        let snapshot = wait_for_plan_run_snapshot(&rx).await;
+        let plan_run = snapshot.plan_run.expect("plan run should be present");
+        assert_eq!(12, plan_run.tokens_used);
+
+        sess.emit_plan_run_snapshot("plan-run-snapshot-2".to_string())
+            .await;
+        let snapshot = wait_for_plan_run_snapshot(&rx).await;
+        let plan_run = snapshot.plan_run.expect("plan run should be present");
+        assert_eq!(12, plan_run.tokens_used);
+
+        let stored = state_db
+            .get_thread_plan_run(sess.conversation_id)
+            .await
+            .expect("plan run read should succeed")
+            .expect("plan run should exist");
+        assert_eq!(12, stored.tokens_used);
+        sess.abort_all_tasks(TurnAbortReason::Replaced).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plan_run_completion_accounts_only_remaining_usage_after_display_refresh() {
+        let (sess, state_db, rx, _state_home) = make_plan_run_session_with_state().await;
+        set_programmer_identity(&sess).await;
+        state_db
+            .replace_thread_plan_run(
+                sess.conversation_id,
+                "# Plan\n- finish after display refresh",
+                adam_state::ThreadPlanRunStatus::Active,
+                None,
+            )
+            .await
+            .expect("plan run replacement should succeed");
+
+        let turn_context = sess
+            .new_default_turn_with_sub_id("display-plan-run-then-finish".to_string())
+            .await;
+        let finish = Arc::new(Notify::new());
+        sess.spawn_task(
+            Arc::clone(&turn_context),
+            vec![UserInput::Text {
+                text: "keep working".to_string(),
+                text_elements: Vec::new(),
+            }],
+            WaitForFinishTask {
+                finish: Arc::clone(&finish),
+            },
+        )
+        .await;
+        set_reported_total_tokens(&sess, 12).await;
+        sess.emit_plan_run_snapshot("plan-run-snapshot-before-finish".to_string())
+            .await;
+        let snapshot = wait_for_plan_run_snapshot(&rx).await;
+        let plan_run = snapshot.plan_run.expect("plan run should be present");
+        assert_eq!(12, plan_run.tokens_used);
+
+        set_reported_total_tokens(&sess, 20).await;
+        finish.notify_one();
+        wait_for_turn_complete(&rx).await;
+
+        let stored = state_db
+            .get_thread_plan_run(sess.conversation_id)
+            .await
+            .expect("plan run read should succeed")
+            .expect("plan run should exist");
+        assert_eq!(20, stored.tokens_used);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plan_run_final_settlement_counts_partial_second_after_display_refresh() {
+        let (sess, state_db, _rx, _state_home) = make_plan_run_session_with_state().await;
+        set_programmer_identity(&sess).await;
+        let plan_run = state_db
+            .replace_thread_plan_run(
+                sess.conversation_id,
+                "# Plan\n- finish after partial refresh",
+                adam_state::ThreadPlanRunStatus::Active,
+                None,
+            )
+            .await
+            .expect("plan run replacement should succeed");
+
+        let turn_context = sess
+            .new_default_turn_with_sub_id("display-plan-run-partial-then-finish".to_string())
+            .await;
+        turn_context
+            .plan_run_context
+            .set_expected_plan_run_id(plan_run.plan_run_id.clone())
+            .await;
+        turn_context
+            .plan_run_context
+            .set_accounting_plan_run_id(plan_run.plan_run_id)
+            .await;
+        turn_context
+            .plan_run_context
+            .reset_accounting_usage_checkpoint(TaskUsageSnapshot {
+                started_at: Instant::now() - Duration::from_millis(1100),
+                starting_total_tokens: 0,
+            })
+            .await;
+
+        let refresh_outcome = sess
+            .settle_plan_run_usage_for_turn_context(
+                turn_context.as_ref(),
+                PlanRunUsageSettlementMode::RefreshForDisplay,
+            )
+            .await
+            .expect("refresh should settle plan run usage");
+        let adam_state::PlanRunAccountingOutcome::Updated(refreshed) = refresh_outcome else {
+            panic!("refresh should update plan run usage");
+        };
+        assert_eq!(1, refreshed.time_used_seconds);
+        assert_eq!(0, refreshed.tokens_used);
+
+        let final_outcome = sess
+            .settle_plan_run_usage_for_turn_context(
+                turn_context.as_ref(),
+                PlanRunUsageSettlementMode::FinalTask,
+            )
+            .await
+            .expect("final settlement should settle plan run usage");
+        let adam_state::PlanRunAccountingOutcome::Updated(finished) = final_outcome else {
+            panic!("final settlement should update plan run usage");
+        };
+        assert_eq!(2, finished.time_used_seconds);
+        assert_eq!(0, finished.tokens_used);
+
+        let repeated_final_outcome = sess
+            .settle_plan_run_usage_for_turn_context(
+                turn_context.as_ref(),
+                PlanRunUsageSettlementMode::FinalTask,
+            )
+            .await;
+        assert!(repeated_final_outcome.is_none());
+
+        let stored = state_db
+            .get_thread_plan_run(sess.conversation_id)
+            .await
+            .expect("plan run read should succeed")
+            .expect("plan run should exist");
+        assert_eq!(finished, stored);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plan_run_status_update_refreshes_known_usage_before_emit() {
+        let (sess, state_db, rx, _state_home) = make_plan_run_session_with_state().await;
+        set_programmer_identity(&sess).await;
+        state_db
+            .replace_thread_plan_run(
+                sess.conversation_id,
+                "# Plan\n- complete with usage",
+                adam_state::ThreadPlanRunStatus::Active,
+                None,
+            )
+            .await
+            .expect("plan run replacement should succeed");
+
+        let turn_context = sess
+            .new_default_turn_with_sub_id("complete-plan-run-refresh".to_string())
+            .await;
+        sess.spawn_task(
+            Arc::clone(&turn_context),
+            vec![UserInput::Text {
+                text: "keep working".to_string(),
+                text_elements: Vec::new(),
+            }],
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+        set_reported_total_tokens(&sess, 18).await;
+
+        assert!(
+            sess.set_thread_plan_run_status(
+                "complete-plan-run".to_string(),
+                ThreadPlanRunStatus::Complete,
+            )
+            .await
+        );
+        let updated = wait_for_plan_run_updated(&rx).await;
+        assert_eq!(ThreadPlanRunStatus::Complete, updated.status);
+        assert_eq!(18, updated.tokens_used);
+        sess.abort_all_tasks(TurnAbortReason::Replaced).await;
+    }
+
     #[derive(Clone)]
     struct CreateGoalMidTurnTask {
         start: Arc<Notify>,
@@ -9777,6 +10260,31 @@ mod tests {
         panic!("timed out waiting for interrupted turn abort");
     }
 
+    async fn wait_for_abort_plan_run_update(
+        rx: &async_channel::Receiver<Event>,
+    ) -> Option<ThreadPlanRun> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut plan_run_update = None;
+        while tokio::time::Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let evt = tokio::time::timeout(remaining, rx.recv())
+                .await
+                .expect("timeout waiting for event")
+                .expect("event");
+            match evt.msg {
+                EventMsg::ThreadPlanRunUpdated(update) => {
+                    plan_run_update = Some(update.plan_run);
+                }
+                EventMsg::TurnAborted(ev) => {
+                    assert_eq!(TurnAbortReason::Interrupted, ev.reason);
+                    return plan_run_update;
+                }
+                _ => {}
+            }
+        }
+        panic!("timed out waiting for interrupted turn abort");
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn interrupted_goal_task_accounts_usage_and_pauses() {
         let (sess, state_db, rx, _state_home) = make_goal_session_with_state().await;
@@ -9837,6 +10345,71 @@ mod tests {
                 time_used_seconds: stored.time_used_seconds,
                 updated_at: stored.updated_at,
                 ..goal
+            },
+            stored
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn interrupted_plan_run_task_accounts_usage_and_pauses() {
+        let (sess, state_db, rx, _state_home) = make_plan_run_session_with_state().await;
+        set_programmer_identity(&sess).await;
+        let plan_run = state_db
+            .replace_thread_plan_run(
+                sess.conversation_id,
+                "# Plan\n- keep working",
+                adam_state::ThreadPlanRunStatus::Active,
+                Some(100),
+            )
+            .await
+            .expect("plan run replacement should succeed");
+        let turn_context = sess
+            .new_default_turn_with_sub_id("plan-run-interrupt".to_string())
+            .await;
+        turn_context
+            .plan_run_context
+            .set_expected_plan_run_id(plan_run.plan_run_id.clone())
+            .await;
+        turn_context
+            .plan_run_context
+            .set_accounting_plan_run_id(plan_run.plan_run_id.clone())
+            .await;
+
+        sess.spawn_task(
+            Arc::clone(&turn_context),
+            vec![UserInput::Text {
+                text: "continue plan run".to_string(),
+                text_elements: Vec::new(),
+            }],
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
+        set_reported_total_tokens(&sess, 12).await;
+
+        sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+        let updated = wait_for_abort_plan_run_update(&rx)
+            .await
+            .expect("interrupted plan run should emit plan run update");
+        assert_eq!(ThreadPlanRunStatus::Paused, updated.status);
+        assert_eq!(12, updated.tokens_used);
+        assert!(updated.time_used_seconds >= 1);
+        let stored = state_db
+            .get_thread_plan_run(sess.conversation_id)
+            .await
+            .expect("plan run read should succeed")
+            .expect("plan run should exist");
+        assert!(stored.time_used_seconds >= 1);
+        assert_eq!(
+            adam_state::ThreadPlanRun {
+                status: adam_state::ThreadPlanRunStatus::Paused,
+                tokens_used: 12,
+                time_used_seconds: stored.time_used_seconds,
+                updated_at: stored.updated_at,
+                ..plan_run
             },
             stored
         );
