@@ -1121,12 +1121,20 @@ impl TranscriptView {
     }
 
     pub(crate) fn live_tail_from_lines(lines: Vec<Line<'static>>) -> Option<TranscriptLiveTail> {
+        Self::live_tail_from_lines_with_backgrounds(lines, false)
+    }
+
+    pub(crate) fn live_tail_from_lines_with_backgrounds(
+        lines: Vec<Line<'static>>,
+        fill_line_backgrounds: bool,
+    ) -> Option<TranscriptLiveTail> {
         if lines.is_empty() {
             return None;
         }
-        let renderable = Box::new(CachedRenderable::new(
-            Paragraph::new(Text::from(lines.clone())).wrap(Wrap { trim: false }),
-        ));
+        let renderable = Box::new(CachedRenderable::new(LiveTailRenderable {
+            lines: lines.clone(),
+            fill_line_backgrounds,
+        }));
         Some(TranscriptLiveTail { lines, renderable })
     }
 
@@ -1233,6 +1241,26 @@ impl Renderable for CachedRenderable {
             self.last_width.set(Some(width));
         }
         self.height.get().unwrap_or(0)
+    }
+}
+
+struct LiveTailRenderable {
+    lines: Vec<Line<'static>>,
+    fill_line_backgrounds: bool,
+}
+
+impl Renderable for LiveTailRenderable {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        if self.fill_line_backgrounds {
+            render_line_backgrounds(&self.lines, area, buf, 0);
+        }
+        Paragraph::new(Text::from(self.lines.clone()))
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        rendered_lines_height(&self.lines, width)
     }
 }
 
@@ -1707,6 +1735,16 @@ mod tests {
         }
     }
 
+    fn assert_row_bg_is(buf: &Buffer, width: u16, y: u16, bg: Option<Color>) {
+        for x in 0..width {
+            assert_eq!(
+                buf[(x, y)].style().bg,
+                bg,
+                "expected background {bg:?} at x={x}, y={y}"
+            );
+        }
+    }
+
     fn render_test_view(view: &mut TranscriptView, width: u16, height: u16) -> Buffer {
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
@@ -2157,6 +2195,103 @@ mod tests {
             select_columns(&mut view, 1, 0, 2, UnicodeWidthStr::width("Plan只有文字")),
             Some("ProposedPlan只有文字\n有背景色".to_string())
         );
+    }
+
+    #[test]
+    fn live_tail_backgrounds_fill_text_row_when_requested() {
+        let Some(plan_bg) = proposed_plan_style().bg else {
+            return;
+        };
+        let width = 40;
+        let mut view = TranscriptView::new_transcript(Vec::new());
+        view.sync_live_tail(
+            width,
+            Some(TranscriptLiveTailKey::new(
+                TranscriptLiveTailSource::ActiveCell,
+                0,
+                1,
+                false,
+                None,
+            )),
+            |_| {
+                TranscriptView::live_tail_from_lines_with_backgrounds(
+                    vec![Line::from("  short plan line").style(proposed_plan_style())],
+                    true,
+                )
+            },
+        );
+        let height = view.desired_height(width);
+        let buf = render_test_view(&mut view, width, height);
+        let row = (0..height)
+            .find(|y| {
+                (0..width)
+                    .map(|x| buf[(x, *y)].symbol())
+                    .collect::<String>()
+                    .contains("short plan line")
+            })
+            .expect("expected rendered live tail row");
+
+        assert_row_bg_is(&buf, width, row, Some(plan_bg));
+    }
+
+    #[test]
+    fn live_tail_backgrounds_fill_wrapped_rows_when_requested() {
+        let Some(plan_bg) = proposed_plan_style().bg else {
+            return;
+        };
+        let width = 10;
+        let mut view = TranscriptView::new_transcript(Vec::new());
+        view.sync_live_tail(
+            width,
+            Some(TranscriptLiveTailKey::new(
+                TranscriptLiveTailSource::ActiveCell,
+                0,
+                1,
+                false,
+                None,
+            )),
+            |_| {
+                TranscriptView::live_tail_from_lines_with_backgrounds(
+                    vec![Line::from("alpha beta gamma delta").style(proposed_plan_style())],
+                    true,
+                )
+            },
+        );
+        let height = view.desired_height(width);
+        assert!(height > 1, "expected live tail to wrap");
+        let buf = render_test_view(&mut view, width, height);
+
+        for y in 0..height {
+            assert_row_bg_is(&buf, width, y, Some(plan_bg));
+        }
+    }
+
+    #[test]
+    fn live_tail_from_lines_does_not_fill_backgrounds_by_default() {
+        let Some(plan_bg) = proposed_plan_style().bg else {
+            return;
+        };
+        let width = 40;
+        let mut view = TranscriptView::new_transcript(Vec::new());
+        view.sync_live_tail(
+            width,
+            Some(TranscriptLiveTailKey::new(
+                TranscriptLiveTailSource::ActiveCell,
+                0,
+                1,
+                false,
+                None,
+            )),
+            |_| {
+                TranscriptView::live_tail_from_lines(vec![
+                    Line::from("  short").style(proposed_plan_style()),
+                ])
+            },
+        );
+        let height = view.desired_height(width);
+        let buf = render_test_view(&mut view, width, height);
+
+        assert_ne!(buf[(width - 1, 0)].style().bg, Some(plan_bg));
     }
 
     #[test]

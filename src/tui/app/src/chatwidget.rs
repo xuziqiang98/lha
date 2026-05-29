@@ -7063,13 +7063,15 @@ impl ChatWidget {
         mode: TranscriptRenderMode,
     ) -> Option<TranscriptLiveTail> {
         if let Some(cell) = self.active_cell.as_ref() {
-            return match mode {
-                TranscriptRenderMode::Display => {
-                    TranscriptView::live_tail_from_lines(cell.display_lines(width))
-                }
-                TranscriptRenderMode::Transcript => {
-                    TranscriptView::live_tail_from_lines(cell.transcript_lines(width))
-                }
+            let fill_line_backgrounds = cell.fill_line_backgrounds();
+            let lines = match mode {
+                TranscriptRenderMode::Display => cell.display_lines(width),
+                TranscriptRenderMode::Transcript => cell.transcript_lines(width),
+            };
+            return if fill_line_backgrounds {
+                TranscriptView::live_tail_from_lines_with_backgrounds(lines, true)
+            } else {
+                TranscriptView::live_tail_from_lines(lines)
             };
         }
         None
