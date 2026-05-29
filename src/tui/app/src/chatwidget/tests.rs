@@ -5576,6 +5576,32 @@ async fn session_configured_does_not_override_resumed_identity_when_identity_dif
 }
 
 #[tokio::test]
+async fn resumed_session_configured_sets_restored_identity_without_runtime_sync() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    drain_ops(&mut op_rx);
+
+    chat.handle_codex_event(configured_event_with_identity(IdentityKind::Planner));
+
+    let ops = drain_ops(&mut op_rx);
+    assert_eq!(chat.active_identity_kind_for_ui(), IdentityKind::Planner);
+    assert!(
+        !ops.iter().any(|op| matches!(
+            op,
+            Op::OverrideTurnContext {
+                identity: Some(_),
+                ..
+            }
+        )),
+        "did not expect resumed session identity override, got {ops:?}"
+    );
+    assert!(
+        ops.iter().any(|op| matches!(op, Op::ListCustomPrompts)),
+        "expected normal startup refresh ops, got {ops:?}"
+    );
+}
+
+#[tokio::test]
 async fn session_configured_skips_identity_sync_when_identity_matches() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::Identities, true);

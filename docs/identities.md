@@ -107,6 +107,11 @@ only when identities are enabled.
 Switching identities affects subsequent turns. It does not rewrite earlier
 turns in the conversation.
 
+When you resume or fork a saved thread, Adam restores the last identity recorded
+for that thread. Model selection still follows the current resume/configuration
+overrides, so resuming with a different model does not change the restored
+identity.
+
 Some TUI footers may show a shortcut such as `Shift+Tab` for changing the active
 identity.
 

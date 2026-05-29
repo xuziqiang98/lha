@@ -494,7 +494,7 @@ impl Codex {
 
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.identity
         // to avoid extracting these fields separately and constructing Identity here.
-        let identity = Identity {
+        let base_identity = Identity {
             kind: IdentityKind::Nobody,
             settings: Settings {
                 model: model.clone(),
@@ -502,6 +502,7 @@ impl Codex {
                 developer_instructions: None,
             },
         };
+        let identity = identity_for_session(base_identity, &conversation_history);
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             identity,
@@ -856,6 +857,60 @@ fn append_workflow_developer_instructions(
     }
 }
 
+fn builtin_identity_developer_instructions(kind: IdentityKind) -> Option<String> {
+    match kind {
+        IdentityKind::Nobody => None,
+        IdentityKind::Planner
+        | IdentityKind::Programmer
+        | IdentityKind::Explorer
+        | IdentityKind::Reviewer => adam_identity::builtin_identity_presets()
+            .into_iter()
+            .find(|mask| mask.kind == Some(kind))
+            .and_then(|mask| mask.developer_instructions.flatten()),
+    }
+}
+
+fn latest_identity_from_rollout_items(items: &[RolloutItem]) -> Option<Identity> {
+    items.iter().rev().find_map(|item| match item {
+        RolloutItem::TurnContext(turn_context) => turn_context.identity.clone(),
+        RolloutItem::SessionMeta(_)
+        | RolloutItem::TranscriptItem(_)
+        | RolloutItem::GhostSnapshot(_)
+        | RolloutItem::Compacted(_)
+        | RolloutItem::Workflow(_)
+        | RolloutItem::EventMsg(_) => None,
+    })
+}
+
+fn latest_identity_from_initial_history(initial_history: &InitialHistory) -> Option<Identity> {
+    match initial_history {
+        InitialHistory::New => None,
+        InitialHistory::Resumed(resumed) => latest_identity_from_rollout_items(&resumed.history),
+        InitialHistory::Forked(items) => latest_identity_from_rollout_items(items),
+    }
+}
+
+fn identity_for_session(base_identity: Identity, initial_history: &InitialHistory) -> Identity {
+    let Some(restored_identity) = latest_identity_from_initial_history(initial_history) else {
+        return base_identity;
+    };
+
+    let developer_instructions = restored_identity
+        .settings
+        .developer_instructions
+        .filter(|instructions| !instructions.trim().is_empty())
+        .or_else(|| builtin_identity_developer_instructions(restored_identity.kind));
+
+    Identity {
+        kind: restored_identity.kind,
+        settings: Settings {
+            model: base_identity.settings.model,
+            reasoning_effort: base_identity.settings.reasoning_effort,
+            developer_instructions,
+        },
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
     /// Provider identifier ("openai", "openrouter", ...).
@@ -921,6 +976,23 @@ impl SessionConfiguration {
             reasoning_effort: self.identity.reasoning_effort(),
             personality: self.personality,
             session_source: self.session_source.clone(),
+        }
+    }
+
+    fn turn_context_item(&self) -> TurnContextItem {
+        TurnContextItem {
+            cwd: self.cwd.clone(),
+            approval_policy: self.approval_policy.value(),
+            sandbox_policy: self.sandbox_policy.get().clone(),
+            model: self.identity.model().to_string(),
+            personality: self.personality,
+            identity: Some(self.identity.clone()),
+            effort: self.identity.reasoning_effort(),
+            summary: self.model_reasoning_summary,
+            user_instructions: self.user_instructions.clone(),
+            developer_instructions: self.developer_instructions.clone(),
+            final_output_json_schema: None,
+            truncation_policy: None,
         }
     }
 
@@ -2627,6 +2699,15 @@ impl Session {
         }
     }
 
+    pub(crate) async fn persist_current_turn_context_snapshot(&self) {
+        let item = {
+            let state = self.state.lock().await;
+            state.session_configuration.turn_context_item()
+        };
+        let items = [RolloutItem::TurnContext(item)];
+        self.persist_rollout_items(&items).await;
+    }
+
     pub(crate) async fn new_turn_with_sub_id(
         &self,
         sub_id: String,
@@ -4293,6 +4374,7 @@ mod handlers {
             .await;
             return;
         }
+        sess.persist_current_turn_context_snapshot().await;
 
         if switches_to_programmer && !was_programmer {
             sess.request_goal_continuation();
