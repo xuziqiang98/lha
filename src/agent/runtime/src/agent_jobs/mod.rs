@@ -38,7 +38,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-const DEFAULT_JOB_MAX_RUNTIME_SECONDS: u64 = 600;
+const DEFAULT_JOB_MAX_RUNTIME_SECONDS: u64 = 3600;
 const STDERR_TAIL_BYTES: usize = 4096;
 const JOBS_DIR: &str = "agent_jobs";
 
