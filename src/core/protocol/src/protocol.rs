@@ -141,7 +141,10 @@ pub enum Op {
         final_output_json_schema: Option<Value>,
 
         /// EXPERIMENTAL - set a pre-set identity.
-        /// Takes precedence over model, effort, and developer instructions if set.
+        ///
+        /// When set, takes precedence over `model`, `effort`, and developer instructions.
+        /// When omitted, the runtime preserves the current session identity kind and
+        /// developer instructions while applying this turn's `model` and `effort`.
         #[serde(skip_serializing_if = "Option::is_none")]
         identity: Option<Identity>,
 

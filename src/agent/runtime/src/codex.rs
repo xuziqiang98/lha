@@ -240,6 +240,7 @@ use adam_protocol::models::ContentItem;
 use adam_protocol::models::DeveloperInstructions;
 use adam_protocol::models::TranscriptItem;
 use adam_protocol::models::transcript_item_from_user_input;
+use adam_protocol::openai_models::ReasoningEffort;
 use adam_protocol::protocol::CodexErrorInfo;
 use adam_protocol::protocol::InitialHistory;
 use adam_protocol::user_input::UserInput;
@@ -908,6 +909,18 @@ fn identity_for_session(base_identity: Identity, initial_history: &InitialHistor
             reasoning_effort: base_identity.settings.reasoning_effort,
             developer_instructions,
         },
+    }
+}
+
+fn identity_for_user_turn(
+    current_identity: &Identity,
+    turn_identity: Option<Identity>,
+    model: String,
+    effort: Option<ReasoningEffort>,
+) -> Identity {
+    match turn_identity {
+        Some(identity) => identity,
+        None => current_identity.with_updates(Some(model), Some(effort), None),
     }
 }
 
@@ -4295,6 +4308,7 @@ mod handlers {
     use crate::codex::Session;
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::buddy_turn_snapshot_to_config;
+    use crate::codex::identity_for_user_turn;
 
     use crate::agent_jobs::AgentJobStatus;
     use crate::codex::start_cli_backed_review_turn;
@@ -4331,9 +4345,7 @@ mod handlers {
     use adam_protocol::request_user_input::RequestUserInputResponse;
 
     use crate::context_manager::is_user_turn_boundary;
-    use adam_protocol::config_types::Identity;
     use adam_protocol::config_types::IdentityKind;
-    use adam_protocol::config_types::Settings;
     use adam_protocol::dynamic_tools::DynamicToolResponse;
     use adam_protocol::user_input::UserInput;
     use adam_rmcp_client::ElicitationAction;
@@ -4396,16 +4408,18 @@ mod handlers {
                 personality,
                 tui_buddy,
             } => {
-                let identity = identity.or_else(|| {
-                    Some(Identity {
-                        kind: IdentityKind::Nobody,
-                        settings: Settings {
-                            model: model.clone(),
-                            reasoning_effort: effort,
-                            developer_instructions: None,
-                        },
-                    })
-                });
+                let identity = match identity {
+                    Some(identity) => identity,
+                    None => {
+                        let state = sess.state.lock().await;
+                        identity_for_user_turn(
+                            &state.session_configuration.identity,
+                            None,
+                            model,
+                            effort,
+                        )
+                    }
+                };
                 (
                     items,
                     SessionSettingsUpdate {
@@ -4413,7 +4427,7 @@ mod handlers {
                         approval_policy: Some(approval_policy),
                         sandbox_policy: Some(sandbox_policy),
                         windows_sandbox_level: None,
-                        identity,
+                        identity: Some(identity),
                         reasoning_summary: Some(summary),
                         final_output_json_schema: Some(final_output_json_schema),
                         personality,
@@ -6763,6 +6777,88 @@ mod tests {
     struct InstructionsTestCase {
         slug: &'static str,
         expects_apply_patch_instructions: bool,
+    }
+
+    #[test]
+    fn identity_for_user_turn_preserves_current_identity_when_turn_identity_is_missing() {
+        let current_identity = Identity {
+            kind: IdentityKind::Planner,
+            settings: Settings {
+                model: "old-model".to_string(),
+                reasoning_effort: Some(ReasoningEffort::Low),
+                developer_instructions: Some("planner instructions".to_string()),
+            },
+        };
+
+        let got = identity_for_user_turn(
+            &current_identity,
+            None,
+            "new-model".to_string(),
+            Some(ReasoningEffort::High),
+        );
+        let expected = Identity {
+            kind: IdentityKind::Planner,
+            settings: Settings {
+                model: "new-model".to_string(),
+                reasoning_effort: Some(ReasoningEffort::High),
+                developer_instructions: Some("planner instructions".to_string()),
+            },
+        };
+
+        assert_eq!(expected, got);
+    }
+
+    #[test]
+    fn identity_for_user_turn_clears_effort_when_turn_effort_is_none() {
+        let current_identity = Identity {
+            kind: IdentityKind::Programmer,
+            settings: Settings {
+                model: "old-model".to_string(),
+                reasoning_effort: Some(ReasoningEffort::Low),
+                developer_instructions: Some("programmer instructions".to_string()),
+            },
+        };
+
+        let got = identity_for_user_turn(&current_identity, None, "new-model".to_string(), None);
+        let expected = Identity {
+            kind: IdentityKind::Programmer,
+            settings: Settings {
+                model: "new-model".to_string(),
+                reasoning_effort: None,
+                developer_instructions: Some("programmer instructions".to_string()),
+            },
+        };
+
+        assert_eq!(expected, got);
+    }
+
+    #[test]
+    fn identity_for_user_turn_prefers_explicit_turn_identity() {
+        let current_identity = Identity {
+            kind: IdentityKind::Planner,
+            settings: Settings {
+                model: "old-model".to_string(),
+                reasoning_effort: Some(ReasoningEffort::Low),
+                developer_instructions: Some("planner instructions".to_string()),
+            },
+        };
+        let turn_identity = Identity {
+            kind: IdentityKind::Reviewer,
+            settings: Settings {
+                model: "reviewer-model".to_string(),
+                reasoning_effort: None,
+                developer_instructions: Some("reviewer instructions".to_string()),
+            },
+        };
+
+        let got = identity_for_user_turn(
+            &current_identity,
+            Some(turn_identity.clone()),
+            "new-model".to_string(),
+            Some(ReasoningEffort::High),
+        );
+
+        assert_eq!(turn_identity, got);
     }
 
     #[tokio::test]

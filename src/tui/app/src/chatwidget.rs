@@ -1223,6 +1223,8 @@ impl ChatWidget {
         self.pending_initial_identity_sync = false;
         if should_sync_initial_identity {
             self.sync_active_identity_to_runtime();
+        } else if !self.identities_enabled() && session_identity_kind != IdentityKind::Nobody {
+            self.sync_identity_to_runtime(self.identity_without_preset());
         } else if !had_pending_initial_identity_sync
             && self.identities_enabled()
             && self.active_identity_kind() != session_identity_kind
@@ -4326,7 +4328,7 @@ impl ChatWidget {
                 .as_ref()
                 .map(|_| effective_mode.clone())
         } else {
-            None
+            Some(effective_mode.clone())
         };
         let personality = self
             .config
@@ -6152,12 +6154,11 @@ impl ChatWidget {
         }
         if feature == Feature::Identities {
             self.bottom_pane.set_identities_enabled(enabled);
-            let settings = self.current_identity.settings.clone();
-            self.current_identity = Identity {
-                kind: IdentityKind::Nobody,
-                settings,
-            };
+            self.current_identity = self.identity_without_preset();
             self.active_identity_mask = None;
+            if !enabled {
+                self.sync_identity_to_runtime(self.identity_without_preset());
+            }
             self.update_identity_indicator();
             self.refresh_model_display();
             self.update_footer_info();
@@ -6426,9 +6427,16 @@ impl ChatWidget {
             .unwrap_or(current_effort)
     }
 
+    fn identity_without_preset(&self) -> Identity {
+        let mut identity = self.current_identity.clone();
+        identity.kind = IdentityKind::Nobody;
+        identity.settings.developer_instructions = None;
+        identity
+    }
+
     fn effective_identity(&self) -> Identity {
         if !self.identities_enabled() {
-            return self.current_identity.clone();
+            return self.identity_without_preset();
         }
         self.active_identity_mask.as_ref().map_or_else(
             || self.current_identity.clone(),
@@ -6524,11 +6532,8 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn sync_active_identity_to_runtime(&mut self) {
-        if !self.is_session_configured() || !self.identities_enabled() {
-            return;
-        }
-        if self.active_identity_mask.is_none() {
+    fn sync_identity_to_runtime(&mut self, identity: Identity) {
+        if !self.is_session_configured() {
             return;
         }
 
@@ -6540,9 +6545,20 @@ impl ChatWidget {
             model: None,
             effort: None,
             summary: None,
-            identity: Some(self.effective_identity()),
+            identity: Some(identity),
             personality: None,
         });
+    }
+
+    pub(crate) fn sync_active_identity_to_runtime(&mut self) {
+        if !self.is_session_configured() || !self.identities_enabled() {
+            return;
+        }
+        if self.active_identity_mask.is_none() {
+            return;
+        }
+
+        self.sync_identity_to_runtime(self.effective_identity());
     }
 
     pub(crate) fn request_redraw_for_ui(&mut self) {

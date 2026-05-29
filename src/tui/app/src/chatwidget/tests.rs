@@ -5510,6 +5510,34 @@ async fn identity_mask_updates_identity_for_subsequent_messages() {
 }
 
 #[tokio::test]
+async fn disabling_identities_syncs_nobody_to_runtime() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::Identities, true);
+    let planner_mask =
+        identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+            .expect("expected planner identity mask");
+    chat.set_identity_mask(planner_mask);
+    chat.sync_active_identity_to_runtime();
+    drain_ops(&mut op_rx);
+
+    chat.set_feature_enabled(Feature::Identities, false);
+
+    let ops = drain_ops(&mut op_rx);
+    assert!(
+        ops.iter().any(|op| matches!(
+            op,
+            Op::OverrideTurnContext {
+                identity: Some(identity),
+                ..
+            } if identity.kind == IdentityKind::Nobody
+                && identity.settings.developer_instructions.is_none()
+        )),
+        "expected identities disable to sync Nobody, got {ops:?}"
+    );
+}
+
+#[tokio::test]
 async fn fresh_session_configured_syncs_initial_identity_to_runtime() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::Identities, true);
@@ -5619,6 +5647,57 @@ async fn session_configured_skips_identity_sync_when_identity_matches() {
             }
         )),
         "did not expect identity runtime sync when identities match, got {ops:?}"
+    );
+    assert!(
+        ops.iter().any(|op| matches!(op, Op::ListCustomPrompts)),
+        "expected normal startup refresh ops, got {ops:?}"
+    );
+}
+
+#[tokio::test]
+async fn session_configured_with_identities_disabled_clears_restored_identity() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, false);
+    drain_ops(&mut op_rx);
+
+    chat.handle_codex_event(configured_event_with_identity(IdentityKind::Planner));
+
+    let ops = drain_ops(&mut op_rx);
+    assert!(
+        ops.iter().any(|op| matches!(
+            op,
+            Op::OverrideTurnContext {
+                identity: Some(identity),
+                ..
+            } if identity.kind == IdentityKind::Nobody
+                && identity.settings.developer_instructions.is_none()
+        )),
+        "expected restored identity to be cleared when identities are disabled, got {ops:?}"
+    );
+    assert!(
+        ops.iter().any(|op| matches!(op, Op::ListCustomPrompts)),
+        "expected normal startup refresh ops, got {ops:?}"
+    );
+}
+
+#[tokio::test]
+async fn session_configured_with_identities_disabled_skips_nobody_sync() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, false);
+    drain_ops(&mut op_rx);
+
+    chat.handle_codex_event(configured_event_with_identity(IdentityKind::Nobody));
+
+    let ops = drain_ops(&mut op_rx);
+    assert!(
+        !ops.iter().any(|op| matches!(
+            op,
+            Op::OverrideTurnContext {
+                identity: Some(_),
+                ..
+            }
+        )),
+        "did not expect Nobody identity sync when restored identity is already Nobody, got {ops:?}"
     );
     assert!(
         ops.iter().any(|op| matches!(op, Op::ListCustomPrompts)),
@@ -6089,6 +6168,31 @@ async fn identity_is_not_sent_until_selected() {
         }
         other => {
             panic!("expected Op::UserTurn, got {other:?}")
+        }
+    }
+}
+
+#[tokio::test]
+async fn user_turn_sends_nobody_identity_when_identities_disabled() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::Identities, false);
+    drain_ops(&mut op_rx);
+
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            identity: Some(identity),
+            ..
+        } => {
+            assert_eq!(identity.kind, IdentityKind::Nobody);
+            assert_eq!(identity.settings.developer_instructions, None);
+        }
+        other => {
+            panic!("expected Op::UserTurn with Nobody identity, got {other:?}")
         }
     }
 }
