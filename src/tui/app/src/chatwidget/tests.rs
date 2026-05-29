@@ -2230,6 +2230,7 @@ async fn make_chatwidget_manual_inner(
         current_identity,
         active_identity_mask: None,
         pending_initial_identity_sync: false,
+        pending_existing_thread_model_override: None,
         reasoning_effort_overrides: HashMap::new(),
         auth_manager,
         thread_manager,
@@ -2408,6 +2409,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         current_identity,
         active_identity_mask: None,
         pending_initial_identity_sync: false,
+        pending_existing_thread_model_override: None,
         reasoning_effort_overrides: HashMap::new(),
         auth_manager,
         thread_manager,
@@ -2588,13 +2590,17 @@ fn drain_ops(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Vec<Op> {
 }
 
 fn configured_event_with_identity(identity_kind: IdentityKind) -> Event {
+    configured_event_with_identity_and_model(identity_kind, "test-model")
+}
+
+fn configured_event_with_identity_and_model(identity_kind: IdentityKind, model: &str) -> Event {
     Event {
         id: "session".to_string(),
         msg: EventMsg::SessionConfigured(adam_agent::protocol::SessionConfiguredEvent {
             session_id: ThreadId::new(),
             forked_from_id: None,
             thread_name: None,
-            model: "test-model".to_string(),
+            model: model.to_string(),
             identity_kind,
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
@@ -5613,6 +5619,7 @@ async fn resumed_session_configured_sets_restored_identity_without_runtime_sync(
 
     let ops = drain_ops(&mut op_rx);
     assert_eq!(chat.active_identity_kind_for_ui(), IdentityKind::Planner);
+    assert!(chat.active_identity_mask.is_none());
     assert!(
         !ops.iter().any(|op| matches!(
             op,
@@ -5627,6 +5634,82 @@ async fn resumed_session_configured_sets_restored_identity_without_runtime_sync(
         ops.iter().any(|op| matches!(op, Op::ListCustomPrompts)),
         "expected normal startup refresh ops, got {ops:?}"
     );
+}
+
+#[tokio::test]
+async fn resumed_session_configured_does_not_send_preset_identity_on_next_turn() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    chat.pending_existing_thread_model_override = Some("gpt-5".to_string());
+    let planner_mask =
+        identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+            .expect("expected planner identity mask");
+    chat.set_identity_mask(planner_mask);
+    drain_ops(&mut op_rx);
+
+    chat.handle_codex_event(configured_event_with_identity(IdentityKind::Planner));
+
+    assert_eq!(chat.active_identity_kind_for_ui(), IdentityKind::Planner);
+    assert!(chat.active_identity_mask.is_none());
+    assert_eq!(chat.current_model(), "gpt-5");
+    drain_ops(&mut op_rx);
+
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            model, identity, ..
+        } => {
+            assert_eq!(model, "gpt-5");
+            assert_eq!(identity, None);
+        }
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn resumed_session_configured_preserves_model_override_without_sending_identity() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("override-model")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    chat.pending_existing_thread_model_override = Some("override-model".to_string());
+    drain_ops(&mut op_rx);
+
+    chat.handle_codex_event(configured_event_with_identity_and_model(
+        IdentityKind::Planner,
+        "saved-model",
+    ));
+
+    let ops = drain_ops(&mut op_rx);
+    assert_eq!(chat.active_identity_kind_for_ui(), IdentityKind::Planner);
+    assert!(chat.active_identity_mask.is_none());
+    assert_eq!(chat.current_model(), "override-model");
+    assert!(chat.pending_existing_thread_model_override.is_none());
+    assert!(
+        !ops.iter().any(|op| matches!(
+            op,
+            Op::OverrideTurnContext {
+                identity: Some(_),
+                ..
+            }
+        )),
+        "did not expect resumed session identity override, got {ops:?}"
+    );
+
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            model, identity, ..
+        } => {
+            assert_eq!(model, "override-model");
+            assert_eq!(identity, None);
+        }
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
 }
 
 #[tokio::test]

@@ -254,6 +254,13 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_identity_indicator_without_redraw(
+        &mut self,
+        indicator: Option<IdentityIndicator>,
+    ) {
+        self.composer.set_identity_indicator(indicator);
+    }
+
     pub fn set_footer_info(
         &mut self,
         model_name: String,
@@ -839,6 +846,10 @@ impl BottomPane {
     pub(crate) fn set_buddy_identity_kind(&mut self, identity_kind: IdentityKind) {
         self.composer.set_buddy_identity_kind(identity_kind);
         self.request_redraw();
+    }
+
+    pub(crate) fn set_buddy_identity_kind_without_redraw(&mut self, identity_kind: IdentityKind) {
+        self.composer.set_buddy_identity_kind(identity_kind);
     }
 
     pub(crate) fn pet_buddy(&mut self) {
