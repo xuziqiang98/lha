@@ -37,6 +37,8 @@ fn identity_with_instructions(instructions: Option<&str>) -> Identity {
     identity_with_kind_and_instructions(IdentityKind::Nobody, instructions)
 }
 
+const IDENTITY_CLEARED_MARKER: &str = "The current session has no active preset identity.";
+
 fn developer_texts(input: &[Value]) -> Vec<String> {
     input
         .iter()
@@ -62,6 +64,14 @@ fn identity_xml(text: &str) -> String {
 
 fn count_exact(texts: &[String], target: &str) -> usize {
     texts.iter().filter(|text| text.as_str() == target).count()
+}
+
+fn position_exact(texts: &[String], target: &str) -> Option<usize> {
+    texts.iter().position(|text| text == target)
+}
+
+fn position_containing(texts: &[String], needle: &str) -> Option<usize> {
+    texts.iter().position(|text| text.contains(needle))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -132,6 +142,10 @@ async fn user_input_includes_identity_instructions_after_override() -> Result<()
     let dev_texts = developer_texts(&input);
     let identity_text = identity_xml(identity_text);
     assert_eq!(count_exact(&dev_texts, &identity_text), 1);
+    assert!(
+        position_containing(&dev_texts, IDENTITY_CLEARED_MARKER).is_none(),
+        "did not expect identity clear when resumed Nobody identity has custom instructions"
+    );
 
     Ok(())
 }
@@ -496,6 +510,91 @@ async fn identity_update_emits_new_instruction_message_when_mode_changes() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn identity_update_clears_previous_instructions_when_switching_to_nobody() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+
+    let test = test_codex().build(&server).await?;
+    let programmer_text = "programmer instructions";
+
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            identity: Some(identity_with_kind_and_instructions(
+                IdentityKind::Programmer,
+                Some(programmer_text),
+            )),
+            personality: None,
+        })
+        .await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello 1".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            identity: Some(identity_with_kind_and_instructions(
+                IdentityKind::Nobody,
+                None,
+            )),
+            personality: None,
+        })
+        .await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello 2".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let input = req2.single_request().input();
+    let dev_texts = developer_texts(&input);
+    let programmer_text = identity_xml(programmer_text);
+    let programmer_pos =
+        position_exact(&dev_texts, &programmer_text).expect("programmer identity instructions");
+    let clear_pos =
+        position_containing(&dev_texts, IDENTITY_CLEARED_MARKER).expect("identity clear message");
+    assert_eq!(count_exact(&dev_texts, &programmer_text), 1);
+    assert!(
+        programmer_pos < clear_pos,
+        "expected clear message after stale identity, got {dev_texts:?}"
+    );
+    assert!(dev_texts[clear_pos].starts_with(IDENTITY_OPEN_TAG));
+    assert!(dev_texts[clear_pos].ends_with(IDENTITY_CLOSE_TAG));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn identity_update_noop_does_not_append_when_mode_is_unchanged() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -632,6 +731,209 @@ async fn resume_replays_identity_instructions() -> Result<()> {
     let dev_texts = developer_texts(&input);
     let identity_text = identity_xml(identity_text);
     assert_eq!(count_exact(&dev_texts, &identity_text), 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_with_stale_identity_and_nobody_override_clears_on_first_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+
+    let mut builder = test_codex();
+    let initial = builder.build(&server).await?;
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+    let home = initial.home.clone();
+
+    let programmer_text = "resume programmer instructions";
+    initial
+        .codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            identity: Some(identity_with_kind_and_instructions(
+                IdentityKind::Programmer,
+                Some(programmer_text),
+            )),
+            personality: None,
+        })
+        .await?;
+
+    initial
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let resumed = builder.resume(&server, home, rollout_path).await?;
+    resumed
+        .codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            identity: Some(identity_with_kind_and_instructions(
+                IdentityKind::Nobody,
+                None,
+            )),
+            personality: None,
+        })
+        .await?;
+
+    resumed
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "after resume".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&resumed.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let input = req2.single_request().input();
+    let dev_texts = developer_texts(&input);
+    let programmer_text = identity_xml(programmer_text);
+    let programmer_pos =
+        position_exact(&dev_texts, &programmer_text).expect("programmer identity instructions");
+    let clear_pos =
+        position_containing(&dev_texts, IDENTITY_CLEARED_MARKER).expect("identity clear message");
+    assert!(
+        programmer_pos < clear_pos,
+        "expected clear message after stale identity, got {dev_texts:?}"
+    );
+    assert!(dev_texts[clear_pos].starts_with(IDENTITY_OPEN_TAG));
+    assert!(dev_texts[clear_pos].ends_with(IDENTITY_CLOSE_TAG));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_with_custom_nobody_identity_does_not_clear_current_instructions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let _req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+    let req3 = mount_sse_once(&server, sse_completed("resp-3")).await;
+
+    let mut builder = test_codex();
+    let initial = builder.build(&server).await?;
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+    let home = initial.home.clone();
+
+    let programmer_text = "old programmer instructions";
+    initial
+        .codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            identity: Some(identity_with_kind_and_instructions(
+                IdentityKind::Programmer,
+                Some(programmer_text),
+            )),
+            personality: None,
+        })
+        .await?;
+
+    initial
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello 1".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let custom_text = "custom nobody instructions";
+    initial
+        .codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            identity: Some(identity_with_kind_and_instructions(
+                IdentityKind::Nobody,
+                Some(custom_text),
+            )),
+            personality: None,
+        })
+        .await?;
+
+    initial
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello 2".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let resumed = builder.resume(&server, home, rollout_path).await?;
+    resumed
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "after resume".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&resumed.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let input = req3.single_request().input();
+    let dev_texts = developer_texts(&input);
+    let programmer_text = identity_xml(programmer_text);
+    let custom_text = identity_xml(custom_text);
+    assert_eq!(count_exact(&dev_texts, &programmer_text), 1);
+    assert_eq!(count_exact(&dev_texts, &custom_text), 1);
+    assert!(
+        position_containing(&dev_texts, IDENTITY_CLEARED_MARKER).is_none(),
+        "did not expect identity clear when current Nobody identity has custom instructions"
+    );
 
     Ok(())
 }

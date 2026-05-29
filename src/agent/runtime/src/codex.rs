@@ -160,6 +160,8 @@ use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
+use crate::protocol::IDENTITY_CLOSE_TAG;
+use crate::protocol::IDENTITY_OPEN_TAG;
 use crate::protocol::McpServerRefreshConfig;
 use crate::protocol::Op;
 use crate::protocol::PlanDeltaEvent;
@@ -858,6 +860,37 @@ fn append_workflow_developer_instructions(
     }
 }
 
+const IDENTITY_CLEARED_MARKER: &str = "The current session has no active preset identity.";
+const IDENTITY_CLEARED_INSTRUCTIONS: &str = "The current session has no active preset identity. Ignore any previous identity instructions, including Planner, Programmer, Explorer, or Reviewer identity behavior. Follow the remaining system, developer, and user instructions normally.";
+
+fn identity_cleared_developer_instructions() -> DeveloperInstructions {
+    DeveloperInstructions::new(format!(
+        "{IDENTITY_OPEN_TAG}{IDENTITY_CLEARED_INSTRUCTIONS}{IDENTITY_CLOSE_TAG}"
+    ))
+}
+
+fn identity_prompt_may_be_active(identity: &Identity) -> bool {
+    identity.kind != IdentityKind::Nobody
+        || identity
+            .settings
+            .developer_instructions
+            .as_deref()
+            .is_some_and(|instructions| !instructions.is_empty())
+}
+
+fn append_identity_clear_from_history_if_needed(
+    items: &mut Vec<TranscriptItem>,
+    identity: &Identity,
+    pending_clear: bool,
+) {
+    if pending_clear
+        && identity.kind == IdentityKind::Nobody
+        && !identity_prompt_may_be_active(identity)
+    {
+        items.push(identity_cleared_developer_instructions().into());
+    }
+}
+
 fn builtin_identity_developer_instructions(kind: IdentityKind) -> Option<String> {
     match kind {
         IdentityKind::Nobody => None,
@@ -889,6 +922,75 @@ fn latest_identity_from_initial_history(initial_history: &InitialHistory) -> Opt
         InitialHistory::Resumed(resumed) => latest_identity_from_rollout_items(&resumed.history),
         InitialHistory::Forked(items) => latest_identity_from_rollout_items(items),
     }
+}
+
+fn developer_text(item: &TranscriptItem) -> Option<&str> {
+    match item {
+        TranscriptItem::Message { role, content, .. } if role == "developer" => {
+            content.iter().find_map(|content| match content {
+                ContentItem::InputText { text } => Some(text.as_str()),
+                ContentItem::InputImage { .. } | ContentItem::OutputText { .. } => None,
+            })
+        }
+        TranscriptItem::Message { .. }
+        | TranscriptItem::Reasoning { .. }
+        | TranscriptItem::HostedActivity { .. }
+        | TranscriptItem::ToolCall { .. }
+        | TranscriptItem::ToolResult { .. }
+        | TranscriptItem::Unknown { .. } => None,
+    }
+}
+
+fn identity_developer_text(text: &str) -> Option<&str> {
+    if text.contains(IDENTITY_OPEN_TAG) && text.contains(IDENTITY_CLOSE_TAG) {
+        Some(text)
+    } else {
+        None
+    }
+}
+
+fn latest_identity_developer_text(items: &[TranscriptItem]) -> Option<&str> {
+    items
+        .iter()
+        .rev()
+        .filter_map(developer_text)
+        .find_map(identity_developer_text)
+}
+
+fn identity_clear_is_latest(text: &str) -> bool {
+    text.contains(IDENTITY_CLEARED_MARKER)
+}
+
+fn rollout_history_may_have_active_identity(rollout_items: &[RolloutItem]) -> bool {
+    let mut history = ContextManager::new();
+    for item in rollout_items {
+        match item {
+            RolloutItem::TranscriptItem(response_item) => {
+                history.record_items(
+                    std::iter::once(response_item),
+                    TruncationPolicy::Bytes(usize::MAX),
+                );
+            }
+            RolloutItem::Compacted(compacted) => {
+                if let Some(replacement) = &compacted.replacement_history {
+                    history.replace(replacement.clone());
+                } else {
+                    history.replace(vec![TranscriptItem::from(compacted.clone())]);
+                }
+            }
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                history.drop_last_n_user_turns(rollback.num_turns);
+            }
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::GhostSnapshot(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::Workflow(_)
+            | RolloutItem::EventMsg(_) => {}
+        }
+    }
+
+    latest_identity_developer_text(history.raw_items())
+        .is_some_and(|text| !identity_clear_is_latest(text))
 }
 
 fn identity_for_session(base_identity: Identity, initial_history: &InitialHistory) -> Identity {
@@ -2582,16 +2684,20 @@ impl Session {
                     state.initial_context_seeded = true;
                     state.prompt_settings_snapshot =
                         Some(PromptSettingsSnapshot::from(turn_context.as_ref()));
+                    state.pending_identity_clear_from_history = false;
                 }
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
                 self.flush_rollout().await;
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
+                let pending_identity_clear_from_history =
+                    rollout_history_may_have_active_identity(&rollout_items);
                 {
                     let mut state = self.state.lock().await;
                     state.initial_context_seeded = false;
                     state.prompt_settings_snapshot = None;
+                    state.pending_identity_clear_from_history = pending_identity_clear_from_history;
                 }
 
                 // If resuming, warn when the last recorded model differs from the current one.
@@ -2643,6 +2749,8 @@ impl Session {
                 self.flush_rollout().await;
             }
             InitialHistory::Forked(rollout_items) => {
+                let pending_identity_clear_from_history =
+                    rollout_history_may_have_active_identity(&rollout_items);
                 // Always add response items to conversation history
                 let reconstructed_history = self
                     .reconstruct_history_from_rollout(&turn_context, &rollout_items)
@@ -2672,7 +2780,12 @@ impl Session {
                     .await;
 
                 // Append the current session's initial context after the reconstructed history.
-                let initial_context = self.build_initial_context(&turn_context).await;
+                let mut initial_context = self.build_initial_context(&turn_context).await;
+                append_identity_clear_from_history_if_needed(
+                    &mut initial_context,
+                    &turn_context.identity,
+                    pending_identity_clear_from_history,
+                );
                 self.record_conversation_items(&turn_context, &initial_context)
                     .await;
                 {
@@ -2680,6 +2793,7 @@ impl Session {
                     state.initial_context_seeded = true;
                     state.prompt_settings_snapshot =
                         Some(PromptSettingsSnapshot::from(turn_context.as_ref()));
+                    state.pending_identity_clear_from_history = false;
                 }
                 // Flush after seeding history and any persisted rollout copy.
                 self.flush_rollout().await;
@@ -2982,13 +3096,21 @@ impl Session {
         next: &TurnContext,
     ) -> Option<TranscriptItem> {
         let prev = previous?;
-        if prev.identity != next.identity {
-            // If the next identity has empty developer instructions, this returns None and we emit
-            // no update, so prior identity instructions remain in the prompt history.
-            Some(DeveloperInstructions::from_identity(&next.identity)?.into())
-        } else {
-            None
+        if prev.identity == next.identity {
+            return None;
         }
+
+        if let Some(identity_instructions) = DeveloperInstructions::from_identity(&next.identity) {
+            return Some(identity_instructions.into());
+        }
+
+        if next.identity.kind == IdentityKind::Nobody
+            && identity_prompt_may_be_active(&prev.identity)
+        {
+            return Some(identity_cleared_developer_instructions().into());
+        }
+
+        None
     }
 
     fn build_buddy_update_item_from_snapshot(
@@ -3507,15 +3629,21 @@ impl Session {
     }
 
     pub(crate) async fn seed_initial_context_if_needed(&self, turn_context: &TurnContext) -> bool {
-        {
+        let pending_identity_clear_from_history = {
             let mut state = self.state.lock().await;
             if state.initial_context_seeded {
                 return false;
             }
             state.initial_context_seeded = true;
-        }
+            std::mem::take(&mut state.pending_identity_clear_from_history)
+        };
 
-        let initial_context = self.build_initial_context(turn_context).await;
+        let mut initial_context = self.build_initial_context(turn_context).await;
+        append_identity_clear_from_history_if_needed(
+            &mut initial_context,
+            &turn_context.identity,
+            pending_identity_clear_from_history,
+        );
         self.record_conversation_items(turn_context, &initial_context)
             .await;
         self.set_prompt_settings_snapshot(turn_context).await;
@@ -8622,6 +8750,144 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn identity_for_test(
+        base: &Identity,
+        kind: IdentityKind,
+        developer_instructions: Option<&str>,
+    ) -> Identity {
+        Identity {
+            kind,
+            settings: Settings {
+                model: base.settings.model.clone(),
+                reasoning_effort: base.settings.reasoning_effort,
+                developer_instructions: developer_instructions.map(str::to_string),
+            },
+        }
+    }
+
+    fn identity_xml_for_test(instructions: &str) -> String {
+        format!("{IDENTITY_OPEN_TAG}{instructions}{IDENTITY_CLOSE_TAG}")
+    }
+
+    fn developer_texts_from_items(items: &[TranscriptItem]) -> Vec<String> {
+        items
+            .iter()
+            .filter_map(|item| match item {
+                TranscriptItem::Message { role, content, .. } if role == "developer" => {
+                    content.iter().find_map(|content| match content {
+                        ContentItem::InputText { text } => Some(text.clone()),
+                        ContentItem::InputImage { .. } | ContentItem::OutputText { .. } => None,
+                    })
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn append_identity_clear_from_history_if_needed_does_not_clear_custom_nobody() {
+        let base = Identity {
+            kind: IdentityKind::Nobody,
+            settings: Settings {
+                model: "test-model".to_string(),
+                reasoning_effort: None,
+                developer_instructions: Some("custom instructions".to_string()),
+            },
+        };
+        let mut items = Vec::new();
+
+        append_identity_clear_from_history_if_needed(&mut items, &base, true);
+
+        assert_eq!(items, Vec::<TranscriptItem>::new());
+    }
+
+    #[tokio::test]
+    async fn build_identity_update_clears_stale_identity_when_switching_to_nobody() {
+        let (session, mut previous) = make_session_and_context().await;
+        previous.identity = identity_for_test(
+            &previous.identity,
+            IdentityKind::Programmer,
+            Some("programmer instructions"),
+        );
+        let nobody = identity_for_test(&previous.identity, IdentityKind::Nobody, None);
+        let previous = Arc::new(previous);
+
+        session
+            .update_settings(SessionSettingsUpdate {
+                identity: Some(nobody),
+                ..Default::default()
+            })
+            .await
+            .expect("update identity");
+
+        let current = session
+            .new_default_turn_with_sub_id("identity-clear".to_string())
+            .await;
+        let items = session.build_settings_update_items(Some(&previous), &current);
+        let texts = developer_texts_from_items(&items);
+
+        assert_eq!(texts.len(), 1);
+        assert!(texts[0].contains(IDENTITY_CLEARED_MARKER));
+        assert!(texts[0].starts_with(IDENTITY_OPEN_TAG));
+        assert!(texts[0].ends_with(IDENTITY_CLOSE_TAG));
+    }
+
+    #[tokio::test]
+    async fn build_identity_update_omits_clear_for_inactive_nobody_changes() {
+        let (session, previous) = make_session_and_context().await;
+        let mut nobody = previous.identity.clone();
+        nobody.settings.reasoning_effort = Some(ReasoningEffort::Low);
+        let previous = Arc::new(previous);
+
+        session
+            .update_settings(SessionSettingsUpdate {
+                identity: Some(nobody),
+                ..Default::default()
+            })
+            .await
+            .expect("update identity");
+
+        let current = session
+            .new_default_turn_with_sub_id("identity-noop".to_string())
+            .await;
+        let items = session.build_settings_update_items(Some(&previous), &current);
+
+        assert_eq!(developer_texts_from_items(&items), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn build_identity_update_prefers_new_identity_instructions_over_clear() {
+        let (session, mut previous) = make_session_and_context().await;
+        previous.identity = identity_for_test(
+            &previous.identity,
+            IdentityKind::Programmer,
+            Some("programmer instructions"),
+        );
+        let planner = identity_for_test(
+            &previous.identity,
+            IdentityKind::Planner,
+            Some("planner instructions"),
+        );
+        let previous = Arc::new(previous);
+
+        session
+            .update_settings(SessionSettingsUpdate {
+                identity: Some(planner),
+                ..Default::default()
+            })
+            .await
+            .expect("update identity");
+
+        let current = session
+            .new_default_turn_with_sub_id("identity-planner".to_string())
+            .await;
+        let items = session.build_settings_update_items(Some(&previous), &current);
+        let texts = developer_texts_from_items(&items);
+
+        assert_eq!(texts, vec![identity_xml_for_test("planner instructions")]);
+        assert!(!texts[0].contains(IDENTITY_CLEARED_MARKER));
     }
 
     #[tokio::test]
