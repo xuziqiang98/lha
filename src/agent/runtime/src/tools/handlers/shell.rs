@@ -226,7 +226,7 @@ fn validate_shell_command(command: &str) -> Result<(), FunctionCallError> {
 }
 
 fn validate_argv_command(command: &[String]) -> Result<(), FunctionCallError> {
-    if command.is_empty() || command.iter().any(String::is_empty) {
+    if command.first().is_none_or(String::is_empty) {
         Err(FunctionCallError::RespondToModel(
             "command must be non-empty".to_string(),
         ))
@@ -428,13 +428,31 @@ mod tests {
     }
 
     #[test]
-    fn validate_argv_command_rejects_empty_token() {
+    fn validate_argv_command_rejects_empty_program_name() {
         let params = shell_params(vec!["".to_string()]);
 
         assert_eq!(
             validate_argv_command(&params.command),
             Err(non_empty_command_error())
         );
+
+        let params = shell_params(vec!["".to_string(), "arg".to_string()]);
+
+        assert_eq!(
+            validate_argv_command(&params.command),
+            Err(non_empty_command_error())
+        );
+    }
+
+    #[test]
+    fn validate_argv_command_accepts_empty_arguments() {
+        let params = shell_params(vec!["printf".to_string(), "%s".to_string(), "".to_string()]);
+
+        assert_eq!(validate_argv_command(&params.command), Ok(()));
+
+        let params = shell_params(vec!["test".to_string(), "-z".to_string(), "".to_string()]);
+
+        assert_eq!(validate_argv_command(&params.command), Ok(()));
     }
 
     #[test]
