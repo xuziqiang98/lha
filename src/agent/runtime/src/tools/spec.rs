@@ -162,6 +162,9 @@ fn tool_name_is_allowed_by_identity(config: &ToolsConfig, name: &str) -> bool {
                 | "local_shell"
                 | "shell_command"
                 | "container.exec"
+                | "spawn_agent"
+                | "wait"
+                | "close_agent"
         ),
         IdentityKind::Nobody | IdentityKind::Planner | IdentityKind::Programmer => true,
     }
@@ -2024,13 +2027,23 @@ mod tests {
 
         assert_eq!(
             tool_names,
-            vec!["exec_command", "grep_files", "read_file", "list_dir"]
+            vec![
+                "exec_command",
+                "grep_files",
+                "read_file",
+                "list_dir",
+                "spawn_agent",
+                "wait",
+                "close_agent"
+            ]
         );
         assert!(registry.handler("exec_command").is_some());
         assert!(registry.handler("grep_files").is_some());
         assert!(registry.handler("read_file").is_some());
         assert!(registry.handler("list_dir").is_some());
-        assert!(registry.handler("spawn_agent").is_none());
+        assert!(registry.handler("spawn_agent").is_some());
+        assert!(registry.handler("wait").is_some());
+        assert!(registry.handler("close_agent").is_some());
         assert!(registry.handler("write_stdin").is_none());
         assert!(registry.handler("apply_patch").is_none());
         assert!(registry.handler("container.exec").is_some());

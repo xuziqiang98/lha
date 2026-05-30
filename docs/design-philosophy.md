@@ -50,8 +50,10 @@ multi-agent product story.
 ## Review And Exploration
 
 `/review` uses the same bounded delegation model as isolated exploration. The
-runtime starts a reviewer job, waits for the final review result, parses it, and
-emits `ExitedReviewMode` in the main thread.
+runtime starts the top-level reviewer job, waits for the final review result,
+parses it, and emits `ExitedReviewMode` in the main thread. A reviewer job may
+start bounded `explorer` jobs for codebase facts, but nested reviewer jobs are
+unsupported.
 
 Exploration jobs should answer narrow repository questions. They may run in
 parallel when the questions are independent, but each job still has one prompt,

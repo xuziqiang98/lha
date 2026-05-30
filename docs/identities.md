@@ -83,7 +83,8 @@ CLI-backed one-shot job, then folds only the final review result back into the
 main thread.
 
 Use `reviewer` for automated review findings. The runtime only exposes
-read-only navigation and inspection command tools for this identity.
+read-only navigation tools, read-only inspection command tools, and delegated
+explorer-job tools for this identity.
 
 `reviewer` is a bounded job identity, not a long-lived sub-agent.
 
@@ -125,7 +126,8 @@ identity.
 - `/goal` requires `programmer`; planner, explorer, reviewer, and nobody turns
   should switch identities before creating or continuing a goal.
 - `explorer` and `reviewer` are one-shot, read-only identities. They do not
-  support ongoing child-agent conversations.
+  support ongoing child-agent conversations. `reviewer` may start bounded
+  `explorer` jobs for isolated codebase facts, but not nested reviewer jobs.
 - Workflow identities are a separate planned/experimental design and do not
   replace the current built-in identities.
 

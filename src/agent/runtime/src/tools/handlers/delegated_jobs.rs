@@ -86,14 +86,8 @@ async fn spawn_agent(
             "message must be non-empty".to_string(),
         ));
     }
-    let agent_type = match args.agent_type.as_deref().unwrap_or("explorer") {
-        "explorer" => AgentJobType::Explorer,
-        other => {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "unsupported agent_type '{other}'; only 'explorer' is available"
-            )));
-        }
-    };
+    let agent_type = parse_agent_job_type(args.agent_type.as_deref())
+        .map_err(FunctionCallError::RespondToModel)?;
     let exec_config = AgentJobExecConfig::from_runtime(
         &turn.runtime,
         &turn.runtime.get_model(),
@@ -125,6 +119,15 @@ async fn spawn_agent(
         success: Some(true),
         content_items: None,
     })
+}
+
+fn parse_agent_job_type(agent_type: Option<&str>) -> Result<AgentJobType, String> {
+    match agent_type.unwrap_or("explorer") {
+        "explorer" => Ok(AgentJobType::Explorer),
+        other => Err(format!(
+            "unsupported agent_type '{other}'; only 'explorer' is available"
+        )),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -223,4 +226,39 @@ async fn close_agent(
         success: Some(true),
         content_items: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn parse_agent_job_type_defaults_to_explorer() {
+        assert_eq!(parse_agent_job_type(None), Ok(AgentJobType::Explorer));
+    }
+
+    #[test]
+    fn parse_agent_job_type_accepts_explorer() {
+        assert_eq!(
+            parse_agent_job_type(Some("explorer")),
+            Ok(AgentJobType::Explorer)
+        );
+    }
+
+    #[test]
+    fn parse_agent_job_type_rejects_reviewer() {
+        let err = parse_agent_job_type(Some("reviewer")).expect_err("reviewer is unsupported");
+
+        assert!(err.contains("reviewer"));
+        assert!(err.contains("only 'explorer' is available"));
+    }
+
+    #[test]
+    fn parse_agent_job_type_rejects_unknown_values() {
+        let err = parse_agent_job_type(Some("planner")).expect_err("planner is unsupported");
+
+        assert!(err.contains("planner"));
+        assert!(err.contains("only 'explorer' is available"));
+    }
 }
