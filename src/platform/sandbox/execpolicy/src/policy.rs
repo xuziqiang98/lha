@@ -102,6 +102,11 @@ impl Policy {
                 self.matches_for_command(command.as_ref(), Some(heuristics_fallback))
             })
             .collect();
+        let matched_rules = if matched_rules.is_empty() {
+            self.matches_for_command(&[], Some(heuristics_fallback))
+        } else {
+            matched_rules
+        };
 
         Evaluation::from_matches(matched_rules)
     }

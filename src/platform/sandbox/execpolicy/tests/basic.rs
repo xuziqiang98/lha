@@ -556,6 +556,25 @@ prefix_rule(
 }
 
 #[test]
+fn check_multiple_handles_empty_command_list() {
+    let policy = Policy::empty();
+    let commands: Vec<Vec<String>> = Vec::new();
+
+    let evaluation = policy.check_multiple(&commands, &allow_all);
+
+    assert_eq!(
+        Evaluation {
+            decision: Decision::Allow,
+            matched_rules: vec![RuleMatch::HeuristicsRuleMatch {
+                command: vec![],
+                decision: Decision::Allow,
+            }],
+        },
+        evaluation
+    );
+}
+
+#[test]
 fn heuristics_match_is_returned_when_no_policy_matches() {
     let policy = Policy::empty();
     let command = tokens(&["python"]);

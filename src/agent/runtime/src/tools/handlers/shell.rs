@@ -120,6 +120,7 @@ impl ToolHandler for ShellHandler {
         match payload {
             ToolPayload::Function { arguments } => {
                 let params: ShellToolCallParams = parse_arguments(&arguments)?;
+                validate_argv_command(&params.command)?;
                 let prefix_rule = params.prefix_rule.clone();
                 let exec_params = Self::to_exec_params(&params, turn.as_ref());
                 Self::run_exec_like(RunExecLikeArgs {
@@ -135,6 +136,7 @@ impl ToolHandler for ShellHandler {
                 .await
             }
             ToolPayload::LocalShell { params } => {
+                validate_argv_command(&params.command)?;
                 let exec_params = Self::to_exec_params(&params, turn.as_ref());
                 Self::run_exec_like(RunExecLikeArgs {
                     tool_name: tool_name.clone(),
@@ -196,6 +198,7 @@ impl ToolHandler for ShellCommandHandler {
         };
 
         let params: ShellCommandToolCallParams = parse_arguments(&arguments)?;
+        validate_shell_command(&params.command)?;
         let prefix_rule = params.prefix_rule.clone();
         let exec_params = Self::to_exec_params(&params, session.as_ref(), turn.as_ref());
         ShellHandler::run_exec_like(RunExecLikeArgs {
@@ -209,6 +212,26 @@ impl ToolHandler for ShellCommandHandler {
             freeform: true,
         })
         .await
+    }
+}
+
+fn validate_shell_command(command: &str) -> Result<(), FunctionCallError> {
+    if command.trim().is_empty() {
+        Err(FunctionCallError::RespondToModel(
+            "command must be non-empty".to_string(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_argv_command(command: &[String]) -> Result<(), FunctionCallError> {
+    if command.is_empty() || command.iter().any(String::is_empty) {
+        Err(FunctionCallError::RespondToModel(
+            "command must be non-empty".to_string(),
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -329,10 +352,14 @@ mod tests {
     use std::sync::Arc;
 
     use adam_protocol::models::ShellCommandToolCallParams;
+    use adam_protocol::models::ShellToolCallParams;
     use pretty_assertions::assert_eq;
 
+    use super::validate_argv_command;
+    use super::validate_shell_command;
     use crate::codex::make_session_and_context;
     use crate::exec_env::create_env;
+    use crate::function_tool::FunctionCallError;
     use crate::is_safe_command::is_known_safe_command;
     use crate::powershell::try_find_powershell_executable_blocking;
     use crate::powershell::try_find_pwsh_executable_blocking;
@@ -342,6 +369,82 @@ mod tests {
     use crate::shell_snapshot::ShellSnapshot;
     use crate::tools::handlers::ShellCommandHandler;
     use tokio::sync::watch;
+
+    fn shell_command_params(command: &str) -> ShellCommandToolCallParams {
+        ShellCommandToolCallParams {
+            command: command.to_string(),
+            workdir: None,
+            login: None,
+            timeout_ms: None,
+            sandbox_permissions: None,
+            prefix_rule: None,
+            justification: None,
+        }
+    }
+
+    fn shell_params(command: Vec<String>) -> ShellToolCallParams {
+        ShellToolCallParams {
+            command,
+            workdir: None,
+            timeout_ms: None,
+            sandbox_permissions: None,
+            prefix_rule: None,
+            justification: None,
+        }
+    }
+
+    fn non_empty_command_error() -> FunctionCallError {
+        FunctionCallError::RespondToModel("command must be non-empty".to_string())
+    }
+
+    #[test]
+    fn validate_shell_command_rejects_empty_command() {
+        let params = shell_command_params("");
+
+        assert_eq!(
+            validate_shell_command(&params.command),
+            Err(non_empty_command_error())
+        );
+    }
+
+    #[test]
+    fn validate_shell_command_rejects_whitespace_command() {
+        let params = shell_command_params("   \n\t");
+
+        assert_eq!(
+            validate_shell_command(&params.command),
+            Err(non_empty_command_error())
+        );
+    }
+
+    #[test]
+    fn validate_argv_command_rejects_empty_command() {
+        let params = shell_params(Vec::new());
+
+        assert_eq!(
+            validate_argv_command(&params.command),
+            Err(non_empty_command_error())
+        );
+    }
+
+    #[test]
+    fn validate_argv_command_rejects_empty_token() {
+        let params = shell_params(vec!["".to_string()]);
+
+        assert_eq!(
+            validate_argv_command(&params.command),
+            Err(non_empty_command_error())
+        );
+    }
+
+    #[test]
+    fn validate_commands_accept_non_empty_commands() {
+        let shell_command = shell_command_params("echo hello");
+        let argv_command = shell_params(vec!["echo".to_string(), "hello".to_string()]);
+
+        assert_eq!(validate_shell_command(&shell_command.command), Ok(()));
+        assert_eq!(validate_argv_command(&argv_command.command), Ok(()));
+    }
 
     /// The logic for is_known_safe_command() has heuristics for known shells,
     /// so we must ensure the commands generated by [ShellCommandHandler] can be

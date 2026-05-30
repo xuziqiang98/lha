@@ -91,7 +91,11 @@ pub fn try_parse_word_only_commands_sequence(tree: &Tree, src: &str) -> Option<V
             return None;
         }
     }
-    Some(commands)
+    if commands.is_empty() {
+        None
+    } else {
+        Some(commands)
+    }
 }
 
 pub fn extract_bash_command(command: &[String]) -> Option<(&str, &str)> {
@@ -218,6 +222,12 @@ mod tests {
     }
 
     #[test]
+    fn rejects_empty_script() {
+        assert!(parse_seq("").is_none());
+        assert!(parse_seq("   \n\t").is_none());
+    }
+
+    #[test]
     fn accepts_single_simple_command() {
         let cmds = parse_seq("ls -1").unwrap();
         assert_eq!(cmds, vec![vec!["ls".to_string(), "-1".to_string()]]);
@@ -331,6 +341,12 @@ mod tests {
         let command = vec!["zsh".to_string(), "-lc".to_string(), "ls".to_string()];
         let parsed = parse_shell_lc_plain_commands(&command).unwrap();
         assert_eq!(parsed, vec![vec!["ls".to_string()]]);
+    }
+
+    #[test]
+    fn parse_shell_lc_plain_commands_rejects_empty_script() {
+        let command = vec!["zsh".to_string(), "-lc".to_string(), String::new()];
+        assert!(parse_shell_lc_plain_commands(&command).is_none());
     }
 
     #[test]

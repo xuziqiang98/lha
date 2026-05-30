@@ -127,6 +127,7 @@ impl ToolHandler for UnifiedExecHandler {
         let response = match tool_name.as_str() {
             "exec_command" => {
                 let args: ExecCommandArgs = parse_arguments(&arguments)?;
+                validate_exec_command_args(&args)?;
                 let process_id = manager.allocate_process_id().await;
                 let command = get_command(&args, session.user_shell());
 
@@ -245,6 +246,16 @@ impl ToolHandler for UnifiedExecHandler {
     }
 }
 
+fn validate_exec_command_args(args: &ExecCommandArgs) -> Result<(), FunctionCallError> {
+    if args.cmd.trim().is_empty() {
+        Err(FunctionCallError::RespondToModel(
+            "cmd must be non-empty".to_string(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String> {
     let model_shell = args.shell.as_ref().map(|shell_str| {
         let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
@@ -291,6 +302,40 @@ mod tests {
     use super::*;
     use crate::shell::default_user_shell;
     use std::sync::Arc;
+
+    #[test]
+    fn validate_exec_command_args_rejects_empty_cmd() -> anyhow::Result<()> {
+        let args: ExecCommandArgs = parse_arguments(r#"{"cmd": ""}"#)?;
+
+        assert_eq!(
+            validate_exec_command_args(&args),
+            Err(FunctionCallError::RespondToModel(
+                "cmd must be non-empty".to_string()
+            ))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn validate_exec_command_args_rejects_whitespace_cmd() -> anyhow::Result<()> {
+        let args: ExecCommandArgs = parse_arguments("{\"cmd\": \"   \\n\\t\"}")?;
+
+        assert_eq!(
+            validate_exec_command_args(&args),
+            Err(FunctionCallError::RespondToModel(
+                "cmd must be non-empty".to_string()
+            ))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn validate_exec_command_args_accepts_non_empty_cmd() -> anyhow::Result<()> {
+        let args: ExecCommandArgs = parse_arguments(r#"{"cmd": "echo hello"}"#)?;
+
+        assert_eq!(validate_exec_command_args(&args), Ok(()));
+        Ok(())
+    }
 
     #[test]
     fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> {
