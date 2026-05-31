@@ -44,7 +44,6 @@ use crate::windows_sandbox::WindowsSandboxLevelExt;
 use lha_app_server_protocol::Tools;
 use lha_app_server_protocol::UserSavedConfig;
 use lha_llm::RuntimeEndpoint;
-use lha_llm::built_in_runtime_endpoints;
 use lha_protocol::config_types::IdentityKind;
 use lha_protocol::config_types::Personality;
 use lha_protocol::config_types::ReasoningSummary;
@@ -102,6 +101,7 @@ pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 pub const GENERATED_PROVIDER_PROFILE_PREFIX: &str = "_provider.";
 pub const MODEL_PROVIDER_VARIANT_SEPARATOR: char = '.';
 pub const MODEL_PROVIDER_VARIANTS_KEY: &str = "variants";
+const UNCONFIGURED_PROVIDER_ID: &str = "unconfigured";
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
@@ -192,6 +192,26 @@ pub fn display_model_provider_ref(provider_ref: &str) -> String {
     split_model_provider_variant_ref(provider_ref)
         .map(|(provider_id, dialect)| format!("{provider_id} ({})", dialect_config_value(dialect)))
         .unwrap_or_else(|| provider_ref.to_string())
+}
+
+fn unconfigured_model_provider() -> RuntimeEndpoint {
+    let mut provider =
+        RuntimeEndpoint::openai_compatible_responses("Unconfigured model provider", "");
+    provider.base_url = None;
+    provider
+}
+
+fn model_ref_for_provider_id(provider_id: &str, model: &str) -> std::io::Result<ModelRef> {
+    if provider_id.contains('.') {
+        ModelRef::parse(&format!("{provider_id}:{model}")).map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Invalid model provider `{provider_id}`: {err}"),
+            )
+        })
+    } else {
+        Ok(ModelRef::new(provider_id, "main", model))
+    }
 }
 
 fn warn_ignored_legacy_config_keys(config_layer_stack: &ConfigLayerStack) {
@@ -1485,17 +1505,25 @@ impl Config {
             || config_profile.sandbox_mode.is_some()
             || cfg.sandbox_mode.is_some();
 
+        let models_json_exists = models_json::has_models_json(&lha_home);
+        let has_model_provider_overrides = !model_provider_overrides.is_empty();
         let provider_config_required = provider_config_required_override
-            .unwrap_or_else(|| cfg!(not(test)) && !models_json::has_models_json(&lha_home));
+            .unwrap_or(cfg!(not(test)) && !models_json_exists && !has_model_provider_overrides);
         let models_json = match ModelsJson::load_from_lha_home(&lha_home) {
             Ok(models_json) => models_json,
             Err(err) if err.kind() == ErrorKind::NotFound => ModelsJson::default(),
             Err(err) => return Err(err),
         };
         let state_json = load_state(&lha_home)?;
-        let mut model_providers = built_in_runtime_endpoints();
-        model_providers.extend(models_json.to_runtime_endpoints());
+        let mut model_providers = models_json.to_runtime_endpoints();
         model_providers.extend(model_provider_overrides);
+        let use_unconfigured_provider =
+            provider_config_required || (!models_json_exists && model_providers.is_empty());
+        if use_unconfigured_provider {
+            model_providers
+                .entry(UNCONFIGURED_PROVIDER_ID.to_string())
+                .or_insert_with(unconfigured_model_provider);
+        }
 
         let state_model_ref = state_json
             .last_selected_model
@@ -1516,22 +1544,40 @@ impl Config {
             None
         };
         let override_provider_id = model_provider.or(inferred_override_provider_id);
-        let selected_model_ref = override_model_ref.or_else(|| {
-            plain_override_model.as_ref().map(|model| {
-                let provider_id = override_provider_id.as_deref().unwrap_or("openai");
-                if provider_id.contains('.') {
-                    ModelRef::parse(&format!("{provider_id}:{model}"))
-                        .unwrap_or_else(|_| ModelRef::new(provider_id, "main", model.as_str()))
-                } else {
-                    ModelRef::new(provider_id, "main", model.as_str())
-                }
-            })
-        });
+        let selected_model_ref = if let Some(model_ref) = override_model_ref {
+            Some(model_ref)
+        } else if let Some(model) = plain_override_model.as_ref() {
+            let Some(provider_id) = override_provider_id.as_deref() else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "model `{model}` is not configured in ~/.lha/models.json; use `lha -m provider.endpoint:{model}` or add it to ~/.lha/models.json first"
+                    ),
+                ));
+            };
+            Some(model_ref_for_provider_id(provider_id, model)?)
+        } else {
+            None
+        };
         let selected_model_ref = selected_model_ref.or(state_model_ref);
+        let selected_model_ref = if selected_model_ref.is_none() && override_provider_id.is_none() {
+            models_json.unique_model_ref()
+        } else {
+            selected_model_ref
+        };
 
-        let model_provider_id = override_provider_id
-            .or_else(|| selected_model_ref.as_ref().map(model_provider_id_from_ref))
-            .unwrap_or_else(|| "openai".to_string());
+        let model_provider_id = if let Some(provider_id) = override_provider_id {
+            provider_id
+        } else if let Some(model_ref) = selected_model_ref.as_ref() {
+            model_provider_id_from_ref(model_ref)
+        } else if use_unconfigured_provider {
+            UNCONFIGURED_PROVIDER_ID.to_string()
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "No default model is configured. Add exactly one model to ~/.lha/models.json, select a default model in the TUI, or start with `lha -m provider.endpoint:model`.",
+            ));
+        };
         let model_provider = model_providers
             .get(&model_provider_id)
             .ok_or_else(|| {
@@ -2493,6 +2539,122 @@ trust_level = "trusted"
     }
 
     #[test]
+    fn models_json_single_entry_becomes_default_model_and_provider() -> std::io::Result<()> {
+        let lha_home = TempDir::new()?;
+        std::fs::write(
+            lha_home.path().join("models.json"),
+            r#"{
+              "providers": {
+                "iie": {
+                  "endpoints": {
+                    "main": {
+                      "models": {
+                        "deepseek-v3": {}
+                      }
+                    }
+                  }
+                }
+              }
+            }"#,
+        )?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            lha_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.model.as_deref(), Some("deepseek-v3"));
+        assert_eq!(config.model_provider_id, "iie");
+
+        Ok(())
+    }
+
+    #[test]
+    fn models_json_multiple_entries_without_state_does_not_fallback_to_openai()
+    -> std::io::Result<()> {
+        let lha_home = TempDir::new()?;
+        std::fs::write(
+            lha_home.path().join("models.json"),
+            r#"{
+              "providers": {
+                "iie": {
+                  "endpoints": {
+                    "main": {
+                      "models": {
+                        "deepseek-v3": {},
+                        "deepseek-r1": {}
+                      }
+                    }
+                  }
+                }
+              }
+            }"#,
+        )?;
+
+        let err = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            lha_home.path().to_path_buf(),
+        )
+        .expect_err("multiple configured models should require an explicit default");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("No default model is configured"));
+        assert!(err.to_string().contains("provider.endpoint:model"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn selected_model_from_state_takes_precedence_over_unique_models_json_default()
+    -> std::io::Result<()> {
+        let lha_home = TempDir::new()?;
+        std::fs::write(
+            lha_home.path().join("models.json"),
+            r#"{
+              "providers": {
+                "iie": {
+                  "endpoints": {
+                    "main": {
+                      "models": {
+                        "deepseek-v3": {}
+                      }
+                    }
+                  }
+                },
+                "crs": {
+                  "endpoints": {
+                    "responses": {
+                      "dialect": "responses",
+                      "models": {}
+                    }
+                  }
+                }
+              }
+            }"#,
+        )?;
+        let model_ref = ModelRef::new("crs", "responses", "gpt-5.5");
+        state_json::LHAStateStore::new(lha_home.path()).set_last_selected_model(
+            &model_ref,
+            Some(ReasoningEffort::XHigh),
+            None,
+        )?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            lha_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.model.as_deref(), Some("gpt-5.5"));
+        assert_eq!(config.model_provider_id, "crs.responses");
+        assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::XHigh));
+
+        Ok(())
+    }
+
+    #[test]
     fn selected_identity_restores_from_state() -> std::io::Result<()> {
         let lha_home = TempDir::new()?;
         state_json::LHAStateStore::new(lha_home.path())
@@ -2645,20 +2807,25 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn plain_override_model_without_mapping_still_falls_back_to_openai() -> std::io::Result<()> {
+    fn plain_override_model_without_mapping_requires_explicit_provider() -> std::io::Result<()> {
         let lha_home = TempDir::new()?;
 
-        let config = Config::load_from_base_config_with_overrides(
+        let err = Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
             ConfigOverrides {
                 model: Some("unknown-model".to_string()),
                 ..Default::default()
             },
             lha_home.path().to_path_buf(),
-        )?;
+        )
+        .expect_err("plain model without a models.json mapping should require a provider");
 
-        assert_eq!(config.model.as_deref(), Some("unknown-model"));
-        assert_eq!(config.model_provider_id, "openai");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(
+            err.to_string()
+                .contains("model `unknown-model` is not configured")
+        );
+        assert!(err.to_string().contains("provider.endpoint:unknown-model"));
 
         Ok(())
     }
@@ -4047,7 +4214,10 @@ model_verbosity = "high"
             fixture.lha_home(),
         )?;
         assert_eq!(o3_profile_config.model, None);
-        assert_eq!(o3_profile_config.model_provider_id, "openai");
+        assert_eq!(
+            o3_profile_config.model_provider_id,
+            UNCONFIGURED_PROVIDER_ID
+        );
         assert_eq!(
             o3_profile_config.approval_policy,
             Constrained::allow_any(AskForApproval::Never)
@@ -4076,7 +4246,10 @@ model_verbosity = "high"
             fixture.lha_home(),
         )?;
         assert_eq!(gpt3_profile_config.model, None);
-        assert_eq!(gpt3_profile_config.model_provider_id, "openai");
+        assert_eq!(
+            gpt3_profile_config.model_provider_id,
+            UNCONFIGURED_PROVIDER_ID
+        );
         assert_eq!(
             gpt3_profile_config.approval_policy,
             Constrained::allow_any(AskForApproval::UnlessTrusted)
@@ -4115,7 +4288,10 @@ model_verbosity = "high"
             fixture.lha_home(),
         )?;
         assert_eq!(zdr_profile_config.model, None);
-        assert_eq!(zdr_profile_config.model_provider_id, "openai");
+        assert_eq!(
+            zdr_profile_config.model_provider_id,
+            UNCONFIGURED_PROVIDER_ID
+        );
         assert_eq!(
             zdr_profile_config.approval_policy,
             Constrained::allow_any(AskForApproval::OnFailure)
@@ -4141,7 +4317,10 @@ model_verbosity = "high"
             fixture.lha_home(),
         )?;
         assert_eq!(gpt5_profile_config.model, None);
-        assert_eq!(gpt5_profile_config.model_provider_id, "openai");
+        assert_eq!(
+            gpt5_profile_config.model_provider_id,
+            UNCONFIGURED_PROVIDER_ID
+        );
         assert_eq!(
             gpt5_profile_config.approval_policy,
             Constrained::allow_any(AskForApproval::OnFailure)

@@ -243,6 +243,12 @@ impl ModelsManager {
                 "dialect = \"messages\" requires an explicit model".to_string(),
             ));
         }
+        if !self.is_current_provider_openai() {
+            let provider_id = self.current_provider_id();
+            return Err(CodexErr::Fatal(format!(
+                "No default model is configured for provider `{provider_id}`. Select a model in the TUI or start with `lha -m provider.endpoint:model`."
+            )));
+        }
         if let Err(err) = self
             .refresh_available_models(config, refresh_strategy)
             .await
@@ -967,6 +973,7 @@ mod tests {
     use crate::CodexAuth;
     use crate::auth::AuthCredentialsStoreMode;
     use crate::config::ConfigBuilder;
+    use crate::config::ConfigOverrides;
     use crate::features::Feature;
     use chrono::Utc;
     use core_test_support::responses::mount_models_once;
@@ -2207,10 +2214,8 @@ remote_models = false
     }
 
     #[tokio::test]
-    async fn get_default_model_without_remote_models_uses_builtin_gpt_5_3_codex() {
+    async fn get_default_model_without_remote_models_uses_builtin_default() {
         let lha_home = tempdir().expect("temp dir");
-        std::fs::write(lha_home.path().join("models.json"), r#"{"providers":{}}"#)
-            .expect("write models.json");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let manager = ModelsManager::new(
@@ -2219,21 +2224,26 @@ remote_models = false
             "openai",
             RuntimeEndpoint::openai(),
         );
-        let config = load_config_from_toml(
-            &lha_home,
-            r#"
-[features]
-remote_models = false
-"#,
-        )
-        .await;
+        let config = ConfigBuilder::default()
+            .lha_home(lha_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                model_provider: Some("openai".to_string()),
+                model_provider_overrides: std::collections::HashMap::from([(
+                    "openai".to_string(),
+                    RuntimeEndpoint::openai(),
+                )]),
+                ..Default::default()
+            })
+            .build()
+            .await
+            .expect("load test config");
 
         let model = manager
             .get_default_model(&None, &config, RefreshStrategy::Offline)
             .await
             .expect("offline default model should resolve");
 
-        assert_eq!(model, "gpt-5.3-codex");
+        assert_eq!(model, "gpt-5.5");
     }
     #[tokio::test]
     async fn list_model_switcher_models_preserves_providerless_top_level_entry() {
@@ -2299,6 +2309,83 @@ bearer_token = "sk-a"
             ]
         );
         assert!(picker_models[0].is_default);
+    }
+
+    #[tokio::test]
+    async fn list_model_switcher_models_uses_models_json_state_without_implicit_openai() {
+        let lha_home = tempdir().expect("temp dir");
+        std::fs::write(
+            lha_home.path().join("models.json"),
+            r#"{
+              "providers": {
+                "crs": {
+                  "endpoints": {
+                    "responses": {
+                      "dialect": "responses",
+                      "models": {
+                        "gpt-5.5": {}
+                      }
+                    }
+                  }
+                },
+                "mytokens": {
+                  "endpoints": {
+                    "responses": {
+                      "dialect": "responses",
+                      "models": {
+                        "gpt-5.5": {}
+                      }
+                    }
+                  }
+                }
+              }
+            }"#,
+        )
+        .expect("write models.json");
+        std::fs::write(
+            lha_home.path().join("state.json"),
+            r#"{
+              "last_selected_model": {
+                "model_ref": "crs.responses:gpt-5.5",
+                "selected_at": null
+              },
+              "last_reasoning_effort": null,
+              "last_model_verbosity": null,
+              "last_selected_identity": null
+            }"#,
+        )
+        .expect("write state.json");
+        let config = ConfigBuilder::default()
+            .lha_home(lha_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load test config");
+        let auth_manager = Arc::new(AuthManager::new(
+            lha_home.path().to_path_buf(),
+            false,
+            AuthCredentialsStoreMode::File,
+        ));
+        let manager = ModelsManager::new(
+            lha_home.path().to_path_buf(),
+            auth_manager,
+            config.model_provider_id.as_str(),
+            config.model_provider.clone(),
+        );
+
+        let picker_models = manager
+            .list_model_switcher_models(&config, RefreshStrategy::Offline)
+            .await;
+
+        assert!(
+            !picker_models
+                .iter()
+                .any(|preset| preset.description == "Configured model from openai provider.")
+        );
+        assert!(picker_models.iter().any(|preset| {
+            preset.model == "gpt-5.5"
+                && preset.model_provider_id.as_deref() == Some("crs.responses")
+                && preset.description == "User-defined model from crs (responses) provider."
+        }));
     }
 
     #[tokio::test]
@@ -2506,20 +2593,31 @@ model = "claude-sonnet-4-5"
     #[tokio::test]
     async fn get_default_model_with_messages_provider_requires_explicit_model() {
         let lha_home = tempdir().expect("temp dir");
-        std::fs::write(lha_home.path().join("models.json"), r#"{"providers":{}}"#)
-            .expect("write models.json");
         let auth_manager = Arc::new(AuthManager::new(
             lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
+        let provider = messages_provider_for("https://api.anthropic.com/v1".to_string());
         let manager = ModelsManager::with_provider(
             lha_home.path().to_path_buf(),
             auth_manager,
             "anthropic",
-            messages_provider_for("https://api.anthropic.com/v1".to_string()),
+            provider.clone(),
         );
-        let config = load_config_from_toml(&lha_home, "").await;
+        let config = ConfigBuilder::default()
+            .lha_home(lha_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                model_provider: Some("anthropic".to_string()),
+                model_provider_overrides: std::collections::HashMap::from([(
+                    "anthropic".to_string(),
+                    provider,
+                )]),
+                ..Default::default()
+            })
+            .build()
+            .await
+            .expect("load test config");
 
         let err = manager
             .get_default_model(&None, &config, RefreshStrategy::Offline)

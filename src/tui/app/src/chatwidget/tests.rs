@@ -212,6 +212,7 @@ async fn resumed_initial_messages_render_history() {
 #[tokio::test]
 async fn session_configured_updates_footer_reasoning_effort_immediately() {
     let lha_home = tempdir().expect("tempdir");
+    write_openai_model_fixture(lha_home.path(), "gpt-5");
     let model_ref = ModelRef::new("openai", "main", "gpt-5");
     LHAStateStore::new(lha_home.path())
         .set_last_selected_model(&model_ref, Some(ReasoningEffortConfig::High), None)
@@ -2153,6 +2154,29 @@ fn test_otel_manager(config: &Config, model: &str) -> OtelManager {
     )
 }
 
+fn write_openai_model_fixture(lha_home: &std::path::Path, model: &str) {
+    std::fs::write(
+        lha_home.join("models.json"),
+        format!(
+            r#"{{
+  "providers": {{
+    "openai": {{
+      "endpoints": {{
+        "main": {{
+          "models": {{
+            "{model}": {{}}
+          }}
+        }}
+      }}
+    }}
+  }}
+}}
+"#
+        ),
+    )
+    .expect("write openai models fixture");
+}
+
 // --- Helpers for tests that need direct construction and event draining ---
 async fn make_chatwidget_manual(
     model_override: Option<&str>,
@@ -2179,9 +2203,7 @@ async fn make_chatwidget_manual_inner(
     let resolved_model = model_override
         .map(str::to_owned)
         .unwrap_or_else(|| ModelsManager::get_model_offline(cfg.model.as_deref()));
-    if let Some(model) = model_override {
-        cfg.model = Some(model.to_string());
-    }
+    cfg.model = Some(resolved_model.clone());
     let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
     let mut bottom = BottomPane::new(BottomPaneParams {
         app_event_tx: app_event_tx.clone(),
@@ -5997,6 +6019,7 @@ async fn last_selected_identity_plan_applies_on_startup() {
 #[tokio::test]
 async fn last_selected_identity_plan_preserves_configured_effort_on_startup() {
     let lha_home = tempdir().expect("tempdir");
+    write_openai_model_fixture(lha_home.path(), "gpt-5");
     let model_ref = ModelRef::new("openai", "main", "gpt-5");
     LHAStateStore::new(lha_home.path())
         .set_last_selected_model(&model_ref, Some(ReasoningEffortConfig::High), None)
@@ -7119,6 +7142,7 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
 async fn model_reasoning_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
 
+    chat.config.model_provider_id = "openai".to_string();
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
@@ -7132,6 +7156,7 @@ async fn model_reasoning_selection_popup_snapshot() {
 async fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
 
+    chat.config.model_provider_id = "openai".to_string();
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");

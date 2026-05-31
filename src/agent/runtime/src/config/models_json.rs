@@ -235,6 +235,21 @@ impl ModelsJson {
         entries
     }
 
+    pub fn unique_model_ref(&self) -> Option<ModelRef> {
+        let mut unique = None;
+        for (provider_id, provider) in &self.providers {
+            for (endpoint_id, endpoint) in &provider.endpoints {
+                for model_id in endpoint.models.keys() {
+                    if unique.is_some() {
+                        return None;
+                    }
+                    unique = Some(ModelRef::new(provider_id, endpoint_id, model_id));
+                }
+            }
+        }
+        unique
+    }
+
     pub fn resolve_model_provider_for_model(
         &self,
         model: &str,
@@ -356,6 +371,71 @@ mod tests {
                 .expect("resolve provider"),
             Some("iie".to_string())
         );
+    }
+
+    #[test]
+    fn unique_model_ref_returns_the_only_configured_model() {
+        let config: ModelsJson = serde_json::from_str(
+            r#"{
+              "providers": {
+                "iie": {
+                  "endpoints": {
+                    "main": {
+                      "models": {
+                        "deepseek-v3": {}
+                      }
+                    }
+                  }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config
+                .unique_model_ref()
+                .map(|model_ref| model_ref.to_string()),
+            Some("iie.main:deepseek-v3".to_string())
+        );
+    }
+
+    #[test]
+    fn unique_model_ref_returns_none_for_zero_or_multiple_models() {
+        let empty: ModelsJson = serde_json::from_str(
+            r#"{
+              "providers": {
+                "iie": {
+                  "endpoints": {
+                    "main": {
+                      "models": {}
+                    }
+                  }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+        let multiple: ModelsJson = serde_json::from_str(
+            r#"{
+              "providers": {
+                "iie": {
+                  "endpoints": {
+                    "main": {
+                      "models": {
+                        "deepseek-v3": {},
+                        "deepseek-r1": {}
+                      }
+                    }
+                  }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(empty.unique_model_ref(), None);
+        assert_eq!(multiple.unique_model_ref(), None);
     }
 
     #[test]

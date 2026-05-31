@@ -9310,6 +9310,7 @@ mod tests {
       "endpoints": {
         "main": {
           "models": {
+            "initial-model": {},
             "custom-model": { "context_window": 64000 }
           }
         }
@@ -9320,6 +9321,20 @@ mod tests {
 "#,
         )
         .expect("write models.json");
+        std::fs::write(
+            lha_home.path().join("state.json"),
+            r#"{
+  "last_selected_model": {
+    "model_ref": "openai.main:initial-model",
+    "selected_at": null
+  },
+  "last_reasoning_effort": null,
+  "last_model_verbosity": null,
+  "last_selected_identity": null
+}
+"#,
+        )
+        .expect("write state.json");
 
         let config = build_test_config(lha_home.path()).await;
         let (session, turn_context) = make_session_and_context_for_config(config).await;

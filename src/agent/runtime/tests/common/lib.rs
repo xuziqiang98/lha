@@ -8,8 +8,10 @@ use lha_agent::CodexThread;
 use lha_agent::config::Config;
 use lha_agent::config::ConfigBuilder;
 use lha_agent::config::ConfigOverrides;
+use lha_llm::RuntimeEndpoint;
 use lha_utils_absolute_path::AbsolutePathBuf;
 use regex_lite::Regex;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub mod process;
@@ -87,19 +89,31 @@ pub async fn load_default_config_for_test(lha_home: &TempDir) -> Config {
 
 #[cfg(target_os = "linux")]
 fn default_test_overrides() -> ConfigOverrides {
-    ConfigOverrides {
-        // The core integration test binary installs arg0-based aliases at startup,
-        // so use the current test executable as the sandbox entrypoint.
-        codex_linux_sandbox_exe: Some(
-            std::env::current_exe().expect("should find current core test executable"),
-        ),
-        ..ConfigOverrides::default()
-    }
+    let mut overrides = default_test_model_overrides();
+    // The core integration test binary installs arg0-based aliases at startup,
+    // so use the current test executable as the sandbox entrypoint.
+    overrides.codex_linux_sandbox_exe =
+        Some(std::env::current_exe().expect("should find current core test executable"));
+    overrides
 }
 
 #[cfg(not(target_os = "linux"))]
 fn default_test_overrides() -> ConfigOverrides {
-    ConfigOverrides::default()
+    default_test_model_overrides()
+}
+
+fn default_test_model_overrides() -> ConfigOverrides {
+    let mut provider = RuntimeEndpoint::openai();
+    provider.env_key = None;
+    provider.env_key_instructions = None;
+    provider.bearer_token = Some("sk-test".to_string());
+
+    ConfigOverrides {
+        model: Some("gpt-5.3-codex".to_string()),
+        model_provider: Some("test-provider".to_string()),
+        model_provider_overrides: HashMap::from([("test-provider".to_string(), provider)]),
+        ..ConfigOverrides::default()
+    }
 }
 
 /// Builds an SSE stream body from a JSON fixture.

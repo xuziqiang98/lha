@@ -7505,6 +7505,7 @@ show_raw_agent_reasoning = true
     #[tokio::test]
     async fn persist_model_selection_uses_explicit_openai_provider_for_builtin_same_slug() {
         let mut app = make_test_app().await;
+        persist_main_provider_fixture(&app.config.lha_home, "openai", "gpt-5.2", None);
         persist_main_provider_fixture(&app.config.lha_home, "provider_a", "gpt-5.2", None);
         persist_selected_model_fixture(&app.config.lha_home, "provider_a", "gpt-5.2");
 

@@ -431,7 +431,7 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
     let manager = ModelsManager::with_provider(
         lha_home.path().to_path_buf(),
         lha_agent::auth::AuthManager::from_auth_for_testing(auth),
-        "mock-provider",
+        "openai",
         provider,
     );
 
@@ -495,7 +495,7 @@ async fn remote_models_merge_adds_new_high_priority_first() -> Result<()> {
     let manager = ModelsManager::with_provider(
         lha_home.path().to_path_buf(),
         lha_agent::auth::AuthManager::from_auth_for_testing(auth),
-        "mock-provider",
+        "openai",
         provider,
     );
 
@@ -543,7 +543,7 @@ async fn remote_models_merge_replaces_overlapping_model() -> Result<()> {
     let manager = ModelsManager::with_provider(
         lha_home.path().to_path_buf(),
         lha_agent::auth::AuthManager::from_auth_for_testing(auth),
-        "mock-provider",
+        "openai",
         provider,
     );
 
@@ -588,7 +588,7 @@ async fn remote_models_merge_preserves_bundled_models_on_empty_response() -> Res
     let manager = ModelsManager::with_provider(
         lha_home.path().to_path_buf(),
         lha_agent::auth::AuthManager::from_auth_for_testing(auth),
-        "mock-provider",
+        "openai",
         provider,
     );
 
@@ -635,7 +635,7 @@ async fn remote_models_request_times_out_after_5s() -> Result<()> {
     let manager = ModelsManager::with_provider(
         lha_home.path().to_path_buf(),
         lha_agent::auth::AuthManager::from_auth_for_testing(auth),
-        "mock-provider",
+        "openai",
         provider,
     );
 
@@ -703,7 +703,7 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     let manager = ModelsManager::with_provider(
         lha_home.path().to_path_buf(),
         lha_agent::auth::AuthManager::from_auth_for_testing(auth),
-        "mock-provider",
+        "openai",
         provider,
     );
 
