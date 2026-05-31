@@ -5,8 +5,8 @@ use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
 
-use adam_agent::config::Config;
-use adam_common::CliConfigOverrides;
+use lha_agent::config::Config;
+use lha_common::CliConfigOverrides;
 
 use mcp_types::JSONRPCMessage;
 use tokio::io::AsyncBufReadExt;

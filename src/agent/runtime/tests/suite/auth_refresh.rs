@@ -1,14 +1,14 @@
-use adam_agent::AuthManager;
-use adam_agent::auth::AuthCredentialsStoreMode;
-use adam_agent::auth::AuthDotJson;
-use adam_agent::auth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
-use adam_agent::auth::RefreshTokenError;
-use adam_agent::auth::load_auth_dot_json;
-use adam_agent::auth::save_auth;
-use adam_agent::error::RefreshTokenFailedReason;
-use adam_agent::token_data::IdTokenInfo;
-use adam_agent::token_data::TokenData;
-use adam_app_server_protocol::AuthMode;
+use lha_agent::AuthManager;
+use lha_agent::auth::AuthCredentialsStoreMode;
+use lha_agent::auth::AuthDotJson;
+use lha_agent::auth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use lha_agent::auth::RefreshTokenError;
+use lha_agent::auth::load_auth_dot_json;
+use lha_agent::auth::save_auth;
+use lha_agent::error::RefreshTokenFailedReason;
+use lha_agent::token_data::IdTokenInfo;
+use lha_agent::token_data::TokenData;
+use lha_app_server_protocol::AuthMode;
 use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
@@ -335,7 +335,7 @@ async fn unauthorized_recovery_reloads_then_refreshes_tokens() -> Result<()> {
         last_refresh: Some(initial_last_refresh),
     };
     save_auth(
-        ctx.adam_home.path(),
+        ctx.lha_home.path(),
         &disk_auth,
         AuthCredentialsStoreMode::File,
     )?;
@@ -433,7 +433,7 @@ async fn unauthorized_recovery_skips_reload_on_account_mismatch() -> Result<()> 
         last_refresh: Some(initial_last_refresh),
     };
     save_auth(
-        ctx.adam_home.path(),
+        ctx.lha_home.path(),
         &disk_auth,
         AuthCredentialsStoreMode::File,
     )?;
@@ -515,40 +515,40 @@ async fn unauthorized_recovery_requires_chatgpt_auth() -> Result<()> {
 }
 
 struct RefreshTokenTestContext {
-    adam_home: TempDir,
+    lha_home: TempDir,
     auth_manager: Arc<AuthManager>,
     _env_guard: EnvGuard,
 }
 
 impl RefreshTokenTestContext {
     fn new(server: &MockServer) -> Result<Self> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
 
         let endpoint = format!("{}/oauth/token", server.uri());
         let env_guard = EnvGuard::set(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR, endpoint);
 
         let auth_manager = AuthManager::shared(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         );
 
         Ok(Self {
-            adam_home,
+            lha_home,
             auth_manager,
             _env_guard: env_guard,
         })
     }
 
     fn load_auth(&self) -> Result<AuthDotJson> {
-        load_auth_dot_json(self.adam_home.path(), AuthCredentialsStoreMode::File)
+        load_auth_dot_json(self.lha_home.path(), AuthCredentialsStoreMode::File)
             .context("load auth.json")?
             .context("auth.json should exist")
     }
 
     fn write_auth(&self, auth_dot_json: &AuthDotJson) -> Result<()> {
         save_auth(
-            self.adam_home.path(),
+            self.lha_home.path(),
             auth_dot_json,
             AuthCredentialsStoreMode::File,
         )?;

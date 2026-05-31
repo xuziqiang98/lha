@@ -13,7 +13,7 @@ pub use crate::metrics::timer::Timer;
 use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
 use crate::otel_provider::OtelProvider;
-use adam_protocol::ThreadId;
+use lha_protocol::ThreadId;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use serde::Serialize;
 use std::time::Duration;

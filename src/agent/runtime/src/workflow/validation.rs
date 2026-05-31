@@ -1,6 +1,6 @@
-use adam_protocol::workflow::WorkflowDefinition;
-use adam_protocol::workflow::WorkflowValidationError;
-use adam_protocol::workflow::WorkflowValidatorDefinition;
+use lha_protocol::workflow::WorkflowDefinition;
+use lha_protocol::workflow::WorkflowValidationError;
+use lha_protocol::workflow::WorkflowValidatorDefinition;
 use serde_json::Value;
 use std::collections::BTreeSet;
 
@@ -226,8 +226,8 @@ fn error(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_protocol::workflow::WorkflowMode;
-    use adam_protocol::workflow::WorkflowStepDefinition;
+    use lha_protocol::workflow::WorkflowMode;
+    use lha_protocol::workflow::WorkflowStepDefinition;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 

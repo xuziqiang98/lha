@@ -34,7 +34,7 @@
       "type": "object"
     },
     "Identity": {
-      "description": "Identity for an Adam session.",
+      "description": "Identity for an LHA session.",
       "properties": {
         "kind": {
           "$ref": "#/definitions/IdentityKind"
@@ -50,7 +50,7 @@
       "type": "object"
     },
     "IdentityKind": {
-      "description": "Built-in Adam identity kind.",
+      "description": "Built-in LHA identity kind.",
       "enum": [
         "nobody",
         "planner",

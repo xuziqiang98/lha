@@ -1,5 +1,5 @@
 [package]
-name = "adam-state"
+name = "lha-state"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,8 +8,8 @@ license.workspace = true
 anyhow = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
-adam-otel = { workspace = true }
-adam-protocol = { workspace = true }
+lha-otel = { workspace = true }
+lha-protocol = { workspace = true }
 dirs = { workspace = true }
 owo-colors = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

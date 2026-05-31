@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use adam_agent::CodexThread;
-use adam_agent::protocol::FileChange;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::ReviewDecision;
-use adam_protocol::ThreadId;
+use lha_agent::CodexThread;
+use lha_agent::protocol::FileChange;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::ReviewDecision;
+use lha_protocol::ThreadId;
 use mcp_types::ElicitRequest;
 use mcp_types::ElicitRequestParamsRequestedSchema;
 use mcp_types::JSONRPCErrorError;
@@ -60,7 +60,7 @@ pub(crate) async fn handle_patch_approval_request(
     if let Some(r) = &reason {
         message_lines.push(r.clone());
     }
-    message_lines.push("Allow Adam to apply proposed code changes?".to_string());
+    message_lines.push("Allow LHA to apply proposed code changes?".to_string());
 
     let params = PatchApprovalElicitRequestParams {
         message: message_lines.join("\n"),

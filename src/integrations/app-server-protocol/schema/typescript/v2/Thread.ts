@@ -35,7 +35,7 @@ cwd: string,
  */
 cliVersion: string,
 /**
- * Origin of the thread (CLI, VSCode, adam exec, adam app-server, etc.).
+ * Origin of the thread (CLI, VSCode, lha exec, lha app-server, etc.).
  */
 source: SessionSource,
 /**

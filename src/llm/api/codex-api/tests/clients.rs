@@ -2,26 +2,26 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use adam_api::AuthProvider;
-use adam_api::ChatClient;
-use adam_api::MessagesClient;
-use adam_api::Provider;
-use adam_api::ResponsesClient;
-use adam_api::ResponsesOptions;
-use adam_api::WireApi;
-use adam_api::requests::responses::Compression;
-use adam_client::HttpTransport;
-use adam_client::Request;
-use adam_client::Response;
-use adam_client::StreamResponse;
-use adam_client::TransportError;
-use adam_llm_types::ContentItem;
-use adam_llm_types::TranscriptItem;
 use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
 use http::HeaderMap;
 use http::StatusCode;
+use lha_api::AuthProvider;
+use lha_api::ChatClient;
+use lha_api::MessagesClient;
+use lha_api::Provider;
+use lha_api::ResponsesClient;
+use lha_api::ResponsesOptions;
+use lha_api::WireApi;
+use lha_api::requests::responses::Compression;
+use lha_client::HttpTransport;
+use lha_client::Request;
+use lha_client::Response;
+use lha_client::StreamResponse;
+use lha_client::TransportError;
+use lha_llm_types::ContentItem;
+use lha_llm_types::TranscriptItem;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 
@@ -121,7 +121,7 @@ fn provider(name: &str, wire: WireApi) -> Provider {
         query_params: None,
         wire,
         headers: HeaderMap::new(),
-        retry: adam_api::provider::RetryConfig {
+        retry: lha_api::provider::RetryConfig {
             max_attempts: 1,
             base_delay: Duration::from_millis(1),
             retry_429: false,
@@ -258,7 +258,7 @@ async fn messages_client_uses_messages_path_for_messages_wire() -> Result<()> {
 
     let body = serde_json::json!({ "echo": true });
     let _stream = client
-        .stream_request(adam_api::MessagesRequest {
+        .stream_request(lha_api::MessagesRequest {
             body,
             headers: HeaderMap::new(),
         })
@@ -278,7 +278,7 @@ async fn messages_wire_uses_x_api_key_auth() -> Result<()> {
 
     let body = serde_json::json!({ "model": "claude-test" });
     let _stream = client
-        .stream_request(adam_api::MessagesRequest {
+        .stream_request(lha_api::MessagesRequest {
             body,
             headers: HeaderMap::new(),
         })
@@ -337,7 +337,7 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
 
     let client = ResponsesClient::new(transport.clone(), provider, NoAuth);
 
-    let prompt = adam_api::Prompt {
+    let prompt = lha_api::Prompt {
         instructions: "Say hi".to_string(),
         input: vec![TranscriptItem::Message {
             id: None,

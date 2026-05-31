@@ -37,57 +37,57 @@ use crate::workflow::ArtifactSubmission;
 use crate::workflow::WorkflowSession;
 use crate::workflow::WorkflowSubmissionResult;
 use crate::workflow::WorkflowTurnContext;
-use adam_agent_core::kernel::AgentKernel;
-use adam_agent_core::kernel::TurnEventProcessor;
-use adam_agent_core::kernel::TurnEventUpdate;
-use adam_agent_core::kernel::TurnStreamOutcome;
-use adam_agent_runtime::SessionStatus;
-use adam_llm::DefaultRuntimeClientFactory;
-use adam_llm::RuntimeEndpoint;
-use adam_llm::RuntimeNotice;
-use adam_llm::RuntimeNoticeKind;
-use adam_llm::RuntimeSession;
-use adam_llm::ToolResultItem;
-use adam_llm::TurnEvent;
-use adam_llm::TurnRequest;
-use adam_protocol::ThreadId;
-use adam_protocol::approvals::ExecPolicyAmendment;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::Settings;
-use adam_protocol::config_types::WebSearchMode;
-use adam_protocol::dynamic_tools::DynamicToolResponse;
-use adam_protocol::dynamic_tools::DynamicToolSpec;
-use adam_protocol::items::PlanItem;
-use adam_protocol::items::TurnItem;
-use adam_protocol::items::UserMessageItem;
-use adam_protocol::models::BaseInstructions;
-use adam_protocol::models::format_allow_prefixes;
-use adam_protocol::openai_models::ModelInfo;
-use adam_protocol::protocol::BuddyTurnSnapshot;
-use adam_protocol::protocol::FileChange;
-use adam_protocol::protocol::GhostSnapshotRecord;
-use adam_protocol::protocol::GhostSnapshotStatus;
-use adam_protocol::protocol::HasLegacyEvent;
-use adam_protocol::protocol::ItemCompletedEvent;
-use adam_protocol::protocol::ItemStartedEvent;
-use adam_protocol::protocol::RawTranscriptItemEvent;
-use adam_protocol::protocol::ReviewRequest;
-use adam_protocol::protocol::RolloutItem;
-use adam_protocol::protocol::SessionSource;
-use adam_protocol::protocol::TurnAbortReason;
-use adam_protocol::protocol::TurnContextItem;
-use adam_protocol::protocol::TurnStartedEvent;
-use adam_protocol::request_user_input::RequestUserInputArgs;
-use adam_protocol::request_user_input::RequestUserInputResponse;
-#[cfg(any(test, feature = "test-support"))]
-use adam_protocol::workflow::WorkflowDefinition;
-use adam_rmcp_client::ElicitationResponse;
-use adam_rmcp_client::OAuthCredentialsStoreMode;
 use async_channel::Receiver;
 use async_channel::Sender;
 use async_trait::async_trait;
 use chrono::DateTime;
 use chrono::Utc;
+use lha_agent_core::kernel::AgentKernel;
+use lha_agent_core::kernel::TurnEventProcessor;
+use lha_agent_core::kernel::TurnEventUpdate;
+use lha_agent_core::kernel::TurnStreamOutcome;
+use lha_agent_runtime::SessionStatus;
+use lha_llm::DefaultRuntimeClientFactory;
+use lha_llm::RuntimeEndpoint;
+use lha_llm::RuntimeNotice;
+use lha_llm::RuntimeNoticeKind;
+use lha_llm::RuntimeSession;
+use lha_llm::ToolResultItem;
+use lha_llm::TurnEvent;
+use lha_llm::TurnRequest;
+use lha_protocol::ThreadId;
+use lha_protocol::approvals::ExecPolicyAmendment;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::Settings;
+use lha_protocol::config_types::WebSearchMode;
+use lha_protocol::dynamic_tools::DynamicToolResponse;
+use lha_protocol::dynamic_tools::DynamicToolSpec;
+use lha_protocol::items::PlanItem;
+use lha_protocol::items::TurnItem;
+use lha_protocol::items::UserMessageItem;
+use lha_protocol::models::BaseInstructions;
+use lha_protocol::models::format_allow_prefixes;
+use lha_protocol::openai_models::ModelInfo;
+use lha_protocol::protocol::BuddyTurnSnapshot;
+use lha_protocol::protocol::FileChange;
+use lha_protocol::protocol::GhostSnapshotRecord;
+use lha_protocol::protocol::GhostSnapshotStatus;
+use lha_protocol::protocol::HasLegacyEvent;
+use lha_protocol::protocol::ItemCompletedEvent;
+use lha_protocol::protocol::ItemStartedEvent;
+use lha_protocol::protocol::RawTranscriptItemEvent;
+use lha_protocol::protocol::ReviewRequest;
+use lha_protocol::protocol::RolloutItem;
+use lha_protocol::protocol::SessionSource;
+use lha_protocol::protocol::TurnAbortReason;
+use lha_protocol::protocol::TurnContextItem;
+use lha_protocol::protocol::TurnStartedEvent;
+use lha_protocol::request_user_input::RequestUserInputArgs;
+use lha_protocol::request_user_input::RequestUserInputResponse;
+#[cfg(any(test, feature = "test-support"))]
+use lha_protocol::workflow::WorkflowDefinition;
+use lha_rmcp_client::ElicitationResponse;
+use lha_rmcp_client::OAuthCredentialsStoreMode;
 use mcp_types::CallToolResult;
 use mcp_types::ListResourceTemplatesRequestParams;
 use mcp_types::ListResourceTemplatesResult;
@@ -232,25 +232,25 @@ use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::user_notification::UserNotification;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
-use adam_async_utils::OrCancelExt;
-use adam_otel::OtelManager;
-use adam_protocol::config_types::Identity;
-use adam_protocol::config_types::Personality;
-use adam_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use adam_protocol::config_types::WindowsSandboxLevel;
-use adam_protocol::models::ContentItem;
-use adam_protocol::models::DeveloperInstructions;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::models::transcript_item_from_user_input;
-use adam_protocol::openai_models::ReasoningEffort;
-use adam_protocol::protocol::CodexErrorInfo;
-use adam_protocol::protocol::InitialHistory;
-use adam_protocol::user_input::UserInput;
-use adam_utils_readiness::Readiness;
-use adam_utils_readiness::ReadinessFlag;
+use lha_async_utils::OrCancelExt;
+use lha_otel::OtelManager;
+use lha_protocol::config_types::Identity;
+use lha_protocol::config_types::Personality;
+use lha_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use lha_protocol::config_types::WindowsSandboxLevel;
+use lha_protocol::models::ContentItem;
+use lha_protocol::models::DeveloperInstructions;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::models::transcript_item_from_user_input;
+use lha_protocol::openai_models::ReasoningEffort;
+use lha_protocol::protocol::CodexErrorInfo;
+use lha_protocol::protocol::InitialHistory;
+use lha_protocol::user_input::UserInput;
+use lha_utils_readiness::Readiness;
+use lha_utils_readiness::ReadinessFlag;
 use tokio::sync::watch;
 
-/// The high-level interface to the Adam system.
+/// The high-level interface to the LHA system.
 /// It operates as a queue pair where you send submissions and receive events.
 pub struct Codex {
     pub(crate) next_id: AtomicU64,
@@ -265,7 +265,7 @@ fn transcript_input_from_user_input(input: Vec<UserInput>) -> TranscriptItem {
     transcript_item_from_user_input(input)
 }
 
-pub(crate) fn protocol_goal_from_state(goal: adam_state::ThreadGoal) -> ThreadGoal {
+pub(crate) fn protocol_goal_from_state(goal: lha_state::ThreadGoal) -> ThreadGoal {
     ThreadGoal {
         thread_id: goal.thread_id,
         goal_id: goal.goal_id,
@@ -279,30 +279,30 @@ pub(crate) fn protocol_goal_from_state(goal: adam_state::ThreadGoal) -> ThreadGo
     }
 }
 
-fn protocol_goal_status_from_state(status: adam_state::ThreadGoalStatus) -> ThreadGoalStatus {
+fn protocol_goal_status_from_state(status: lha_state::ThreadGoalStatus) -> ThreadGoalStatus {
     match status {
-        adam_state::ThreadGoalStatus::Active => ThreadGoalStatus::Active,
-        adam_state::ThreadGoalStatus::Paused => ThreadGoalStatus::Paused,
-        adam_state::ThreadGoalStatus::Blocked => ThreadGoalStatus::Blocked,
-        adam_state::ThreadGoalStatus::UsageLimited => ThreadGoalStatus::UsageLimited,
-        adam_state::ThreadGoalStatus::BudgetLimited => ThreadGoalStatus::BudgetLimited,
-        adam_state::ThreadGoalStatus::Complete => ThreadGoalStatus::Complete,
+        lha_state::ThreadGoalStatus::Active => ThreadGoalStatus::Active,
+        lha_state::ThreadGoalStatus::Paused => ThreadGoalStatus::Paused,
+        lha_state::ThreadGoalStatus::Blocked => ThreadGoalStatus::Blocked,
+        lha_state::ThreadGoalStatus::UsageLimited => ThreadGoalStatus::UsageLimited,
+        lha_state::ThreadGoalStatus::BudgetLimited => ThreadGoalStatus::BudgetLimited,
+        lha_state::ThreadGoalStatus::Complete => ThreadGoalStatus::Complete,
     }
 }
 
-fn state_goal_status_from_protocol(status: ThreadGoalStatus) -> adam_state::ThreadGoalStatus {
+fn state_goal_status_from_protocol(status: ThreadGoalStatus) -> lha_state::ThreadGoalStatus {
     match status {
-        ThreadGoalStatus::Active => adam_state::ThreadGoalStatus::Active,
-        ThreadGoalStatus::Paused => adam_state::ThreadGoalStatus::Paused,
-        ThreadGoalStatus::Blocked => adam_state::ThreadGoalStatus::Blocked,
-        ThreadGoalStatus::UsageLimited => adam_state::ThreadGoalStatus::UsageLimited,
-        ThreadGoalStatus::BudgetLimited => adam_state::ThreadGoalStatus::BudgetLimited,
-        ThreadGoalStatus::Complete => adam_state::ThreadGoalStatus::Complete,
+        ThreadGoalStatus::Active => lha_state::ThreadGoalStatus::Active,
+        ThreadGoalStatus::Paused => lha_state::ThreadGoalStatus::Paused,
+        ThreadGoalStatus::Blocked => lha_state::ThreadGoalStatus::Blocked,
+        ThreadGoalStatus::UsageLimited => lha_state::ThreadGoalStatus::UsageLimited,
+        ThreadGoalStatus::BudgetLimited => lha_state::ThreadGoalStatus::BudgetLimited,
+        ThreadGoalStatus::Complete => lha_state::ThreadGoalStatus::Complete,
     }
 }
 
-fn thread_goal_seed_from_protocol(goal: ThreadGoal) -> adam_state::ThreadGoalSeed {
-    adam_state::ThreadGoalSeed {
+fn thread_goal_seed_from_protocol(goal: ThreadGoal) -> lha_state::ThreadGoalSeed {
+    lha_state::ThreadGoalSeed {
         objective: goal.objective,
         status: state_goal_status_from_protocol(goal.status),
         token_budget: goal.token_budget,
@@ -313,7 +313,7 @@ fn thread_goal_seed_from_protocol(goal: ThreadGoal) -> adam_state::ThreadGoalSee
     }
 }
 
-pub(crate) fn protocol_plan_run_from_state(plan_run: adam_state::ThreadPlanRun) -> ThreadPlanRun {
+pub(crate) fn protocol_plan_run_from_state(plan_run: lha_state::ThreadPlanRun) -> ThreadPlanRun {
     ThreadPlanRun {
         thread_id: plan_run.thread_id,
         plan_run_id: plan_run.plan_run_id,
@@ -328,33 +328,33 @@ pub(crate) fn protocol_plan_run_from_state(plan_run: adam_state::ThreadPlanRun) 
 }
 
 fn protocol_plan_run_status_from_state(
-    status: adam_state::ThreadPlanRunStatus,
+    status: lha_state::ThreadPlanRunStatus,
 ) -> ThreadPlanRunStatus {
     match status {
-        adam_state::ThreadPlanRunStatus::Active => ThreadPlanRunStatus::Active,
-        adam_state::ThreadPlanRunStatus::Paused => ThreadPlanRunStatus::Paused,
-        adam_state::ThreadPlanRunStatus::Blocked => ThreadPlanRunStatus::Blocked,
-        adam_state::ThreadPlanRunStatus::UsageLimited => ThreadPlanRunStatus::UsageLimited,
-        adam_state::ThreadPlanRunStatus::BudgetLimited => ThreadPlanRunStatus::BudgetLimited,
-        adam_state::ThreadPlanRunStatus::Complete => ThreadPlanRunStatus::Complete,
+        lha_state::ThreadPlanRunStatus::Active => ThreadPlanRunStatus::Active,
+        lha_state::ThreadPlanRunStatus::Paused => ThreadPlanRunStatus::Paused,
+        lha_state::ThreadPlanRunStatus::Blocked => ThreadPlanRunStatus::Blocked,
+        lha_state::ThreadPlanRunStatus::UsageLimited => ThreadPlanRunStatus::UsageLimited,
+        lha_state::ThreadPlanRunStatus::BudgetLimited => ThreadPlanRunStatus::BudgetLimited,
+        lha_state::ThreadPlanRunStatus::Complete => ThreadPlanRunStatus::Complete,
     }
 }
 
 fn state_plan_run_status_from_protocol(
     status: ThreadPlanRunStatus,
-) -> adam_state::ThreadPlanRunStatus {
+) -> lha_state::ThreadPlanRunStatus {
     match status {
-        ThreadPlanRunStatus::Active => adam_state::ThreadPlanRunStatus::Active,
-        ThreadPlanRunStatus::Paused => adam_state::ThreadPlanRunStatus::Paused,
-        ThreadPlanRunStatus::Blocked => adam_state::ThreadPlanRunStatus::Blocked,
-        ThreadPlanRunStatus::UsageLimited => adam_state::ThreadPlanRunStatus::UsageLimited,
-        ThreadPlanRunStatus::BudgetLimited => adam_state::ThreadPlanRunStatus::BudgetLimited,
-        ThreadPlanRunStatus::Complete => adam_state::ThreadPlanRunStatus::Complete,
+        ThreadPlanRunStatus::Active => lha_state::ThreadPlanRunStatus::Active,
+        ThreadPlanRunStatus::Paused => lha_state::ThreadPlanRunStatus::Paused,
+        ThreadPlanRunStatus::Blocked => lha_state::ThreadPlanRunStatus::Blocked,
+        ThreadPlanRunStatus::UsageLimited => lha_state::ThreadPlanRunStatus::UsageLimited,
+        ThreadPlanRunStatus::BudgetLimited => lha_state::ThreadPlanRunStatus::BudgetLimited,
+        ThreadPlanRunStatus::Complete => lha_state::ThreadPlanRunStatus::Complete,
     }
 }
 
-fn thread_plan_run_seed_from_protocol(plan_run: ThreadPlanRun) -> adam_state::ThreadPlanRunSeed {
-    adam_state::ThreadPlanRunSeed {
+fn thread_plan_run_seed_from_protocol(plan_run: ThreadPlanRun) -> lha_state::ThreadPlanRunSeed {
+    lha_state::ThreadPlanRunSeed {
         plan_text: plan_run.plan_text,
         status: state_plan_run_status_from_protocol(plan_run.status),
         token_budget: plan_run.token_budget,
@@ -519,14 +519,14 @@ impl Codex {
             sandbox_policy: config.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
-            adam_home: config.adam_home.clone(),
+            lha_home: config.lha_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source,
             dynamic_tools,
         };
 
-        // Generate a unique ID for the lifetime of this Adam session.
+        // Generate a unique ID for the lifetime of this LHA session.
         let session_source_clone = session_configuration.session_source.clone();
         let (session_status_tx, session_status_rx) = watch::channel(SessionStatus::Idle);
         let (shutdown_complete_tx, shutdown_complete_rx) = watch::channel(false);
@@ -549,7 +549,7 @@ impl Codex {
         .await
         .map_err(|e| {
             error!("Failed to create session: {e:#}");
-            map_session_init_error(&e, &config.adam_home)
+            map_session_init_error(&e, &config.lha_home)
         })?;
         let thread_id = session.conversation_id;
 
@@ -586,7 +586,7 @@ impl Codex {
         Ok(id)
     }
 
-    /// Use sparingly: prefer `submit()` so Adam is responsible for generating
+    /// Use sparingly: prefer `submit()` so LHA is responsible for generating
     /// unique IDs for each submission.
     pub async fn submit_with_id(&self, sub: Submission) -> CodexResult<()> {
         self.tx_sub
@@ -779,18 +779,18 @@ pub(crate) enum GoalUsageSettlementMode {
 }
 
 fn goal_accounting_mode_for_status(
-    status: adam_state::ThreadGoalStatus,
-) -> adam_state::GoalAccountingMode {
+    status: lha_state::ThreadGoalStatus,
+) -> lha_state::GoalAccountingMode {
     match status {
-        adam_state::ThreadGoalStatus::Active | adam_state::ThreadGoalStatus::BudgetLimited => {
-            adam_state::GoalAccountingMode::ActiveOnly
+        lha_state::ThreadGoalStatus::Active | lha_state::ThreadGoalStatus::BudgetLimited => {
+            lha_state::GoalAccountingMode::ActiveOnly
         }
-        adam_state::ThreadGoalStatus::Paused
-        | adam_state::ThreadGoalStatus::Blocked
-        | adam_state::ThreadGoalStatus::UsageLimited => {
-            adam_state::GoalAccountingMode::ActiveOrStopped
+        lha_state::ThreadGoalStatus::Paused
+        | lha_state::ThreadGoalStatus::Blocked
+        | lha_state::ThreadGoalStatus::UsageLimited => {
+            lha_state::GoalAccountingMode::ActiveOrStopped
         }
-        adam_state::ThreadGoalStatus::Complete => adam_state::GoalAccountingMode::ActiveOrComplete,
+        lha_state::ThreadGoalStatus::Complete => lha_state::GoalAccountingMode::ActiveOrComplete,
     }
 }
 
@@ -852,20 +852,19 @@ pub(crate) enum PlanRunUsageSettlementMode {
 }
 
 fn plan_run_accounting_mode_for_status(
-    status: adam_state::ThreadPlanRunStatus,
-) -> adam_state::PlanRunAccountingMode {
+    status: lha_state::ThreadPlanRunStatus,
+) -> lha_state::PlanRunAccountingMode {
     match status {
-        adam_state::ThreadPlanRunStatus::Active
-        | adam_state::ThreadPlanRunStatus::BudgetLimited => {
-            adam_state::PlanRunAccountingMode::ActiveOnly
+        lha_state::ThreadPlanRunStatus::Active | lha_state::ThreadPlanRunStatus::BudgetLimited => {
+            lha_state::PlanRunAccountingMode::ActiveOnly
         }
-        adam_state::ThreadPlanRunStatus::Paused
-        | adam_state::ThreadPlanRunStatus::Blocked
-        | adam_state::ThreadPlanRunStatus::UsageLimited => {
-            adam_state::PlanRunAccountingMode::ActiveOrStopped
+        lha_state::ThreadPlanRunStatus::Paused
+        | lha_state::ThreadPlanRunStatus::Blocked
+        | lha_state::ThreadPlanRunStatus::UsageLimited => {
+            lha_state::PlanRunAccountingMode::ActiveOrStopped
         }
-        adam_state::ThreadPlanRunStatus::Complete => {
-            adam_state::PlanRunAccountingMode::ActiveOrComplete
+        lha_state::ThreadPlanRunStatus::Complete => {
+            lha_state::PlanRunAccountingMode::ActiveOrComplete
         }
     }
 }
@@ -950,7 +949,7 @@ fn builtin_identity_developer_instructions(kind: IdentityKind) -> Option<String>
         IdentityKind::Planner
         | IdentityKind::Programmer
         | IdentityKind::Explorer
-        | IdentityKind::Reviewer => adam_identity::builtin_identity_presets()
+        | IdentityKind::Reviewer => lha_identity::builtin_identity_presets()
             .into_iter()
             .find(|mask| mask.kind == Some(kind))
             .and_then(|mask| mask.developer_instructions.flatten()),
@@ -1116,8 +1115,8 @@ pub(crate) struct SessionConfiguration {
     /// `ConfigureSession` operation so that the business-logic layer can
     /// operate deterministically.
     cwd: PathBuf,
-    /// Directory containing all Adam state for this session.
-    adam_home: PathBuf,
+    /// Directory containing all LHA state for this session.
+    lha_home: PathBuf,
     /// Optional user-facing name for the thread, updated during the session.
     thread_name: Option<String>,
 
@@ -1129,8 +1128,8 @@ pub(crate) struct SessionConfiguration {
 }
 
 impl SessionConfiguration {
-    pub(crate) fn adam_home(&self) -> &PathBuf {
-        &self.adam_home
+    pub(crate) fn lha_home(&self) -> &PathBuf {
+        &self.lha_home
     }
 
     fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
@@ -1343,9 +1342,9 @@ impl Session {
         Some(state.get_or_create_dynamic_context_window(key))
     }
 
-    pub(crate) async fn adam_home(&self) -> PathBuf {
+    pub(crate) async fn lha_home(&self) -> PathBuf {
         let state = self.state.lock().await;
-        state.session_configuration.adam_home().clone()
+        state.session_configuration.lha_home().clone()
     }
 
     pub(crate) async fn update_model_provider(&self, provider: RuntimeEndpoint) {
@@ -1381,7 +1380,7 @@ impl Session {
     #[allow(clippy::too_many_arguments)]
     fn make_turn_context(
         auth_manager: Option<Arc<AuthManager>>,
-        runtime_factory: Arc<dyn adam_llm::RuntimeClientFactory>,
+        runtime_factory: Arc<dyn lha_llm::RuntimeClientFactory>,
         otel_manager: &OtelManager,
         provider: RuntimeEndpoint,
         session_configuration: &SessionConfiguration,
@@ -1627,24 +1626,20 @@ impl Session {
         // Create the mutable state for the Session.
         if config.features.enabled(Feature::ShellSnapshot) {
             ShellSnapshot::start_snapshotting(
-                config.adam_home.clone(),
+                config.lha_home.clone(),
                 conversation_id,
                 &mut default_shell,
                 otel_manager.clone(),
             );
         }
-        let thread_name = match session_index::find_thread_name_by_id(
-            &config.adam_home,
-            &conversation_id,
-        )
-        .await
-        {
-            Ok(name) => name,
-            Err(err) => {
-                warn!("Failed to read session index for thread name: {err}");
-                None
-            }
-        };
+        let thread_name =
+            match session_index::find_thread_name_by_id(&config.lha_home, &conversation_id).await {
+                Ok(name) => name,
+                Err(err) => {
+                    warn!("Failed to read session index for thread name: {err}");
+                    None
+                }
+            };
         session_configuration.thread_name = thread_name.clone();
         let state = SessionState::new(session_configuration.clone());
 
@@ -1663,7 +1658,7 @@ impl Session {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_jobs: crate::agent_jobs::AgentJobManager::new(
-                config.adam_home.clone(),
+                config.lha_home.clone(),
                 config.agent_job_max_concurrency,
                 config.agent_job_max_runtime_seconds,
             ),
@@ -1766,7 +1761,7 @@ impl Session {
             return;
         };
         match state_db.get_thread_goal(self.conversation_id).await {
-            Ok(Some(goal)) if goal.status == adam_state::ThreadGoalStatus::Active => {
+            Ok(Some(goal)) if goal.status == lha_state::ThreadGoalStatus::Active => {
                 let goal_id = goal.goal_id;
                 turn_context
                     .goal_context
@@ -1805,7 +1800,7 @@ impl Session {
                     .plan_run_context
                     .set_expected_plan_run_id(plan_run_id.clone())
                     .await;
-                if plan_run.status == adam_state::ThreadPlanRunStatus::Active {
+                if plan_run.status == lha_state::ThreadPlanRunStatus::Active {
                     turn_context
                         .plan_run_context
                         .set_accounting_plan_run_id(plan_run_id)
@@ -1885,7 +1880,7 @@ impl Session {
             .await;
             return false;
         }
-        if let Err(message) = adam_protocol::protocol::validate_thread_goal_objective(&objective) {
+        if let Err(message) = lha_protocol::protocol::validate_thread_goal_objective(&objective) {
             self.send_goal_error(sub_id, message).await;
             return false;
         }
@@ -1895,7 +1890,7 @@ impl Session {
                 .insert_thread_goal_or_replace_completed(
                     self.conversation_id,
                     &objective,
-                    adam_state::ThreadGoalStatus::Active,
+                    lha_state::ThreadGoalStatus::Active,
                     None,
                 )
                 .await
@@ -1903,7 +1898,7 @@ impl Session {
                 Ok(Some(goal)) => Ok(goal),
                 Ok(None) => match state_db.get_thread_goal(self.conversation_id).await {
                     Ok(Some(existing))
-                        if existing.status != adam_state::ThreadGoalStatus::Complete =>
+                        if existing.status != lha_state::ThreadGoalStatus::Complete =>
                     {
                         self.send_event_raw(Event {
                             id: sub_id,
@@ -1922,7 +1917,7 @@ impl Session {
                         .insert_thread_goal_or_replace_completed(
                             self.conversation_id,
                             &objective,
-                            adam_state::ThreadGoalStatus::Active,
+                            lha_state::ThreadGoalStatus::Active,
                             None,
                         )
                         .await
@@ -1948,7 +1943,7 @@ impl Session {
                             self.conversation_id,
                             &expected_goal_id,
                             &objective,
-                            adam_state::ThreadGoalStatus::Active,
+                            lha_state::ThreadGoalStatus::Active,
                             None,
                         )
                         .await
@@ -1968,7 +1963,7 @@ impl Session {
             } => state_db
                 .update_thread_goal(
                     self.conversation_id,
-                    adam_state::GoalUpdate {
+                    lha_state::GoalUpdate {
                         objective: Some(objective.clone()),
                         status: Some(state_goal_status_from_protocol(status)),
                         token_budget: Some(token_budget),
@@ -2030,7 +2025,7 @@ impl Session {
         match state_db
             .update_thread_goal(
                 self.conversation_id,
-                adam_state::GoalUpdate {
+                lha_state::GoalUpdate {
                     objective: None,
                     status: Some(state_goal_status_from_protocol(status)),
                     token_budget: None,
@@ -2167,12 +2162,12 @@ impl Session {
             .await;
             return false;
         }
-        if let Err(message) = adam_protocol::protocol::validate_thread_plan_run_text(&plan_text) {
+        if let Err(message) = lha_protocol::protocol::validate_thread_plan_run_text(&plan_text) {
             self.send_plan_run_error(sub_id, message).await;
             return false;
         }
         match state_db.get_thread_goal(self.conversation_id).await {
-            Ok(Some(goal)) if goal.status != adam_state::ThreadGoalStatus::Complete => {
+            Ok(Some(goal)) if goal.status != lha_state::ThreadGoalStatus::Complete => {
                 self.send_plan_run_error(
                     sub_id,
                     "Cannot start YOLO plan completion while a programmer goal is unfinished. Complete or clear the current /goal first."
@@ -2192,7 +2187,7 @@ impl Session {
             .insert_thread_plan_run_or_replace_completed(
                 self.conversation_id,
                 &plan_text,
-                adam_state::ThreadPlanRunStatus::Active,
+                lha_state::ThreadPlanRunStatus::Active,
                 None,
             )
             .await
@@ -2247,7 +2242,7 @@ impl Session {
         match state_db
             .update_thread_plan_run(
                 self.conversation_id,
-                adam_state::PlanRunUpdate {
+                lha_state::PlanRunUpdate {
                     plan_text: None,
                     status: Some(state_plan_run_status_from_protocol(status)),
                     token_budget: None,
@@ -2362,7 +2357,7 @@ impl Session {
             return false;
         };
         let goal = match state_db.get_thread_goal(self.conversation_id).await {
-            Ok(Some(goal)) if goal.status == adam_state::ThreadGoalStatus::Active => goal,
+            Ok(Some(goal)) if goal.status == lha_state::ThreadGoalStatus::Active => goal,
             Ok(_) => return false,
             Err(err) => {
                 warn!("failed to load active goal for continuation: {err}");
@@ -2380,7 +2375,7 @@ impl Session {
         match state_db.get_thread_goal(self.conversation_id).await {
             Ok(Some(current))
                 if current.goal_id == goal_id
-                    && current.status == adam_state::ThreadGoalStatus::Active => {}
+                    && current.status == lha_state::ThreadGoalStatus::Active => {}
             Ok(_) => return false,
             Err(err) => {
                 warn!("failed to reload active goal for continuation: {err}");
@@ -2430,7 +2425,7 @@ impl Session {
             return false;
         };
         let plan_run = match state_db.get_thread_plan_run(self.conversation_id).await {
-            Ok(Some(plan_run)) if plan_run.status == adam_state::ThreadPlanRunStatus::Active => {
+            Ok(Some(plan_run)) if plan_run.status == lha_state::ThreadPlanRunStatus::Active => {
                 plan_run
             }
             Ok(_) => return false,
@@ -2450,7 +2445,7 @@ impl Session {
         match state_db.get_thread_plan_run(self.conversation_id).await {
             Ok(Some(current))
                 if current.plan_run_id == plan_run_id
-                    && current.status == adam_state::ThreadPlanRunStatus::Active => {}
+                    && current.status == lha_state::ThreadPlanRunStatus::Active => {}
             Ok(_) => return false,
             Err(err) => {
                 warn!("failed to reload active plan run for continuation: {err}");
@@ -2560,7 +2555,7 @@ impl Session {
 
     pub(crate) async fn settle_active_goal_usage_for_display(
         &self,
-    ) -> Option<adam_state::ThreadGoal> {
+    ) -> Option<lha_state::ThreadGoal> {
         let turn_contexts = {
             let active_turn = self.active_turn.lock().await;
             active_turn
@@ -2595,7 +2590,7 @@ impl Session {
 
     pub(crate) async fn settle_active_plan_run_usage_for_display(
         &self,
-    ) -> Option<adam_state::ThreadPlanRun> {
+    ) -> Option<lha_state::ThreadPlanRun> {
         let turn_contexts = {
             let active_turn = self.active_turn.lock().await;
             active_turn
@@ -2632,7 +2627,7 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         mode: PlanRunUsageSettlementMode,
-    ) -> Option<adam_state::PlanRunAccountingOutcome> {
+    ) -> Option<lha_state::PlanRunAccountingOutcome> {
         let plan_run_id = turn_context
             .plan_run_context
             .accounting_plan_run_id()
@@ -2678,7 +2673,7 @@ impl Session {
             if matches!(mode, PlanRunUsageSettlementMode::FinalTask) {
                 *checkpoint_guard = None;
             }
-            return Some(adam_state::PlanRunAccountingOutcome::Unchanged(Some(
+            return Some(lha_state::PlanRunAccountingOutcome::Unchanged(Some(
                 plan_run,
             )));
         }
@@ -2696,7 +2691,7 @@ impl Session {
             Ok(outcome) => {
                 if matches!(mode, PlanRunUsageSettlementMode::FinalTask) {
                     *checkpoint_guard = None;
-                } else if matches!(outcome, adam_state::PlanRunAccountingOutcome::Updated(_)) {
+                } else if matches!(outcome, lha_state::PlanRunAccountingOutcome::Updated(_)) {
                     let seconds_to_advance = elapsed_whole_seconds
                         .min(u64::try_from(time_delta_seconds).unwrap_or(u64::MAX));
                     let checkpoint = checkpoint_guard.as_mut()?;
@@ -2720,7 +2715,7 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         mode: GoalUsageSettlementMode,
-    ) -> Option<adam_state::GoalAccountingOutcome> {
+    ) -> Option<lha_state::GoalAccountingOutcome> {
         let goal_id = turn_context.goal_context.accounting_goal_id().await?;
         let state_db = self.state_db()?;
         let current_total_tokens = self.reported_total_token_usage().await;
@@ -2763,7 +2758,7 @@ impl Session {
             if matches!(mode, GoalUsageSettlementMode::FinalTask) {
                 *checkpoint_guard = None;
             }
-            return Some(adam_state::GoalAccountingOutcome::Unchanged(Some(goal)));
+            return Some(lha_state::GoalAccountingOutcome::Unchanged(Some(goal)));
         }
 
         match state_db
@@ -2779,7 +2774,7 @@ impl Session {
             Ok(outcome) => {
                 if matches!(mode, GoalUsageSettlementMode::FinalTask) {
                     *checkpoint_guard = None;
-                } else if matches!(outcome, adam_state::GoalAccountingOutcome::Updated(_)) {
+                } else if matches!(outcome, lha_state::GoalAccountingOutcome::Updated(_)) {
                     let seconds_to_advance = elapsed_whole_seconds
                         .min(u64::try_from(time_delta_seconds).unwrap_or(u64::MAX));
                     let checkpoint = checkpoint_guard.as_mut()?;
@@ -2824,7 +2819,7 @@ impl Session {
                 return;
             }
         };
-        let should_continue = state_goal.status == adam_state::ThreadGoalStatus::Active;
+        let should_continue = state_goal.status == lha_state::ThreadGoalStatus::Active;
         self.send_event_raw(Event {
             id: INITIAL_SUBMIT_ID.to_string(),
             msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
@@ -2860,7 +2855,7 @@ impl Session {
                 return;
             }
         };
-        let should_continue = state_plan_run.status == adam_state::ThreadPlanRunStatus::Active;
+        let should_continue = state_plan_run.status == lha_state::ThreadPlanRunStatus::Active;
         self.send_event_raw(Event {
             id: INITIAL_SUBMIT_ID.to_string(),
             msg: EventMsg::ThreadPlanRunUpdated(ThreadPlanRunUpdatedEvent {
@@ -2921,7 +2916,7 @@ impl Session {
                             EventMsg::Warning(WarningEvent {
                                 message: format!(
                                     "This session was recorded with model `{prev}` but is resuming with `{curr}`. \
-                         Consider switching back to `{prev}` as it may affect Adam performance."
+                         Consider switching back to `{prev}` as it may affect LHA performance."
                                 ),
                             }),
                         )
@@ -3176,7 +3171,7 @@ impl Session {
     pub(crate) async fn set_workflow_for_testing(
         &self,
         definition: WorkflowDefinition,
-    ) -> Result<(), Vec<adam_protocol::workflow::WorkflowValidationError>> {
+    ) -> Result<(), Vec<lha_protocol::workflow::WorkflowValidationError>> {
         let workflow = WorkflowSession::new(definition)?;
         let started_item = workflow.started_item("workflow-test");
         {
@@ -3200,7 +3195,7 @@ impl Session {
                 return WorkflowSubmissionResult::Rejected {
                     workflow_id: "".to_string(),
                     step_id: submission.step_id,
-                    errors: vec![adam_protocol::workflow::WorkflowValidationError::new(
+                    errors: vec![lha_protocol::workflow::WorkflowValidationError::new(
                         "workflow_unavailable",
                         "/step_id",
                         "workflow_submit_artifact is unavailable because the active identity has no workflow",
@@ -3470,12 +3465,12 @@ impl Session {
         amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
         let features = self.features.clone();
-        let adam_home = self
+        let lha_home = self
             .state
             .lock()
             .await
             .session_configuration
-            .adam_home()
+            .lha_home()
             .clone();
 
         if !features.enabled(Feature::ExecPolicy) {
@@ -3485,7 +3480,7 @@ impl Session {
 
         self.services
             .exec_policy
-            .append_amendment_and_update(&adam_home, amendment)
+            .append_amendment_and_update(&lha_home, amendment)
             .await?;
 
         Ok(())
@@ -4654,33 +4649,33 @@ mod handlers {
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
-    use adam_protocol::custom_prompts::CustomPrompt;
-    use adam_protocol::protocol::CodexErrorInfo;
-    use adam_protocol::protocol::ErrorEvent;
-    use adam_protocol::protocol::Event;
-    use adam_protocol::protocol::EventMsg;
-    use adam_protocol::protocol::ListCustomPromptsResponseEvent;
-    use adam_protocol::protocol::ListSkillsResponseEvent;
-    use adam_protocol::protocol::McpServerRefreshConfig;
-    use adam_protocol::protocol::Op;
-    use adam_protocol::protocol::ReviewDecision;
-    use adam_protocol::protocol::ReviewRequest;
-    use adam_protocol::protocol::SkillsListEntry;
-    use adam_protocol::protocol::ThreadGoalSetMode;
-    use adam_protocol::protocol::ThreadGoalStatus;
-    use adam_protocol::protocol::ThreadNameUpdatedEvent;
-    use adam_protocol::protocol::ThreadPlanRunStatus;
-    use adam_protocol::protocol::ThreadRolledBackEvent;
-    use adam_protocol::protocol::TurnAbortReason;
-    use adam_protocol::protocol::WarningEvent;
-    use adam_protocol::request_user_input::RequestUserInputResponse;
+    use lha_protocol::custom_prompts::CustomPrompt;
+    use lha_protocol::protocol::CodexErrorInfo;
+    use lha_protocol::protocol::ErrorEvent;
+    use lha_protocol::protocol::Event;
+    use lha_protocol::protocol::EventMsg;
+    use lha_protocol::protocol::ListCustomPromptsResponseEvent;
+    use lha_protocol::protocol::ListSkillsResponseEvent;
+    use lha_protocol::protocol::McpServerRefreshConfig;
+    use lha_protocol::protocol::Op;
+    use lha_protocol::protocol::ReviewDecision;
+    use lha_protocol::protocol::ReviewRequest;
+    use lha_protocol::protocol::SkillsListEntry;
+    use lha_protocol::protocol::ThreadGoalSetMode;
+    use lha_protocol::protocol::ThreadGoalStatus;
+    use lha_protocol::protocol::ThreadNameUpdatedEvent;
+    use lha_protocol::protocol::ThreadPlanRunStatus;
+    use lha_protocol::protocol::ThreadRolledBackEvent;
+    use lha_protocol::protocol::TurnAbortReason;
+    use lha_protocol::protocol::WarningEvent;
+    use lha_protocol::request_user_input::RequestUserInputResponse;
 
     use crate::context_manager::is_user_turn_boundary;
-    use adam_protocol::config_types::IdentityKind;
-    use adam_protocol::dynamic_tools::DynamicToolResponse;
-    use adam_protocol::user_input::UserInput;
-    use adam_rmcp_client::ElicitationAction;
-    use adam_rmcp_client::ElicitationResponse;
+    use lha_protocol::config_types::IdentityKind;
+    use lha_protocol::dynamic_tools::DynamicToolResponse;
+    use lha_protocol::user_input::UserInput;
+    use lha_rmcp_client::ElicitationAction;
+    use lha_rmcp_client::ElicitationResponse;
     use mcp_types::RequestId;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -4813,12 +4808,12 @@ mod handlers {
         sess: &Arc<Session>,
         server_name: String,
         request_id: RequestId,
-        decision: adam_protocol::approvals::ElicitationAction,
+        decision: lha_protocol::approvals::ElicitationAction,
     ) {
         let action = match decision {
-            adam_protocol::approvals::ElicitationAction::Accept => ElicitationAction::Accept,
-            adam_protocol::approvals::ElicitationAction::Decline => ElicitationAction::Decline,
-            adam_protocol::approvals::ElicitationAction::Cancel => ElicitationAction::Cancel,
+            lha_protocol::approvals::ElicitationAction::Accept => ElicitationAction::Accept,
+            lha_protocol::approvals::ElicitationAction::Decline => ElicitationAction::Decline,
+            lha_protocol::approvals::ElicitationAction::Cancel => ElicitationAction::Cancel,
         };
         // When accepting, send an empty object as content to satisfy MCP servers
         // that expect non-null content on Accept. For Decline/Cancel, content is None.
@@ -4988,7 +4983,7 @@ mod handlers {
                     crate::protocol::GetHistoryEntryResponseEvent {
                         offset,
                         log_id,
-                        entry: entry_opt.map(|e| adam_protocol::message_history::HistoryEntry {
+                        entry: entry_opt.map(|e| lha_protocol::message_history::HistoryEntry {
                             conversation_id: e.session_id,
                             ts: e.ts,
                             text: e.text,
@@ -5145,7 +5140,7 @@ mod handlers {
     /// Persists the thread name in the session index, updates in-memory state, and emits
     /// a `ThreadNameUpdated` event on success.
     ///
-    /// This appends the name to `ADAM_HOME/sessions_index.jsonl` via `session_index::append_thread_name` for the
+    /// This appends the name to `LHA_HOME/sessions_index.jsonl` via `session_index::append_thread_name` for the
     /// current `thread_id`, then updates `SessionConfiguration::thread_name`.
     ///
     /// Returns an error event if the name is empty or session persistence is disabled.
@@ -5178,9 +5173,9 @@ mod handlers {
             return;
         };
 
-        let adam_home = sess.adam_home().await;
+        let lha_home = sess.lha_home().await;
         if let Err(e) =
-            session_index::append_thread_name(&adam_home, sess.conversation_id, &name).await
+            session_index::append_thread_name(&lha_home, sess.conversation_id, &name).await
         {
             let event = Event {
                 id: sub_id,
@@ -5222,7 +5217,7 @@ mod handlers {
             .unified_exec_manager
             .terminate_all_processes()
             .await;
-        info!("Shutting down Adam instance");
+        info!("Shutting down LHA instance");
         let history = sess.clone_history().await;
         let turn_count = history
             .raw_items()
@@ -5787,11 +5782,11 @@ pub(crate) async fn run_turn(
                 run_auto_compact(&sess, &turn_context).await;
                 continue;
             }
-            Err(SamplingRequestError::Adam(CodexErr::TurnAborted)) => {
+            Err(SamplingRequestError::LHA(CodexErr::TurnAborted)) => {
                 // Aborted turn is reported via a different event.
                 break;
             }
-            Err(SamplingRequestError::Adam(CodexErr::InvalidImageRequest())) => {
+            Err(SamplingRequestError::LHA(CodexErr::InvalidImageRequest())) => {
                 has_sent_sampling_request = true;
                 preflight_compaction_attempted = false;
                 let mut state = sess.state.lock().await;
@@ -5809,7 +5804,7 @@ pub(crate) async fn run_turn(
                 sess.send_event(&turn_context, event).await;
                 break;
             }
-            Err(SamplingRequestError::Adam(e)) => {
+            Err(SamplingRequestError::LHA(e)) => {
                 info!("Turn error: {e:#}");
                 let event = EventMsg::Error(e.to_error_event(None));
                 sess.send_event(&turn_context, event).await;
@@ -5901,13 +5896,13 @@ async fn learn_dynamic_context_window(
         return;
     };
 
-    let (adam_home, active_profile, model_provider_id, model) = {
+    let (lha_home, active_profile, model_provider_id, model) = {
         let mut state = sess.state.lock().await;
         state
             .session_configuration
             .set_learned_model_context_window(context_window, auto_compact_token_limit);
         (
-            state.session_configuration.adam_home().clone(),
+            state.session_configuration.lha_home().clone(),
             state
                 .session_configuration
                 .original_config_do_not_use
@@ -5944,7 +5939,7 @@ async fn learn_dynamic_context_window(
         });
     }
 
-    if let Err(err) = ConfigEditsBuilder::new(adam_home.as_path())
+    if let Err(err) = ConfigEditsBuilder::new(lha_home.as_path())
         .with_edits(edits)
         .apply()
         .await
@@ -6088,7 +6083,7 @@ async fn run_sampling_request(
         .or_cancel(&cancellation_token)
         .await
         .map_err(CodexErr::from)
-        .map_err(SamplingRequestError::Adam)?;
+        .map_err(SamplingRequestError::LHA)?;
     let connectors_for_tools = if turn_context
         .runtime
         .config()
@@ -6169,9 +6164,9 @@ async fn run_sampling_request(
             request_input_tokens,
         }),
         Err(CodexErr::UsageLimitReached(e)) => {
-            Err(SamplingRequestError::Adam(CodexErr::UsageLimitReached(e)))
+            Err(SamplingRequestError::LHA(CodexErr::UsageLimitReached(e)))
         }
-        Err(err) => Err(SamplingRequestError::Adam(err)),
+        Err(err) => Err(SamplingRequestError::LHA(err)),
     }
 }
 
@@ -6179,7 +6174,7 @@ async fn run_sampling_request(
 enum SamplingRequestError {
     ContextWindowExceeded { request_input_tokens: Option<i64> },
     PreflightCompactRequired,
-    Adam(CodexErr),
+    LHA(CodexErr),
 }
 
 #[derive(Debug)]
@@ -6334,11 +6329,11 @@ async fn maybe_emit_pending_agent_message_start(
 }
 
 /// Agent messages are text-only today; concatenate all text entries.
-fn agent_message_text(item: &adam_protocol::items::AgentMessageItem) -> String {
+fn agent_message_text(item: &lha_protocol::items::AgentMessageItem) -> String {
     item.content
         .iter()
         .map(|entry| match entry {
-            adam_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+            lha_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
         })
         .collect()
 }
@@ -6473,7 +6468,7 @@ async fn maybe_complete_plan_item_from_message(
 async fn emit_agent_message_in_plan_mode(
     sess: &Session,
     turn_context: &TurnContext,
-    agent_message: adam_protocol::items::AgentMessageItem,
+    agent_message: lha_protocol::items::AgentMessageItem,
     state: &mut PlanModeStreamState,
 ) {
     let agent_message_id = agent_message.id.clone();
@@ -6494,7 +6489,7 @@ async fn emit_agent_message_in_plan_mode(
             .pending_agent_message_items
             .remove(&agent_message_id)
             .unwrap_or_else(|| {
-                TurnItem::AgentMessage(adam_protocol::items::AgentMessageItem {
+                TurnItem::AgentMessage(lha_protocol::items::AgentMessageItem {
                     id: agent_message_id.clone(),
                     content: Vec::new(),
                 })
@@ -6890,7 +6885,7 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
 
     async fn finish(
         self,
-        state: adam_agent_core::kernel::TurnStreamState,
+        state: lha_agent_core::kernel::TurnStreamState,
     ) -> Result<TurnStreamOutcome, Self::Error> {
         let needs_follow_up = if self.cancellation_token.is_cancelled() {
             false
@@ -6925,7 +6920,7 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
         CodexErr::TurnAborted
     }
 
-    fn llm_error(&self, err: adam_llm::Error) -> Self::Error {
+    fn llm_error(&self, err: lha_llm::Error) -> Self::Error {
         err.into()
     }
 
@@ -7067,9 +7062,9 @@ mod tests {
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
 
-    use adam_llm::ToolCallPayload;
-    use adam_llm::ToolResultPayload;
-    use adam_protocol::ThreadId;
+    use lha_llm::ToolCallPayload;
+    use lha_llm::ToolResultPayload;
+    use lha_protocol::ThreadId;
 
     use crate::protocol::CompactedItem;
     use crate::protocol::InitialHistory;
@@ -7089,11 +7084,11 @@ mod tests {
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::registry::ToolHandler;
     use crate::turn_diff_tracker::TurnDiffTracker;
-    use adam_app_server_protocol::AppInfo;
-    use adam_app_server_protocol::AuthMode;
-    use adam_protocol::models::ContentItem;
-    use adam_protocol::models::TranscriptItem;
-    use adam_protocol::models::tool_result_payload_from_call_tool_result;
+    use lha_app_server_protocol::AppInfo;
+    use lha_app_server_protocol::AuthMode;
+    use lha_protocol::models::ContentItem;
+    use lha_protocol::models::TranscriptItem;
+    use lha_protocol::models::tool_result_payload_from_call_tool_result;
     use std::path::Path;
     use std::time::Duration;
     use tokio::time::sleep;
@@ -7579,7 +7574,7 @@ mod tests {
         assert_eq!(stored.thread_id, session.conversation_id);
         assert_ne!(stored.goal_id, source_goal_id);
         assert_eq!(stored.objective, "finish forked goal");
-        assert_eq!(stored.status, adam_state::ThreadGoalStatus::Active);
+        assert_eq!(stored.status, lha_state::ThreadGoalStatus::Active);
 
         let event = rx.recv().await.expect("goal update event should be sent");
         match event.msg {
@@ -7696,8 +7691,8 @@ mod tests {
 
     #[tokio::test]
     async fn reconstruct_history_backfills_latest_surviving_plan_after_local_compaction() {
-        let adam_home = tempfile::tempdir().expect("create temp dir");
-        let config = build_test_config(adam_home.path()).await;
+        let lha_home = tempfile::tempdir().expect("create temp dir");
+        let config = build_test_config(lha_home.path()).await;
         let (session, turn_context) = make_session_and_context_for_config(config).await;
 
         let initial_context = session.build_initial_context(&turn_context).await;
@@ -8381,9 +8376,9 @@ mod tests {
         })
     }
 
-    async fn build_test_config(adam_home: &Path) -> Config {
+    async fn build_test_config(lha_home: &Path) -> Config {
         let mut config = ConfigBuilder::default()
-            .adam_home(adam_home.to_path_buf())
+            .lha_home(lha_home.to_path_buf())
             .build()
             .await
             .expect("load default test config");
@@ -8392,8 +8387,8 @@ mod tests {
     }
 
     async fn make_session_for_messages_model(model_context_window: Option<i64>) -> Session {
-        let adam_home = tempfile::tempdir().expect("create temp dir");
-        let mut config = build_test_config(adam_home.path()).await;
+        let lha_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(lha_home.path()).await;
         config.model = Some("claude-sonnet-4-5".to_string());
         config.model_context_window = model_context_window;
         config.model_auto_compact_token_limit = None;
@@ -8412,8 +8407,8 @@ mod tests {
     }
 
     async fn make_session_for_responses_model_without_static_metadata() -> Session {
-        let adam_home = tempfile::tempdir().expect("create temp dir");
-        let mut config = build_test_config(adam_home.path()).await;
+        let lha_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(lha_home.path()).await;
         config.model = Some("responses-unknown-model".to_string());
 
         make_session_and_context_for_config(config).await.0
@@ -8426,7 +8421,7 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(
-            config.adam_home.clone(),
+            config.lha_home.clone(),
             auth_manager.clone(),
             config.model_provider_id.as_str(),
             config.model_provider.clone(),
@@ -8461,7 +8456,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
-            adam_home: config.adam_home.clone(),
+            lha_home: config.lha_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
@@ -8481,7 +8476,7 @@ mod tests {
 
         let mut state = SessionState::new(session_configuration.clone());
         mark_state_initial_context_seeded(&mut state);
-        let skills_manager = Arc::new(SkillsManager::new(config.adam_home.clone()));
+        let skills_manager = Arc::new(SkillsManager::new(config.lha_home.clone()));
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -8498,7 +8493,7 @@ mod tests {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_jobs: crate::agent_jobs::AgentJobManager::new(
-                config.adam_home.clone(),
+                config.lha_home.clone(),
                 config.agent_job_max_concurrency,
                 config.agent_job_max_runtime_seconds,
             ),
@@ -8559,8 +8554,8 @@ mod tests {
     }
 
     pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
-        let adam_home = tempfile::tempdir().expect("create temp dir");
-        let config = build_test_config(adam_home.path()).await;
+        let lha_home = tempfile::tempdir().expect("create temp dir");
+        let config = build_test_config(lha_home.path()).await;
         make_session_and_context_for_config(config).await
     }
 
@@ -8572,8 +8567,8 @@ mod tests {
 
     #[tokio::test]
     async fn agent_job_exec_config_uses_endpoint_bearer_token() {
-        let adam_home = tempfile::tempdir().expect("create temp dir");
-        let mut config = build_test_config(adam_home.path()).await;
+        let lha_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(lha_home.path()).await;
         config.model_provider.bearer_token = Some("provider-token".to_string());
         let (_session, turn_context) = make_session_and_context_for_config(config).await;
 
@@ -8590,8 +8585,8 @@ mod tests {
 
     #[tokio::test]
     async fn agent_job_exec_config_does_not_fallback_to_auth_manager() {
-        let adam_home = tempfile::tempdir().expect("create temp dir");
-        let config = build_test_config(adam_home.path()).await;
+        let lha_home = tempfile::tempdir().expect("create temp dir");
+        let config = build_test_config(lha_home.path()).await;
         let (_session, turn_context) = make_session_and_context_for_config(config).await;
 
         let exec_config = crate::agent_jobs::AgentJobExecConfig::from_runtime(
@@ -8605,21 +8600,21 @@ mod tests {
     }
 
     async fn make_session_and_context_without_personality() -> (Session, TurnContext) {
-        let adam_home = tempfile::tempdir().expect("create temp dir");
-        let mut config = build_test_config(adam_home.path()).await;
+        let lha_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(lha_home.path()).await;
         config.personality = None;
         make_session_and_context_for_config(config).await
     }
 
     async fn make_goal_session_with_state() -> (
         Arc<Session>,
-        Arc<adam_state::StateRuntime>,
+        Arc<lha_state::StateRuntime>,
         async_channel::Receiver<Event>,
         tempfile::TempDir,
     ) {
         let (mut session, _turn_context, rx) = make_session_and_context_with_rx().await;
         let state_home = tempfile::tempdir().expect("create state temp dir");
-        let state_db = adam_state::StateRuntime::init(
+        let state_db = lha_state::StateRuntime::init(
             state_home.path().to_path_buf(),
             "test".to_string(),
             None,
@@ -8636,13 +8631,13 @@ mod tests {
 
     async fn make_plan_run_session_with_state() -> (
         Arc<Session>,
-        Arc<adam_state::StateRuntime>,
+        Arc<lha_state::StateRuntime>,
         async_channel::Receiver<Event>,
         tempfile::TempDir,
     ) {
         let (mut session, _turn_context, rx) = make_session_and_context_with_rx().await;
         let state_home = tempfile::tempdir().expect("create state temp dir");
-        let state_db = adam_state::StateRuntime::init(
+        let state_db = lha_state::StateRuntime::init(
             state_home.path().to_path_buf(),
             "test".to_string(),
             None,
@@ -8681,8 +8676,8 @@ mod tests {
         developer_instructions: &str,
         user_instructions: &str,
     ) -> (Session, TurnContext) {
-        let adam_home = tempfile::tempdir().expect("create temp dir");
-        let mut config = build_test_config(adam_home.path()).await;
+        let lha_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(lha_home.path()).await;
         config.personality = None;
         config.cwd = PathBuf::from(cwd);
         config.developer_instructions = Some(developer_instructions.to_string());
@@ -8724,14 +8719,14 @@ mod tests {
         async_channel::Receiver<Event>,
     ) {
         let (tx_event, rx_event) = async_channel::unbounded();
-        let adam_home = tempfile::tempdir().expect("create temp dir");
-        let config = build_test_config(adam_home.path()).await;
+        let lha_home = tempfile::tempdir().expect("create temp dir");
+        let config = build_test_config(lha_home.path()).await;
         let config = Arc::new(config);
         let conversation_id = ThreadId::default();
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(
-            config.adam_home.clone(),
+            config.lha_home.clone(),
             auth_manager.clone(),
             config.model_provider_id.as_str(),
             config.model_provider.clone(),
@@ -8766,7 +8761,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
-            adam_home: config.adam_home.clone(),
+            lha_home: config.lha_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
@@ -8786,7 +8781,7 @@ mod tests {
 
         let mut state = SessionState::new(session_configuration.clone());
         mark_state_initial_context_seeded(&mut state);
-        let skills_manager = Arc::new(SkillsManager::new(config.adam_home.clone()));
+        let skills_manager = Arc::new(SkillsManager::new(config.lha_home.clone()));
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -8803,7 +8798,7 @@ mod tests {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_jobs: crate::agent_jobs::AgentJobManager::new(
-                config.adam_home.clone(),
+                config.lha_home.clone(),
                 config.agent_job_max_concurrency,
                 config.agent_job_max_runtime_seconds,
             ),
@@ -8914,8 +8909,8 @@ mod tests {
 
     #[tokio::test]
     async fn buddy_intro_is_injected_when_talk_is_on() {
-        let adam_home = tempfile::tempdir().expect("create temp dir");
-        let mut config = build_test_config(adam_home.path()).await;
+        let lha_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(lha_home.path()).await;
         config.tui_buddy = crate::config::types::TuiBuddy {
             enabled: true,
             muted: false,
@@ -9152,8 +9147,8 @@ mod tests {
 
     #[tokio::test]
     async fn buddy_intro_update_is_injected_when_buddy_identity_changes() {
-        let adam_home = tempfile::tempdir().expect("create temp dir");
-        let mut config = build_test_config(adam_home.path()).await;
+        let lha_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(lha_home.path()).await;
         config.tui_buddy = active_buddy("Byte");
         let (session, previous) = make_session_and_context_for_config(config).await;
         let previous = Arc::new(previous);
@@ -9179,8 +9174,8 @@ mod tests {
 
     #[tokio::test]
     async fn buddy_intro_update_disables_stale_buddy_when_talk_turns_off() {
-        let adam_home = tempfile::tempdir().expect("create temp dir");
-        let mut config = build_test_config(adam_home.path()).await;
+        let lha_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(lha_home.path()).await;
         config.tui_buddy = active_buddy("Byte");
         let (session, previous) = make_session_and_context_for_config(config).await;
         let previous = Arc::new(previous);
@@ -9213,8 +9208,8 @@ mod tests {
 
     #[tokio::test]
     async fn buddy_intro_update_is_omitted_for_ui_only_buddy_changes() {
-        let adam_home = tempfile::tempdir().expect("create temp dir");
-        let mut config = build_test_config(adam_home.path()).await;
+        let lha_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(lha_home.path()).await;
         config.tui_buddy = active_buddy("Byte");
         let (session, previous) = make_session_and_context_for_config(config).await;
         let previous = Arc::new(previous);
@@ -9306,9 +9301,9 @@ mod tests {
 
     #[tokio::test]
     async fn switch_provider_and_model_uses_target_model_context_limits() {
-        let adam_home = tempfile::tempdir().expect("create temp dir");
+        let lha_home = tempfile::tempdir().expect("create temp dir");
         std::fs::write(
-            adam_home.path().join("models.json"),
+            lha_home.path().join("models.json"),
             r#"{
   "providers": {
     "openai": {
@@ -9326,7 +9321,7 @@ mod tests {
         )
         .expect("write models.json");
 
-        let config = build_test_config(adam_home.path()).await;
+        let config = build_test_config(lha_home.path()).await;
         let (session, turn_context) = make_session_and_context_for_config(config).await;
         let endpoint = turn_context.runtime.endpoint();
         {
@@ -9457,7 +9452,7 @@ mod tests {
         let last = history_items.last().expect("warning recorded");
 
         match last {
-            adam_protocol::models::TranscriptItem::Message { role, content, .. } => {
+            lha_protocol::models::TranscriptItem::Message { role, content, .. } => {
                 assert_eq!(role, "user");
                 assert_eq!(
                     content,
@@ -9698,7 +9693,7 @@ mod tests {
             .replace_thread_goal(
                 sess.conversation_id,
                 "track display usage",
-                adam_state::ThreadGoalStatus::Active,
+                lha_state::ThreadGoalStatus::Active,
                 None,
             )
             .await
@@ -9748,7 +9743,7 @@ mod tests {
             .replace_thread_goal(
                 sess.conversation_id,
                 "finish after display refresh",
-                adam_state::ThreadGoalStatus::Active,
+                lha_state::ThreadGoalStatus::Active,
                 None,
             )
             .await
@@ -9796,7 +9791,7 @@ mod tests {
             .replace_thread_goal(
                 sess.conversation_id,
                 "finish after partial refresh",
-                adam_state::ThreadGoalStatus::Active,
+                lha_state::ThreadGoalStatus::Active,
                 None,
             )
             .await
@@ -9828,7 +9823,7 @@ mod tests {
             )
             .await
             .expect("refresh should settle goal usage");
-        let adam_state::GoalAccountingOutcome::Updated(refreshed) = refresh_outcome else {
+        let lha_state::GoalAccountingOutcome::Updated(refreshed) = refresh_outcome else {
             panic!("refresh should update goal usage");
         };
         assert_eq!(1, refreshed.time_used_seconds);
@@ -9841,7 +9836,7 @@ mod tests {
             )
             .await
             .expect("final settlement should settle goal usage");
-        let adam_state::GoalAccountingOutcome::Updated(finished) = final_outcome else {
+        let lha_state::GoalAccountingOutcome::Updated(finished) = final_outcome else {
             panic!("final settlement should update goal usage");
         };
         assert_eq!(2, finished.time_used_seconds);
@@ -9871,7 +9866,7 @@ mod tests {
             .replace_thread_goal(
                 sess.conversation_id,
                 "complete with usage",
-                adam_state::ThreadGoalStatus::Active,
+                lha_state::ThreadGoalStatus::Active,
                 None,
             )
             .await
@@ -9912,7 +9907,7 @@ mod tests {
             .replace_thread_plan_run(
                 sess.conversation_id,
                 "# Plan\n- track display usage",
-                adam_state::ThreadPlanRunStatus::Active,
+                lha_state::ThreadPlanRunStatus::Active,
                 None,
             )
             .await
@@ -9964,7 +9959,7 @@ mod tests {
             .replace_thread_plan_run(
                 sess.conversation_id,
                 "# Plan\n- finish after display refresh",
-                adam_state::ThreadPlanRunStatus::Active,
+                lha_state::ThreadPlanRunStatus::Active,
                 None,
             )
             .await
@@ -10012,7 +10007,7 @@ mod tests {
             .replace_thread_plan_run(
                 sess.conversation_id,
                 "# Plan\n- finish after partial refresh",
-                adam_state::ThreadPlanRunStatus::Active,
+                lha_state::ThreadPlanRunStatus::Active,
                 None,
             )
             .await
@@ -10044,7 +10039,7 @@ mod tests {
             )
             .await
             .expect("refresh should settle plan run usage");
-        let adam_state::PlanRunAccountingOutcome::Updated(refreshed) = refresh_outcome else {
+        let lha_state::PlanRunAccountingOutcome::Updated(refreshed) = refresh_outcome else {
             panic!("refresh should update plan run usage");
         };
         assert_eq!(1, refreshed.time_used_seconds);
@@ -10057,7 +10052,7 @@ mod tests {
             )
             .await
             .expect("final settlement should settle plan run usage");
-        let adam_state::PlanRunAccountingOutcome::Updated(finished) = final_outcome else {
+        let lha_state::PlanRunAccountingOutcome::Updated(finished) = final_outcome else {
             panic!("final settlement should update plan run usage");
         };
         assert_eq!(2, finished.time_used_seconds);
@@ -10087,7 +10082,7 @@ mod tests {
             .replace_thread_plan_run(
                 sess.conversation_id,
                 "# Plan\n- complete with usage",
-                adam_state::ThreadPlanRunStatus::Active,
+                lha_state::ThreadPlanRunStatus::Active,
                 None,
             )
             .await
@@ -10126,7 +10121,7 @@ mod tests {
     #[derive(Clone)]
     struct CreateGoalMidTurnTask {
         start: Arc<Notify>,
-        state_db: Arc<adam_state::StateRuntime>,
+        state_db: Arc<lha_state::StateRuntime>,
     }
 
     #[async_trait::async_trait]
@@ -10150,7 +10145,7 @@ mod tests {
                 .insert_thread_goal(
                     session.conversation_id,
                     "created mid turn",
-                    adam_state::ThreadGoalStatus::Active,
+                    lha_state::ThreadGoalStatus::Active,
                     None,
                 )
                 .await
@@ -10180,7 +10175,7 @@ mod tests {
             .replace_thread_plan_run(
                 sess.conversation_id,
                 "# Plan\n- keep working",
-                adam_state::ThreadPlanRunStatus::Active,
+                lha_state::ThreadPlanRunStatus::Active,
                 None,
             )
             .await
@@ -10293,7 +10288,7 @@ mod tests {
             .replace_thread_goal(
                 sess.conversation_id,
                 "keep working",
-                adam_state::ThreadGoalStatus::Active,
+                lha_state::ThreadGoalStatus::Active,
                 Some(100),
             )
             .await
@@ -10339,8 +10334,8 @@ mod tests {
             .expect("goal should exist");
         assert!(stored.time_used_seconds >= 1);
         assert_eq!(
-            adam_state::ThreadGoal {
-                status: adam_state::ThreadGoalStatus::Paused,
+            lha_state::ThreadGoal {
+                status: lha_state::ThreadGoalStatus::Paused,
                 tokens_used: 12,
                 time_used_seconds: stored.time_used_seconds,
                 updated_at: stored.updated_at,
@@ -10358,7 +10353,7 @@ mod tests {
             .replace_thread_plan_run(
                 sess.conversation_id,
                 "# Plan\n- keep working",
-                adam_state::ThreadPlanRunStatus::Active,
+                lha_state::ThreadPlanRunStatus::Active,
                 Some(100),
             )
             .await
@@ -10404,8 +10399,8 @@ mod tests {
             .expect("plan run should exist");
         assert!(stored.time_used_seconds >= 1);
         assert_eq!(
-            adam_state::ThreadPlanRun {
-                status: adam_state::ThreadPlanRunStatus::Paused,
+            lha_state::ThreadPlanRun {
+                status: lha_state::ThreadPlanRunStatus::Paused,
                 tokens_used: 12,
                 time_used_seconds: stored.time_used_seconds,
                 updated_at: stored.updated_at,
@@ -10423,7 +10418,7 @@ mod tests {
             .replace_thread_goal(
                 sess.conversation_id,
                 "keep working",
-                adam_state::ThreadGoalStatus::Active,
+                lha_state::ThreadGoalStatus::Active,
                 Some(10),
             )
             .await
@@ -10469,8 +10464,8 @@ mod tests {
             .expect("goal should exist");
         assert!(stored.time_used_seconds >= 1);
         assert_eq!(
-            adam_state::ThreadGoal {
-                status: adam_state::ThreadGoalStatus::BudgetLimited,
+            lha_state::ThreadGoal {
+                status: lha_state::ThreadGoalStatus::BudgetLimited,
                 tokens_used: 12,
                 time_used_seconds: stored.time_used_seconds,
                 updated_at: stored.updated_at,
@@ -10538,7 +10533,7 @@ mod tests {
         // recorded in history for the model.
         assert!(
             history.raw_items().iter().any(|item| {
-                let adam_protocol::models::TranscriptItem::Message { role, content, .. } = item
+                let lha_protocol::models::TranscriptItem::Message { role, content, .. } = item
                 else {
                     return false;
                 };
@@ -10587,7 +10582,7 @@ mod tests {
             },
         };
 
-        let request = adam_llm::ToolCallRequest::from_transcript_item(item.clone())
+        let request = lha_llm::ToolCallRequest::from_transcript_item(item.clone())
             .expect("tool call request");
         let call = ToolRouter::build_tool_call(session.as_ref(), request)
             .await

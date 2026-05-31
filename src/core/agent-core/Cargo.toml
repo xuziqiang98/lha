@@ -1,12 +1,12 @@
 [package]
 edition.workspace = true
 license.workspace = true
-name = "adam-agent-core"
+name = "lha-agent-core"
 version.workspace = true
 
 [lib]
 doctest = false
-name = "adam_agent_core"
+name = "lha_agent_core"
 path = "src/lib.rs"
 
 [lints]
@@ -14,9 +14,9 @@ workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
-adam-async-utils = { workspace = true }
-adam-llm = { workspace = true }
-adam-llm-types = { workspace = true }
+lha-async-utils = { workspace = true }
+lha-llm = { workspace = true }
+lha-llm-types = { workspace = true }
 futures = { workspace = true }
 tokio-util = { workspace = true }
 

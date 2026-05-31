@@ -1,13 +1,5 @@
 #![cfg(not(target_os = "windows"))]
 
-use adam_agent::config_loader::ConfigLayerEntry;
-use adam_agent::config_loader::ConfigLayerStack;
-use adam_agent::config_loader::ConfigRequirements;
-use adam_agent::config_loader::ConfigRequirementsToml;
-use adam_agent::features::Feature;
-use adam_agent::protocol::DeprecationNoticeEvent;
-use adam_agent::protocol::EventMsg;
-use adam_app_server_protocol::ConfigLayerSource;
 use anyhow::Ok;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -15,6 +7,14 @@ use core_test_support::test_absolute_path;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_match;
+use lha_agent::config_loader::ConfigLayerEntry;
+use lha_agent::config_loader::ConfigLayerStack;
+use lha_agent::config_loader::ConfigRequirements;
+use lha_agent::config_loader::ConfigRequirementsToml;
+use lha_agent::features::Feature;
+use lha_agent::protocol::DeprecationNoticeEvent;
+use lha_agent::protocol::EventMsg;
+use lha_app_server_protocol::ConfigLayerSource;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use toml::Value as TomlValue;

@@ -3,7 +3,7 @@ use clap::Parser;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "adam-write-state-schema")]
+#[command(name = "lha-write-state-schema")]
 struct Args {
     #[arg(short, long, value_name = "PATH")]
     out: Option<PathBuf>,
@@ -14,6 +14,6 @@ fn main() -> Result<()> {
     let out_path = args
         .out
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("state.schema.json"));
-    adam_agent::config::schema::write_state_schema(&out_path)?;
+    lha_agent::config::schema::write_state_schema(&out_path)?;
     Ok(())
 }

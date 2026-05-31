@@ -1,11 +1,11 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-use adam_protocol::ThreadId;
-use adam_protocol::protocol::SessionMeta;
-use adam_protocol::protocol::SessionMetaLine;
-use adam_protocol::protocol::SessionSource;
-use adam_utils_cargo_bin::find_resource;
 use anyhow::Context;
 use core_test_support::test_codex_exec::test_codex_exec;
+use lha_protocol::ThreadId;
+use lha_protocol::protocol::SessionMeta;
+use lha_protocol::protocol::SessionMetaLine;
+use lha_protocol::protocol::SessionSource;
+use lha_utils_cargo_bin::find_resource;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -116,7 +116,7 @@ fn last_user_image_count(path: &std::path::Path) -> usize {
 }
 
 fn write_fake_rollout(
-    adam_home: &Path,
+    lha_home: &Path,
     filename_ts: &str,
     meta_rfc3339: &str,
     preview: &str,
@@ -128,7 +128,7 @@ fn write_fake_rollout(
     let year = &filename_ts[0..4];
     let month = &filename_ts[5..7];
     let day = &filename_ts[8..10];
-    let dir = adam_home.join("sessions").join(year).join(month).join(day);
+    let dir = lha_home.join("sessions").join(year).join(month).join(day);
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("rollout-{filename_ts}-{uuid}.jsonl"));
     let meta = SessionMeta {
@@ -138,7 +138,7 @@ fn write_fake_rollout(
         cwd: cwd.to_path_buf(),
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
-        rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+        rollout_schema_version: lha_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
         source: SessionSource::Cli,
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
@@ -186,7 +186,7 @@ fn exec_fixture() -> anyhow::Result<std::path::PathBuf> {
 }
 
 fn exec_repo_root() -> anyhow::Result<std::path::PathBuf> {
-    Ok(adam_utils_cargo_bin::repo_root()?)
+    Ok(lha_utils_cargo_bin::repo_root()?)
 }
 
 #[test]

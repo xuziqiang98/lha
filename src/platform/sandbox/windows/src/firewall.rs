@@ -21,15 +21,15 @@ use windows::Win32::System::Com::CoUninitialize;
 use windows::Win32::System::Com::CLSCTX_INPROC_SERVER;
 use windows::Win32::System::Com::COINIT_APARTMENTTHREADED;
 
-use adam_windows_sandbox::SetupErrorCode;
-use adam_windows_sandbox::SetupFailure;
+use lha_windows_sandbox::SetupErrorCode;
+use lha_windows_sandbox::SetupFailure;
 
 // This is the stable identifier we use to find/update the rule idempotently.
 // It intentionally does not change between installs.
 const OFFLINE_BLOCK_RULE_NAME: &str = "codex_sandbox_offline_block_outbound";
 
 // Friendly text shown in the firewall UI.
-const OFFLINE_BLOCK_RULE_FRIENDLY: &str = "Adam Sandbox Offline - Block Outbound";
+const OFFLINE_BLOCK_RULE_FRIENDLY: &str = "LHA Sandbox Offline - Block Outbound";
 
 pub fn ensure_offline_outbound_block(offline_sid: &str, log: &mut File) -> Result<()> {
     let local_user_spec = format!("O:LSD:(A;;CC;;;{offline_sid})");

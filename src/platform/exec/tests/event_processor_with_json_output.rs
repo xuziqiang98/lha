@@ -1,58 +1,58 @@
-use adam_agent::protocol::AgentMessageEvent;
-use adam_agent::protocol::AgentReasoningEvent;
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::ErrorEvent;
-use adam_agent::protocol::Event;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::ExecCommandBeginEvent;
-use adam_agent::protocol::ExecCommandEndEvent;
-use adam_agent::protocol::ExecCommandSource;
-use adam_agent::protocol::FileChange;
-use adam_agent::protocol::McpInvocation;
-use adam_agent::protocol::McpToolCallBeginEvent;
-use adam_agent::protocol::McpToolCallEndEvent;
-use adam_agent::protocol::PatchApplyBeginEvent;
-use adam_agent::protocol::PatchApplyEndEvent;
-use adam_agent::protocol::SandboxPolicy;
-use adam_agent::protocol::SessionConfiguredEvent;
-use adam_agent::protocol::WarningEvent;
-use adam_agent::protocol::WebSearchBeginEvent;
-use adam_agent::protocol::WebSearchEndEvent;
-use adam_exec::event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
-use adam_exec::exec_events::AgentMessageItem;
-use adam_exec::exec_events::CommandExecutionItem;
-use adam_exec::exec_events::CommandExecutionStatus;
-use adam_exec::exec_events::ErrorItem;
-use adam_exec::exec_events::ItemCompletedEvent;
-use adam_exec::exec_events::ItemStartedEvent;
-use adam_exec::exec_events::ItemUpdatedEvent;
-use adam_exec::exec_events::McpToolCallItem;
-use adam_exec::exec_events::McpToolCallItemError;
-use adam_exec::exec_events::McpToolCallItemResult;
-use adam_exec::exec_events::McpToolCallStatus;
-use adam_exec::exec_events::PatchApplyStatus;
-use adam_exec::exec_events::PatchChangeKind;
-use adam_exec::exec_events::ReasoningItem;
-use adam_exec::exec_events::ThreadErrorEvent;
-use adam_exec::exec_events::ThreadEvent;
-use adam_exec::exec_events::ThreadItem;
-use adam_exec::exec_events::ThreadItemDetails;
-use adam_exec::exec_events::ThreadStartedEvent;
-use adam_exec::exec_events::TodoItem as ExecTodoItem;
-use adam_exec::exec_events::TodoListItem as ExecTodoListItem;
-use adam_exec::exec_events::TurnCompletedEvent;
-use adam_exec::exec_events::TurnFailedEvent;
-use adam_exec::exec_events::TurnStartedEvent;
-use adam_exec::exec_events::Usage;
-use adam_exec::exec_events::WebSearchItem;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::models::WebSearchAction;
-use adam_protocol::plan_tool::PlanItemArg;
-use adam_protocol::plan_tool::StepStatus;
-use adam_protocol::plan_tool::UpdatePlanArgs;
-use adam_protocol::protocol::CodexErrorInfo;
-use adam_protocol::protocol::ExecCommandOutputDeltaEvent;
-use adam_protocol::protocol::ExecOutputStream;
+use lha_agent::protocol::AgentMessageEvent;
+use lha_agent::protocol::AgentReasoningEvent;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::ErrorEvent;
+use lha_agent::protocol::Event;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::ExecCommandBeginEvent;
+use lha_agent::protocol::ExecCommandEndEvent;
+use lha_agent::protocol::ExecCommandSource;
+use lha_agent::protocol::FileChange;
+use lha_agent::protocol::McpInvocation;
+use lha_agent::protocol::McpToolCallBeginEvent;
+use lha_agent::protocol::McpToolCallEndEvent;
+use lha_agent::protocol::PatchApplyBeginEvent;
+use lha_agent::protocol::PatchApplyEndEvent;
+use lha_agent::protocol::SandboxPolicy;
+use lha_agent::protocol::SessionConfiguredEvent;
+use lha_agent::protocol::WarningEvent;
+use lha_agent::protocol::WebSearchBeginEvent;
+use lha_agent::protocol::WebSearchEndEvent;
+use lha_exec::event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
+use lha_exec::exec_events::AgentMessageItem;
+use lha_exec::exec_events::CommandExecutionItem;
+use lha_exec::exec_events::CommandExecutionStatus;
+use lha_exec::exec_events::ErrorItem;
+use lha_exec::exec_events::ItemCompletedEvent;
+use lha_exec::exec_events::ItemStartedEvent;
+use lha_exec::exec_events::ItemUpdatedEvent;
+use lha_exec::exec_events::McpToolCallItem;
+use lha_exec::exec_events::McpToolCallItemError;
+use lha_exec::exec_events::McpToolCallItemResult;
+use lha_exec::exec_events::McpToolCallStatus;
+use lha_exec::exec_events::PatchApplyStatus;
+use lha_exec::exec_events::PatchChangeKind;
+use lha_exec::exec_events::ReasoningItem;
+use lha_exec::exec_events::ThreadErrorEvent;
+use lha_exec::exec_events::ThreadEvent;
+use lha_exec::exec_events::ThreadItem;
+use lha_exec::exec_events::ThreadItemDetails;
+use lha_exec::exec_events::ThreadStartedEvent;
+use lha_exec::exec_events::TodoItem as ExecTodoItem;
+use lha_exec::exec_events::TodoListItem as ExecTodoListItem;
+use lha_exec::exec_events::TurnCompletedEvent;
+use lha_exec::exec_events::TurnFailedEvent;
+use lha_exec::exec_events::TurnStartedEvent;
+use lha_exec::exec_events::Usage;
+use lha_exec::exec_events::WebSearchItem;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::models::WebSearchAction;
+use lha_protocol::plan_tool::PlanItemArg;
+use lha_protocol::plan_tool::StepStatus;
+use lha_protocol::plan_tool::UpdatePlanArgs;
+use lha_protocol::protocol::CodexErrorInfo;
+use lha_protocol::protocol::ExecCommandOutputDeltaEvent;
+use lha_protocol::protocol::ExecOutputStream;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
 use mcp_types::TextContent;
@@ -72,7 +72,7 @@ fn event(id: &str, msg: EventMsg) -> Event {
 fn session_configured_produces_thread_started_event() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let session_id =
-        adam_protocol::ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
+        lha_protocol::ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
     let rollout_path = PathBuf::from("/tmp/rollout.json");
     let ev = event(
         "e1",
@@ -107,7 +107,7 @@ fn task_started_produces_turn_started_event() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let out = ep.collect_thread_events(&event(
         "t1",
-        EventMsg::TurnStarted(adam_agent::protocol::TurnStartedEvent {
+        EventMsg::TurnStarted(lha_agent::protocol::TurnStartedEvent {
             model_context_window: Some(32_000),
             identity_kind: IdentityKind::Nobody,
         }),
@@ -300,7 +300,7 @@ fn plan_update_emits_todo_list_started_updated_and_completed() {
     // Task completes => item.completed (same id, latest state)
     let complete = event(
         "p3",
-        EventMsg::TurnComplete(adam_agent::protocol::TurnCompleteEvent {
+        EventMsg::TurnComplete(lha_agent::protocol::TurnCompleteEvent {
             last_agent_message: None,
         }),
     );
@@ -544,7 +544,7 @@ fn plan_update_after_complete_starts_new_todo_list_with_new_id() {
     let _ = ep.collect_thread_events(&start);
     let complete = event(
         "t2",
-        EventMsg::TurnComplete(adam_agent::protocol::TurnCompleteEvent {
+        EventMsg::TurnComplete(lha_agent::protocol::TurnCompleteEvent {
             last_agent_message: None,
         }),
     );
@@ -622,7 +622,7 @@ fn error_event_produces_error() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let out = ep.collect_thread_events(&event(
         "e1",
-        EventMsg::Error(adam_agent::protocol::ErrorEvent {
+        EventMsg::Error(lha_agent::protocol::ErrorEvent {
             message: "boom".to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
         }),
@@ -662,7 +662,7 @@ fn stream_error_event_produces_error() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let out = ep.collect_thread_events(&event(
         "e1",
-        EventMsg::StreamError(adam_agent::protocol::StreamErrorEvent {
+        EventMsg::StreamError(lha_agent::protocol::StreamErrorEvent {
             message: "retrying".to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
             additional_details: None,
@@ -696,7 +696,7 @@ fn error_followed_by_task_complete_produces_turn_failed() {
 
     let complete_event = event(
         "e2",
-        EventMsg::TurnComplete(adam_agent::protocol::TurnCompleteEvent {
+        EventMsg::TurnComplete(lha_agent::protocol::TurnCompleteEvent {
             last_agent_message: None,
         }),
     );
@@ -1119,28 +1119,28 @@ fn task_complete_produces_turn_completed_with_usage() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
 
     // First, feed a TokenCount event with known totals.
-    let usage = adam_agent::protocol::TokenUsage {
+    let usage = lha_agent::protocol::TokenUsage {
         input_tokens: 1200,
         cached_input_tokens: 200,
         output_tokens: 345,
         reasoning_output_tokens: 0,
         total_tokens: 0,
     };
-    let info = adam_agent::protocol::TokenUsageInfo {
+    let info = lha_agent::protocol::TokenUsageInfo {
         total_token_usage: usage.clone(),
         last_token_usage: usage,
         model_context_window: None,
     };
     let token_count_event = event(
         "e1",
-        EventMsg::TokenCount(adam_agent::protocol::TokenCountEvent { info: Some(info) }),
+        EventMsg::TokenCount(lha_agent::protocol::TokenCountEvent { info: Some(info) }),
     );
     assert!(ep.collect_thread_events(&token_count_event).is_empty());
 
     // Then TurnComplete should produce turn.completed with the captured usage.
     let complete_event = event(
         "e2",
-        EventMsg::TurnComplete(adam_agent::protocol::TurnCompleteEvent {
+        EventMsg::TurnComplete(lha_agent::protocol::TurnCompleteEvent {
             last_agent_message: Some("done".to_string()),
         }),
     );

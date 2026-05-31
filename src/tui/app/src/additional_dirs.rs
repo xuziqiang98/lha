@@ -1,4 +1,4 @@
-use adam_agent::protocol::SandboxPolicy;
+use lha_agent::protocol::SandboxPolicy;
 use std::path::PathBuf;
 
 /// Returns a warning describing why `--add-dir` entries will be ignored for the
@@ -34,8 +34,8 @@ fn format_warning(additional_dirs: &[PathBuf]) -> String {
 #[cfg(test)]
 mod tests {
     use super::add_dir_warning_message;
-    use adam_agent::protocol::NetworkAccess;
-    use adam_agent::protocol::SandboxPolicy;
+    use lha_agent::protocol::NetworkAccess;
+    use lha_agent::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 

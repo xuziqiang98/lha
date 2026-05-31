@@ -41,22 +41,22 @@ use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
-use adam_app_server_protocol::Tools;
-use adam_app_server_protocol::UserSavedConfig;
-use adam_llm::RuntimeEndpoint;
-use adam_llm::built_in_runtime_endpoints;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::Personality;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::config_types::SandboxMode;
-use adam_protocol::config_types::TrustLevel;
-use adam_protocol::config_types::Verbosity;
-use adam_protocol::config_types::WebSearchMode;
-use adam_protocol::config_types::WindowsSandboxLevel;
-use adam_protocol::openai_models::ReasoningEffort;
-use adam_rmcp_client::OAuthCredentialsStoreMode;
-use adam_utils_absolute_path::AbsolutePathBuf;
-use adam_utils_absolute_path::AbsolutePathBufGuard;
+use lha_app_server_protocol::Tools;
+use lha_app_server_protocol::UserSavedConfig;
+use lha_llm::RuntimeEndpoint;
+use lha_llm::built_in_runtime_endpoints;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::Personality;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::config_types::SandboxMode;
+use lha_protocol::config_types::TrustLevel;
+use lha_protocol::config_types::Verbosity;
+use lha_protocol::config_types::WebSearchMode;
+use lha_protocol::config_types::WindowsSandboxLevel;
+use lha_protocol::openai_models::ReasoningEffort;
+use lha_rmcp_client::OAuthCredentialsStoreMode;
+use lha_utils_absolute_path::AbsolutePathBuf;
+use lha_utils_absolute_path::AbsolutePathBufGuard;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -91,7 +91,7 @@ pub use models_json::ResolveModelProviderError;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
 
-pub use adam_git::GhostSnapshotConfig;
+pub use lha_git::GhostSnapshotConfig;
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -218,11 +218,11 @@ fn warn_ignored_legacy_config_keys(config_layer_stack: &ConfigLayerStack) {
 
 #[cfg(test)]
 pub(crate) fn test_config() -> Config {
-    let adam_home = tempdir().expect("create temp dir");
+    let lha_home = tempdir().expect("create temp dir");
     Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides::default(),
-        adam_home.path().to_path_buf(),
+        lha_home.path().to_path_buf(),
     )
     .expect("load default test config")
 }
@@ -252,7 +252,7 @@ pub struct Config {
     /// Info needed to make an API request to the model.
     pub model_provider: RuntimeEndpoint,
 
-    /// True when ADAM_HOME/models.json is missing and the TUI should require
+    /// True when LHA_HOME/models.json is missing and the TUI should require
     /// explicit provider configuration before starting a model session.
     pub provider_config_required: bool,
 
@@ -300,23 +300,23 @@ pub struct Config {
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
-    /// Optional external notifier command. When set, Adam will spawn this
+    /// Optional external notifier command. When set, LHA will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
     /// processing a user submission). The value must be the full command
-    /// broken into argv tokens **without** the trailing JSON argument - Adam
+    /// broken into argv tokens **without** the trailing JSON argument - LHA
     /// appends one extra argument containing a JSON payload describing the
     /// event.
     ///
-    /// Example `~/.adam/config.toml` snippet:
+    /// Example `~/.lha/config.toml` snippet:
     ///
     /// ```toml
-    /// notify = ["notify-send", "Adam"]
+    /// notify = ["notify-send", "LHA"]
     /// ```
     ///
     /// which will be invoked as:
     ///
     /// ```shell
-    /// notify-send Adam '{"type":"agent-turn-complete","turn-id":"12345"}'
+    /// notify-send LHA '{"type":"agent-turn-complete","turn-id":"12345"}'
     /// ```
     ///
     /// If unset the feature is disabled.
@@ -352,7 +352,7 @@ pub struct Config {
     /// resolved against this path.
     pub cwd: PathBuf,
 
-    /// Definition for MCP servers that Adam can reach out to for tool calls.
+    /// Definition for MCP servers that LHA can reach out to for tool calls.
     pub mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
 
     #[doc(hidden)]
@@ -360,16 +360,16 @@ pub struct Config {
 
     /// Preferred store for MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
-    ///          Credentials stored in the keyring will only be readable by Adam unless the user explicitly grants access via OS-level keyring access.
+    ///          Credentials stored in the keyring will only be readable by LHA unless the user explicitly grants access via OS-level keyring access.
     ///          https://github.com/openai/codex/blob/main/src/resources/rmcp-client/src/oauth.rs#L2
-    /// file: ADAM_HOME/.credentials.json
-    ///       This file will be readable to Adam and other applications running as the same user.
+    /// file: LHA_HOME/.credentials.json
+    ///       This file will be readable to LHA and other applications running as the same user.
     /// auto (default): keyring if available, otherwise file.
     pub mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode,
 
     /// Optional fixed port to use for the local HTTP callback server used during MCP OAuth login.
     ///
-    /// When unset, Adam will bind to an ephemeral port chosen by the OS.
+    /// When unset, LHA will bind to an ephemeral port chosen by the OS.
     pub mcp_oauth_callback_port: Option<u16>,
 
     /// Combined provider map (defaults merged with user-defined overrides).
@@ -389,11 +389,11 @@ pub struct Config {
     /// Maximum runtime in seconds for agent job workers before they are failed.
     pub agent_job_max_runtime_seconds: Option<u64>,
 
-    /// Directory containing all Adam state (defaults to `~/.adam` but can be
-    /// overridden by the `ADAM_HOME` environment variable).
-    pub adam_home: PathBuf,
+    /// Directory containing all LHA state (defaults to `~/.lha` but can be
+    /// overridden by the `LHA_HOME` environment variable).
+    pub lha_home: PathBuf,
 
-    /// Settings that govern if and what will be written to `~/.adam/history.jsonl`.
+    /// Settings that govern if and what will be written to `~/.lha/history.jsonl`.
     pub history: History,
 
     /// When true, session is not persisted on disk. Default to `false`
@@ -403,12 +403,12 @@ pub struct Config {
     /// output will be hyperlinked using the specified URI scheme.
     pub file_opener: UriBasedFileOpener,
 
-    /// Path to the `adam-linux-sandbox` executable. This must be set if
+    /// Path to the `lha-linux-sandbox` executable. This must be set if
     /// [`crate::exec::SandboxType::LinuxSeccomp`] is used. Note that this
     /// cannot be set in the config file: it must be set in code via
     /// [`ConfigOverrides`].
     ///
-    /// When this program is invoked, arg0 will be set to `adam-linux-sandbox`.
+    /// When this program is invoked, arg0 will be set to `lha-linux-sandbox`.
     pub codex_linux_sandbox_exe: Option<PathBuf>,
 
     /// Value to use for `reasoning.effort` when making a request using the
@@ -458,8 +458,8 @@ pub struct Config {
     /// Collection of various notices we show the user
     pub notices: Notice,
 
-    /// When `true`, checks for Adam updates on startup and surfaces update prompts.
-    /// Set to `false` only if your Adam updates are centrally managed.
+    /// When `true`, checks for LHA updates on startup and surfaces update prompts.
+    /// Set to `false` only if your LHA updates are centrally managed.
     /// Defaults to `true`.
     pub check_for_update_on_startup: bool,
 
@@ -468,11 +468,11 @@ pub struct Config {
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: bool,
 
-    /// When `false`, disables analytics across Adam product surfaces in this machine.
+    /// When `false`, disables analytics across LHA product surfaces in this machine.
     /// Voluntarily left as Optional because the default value might depend on the client.
     pub analytics_enabled: Option<bool>,
 
-    /// When `false`, disables feedback collection across Adam product surfaces.
+    /// When `false`, disables feedback collection across LHA product surfaces.
     /// Defaults to `true`.
     pub feedback_enabled: bool,
 
@@ -482,7 +482,7 @@ pub struct Config {
 
 #[derive(Debug, Clone, Default)]
 pub struct ConfigBuilder {
-    adam_home: Option<PathBuf>,
+    lha_home: Option<PathBuf>,
     cli_overrides: Option<Vec<(String, TomlValue)>>,
     harness_overrides: Option<ConfigOverrides>,
     loader_overrides: Option<LoaderOverrides>,
@@ -492,8 +492,8 @@ pub struct ConfigBuilder {
 }
 
 impl ConfigBuilder {
-    pub fn adam_home(mut self, adam_home: PathBuf) -> Self {
-        self.adam_home = Some(adam_home);
+    pub fn lha_home(mut self, lha_home: PathBuf) -> Self {
+        self.lha_home = Some(lha_home);
         self
     }
 
@@ -529,7 +529,7 @@ impl ConfigBuilder {
 
     pub async fn build(self) -> std::io::Result<Config> {
         let Self {
-            adam_home,
+            lha_home,
             cli_overrides,
             harness_overrides,
             loader_overrides,
@@ -537,7 +537,7 @@ impl ConfigBuilder {
             fallback_cwd,
             provider_config_required,
         } = self;
-        let adam_home = adam_home.map_or_else(find_adam_home, std::io::Result::Ok)?;
+        let lha_home = lha_home.map_or_else(find_lha_home, std::io::Result::Ok)?;
         let cli_overrides = cli_overrides.unwrap_or_default();
         let mut harness_overrides = harness_overrides.unwrap_or_default();
         let loader_overrides = loader_overrides.unwrap_or_default();
@@ -548,7 +548,7 @@ impl ConfigBuilder {
         };
         harness_overrides.cwd = Some(cwd.to_path_buf());
         let config_layer_stack = load_config_layers_state(
-            &adam_home,
+            &lha_home,
             Some(cwd),
             &cli_overrides,
             loader_overrides,
@@ -580,7 +580,7 @@ impl ConfigBuilder {
         Config::load_config_with_layer_stack(
             config_toml,
             harness_overrides,
-            adam_home,
+            lha_home,
             config_layer_stack,
             provider_config_required,
         )
@@ -616,7 +616,7 @@ impl Config {
                 config_profile: self.active_profile.clone(),
                 ..Default::default()
             },
-            self.adam_home.clone(),
+            self.lha_home.clone(),
             self.config_layer_stack.clone(),
             Some(false),
         )?;
@@ -640,7 +640,7 @@ impl Config {
     pub fn load_default_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
     ) -> std::io::Result<Self> {
-        let adam_home = find_adam_home()?;
+        let lha_home = find_lha_home()?;
         let mut merged = toml::Value::try_from(ConfigToml::default()).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -649,11 +649,11 @@ impl Config {
         })?;
         let cli_layer = crate::config_loader::build_cli_overrides_layer(&cli_overrides);
         crate::config_loader::merge_toml_values(&mut merged, &cli_layer);
-        let config_toml = deserialize_config_toml_with_base(merged, &adam_home)?;
+        let config_toml = deserialize_config_toml_with_base(merged, &lha_home)?;
         Self::load_config_with_layer_stack(
             config_toml,
             ConfigOverrides::default(),
-            adam_home,
+            lha_home,
             ConfigLayerStack::default(),
             None,
         )
@@ -661,7 +661,7 @@ impl Config {
 
     /// This is a secondary way of creating [Config], which is appropriate when
     /// the harness is meant to be used with a specific configuration that
-    /// ignores user settings. For example, the `adam exec` subcommand is
+    /// ignores user settings. For example, the `lha exec` subcommand is
     /// designed to use [AskForApproval::Never] exclusively.
     ///
     /// Further, [ConfigOverrides] contains some options that are not supported
@@ -682,12 +682,12 @@ impl Config {
 /// with [ConfigToml] directly means that [ConfigRequirements] have not been
 /// applied yet, which risks failing to enforce required constraints.
 pub async fn load_config_as_toml_with_cli_overrides(
-    adam_home: &Path,
+    lha_home: &Path,
     cwd: &AbsolutePathBuf,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
     let config_layer_stack = load_config_layers_state(
-        adam_home,
+        lha_home,
         Some(cwd.clone()),
         &cli_overrides,
         LoaderOverrides::default(),
@@ -696,7 +696,7 @@ pub async fn load_config_as_toml_with_cli_overrides(
     .await?;
 
     let merged_toml = config_layer_stack.effective_config();
-    let cfg = deserialize_config_toml_with_base(merged_toml, adam_home).map_err(|e| {
+    let cfg = deserialize_config_toml_with_base(merged_toml, lha_home).map_err(|e| {
         tracing::error!("Failed to deserialize overridden config: {e}");
         e
     })?;
@@ -777,7 +777,7 @@ fn mcp_server_matches_requirement(
 }
 
 pub async fn load_global_mcp_servers(
-    adam_home: &Path,
+    lha_home: &Path,
 ) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
     // In general, Config::load_with_cli_overrides() should be used to load the
     // full config with requirements.toml applied, but in this case, we need
@@ -788,10 +788,10 @@ pub async fn load_global_mcp_servers(
     // result.
     let cli_overrides = Vec::<(String, TomlValue)>::new();
     // There is no cwd/project context for this query, so this will not include
-    // MCP servers defined in in-repo .adam/ folders.
+    // MCP servers defined in in-repo .lha/ folders.
     let cwd: Option<AbsolutePathBuf> = None;
     let config_layer_stack = load_config_layers_state(
-        adam_home,
+        lha_home,
         cwd,
         &cli_overrides,
         LoaderOverrides::default(),
@@ -901,21 +901,21 @@ pub(crate) fn set_project_trust_level_inner(
     Ok(())
 }
 
-/// Patch `ADAM_HOME/config.toml` project state to set trust level.
+/// Patch `LHA_HOME/config.toml` project state to set trust level.
 /// Use with caution.
 pub fn set_project_trust_level(
-    adam_home: &Path,
+    lha_home: &Path,
     project_path: &Path,
     trust_level: TrustLevel,
 ) -> anyhow::Result<()> {
     use crate::config::edit::ConfigEditsBuilder;
 
-    ConfigEditsBuilder::new(adam_home)
+    ConfigEditsBuilder::new(lha_home)
         .set_project_trust_level(project_path, trust_level)
         .apply_blocking()
 }
 
-/// Base config deserialized from ~/.adam/config.toml.
+/// Base config deserialized from ~/.lha/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
@@ -951,13 +951,13 @@ pub struct ConfigToml {
     /// Optional path to a file containing model instructions that will override
     /// the built-in instructions for the selected model. Users are STRONGLY
     /// DISCOURAGED from using this field, as deviating from the instructions
-    /// sanctioned by Adam will likely degrade model performance.
+    /// sanctioned by LHA will likely degrade model performance.
     pub model_instructions_file: Option<AbsolutePathBuf>,
 
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
 
-    /// Definition for MCP servers that Adam can reach out to for tool calls.
+    /// Definition for MCP servers that LHA can reach out to for tool calls.
     #[serde(default)]
     // Uses the raw MCP input shape (custom deserialization) rather than `McpServerConfig`.
     #[schemars(schema_with = "crate::config::schema::mcp_servers_schema")]
@@ -966,13 +966,13 @@ pub struct ConfigToml {
     /// Preferred backend for storing MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
     ///          https://github.com/openai/codex/blob/main/src/resources/rmcp-client/src/oauth.rs#L2
-    /// file: Use a file in the Adam home directory.
+    /// file: Use a file in the LHA home directory.
     /// auto (default): Use the OS-specific keyring service if available, otherwise use a file.
     #[serde(default)]
     pub mcp_oauth_credentials_store: Option<OAuthCredentialsStoreMode>,
 
     /// Optional fixed port for the local HTTP callback server used during MCP OAuth login.
-    /// When unset, Adam will bind to an ephemeral port chosen by the OS.
+    /// When unset, LHA will bind to an ephemeral port chosen by the OS.
     pub mcp_oauth_callback_port: Option<u16>,
 
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
@@ -991,7 +991,7 @@ pub struct ConfigToml {
     #[serde(default)]
     pub profiles: HashMap<String, ConfigProfile>,
 
-    /// Settings that govern if and what will be written to `~/.adam/history.jsonl`.
+    /// Settings that govern if and what will be written to `~/.lha/history.jsonl`.
     #[serde(default)]
     pub history: Option<History>,
 
@@ -1048,12 +1048,12 @@ pub struct ConfigToml {
     pub ghost_snapshot: Option<GhostSnapshotToml>,
 
     /// Markers used to detect the project root when searching parent
-    /// directories for `.adam` folders. Defaults to [".git"] when unset.
+    /// directories for `.lha` folders. Defaults to [".git"] when unset.
     #[serde(default)]
     pub project_root_markers: Option<Vec<String>>,
 
-    /// When `true`, checks for Adam updates on startup and surfaces update prompts.
-    /// Set to `false` only if your Adam updates are centrally managed.
+    /// When `true`, checks for LHA updates on startup and surfaces update prompts.
+    /// Set to `false` only if your LHA updates are centrally managed.
     /// Defaults to `true`.
     pub check_for_update_on_startup: Option<bool>,
 
@@ -1062,11 +1062,11 @@ pub struct ConfigToml {
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: Option<bool>,
 
-    /// When `false`, disables analytics across Adam product surfaces in this machine.
+    /// When `false`, disables analytics across LHA product surfaces in this machine.
     /// Defaults to `true`.
     pub analytics: Option<crate::config::types::AnalyticsConfigToml>,
 
-    /// When `false`, disables feedback collection across Adam product surfaces.
+    /// When `false`, disables feedback collection across LHA product surfaces.
     /// Defaults to `true`.
     pub feedback: Option<crate::config::types::FeedbackConfigToml>,
 
@@ -1227,7 +1227,7 @@ impl ConfigToml {
         if cfg!(target_os = "windows")
             && matches!(resolved_sandbox_mode, SandboxMode::WorkspaceWrite)
             // If the experimental Windows sandbox is enabled, do not force a downgrade.
-            && windows_sandbox_level == adam_protocol::config_types::WindowsSandboxLevel::Disabled
+            && windows_sandbox_level == lha_protocol::config_types::WindowsSandboxLevel::Disabled
         {
             sandbox_policy = SandboxPolicy::new_read_only_policy();
             forced_auto_mode_downgraded_on_windows = true;
@@ -1350,22 +1350,22 @@ impl Config {
     fn load_from_base_config_with_overrides(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
-        adam_home: PathBuf,
+        lha_home: PathBuf,
     ) -> std::io::Result<Self> {
         // Note this ignores requirements.toml enforcement for tests.
         let config_layer_stack = ConfigLayerStack::default();
-        Self::load_config_with_layer_stack(cfg, overrides, adam_home, config_layer_stack, None)
+        Self::load_config_with_layer_stack(cfg, overrides, lha_home, config_layer_stack, None)
     }
 
     pub(crate) fn load_config_with_layer_stack(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
-        adam_home: PathBuf,
+        lha_home: PathBuf,
         config_layer_stack: ConfigLayerStack,
         provider_config_required_override: Option<bool>,
     ) -> std::io::Result<Self> {
         let requirements = config_layer_stack.requirements().clone();
-        let user_instructions = Self::load_instructions(Some(&adam_home));
+        let user_instructions = Self::load_instructions(Some(&lha_home));
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
@@ -1486,13 +1486,13 @@ impl Config {
             || cfg.sandbox_mode.is_some();
 
         let provider_config_required = provider_config_required_override
-            .unwrap_or_else(|| cfg!(not(test)) && !models_json::has_models_json(&adam_home));
-        let models_json = match ModelsJson::load_from_adam_home(&adam_home) {
+            .unwrap_or_else(|| cfg!(not(test)) && !models_json::has_models_json(&lha_home));
+        let models_json = match ModelsJson::load_from_lha_home(&lha_home) {
             Ok(models_json) => models_json,
             Err(err) if err.kind() == ErrorKind::NotFound => ModelsJson::default(),
             Err(err) => return Err(err),
         };
-        let state_json = load_state(&adam_home)?;
+        let state_json = load_state(&lha_home)?;
         let mut model_providers = built_in_runtime_endpoints();
         model_providers.extend(models_json.to_runtime_endpoints());
         model_providers.extend(model_provider_overrides);
@@ -1734,7 +1734,7 @@ impl Config {
             tool_output_token_limit: cfg.tool_output_token_limit,
             agent_job_max_concurrency,
             agent_job_max_runtime_seconds,
-            adam_home,
+            lha_home,
             config_layer_stack,
             history,
             ephemeral: ephemeral.unwrap_or_default(),
@@ -1910,22 +1910,22 @@ fn toml_uses_deprecated_instructions_file(value: &TomlValue) -> bool {
     })
 }
 
-/// Returns the path to the Adam configuration directory, which can be
-/// specified by the `ADAM_HOME` environment variable. If not set, defaults to
-/// `~/.adam`.
+/// Returns the path to the LHA configuration directory, which can be
+/// specified by the `LHA_HOME` environment variable. If not set, defaults to
+/// `~/.lha`.
 ///
-/// - If `ADAM_HOME` is set, the value must exist and be a directory. The
+/// - If `LHA_HOME` is set, the value must exist and be a directory. The
 ///   value will be canonicalized and this function will Err otherwise.
-/// - If `ADAM_HOME` is not set, this function does not verify that the
+/// - If `LHA_HOME` is not set, this function does not verify that the
 ///   directory exists.
-pub fn find_adam_home() -> std::io::Result<PathBuf> {
-    adam_utils_home_dir::find_adam_home()
+pub fn find_lha_home() -> std::io::Result<PathBuf> {
+    lha_utils_home_dir::find_lha_home()
 }
 
-/// Returns the path to the folder where Adam logs are stored. Does not verify
+/// Returns the path to the folder where LHA logs are stored. Does not verify
 /// that the directory exists.
 pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
-    let mut p = cfg.adam_home.clone();
+    let mut p = cfg.lha_home.clone();
     p.push("log");
     Ok(p)
 }
@@ -2023,16 +2023,16 @@ persistence = "none"
     fn load_test_config_from_toml(config_toml: &str) -> std::io::Result<Config> {
         let cfg =
             toml::from_str::<ConfigToml>(config_toml).expect("TOML deserialization should succeed");
-        let adam_home = tempfile::tempdir().expect("tempdir");
-        let cwd = adam_home.path().to_path_buf();
-        let adam_home_path = adam_home.keep();
+        let lha_home = tempfile::tempdir().expect("tempdir");
+        let cwd = lha_home.path().to_path_buf();
+        let lha_home_path = lha_home.keep();
         Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides {
                 cwd: Some(cwd),
                 ..Default::default()
             },
-            adam_home_path,
+            lha_home_path,
         )
     }
 
@@ -2455,9 +2455,9 @@ trust_level = "trusted"
 
     #[test]
     fn selected_model_and_reasoning_effort_restore_from_state() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
         std::fs::write(
-            adam_home.path().join("models.json"),
+            lha_home.path().join("models.json"),
             r#"{
               "providers": {
                 "iie": {
@@ -2473,7 +2473,7 @@ trust_level = "trusted"
             }"#,
         )?;
         let model_ref = ModelRef::new("iie", "main", "deepseek-v3");
-        state_json::AdamStateStore::new(adam_home.path()).set_last_selected_model(
+        state_json::LHAStateStore::new(lha_home.path()).set_last_selected_model(
             &model_ref,
             Some(ReasoningEffort::High),
             None,
@@ -2482,7 +2482,7 @@ trust_level = "trusted"
         let config = Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
             ConfigOverrides::default(),
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         assert_eq!(config.model.as_deref(), Some("deepseek-v3"));
@@ -2494,14 +2494,14 @@ trust_level = "trusted"
 
     #[test]
     fn selected_identity_restores_from_state() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
-        state_json::AdamStateStore::new(adam_home.path())
+        let lha_home = TempDir::new()?;
+        state_json::LHAStateStore::new(lha_home.path())
             .set_last_selected_identity(IdentityKind::Planner)?;
 
         let config = Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
             ConfigOverrides::default(),
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         assert_eq!(config.last_selected_identity, Some(IdentityKind::Planner));
@@ -2511,9 +2511,9 @@ trust_level = "trusted"
 
     #[test]
     fn reasoning_effort_falls_back_to_models_json_metadata() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
         std::fs::write(
-            adam_home.path().join("models.json"),
+            lha_home.path().join("models.json"),
             r#"{
               "providers": {
                 "iie": {
@@ -2531,13 +2531,13 @@ trust_level = "trusted"
             }"#,
         )?;
         let model_ref = ModelRef::new("iie", "main", "deepseek-v3");
-        state_json::AdamStateStore::new(adam_home.path())
+        state_json::LHAStateStore::new(lha_home.path())
             .set_last_selected_model(&model_ref, None, None)?;
 
         let config = Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
             ConfigOverrides::default(),
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         assert_eq!(config.model.as_deref(), Some("deepseek-v3"));
@@ -2550,9 +2550,9 @@ trust_level = "trusted"
     #[test]
     fn plain_override_model_rejects_ambiguous_models_json_provider_mapping() -> std::io::Result<()>
     {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
         std::fs::write(
-            adam_home.path().join("models.json"),
+            lha_home.path().join("models.json"),
             r#"{
               "providers": {
                 "iie": {
@@ -2583,7 +2583,7 @@ trust_level = "trusted"
                 model: Some("deepseek-v3".to_string()),
                 ..Default::default()
             },
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )
         .expect_err("plain ambiguous model should be rejected");
 
@@ -2601,9 +2601,9 @@ trust_level = "trusted"
     #[test]
     fn plain_override_model_with_explicit_provider_allows_ambiguous_models_json_mapping()
     -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
         std::fs::write(
-            adam_home.path().join("models.json"),
+            lha_home.path().join("models.json"),
             r#"{
               "providers": {
                 "iie": {
@@ -2635,7 +2635,7 @@ trust_level = "trusted"
                 model_provider: Some("iie".to_string()),
                 ..Default::default()
             },
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         assert_eq!(config.model.as_deref(), Some("deepseek-v3"));
@@ -2646,7 +2646,7 @@ trust_level = "trusted"
 
     #[test]
     fn plain_override_model_without_mapping_still_falls_back_to_openai() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
 
         let config = Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
@@ -2654,7 +2654,7 @@ trust_level = "trusted"
                 model: Some("unknown-model".to_string()),
                 ..Default::default()
             },
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         assert_eq!(config.model.as_deref(), Some("unknown-model"));
@@ -2694,13 +2694,13 @@ model_reasoning_effort = "high"
 
     #[test]
     fn config_defaults_to_auto_oauth_store_mode() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
         let cfg = ConfigToml::default();
 
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         assert_eq!(
@@ -2713,7 +2713,7 @@ model_reasoning_effort = "high"
 
     #[test]
     fn feedback_enabled_defaults_to_true() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
         let cfg = ConfigToml {
             feedback: Some(FeedbackConfigToml::default()),
             ..Default::default()
@@ -2722,7 +2722,7 @@ model_reasoning_effort = "high"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         assert_eq!(config.feedback_enabled, true);
@@ -2805,7 +2805,7 @@ model_reasoning_effort = "high"
 
     #[test]
     fn profile_legacy_toggles_override_base() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
         let mut profiles = HashMap::new();
         profiles.insert(
             "work".to_string(),
@@ -2823,7 +2823,7 @@ model_reasoning_effort = "high"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         assert!(!config.features.enabled(Feature::WebSearchRequest));
@@ -2833,11 +2833,11 @@ model_reasoning_effort = "high"
 
     #[tokio::test]
     async fn project_profile_overrides_user_profile() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
         let workspace = TempDir::new()?;
         let workspace_key = workspace.path().to_string_lossy().replace('\\', "\\\\");
         std::fs::write(
-            adam_home.path().join(CONFIG_TOML_FILE),
+            lha_home.path().join(CONFIG_TOML_FILE),
             format!(
                 r#"
 profile = "global"
@@ -2853,7 +2853,7 @@ trust_level = "trusted"
 "#,
             ),
         )?;
-        let project_config_dir = workspace.path().join(".adam");
+        let project_config_dir = workspace.path().join(".lha");
         std::fs::create_dir_all(&project_config_dir)?;
         std::fs::write(
             project_config_dir.join(CONFIG_TOML_FILE),
@@ -2863,7 +2863,7 @@ profile = "project"
         )?;
 
         let config = ConfigBuilder::default()
-            .adam_home(adam_home.path().to_path_buf())
+            .lha_home(lha_home.path().to_path_buf())
             .harness_overrides(ConfigOverrides {
                 cwd: Some(workspace.path().to_path_buf()),
                 ..Default::default()
@@ -2880,7 +2880,7 @@ profile = "project"
 
     #[test]
     fn profile_sandbox_mode_overrides_base() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
         let mut profiles = HashMap::new();
         profiles.insert(
             "work".to_string(),
@@ -2899,7 +2899,7 @@ profile = "project"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         assert!(matches!(
@@ -2913,7 +2913,7 @@ profile = "project"
 
     #[test]
     fn cli_override_takes_precedence_over_profile_sandbox_mode() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
         let mut profiles = HashMap::new();
         profiles.insert(
             "work".to_string(),
@@ -2936,7 +2936,7 @@ profile = "project"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             overrides,
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         if cfg!(target_os = "windows") {
@@ -2958,7 +2958,7 @@ profile = "project"
 
     #[test]
     fn feature_table_overrides_legacy_flags() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
         let mut entries = BTreeMap::new();
         entries.insert("apply_patch_freeform".to_string(), false);
         let cfg = ConfigToml {
@@ -2969,7 +2969,7 @@ profile = "project"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         assert!(!config.features.enabled(Feature::ApplyPatchFreeform));
@@ -2980,7 +2980,7 @@ profile = "project"
 
     #[test]
     fn apps_feature_is_disabled_even_when_explicitly_enabled() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
         let mut entries = BTreeMap::new();
         entries.insert("apps".to_string(), true);
         entries.insert("steer".to_string(), true);
@@ -2992,7 +2992,7 @@ profile = "project"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         assert!(!config.features.enabled(Feature::Apps));
@@ -3003,7 +3003,7 @@ profile = "project"
 
     #[test]
     fn legacy_connectors_alias_is_disabled_even_when_explicitly_enabled() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
         let mut entries = BTreeMap::new();
         entries.insert("connectors".to_string(), true);
         entries.insert("steer".to_string(), true);
@@ -3015,7 +3015,7 @@ profile = "project"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         assert!(!config.features.enabled(Feature::Apps));
@@ -3026,7 +3026,7 @@ profile = "project"
 
     #[test]
     fn legacy_toggles_map_to_features() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
         let cfg = ConfigToml {
             experimental_use_unified_exec_tool: Some(true),
             experimental_use_freeform_apply_patch: Some(true),
@@ -3036,7 +3036,7 @@ profile = "project"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         assert!(config.features.enabled(Feature::ApplyPatchFreeform));
@@ -3051,7 +3051,7 @@ profile = "project"
 
     #[test]
     fn responses_realtime_feature_does_not_change_dialect() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
         let mut entries = BTreeMap::new();
         entries.insert("responses_websockets".to_string(), true);
         let cfg = ConfigToml {
@@ -3062,7 +3062,7 @@ profile = "project"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         assert!(config.model_provider.uses_responses_api());
@@ -3072,7 +3072,7 @@ profile = "project"
 
     #[test]
     fn config_honors_explicit_file_oauth_store_mode() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
         let cfg = ConfigToml {
             mcp_oauth_credentials_store: Some(OAuthCredentialsStoreMode::File),
             ..Default::default()
@@ -3081,7 +3081,7 @@ profile = "project"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         assert_eq!(
@@ -3094,9 +3094,9 @@ profile = "project"
 
     #[tokio::test]
     async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
-        let managed_path = adam_home.path().join("managed_config.toml");
-        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
+        let lha_home = TempDir::new()?;
+        let managed_path = lha_home.path().join("managed_config.toml");
+        let config_path = lha_home.path().join(CONFIG_TOML_FILE);
 
         std::fs::write(&config_path, "mcp_oauth_credentials_store = \"file\"\n")?;
         std::fs::write(&managed_path, "mcp_oauth_credentials_store = \"keyring\"\n")?;
@@ -3108,9 +3108,9 @@ profile = "project"
             macos_managed_config_requirements_base64: None,
         };
 
-        let cwd = AbsolutePathBuf::try_from(adam_home.path())?;
+        let cwd = AbsolutePathBuf::try_from(lha_home.path())?;
         let config_layer_stack = load_config_layers_state(
-            adam_home.path(),
+            lha_home.path(),
             Some(cwd),
             &Vec::new(),
             overrides,
@@ -3119,7 +3119,7 @@ profile = "project"
         .await?;
         let cfg = deserialize_config_toml_with_base(
             config_layer_stack.effective_config(),
-            adam_home.path(),
+            lha_home.path(),
         )
         .map_err(|e| {
             tracing::error!("Failed to deserialize overridden config: {e}");
@@ -3133,7 +3133,7 @@ profile = "project"
         let final_config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
         assert_eq!(
             final_config.mcp_oauth_credentials_store_mode,
@@ -3145,9 +3145,9 @@ profile = "project"
 
     #[tokio::test]
     async fn load_global_mcp_servers_returns_empty_if_missing() -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
 
-        let servers = load_global_mcp_servers(adam_home.path()).await?;
+        let servers = load_global_mcp_servers(lha_home.path()).await?;
         assert!(servers.is_empty());
 
         Ok(())
@@ -3155,7 +3155,7 @@ profile = "project"
 
     #[tokio::test]
     async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
 
         let mut servers = BTreeMap::new();
         servers.insert(
@@ -3179,12 +3179,12 @@ profile = "project"
         );
 
         apply_blocking(
-            adam_home.path(),
+            lha_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
 
-        let loaded = load_global_mcp_servers(adam_home.path()).await?;
+        let loaded = load_global_mcp_servers(lha_home.path()).await?;
         assert_eq!(loaded.len(), 1);
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
@@ -3209,11 +3209,11 @@ profile = "project"
 
         let empty = BTreeMap::new();
         apply_blocking(
-            adam_home.path(),
+            lha_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(empty.clone())],
         )?;
-        let loaded = load_global_mcp_servers(adam_home.path()).await?;
+        let loaded = load_global_mcp_servers(lha_home.path()).await?;
         assert!(loaded.is_empty());
 
         Ok(())
@@ -3221,11 +3221,11 @@ profile = "project"
 
     #[tokio::test]
     async fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
-        let managed_path = adam_home.path().join("managed_config.toml");
+        let lha_home = TempDir::new()?;
+        let managed_path = lha_home.path().join("managed_config.toml");
 
         std::fs::write(
-            adam_home.path().join(CONFIG_TOML_FILE),
+            lha_home.path().join(CONFIG_TOML_FILE),
             "approval_policy = \"on-request\"\n",
         )?;
         std::fs::write(&managed_path, "approval_policy = \"never\"\n")?;
@@ -3237,9 +3237,9 @@ profile = "project"
             macos_managed_config_requirements_base64: None,
         };
 
-        let cwd = AbsolutePathBuf::try_from(adam_home.path())?;
+        let cwd = AbsolutePathBuf::try_from(lha_home.path())?;
         let config_layer_stack = load_config_layers_state(
-            adam_home.path(),
+            lha_home.path(),
             Some(cwd),
             &[(
                 "approval_policy".to_string(),
@@ -3252,7 +3252,7 @@ profile = "project"
 
         let cfg = deserialize_config_toml_with_base(
             config_layer_stack.effective_config(),
-            adam_home.path(),
+            lha_home.path(),
         )
         .map_err(|e| {
             tracing::error!("Failed to deserialize overridden config: {e}");
@@ -3265,8 +3265,8 @@ profile = "project"
 
     #[tokio::test]
     async fn load_global_mcp_servers_accepts_legacy_ms_field() -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
-        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
+        let lha_home = TempDir::new()?;
+        let config_path = lha_home.path().join(CONFIG_TOML_FILE);
 
         std::fs::write(
             &config_path,
@@ -3278,7 +3278,7 @@ startup_timeout_ms = 2500
 "#,
         )?;
 
-        let servers = load_global_mcp_servers(adam_home.path()).await?;
+        let servers = load_global_mcp_servers(lha_home.path()).await?;
         let docs = servers.get("docs").expect("docs entry");
         assert_eq!(docs.startup_timeout_sec, Some(Duration::from_millis(2500)));
 
@@ -3287,8 +3287,8 @@ startup_timeout_ms = 2500
 
     #[tokio::test]
     async fn load_global_mcp_servers_rejects_inline_bearer_token() -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
-        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
+        let lha_home = TempDir::new()?;
+        let config_path = lha_home.path().join(CONFIG_TOML_FILE);
 
         std::fs::write(
             &config_path,
@@ -3299,7 +3299,7 @@ bearer_token = "secret"
 "#,
         )?;
 
-        let err = load_global_mcp_servers(adam_home.path())
+        let err = load_global_mcp_servers(lha_home.path())
             .await
             .expect_err("bearer_token entries should be rejected");
 
@@ -3312,7 +3312,7 @@ bearer_token = "secret"
 
     #[tokio::test]
     async fn replace_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
 
         let servers = BTreeMap::from([(
             "docs".to_string(),
@@ -3338,12 +3338,12 @@ bearer_token = "secret"
         )]);
 
         apply_blocking(
-            adam_home.path(),
+            lha_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
 
-        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
+        let config_path = lha_home.path().join(CONFIG_TOML_FILE);
         let serialized = std::fs::read_to_string(&config_path)?;
         assert_eq!(
             serialized,
@@ -3357,7 +3357,7 @@ ZIG_VAR = "3"
 "#
         );
 
-        let loaded = load_global_mcp_servers(adam_home.path()).await?;
+        let loaded = load_global_mcp_servers(lha_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::Stdio {
@@ -3385,7 +3385,7 @@ ZIG_VAR = "3"
 
     #[tokio::test]
     async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
 
         let servers = BTreeMap::from([(
             "docs".to_string(),
@@ -3408,19 +3408,19 @@ ZIG_VAR = "3"
         )]);
 
         apply_blocking(
-            adam_home.path(),
+            lha_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
 
-        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
+        let config_path = lha_home.path().join(CONFIG_TOML_FILE);
         let serialized = std::fs::read_to_string(&config_path)?;
         assert!(
             serialized.contains(r#"env_vars = ["ALPHA", "BETA"]"#),
             "serialized config missing env_vars field:\n{serialized}"
         );
 
-        let loaded = load_global_mcp_servers(adam_home.path()).await?;
+        let loaded = load_global_mcp_servers(lha_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::Stdio { env_vars, .. } => {
@@ -3434,7 +3434,7 @@ ZIG_VAR = "3"
 
     #[tokio::test]
     async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
 
         let cwd_path = PathBuf::from("/tmp/codex-mcp");
         let servers = BTreeMap::from([(
@@ -3458,19 +3458,19 @@ ZIG_VAR = "3"
         )]);
 
         apply_blocking(
-            adam_home.path(),
+            lha_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
 
-        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
+        let config_path = lha_home.path().join(CONFIG_TOML_FILE);
         let serialized = std::fs::read_to_string(&config_path)?;
         assert!(
             serialized.contains(r#"cwd = "/tmp/codex-mcp""#),
             "serialized config missing cwd field:\n{serialized}"
         );
 
-        let loaded = load_global_mcp_servers(adam_home.path()).await?;
+        let loaded = load_global_mcp_servers(lha_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::Stdio { cwd, .. } => {
@@ -3484,7 +3484,7 @@ ZIG_VAR = "3"
 
     #[tokio::test]
     async fn replace_mcp_servers_streamable_http_serializes_bearer_token() -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
 
         let servers = BTreeMap::from([(
             "docs".to_string(),
@@ -3506,12 +3506,12 @@ ZIG_VAR = "3"
         )]);
 
         apply_blocking(
-            adam_home.path(),
+            lha_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
 
-        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
+        let config_path = lha_home.path().join(CONFIG_TOML_FILE);
         let serialized = std::fs::read_to_string(&config_path)?;
         assert_eq!(
             serialized,
@@ -3522,7 +3522,7 @@ startup_timeout_sec = 2.0
 "#
         );
 
-        let loaded = load_global_mcp_servers(adam_home.path()).await?;
+        let loaded = load_global_mcp_servers(lha_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::StreamableHttp {
@@ -3545,7 +3545,7 @@ startup_timeout_sec = 2.0
 
     #[tokio::test]
     async fn replace_mcp_servers_streamable_http_serializes_custom_headers() -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
 
         let servers = BTreeMap::from([(
             "docs".to_string(),
@@ -3569,12 +3569,12 @@ startup_timeout_sec = 2.0
             },
         )]);
         apply_blocking(
-            adam_home.path(),
+            lha_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
 
-        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
+        let config_path = lha_home.path().join(CONFIG_TOML_FILE);
         let serialized = std::fs::read_to_string(&config_path)?;
         assert_eq!(
             serialized,
@@ -3591,7 +3591,7 @@ X-Auth = "DOCS_AUTH"
 "#
         );
 
-        let loaded = load_global_mcp_servers(adam_home.path()).await?;
+        let loaded = load_global_mcp_servers(lha_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::StreamableHttp {
@@ -3619,9 +3619,9 @@ X-Auth = "DOCS_AUTH"
 
     #[tokio::test]
     async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
 
-        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
+        let config_path = lha_home.path().join(CONFIG_TOML_FILE);
 
         let mut servers = BTreeMap::from([(
             "docs".to_string(),
@@ -3646,7 +3646,7 @@ X-Auth = "DOCS_AUTH"
         )]);
 
         apply_blocking(
-            adam_home.path(),
+            lha_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
@@ -3674,7 +3674,7 @@ X-Auth = "DOCS_AUTH"
             },
         );
         apply_blocking(
-            adam_home.path(),
+            lha_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
@@ -3687,7 +3687,7 @@ url = "https://example.com/mcp"
 "#
         );
 
-        let loaded = load_global_mcp_servers(adam_home.path()).await?;
+        let loaded = load_global_mcp_servers(lha_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::StreamableHttp {
@@ -3712,8 +3712,8 @@ url = "https://example.com/mcp"
     #[tokio::test]
     async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers()
     -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
-        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
+        let lha_home = TempDir::new()?;
+        let config_path = lha_home.path().join(CONFIG_TOML_FILE);
 
         let servers = BTreeMap::from([
             (
@@ -3762,7 +3762,7 @@ url = "https://example.com/mcp"
         ]);
 
         apply_blocking(
-            adam_home.path(),
+            lha_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
@@ -3785,7 +3785,7 @@ url = "https://example.com/mcp"
             "serialized config should not add bearer token to logs:\n{serialized}"
         );
 
-        let loaded = load_global_mcp_servers(adam_home.path()).await?;
+        let loaded = load_global_mcp_servers(lha_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::StreamableHttp {
@@ -3820,7 +3820,7 @@ url = "https://example.com/mcp"
 
     #[tokio::test]
     async fn replace_mcp_servers_serializes_disabled_flag() -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
 
         let servers = BTreeMap::from([(
             "docs".to_string(),
@@ -3843,19 +3843,19 @@ url = "https://example.com/mcp"
         )]);
 
         apply_blocking(
-            adam_home.path(),
+            lha_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
 
-        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
+        let config_path = lha_home.path().join(CONFIG_TOML_FILE);
         let serialized = std::fs::read_to_string(&config_path)?;
         assert!(
             serialized.contains("enabled = false"),
             "serialized config missing disabled flag:\n{serialized}"
         );
 
-        let loaded = load_global_mcp_servers(adam_home.path()).await?;
+        let loaded = load_global_mcp_servers(lha_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         assert!(!docs.enabled);
 
@@ -3864,7 +3864,7 @@ url = "https://example.com/mcp"
 
     #[tokio::test]
     async fn replace_mcp_servers_serializes_tool_filters() -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
 
         let servers = BTreeMap::from([(
             "docs".to_string(),
@@ -3887,17 +3887,17 @@ url = "https://example.com/mcp"
         )]);
 
         apply_blocking(
-            adam_home.path(),
+            lha_home.path(),
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
 
-        let config_path = adam_home.path().join(CONFIG_TOML_FILE);
+        let config_path = lha_home.path().join(CONFIG_TOML_FILE);
         let serialized = std::fs::read_to_string(&config_path)?;
         assert!(serialized.contains(r#"enabled_tools = ["allowed"]"#));
         assert!(serialized.contains(r#"disabled_tools = ["blocked"]"#));
 
-        let loaded = load_global_mcp_servers(adam_home.path()).await?;
+        let loaded = load_global_mcp_servers(lha_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         assert_eq!(
             docs.enabled_tools.as_ref(),
@@ -3913,7 +3913,7 @@ url = "https://example.com/mcp"
 
     struct PrecedenceTestFixture {
         cwd: TempDir,
-        adam_home: TempDir,
+        lha_home: TempDir,
         cfg: ConfigToml,
     }
 
@@ -3922,14 +3922,14 @@ url = "https://example.com/mcp"
             self.cwd.path().to_path_buf()
         }
 
-        fn adam_home(&self) -> PathBuf {
-            self.adam_home.path().to_path_buf()
+        fn lha_home(&self) -> PathBuf {
+            self.lha_home.path().to_path_buf()
         }
     }
 
     #[test]
     fn cli_override_sets_compact_prompt() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
         let overrides = ConfigOverrides {
             compact_prompt: Some("Use the compact override".to_string()),
             ..Default::default()
@@ -3938,7 +3938,7 @@ url = "https://example.com/mcp"
         let config = Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
             overrides,
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         assert_eq!(
@@ -3951,8 +3951,8 @@ url = "https://example.com/mcp"
 
     #[test]
     fn loads_compact_prompt_from_file() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
-        let workspace = adam_home.path().join("workspace");
+        let lha_home = TempDir::new()?;
+        let workspace = lha_home.path().join("workspace");
         std::fs::create_dir_all(&workspace)?;
 
         let prompt_path = workspace.join("compact_prompt.txt");
@@ -3973,7 +3973,7 @@ url = "https://example.com/mcp"
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             overrides,
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         assert_eq!(
@@ -4023,11 +4023,11 @@ model_verbosity = "high"
         // a parent folder, either.
         std::fs::write(cwd.join(".git"), "gitdir: nowhere")?;
 
-        let adam_home_temp_dir = TempDir::new().unwrap();
+        let lha_home_temp_dir = TempDir::new().unwrap();
 
         Ok(PrecedenceTestFixture {
             cwd: cwd_temp_dir,
-            adam_home: adam_home_temp_dir,
+            lha_home: lha_home_temp_dir,
             cfg,
         })
     }
@@ -4044,7 +4044,7 @@ model_verbosity = "high"
         let o3_profile_config: Config = Config::load_from_base_config_with_overrides(
             fixture.cfg.clone(),
             o3_profile_overrides,
-            fixture.adam_home(),
+            fixture.lha_home(),
         )?;
         assert_eq!(o3_profile_config.model, None);
         assert_eq!(o3_profile_config.model_provider_id, "openai");
@@ -4073,7 +4073,7 @@ model_verbosity = "high"
         let gpt3_profile_config = Config::load_from_base_config_with_overrides(
             fixture.cfg.clone(),
             gpt3_profile_overrides,
-            fixture.adam_home(),
+            fixture.lha_home(),
         )?;
         assert_eq!(gpt3_profile_config.model, None);
         assert_eq!(gpt3_profile_config.model_provider_id, "openai");
@@ -4093,7 +4093,7 @@ model_verbosity = "high"
         let default_profile_config = Config::load_from_base_config_with_overrides(
             fixture.cfg.clone(),
             default_profile_overrides,
-            fixture.adam_home(),
+            fixture.lha_home(),
         )?;
 
         assert_eq!(gpt3_profile_config, default_profile_config);
@@ -4112,7 +4112,7 @@ model_verbosity = "high"
         let zdr_profile_config = Config::load_from_base_config_with_overrides(
             fixture.cfg.clone(),
             zdr_profile_overrides,
-            fixture.adam_home(),
+            fixture.lha_home(),
         )?;
         assert_eq!(zdr_profile_config.model, None);
         assert_eq!(zdr_profile_config.model_provider_id, "openai");
@@ -4138,7 +4138,7 @@ model_verbosity = "high"
         let gpt5_profile_config = Config::load_from_base_config_with_overrides(
             fixture.cfg.clone(),
             gpt5_profile_overrides,
-            fixture.adam_home(),
+            fixture.lha_home(),
         )?;
         assert_eq!(gpt5_profile_config.model, None);
         assert_eq!(gpt5_profile_config.model_provider_id, "openai");
@@ -4167,7 +4167,7 @@ model_verbosity = "high"
             ConfigOverrides {
                 ..Default::default()
             },
-            fixture.adam_home(),
+            fixture.lha_home(),
         )?;
 
         assert!(config.did_user_set_custom_approval_policy_or_sandbox_mode);
@@ -4340,7 +4340,7 @@ oss_provider = "lmstudio"
 
     #[test]
     fn config_loads_mcp_oauth_callback_port_from_toml() -> std::io::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
         let toml = r#"
 mcp_oauth_callback_port = 5678
 "#;
@@ -4350,7 +4350,7 @@ mcp_oauth_callback_port = 5678
         let config = Config::load_from_base_config_with_overrides(
             cfg,
             ConfigOverrides::default(),
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         assert_eq!(config.mcp_oauth_callback_port, Some(5678));
@@ -4359,7 +4359,7 @@ mcp_oauth_callback_port = 5678
 
     #[test]
     fn test_untrusted_project_gets_unless_trusted_approval_policy() -> anyhow::Result<()> {
-        let adam_home = TempDir::new()?;
+        let lha_home = TempDir::new()?;
         let test_project_dir = TempDir::new()?;
         let test_path = test_project_dir.path();
 
@@ -4377,7 +4377,7 @@ mcp_oauth_callback_port = 5678
                 cwd: Some(test_path.to_path_buf()),
                 ..Default::default()
             },
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         )?;
 
         // Verify that untrusted projects get UnlessTrusted approval policy

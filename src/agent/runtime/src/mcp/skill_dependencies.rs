@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use adam_protocol::protocol::AskForApproval;
-use adam_protocol::protocol::SandboxPolicy;
-use adam_protocol::request_user_input::RequestUserInputArgs;
-use adam_protocol::request_user_input::RequestUserInputQuestion;
-use adam_protocol::request_user_input::RequestUserInputQuestionOption;
-use adam_protocol::request_user_input::RequestUserInputResponse;
-use adam_rmcp_client::perform_oauth_login;
+use lha_protocol::protocol::AskForApproval;
+use lha_protocol::protocol::SandboxPolicy;
+use lha_protocol::request_user_input::RequestUserInputArgs;
+use lha_protocol::request_user_input::RequestUserInputQuestion;
+use lha_protocol::request_user_input::RequestUserInputQuestionOption;
+use lha_protocol::request_user_input::RequestUserInputResponse;
+use lha_rmcp_client::perform_oauth_login;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -177,14 +177,14 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         return;
     }
 
-    let adam_home = config.adam_home.clone();
+    let lha_home = config.lha_home.clone();
     let installed = config.mcp_servers.get().clone();
     let missing = collect_missing_mcp_dependencies(mentioned_skills, &installed);
     if missing.is_empty() {
         return;
     }
 
-    let mut servers = match load_global_mcp_servers(&adam_home).await {
+    let mut servers = match load_global_mcp_servers(&lha_home).await {
         Ok(servers) => servers,
         Err(err) => {
             warn!("failed to load MCP servers while installing skill dependencies: {err}");
@@ -207,7 +207,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         return;
     }
 
-    if let Err(err) = ConfigEditsBuilder::new(&adam_home)
+    if let Err(err) = ConfigEditsBuilder::new(&lha_home)
         .replace_mcp_servers(&servers)
         .apply()
         .await
@@ -417,7 +417,7 @@ fn mcp_dependency_to_server_config(
 mod tests {
     use super::*;
     use crate::skills::model::SkillDependencies;
-    use adam_protocol::protocol::SkillScope;
+    use lha_protocol::protocol::SkillScope;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 

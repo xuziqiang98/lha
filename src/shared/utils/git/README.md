@@ -1,4 +1,4 @@
-# adam-git
+# lha-git
 
 Helpers for interacting with git, including patch application and worktree
 snapshot utilities.
@@ -6,7 +6,7 @@ snapshot utilities.
 ```rust,no_run
 use std::path::Path;
 
-use adam_git::{
+use lha_git::{
     apply_git_patch, create_ghost_commit, restore_ghost_commit, ApplyGitRequest,
     CreateGhostCommitOptions,
 };

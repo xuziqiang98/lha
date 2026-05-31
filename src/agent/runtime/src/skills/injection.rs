@@ -4,9 +4,9 @@ use std::path::PathBuf;
 
 use crate::instructions::SkillInstructions;
 use crate::skills::SkillMetadata;
-use adam_otel::OtelManager;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::user_input::UserInput;
+use lha_otel::OtelManager;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::user_input::UserInput;
 use tokio::fs;
 
 #[derive(Debug, Default)]
@@ -432,7 +432,7 @@ mod tests {
             interface: None,
             dependencies: None,
             path: PathBuf::from(path),
-            scope: adam_protocol::protocol::SkillScope::User,
+            scope: lha_protocol::protocol::SkillScope::User,
         }
     }
 

@@ -5,172 +5,172 @@ use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::models::supported_models;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
-use adam_agent::AuthManager;
-use adam_agent::CodexThread;
-use adam_agent::Cursor as RolloutCursor;
-use adam_agent::InitialHistory;
-use adam_agent::NewThread;
-use adam_agent::RolloutRecorder;
-use adam_agent::SessionMeta;
-use adam_agent::ThreadConfigSnapshot;
-use adam_agent::ThreadManager;
-use adam_agent::ThreadSortKey as CoreThreadSortKey;
-use adam_agent::config::Config;
-use adam_agent::config::ConfigOverrides;
-use adam_agent::config::ConfigService;
-use adam_agent::config::edit::ConfigEdit;
-use adam_agent::config::edit::ConfigEditsBuilder;
-use adam_agent::config::model_ref::ModelRef;
-use adam_agent::config::models_json::ModelsJson;
-use adam_agent::config::state_json::AdamStateStore;
-use adam_agent::config::types::McpServerTransportConfig;
-use adam_agent::config_loader::CloudRequirementsLoader;
-use adam_agent::connectors;
-use adam_agent::default_client::get_adam_user_agent;
-use adam_agent::error::CodexErr;
-use adam_agent::exec::ExecParams;
-use adam_agent::exec_env::create_env;
-use adam_agent::features::Feature;
-use adam_agent::find_archived_thread_path_by_id_str;
-use adam_agent::find_thread_path_by_id_str;
-use adam_agent::git_info::git_diff_to_remote;
-use adam_agent::is_unsupported_rollout_schema_error;
-use adam_agent::mcp::collect_mcp_snapshot;
-use adam_agent::mcp::group_tools_by_server;
-use adam_agent::parse_cursor;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::ReviewRequest;
-use adam_agent::protocol::ReviewTarget as CoreReviewTarget;
-use adam_agent::protocol::SessionConfiguredEvent;
-use adam_agent::read_head_for_summary;
-use adam_agent::read_session_meta_line;
-use adam_agent::rollout_date_parts;
-use adam_agent::sandboxing::SandboxPermissions;
-use adam_agent::state_db::get_state_db;
-use adam_agent::windows_sandbox::WindowsSandboxLevelExt;
-use adam_app_server_protocol::AddConversationListenerParams;
-use adam_app_server_protocol::AddConversationSubscriptionResponse;
-use adam_app_server_protocol::AppsListParams;
-use adam_app_server_protocol::AppsListResponse;
-use adam_app_server_protocol::ArchiveConversationParams;
-use adam_app_server_protocol::ArchiveConversationResponse;
-use adam_app_server_protocol::AskForApproval;
-use adam_app_server_protocol::ClientRequest;
-use adam_app_server_protocol::CommandExecParams;
-use adam_app_server_protocol::ConversationGitInfo;
-use adam_app_server_protocol::ConversationSummary;
-use adam_app_server_protocol::DynamicToolSpec as ApiDynamicToolSpec;
-use adam_app_server_protocol::ExecOneOffCommandResponse;
-use adam_app_server_protocol::FeedbackUploadParams;
-use adam_app_server_protocol::FeedbackUploadResponse;
-use adam_app_server_protocol::ForkConversationParams;
-use adam_app_server_protocol::ForkConversationResponse;
-use adam_app_server_protocol::FuzzyFileSearchParams;
-use adam_app_server_protocol::FuzzyFileSearchResponse;
-use adam_app_server_protocol::GetConversationSummaryParams;
-use adam_app_server_protocol::GetConversationSummaryResponse;
-use adam_app_server_protocol::GetUserAgentResponse;
-use adam_app_server_protocol::GetUserSavedConfigResponse;
-use adam_app_server_protocol::GitDiffToRemoteResponse;
-use adam_app_server_protocol::GitInfo as ApiGitInfo;
-use adam_app_server_protocol::IdentityListParams;
-use adam_app_server_protocol::IdentityListResponse;
-use adam_app_server_protocol::InputItem as WireInputItem;
-use adam_app_server_protocol::InterruptConversationParams;
-use adam_app_server_protocol::JSONRPCErrorError;
-use adam_app_server_protocol::ListConversationsParams;
-use adam_app_server_protocol::ListConversationsResponse;
-use adam_app_server_protocol::ListMcpServerStatusParams;
-use adam_app_server_protocol::ListMcpServerStatusResponse;
-use adam_app_server_protocol::McpServerOauthLoginCompletedNotification;
-use adam_app_server_protocol::McpServerOauthLoginParams;
-use adam_app_server_protocol::McpServerOauthLoginResponse;
-use adam_app_server_protocol::McpServerRefreshResponse;
-use adam_app_server_protocol::McpServerStatus;
-use adam_app_server_protocol::ModelListParams;
-use adam_app_server_protocol::ModelListResponse;
-use adam_app_server_protocol::NewConversationParams;
-use adam_app_server_protocol::NewConversationResponse;
-use adam_app_server_protocol::RemoveConversationListenerParams;
-use adam_app_server_protocol::RemoveConversationSubscriptionResponse;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::ResumeConversationParams;
-use adam_app_server_protocol::ResumeConversationResponse;
-use adam_app_server_protocol::ReviewStartParams;
-use adam_app_server_protocol::ReviewStartResponse;
-use adam_app_server_protocol::ReviewTarget as ApiReviewTarget;
-use adam_app_server_protocol::SandboxMode;
-use adam_app_server_protocol::SendUserMessageParams;
-use adam_app_server_protocol::SendUserMessageResponse;
-use adam_app_server_protocol::SendUserTurnParams;
-use adam_app_server_protocol::SendUserTurnResponse;
-use adam_app_server_protocol::ServerNotification;
-use adam_app_server_protocol::SessionConfiguredNotification;
-use adam_app_server_protocol::SetDefaultModelParams;
-use adam_app_server_protocol::SetDefaultModelResponse;
-use adam_app_server_protocol::SkillsConfigWriteParams;
-use adam_app_server_protocol::SkillsConfigWriteResponse;
-use adam_app_server_protocol::SkillsListParams;
-use adam_app_server_protocol::SkillsListResponse;
-use adam_app_server_protocol::Thread;
-use adam_app_server_protocol::ThreadArchiveParams;
-use adam_app_server_protocol::ThreadArchiveResponse;
-use adam_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
-use adam_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
-use adam_app_server_protocol::ThreadForkParams;
-use adam_app_server_protocol::ThreadForkResponse;
-use adam_app_server_protocol::ThreadItem;
-use adam_app_server_protocol::ThreadListParams;
-use adam_app_server_protocol::ThreadListResponse;
-use adam_app_server_protocol::ThreadLoadedListParams;
-use adam_app_server_protocol::ThreadLoadedListResponse;
-use adam_app_server_protocol::ThreadReadParams;
-use adam_app_server_protocol::ThreadReadResponse;
-use adam_app_server_protocol::ThreadResumeParams;
-use adam_app_server_protocol::ThreadResumeResponse;
-use adam_app_server_protocol::ThreadRollbackParams;
-use adam_app_server_protocol::ThreadSetNameParams;
-use adam_app_server_protocol::ThreadSetNameResponse;
-use adam_app_server_protocol::ThreadSortKey;
-use adam_app_server_protocol::ThreadSourceKind;
-use adam_app_server_protocol::ThreadStartParams;
-use adam_app_server_protocol::ThreadStartResponse;
-use adam_app_server_protocol::ThreadStartedNotification;
-use adam_app_server_protocol::ThreadUnarchiveParams;
-use adam_app_server_protocol::ThreadUnarchiveResponse;
-use adam_app_server_protocol::Turn;
-use adam_app_server_protocol::TurnError;
-use adam_app_server_protocol::TurnInterruptParams;
-use adam_app_server_protocol::TurnStartParams;
-use adam_app_server_protocol::TurnStartResponse;
-use adam_app_server_protocol::TurnStartedNotification;
-use adam_app_server_protocol::TurnStatus;
-use adam_app_server_protocol::UserInfoResponse;
-use adam_app_server_protocol::UserInput as V2UserInput;
-use adam_app_server_protocol::UserSavedConfig;
-use adam_app_server_protocol::build_turns_from_event_msgs;
-use adam_feedback::CodexFeedback;
-use adam_llm::CatalogRefreshStrategy;
-use adam_llm::RuntimeEndpoint;
-use adam_protocol::ThreadId;
-use adam_protocol::config_types::Personality;
-use adam_protocol::config_types::WindowsSandboxLevel;
-use adam_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
-use adam_protocol::items::TurnItem;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::protocol::GitInfo as CoreGitInfo;
-use adam_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
-use adam_protocol::protocol::McpServerRefreshConfig;
-use adam_protocol::protocol::RolloutItem;
-use adam_protocol::protocol::SessionMetaLine;
-use adam_protocol::protocol::USER_MESSAGE_BEGIN;
-use adam_protocol::user_input::UserInput as CoreInputItem;
-use adam_rmcp_client::perform_oauth_login_return_url;
-use adam_utils_json_to_toml::json_to_toml;
 use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
+use lha_agent::AuthManager;
+use lha_agent::CodexThread;
+use lha_agent::Cursor as RolloutCursor;
+use lha_agent::InitialHistory;
+use lha_agent::NewThread;
+use lha_agent::RolloutRecorder;
+use lha_agent::SessionMeta;
+use lha_agent::ThreadConfigSnapshot;
+use lha_agent::ThreadManager;
+use lha_agent::ThreadSortKey as CoreThreadSortKey;
+use lha_agent::config::Config;
+use lha_agent::config::ConfigOverrides;
+use lha_agent::config::ConfigService;
+use lha_agent::config::edit::ConfigEdit;
+use lha_agent::config::edit::ConfigEditsBuilder;
+use lha_agent::config::model_ref::ModelRef;
+use lha_agent::config::models_json::ModelsJson;
+use lha_agent::config::state_json::LHAStateStore;
+use lha_agent::config::types::McpServerTransportConfig;
+use lha_agent::config_loader::CloudRequirementsLoader;
+use lha_agent::connectors;
+use lha_agent::default_client::get_lha_user_agent;
+use lha_agent::error::CodexErr;
+use lha_agent::exec::ExecParams;
+use lha_agent::exec_env::create_env;
+use lha_agent::features::Feature;
+use lha_agent::find_archived_thread_path_by_id_str;
+use lha_agent::find_thread_path_by_id_str;
+use lha_agent::git_info::git_diff_to_remote;
+use lha_agent::is_unsupported_rollout_schema_error;
+use lha_agent::mcp::collect_mcp_snapshot;
+use lha_agent::mcp::group_tools_by_server;
+use lha_agent::parse_cursor;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::ReviewRequest;
+use lha_agent::protocol::ReviewTarget as CoreReviewTarget;
+use lha_agent::protocol::SessionConfiguredEvent;
+use lha_agent::read_head_for_summary;
+use lha_agent::read_session_meta_line;
+use lha_agent::rollout_date_parts;
+use lha_agent::sandboxing::SandboxPermissions;
+use lha_agent::state_db::get_state_db;
+use lha_agent::windows_sandbox::WindowsSandboxLevelExt;
+use lha_app_server_protocol::AddConversationListenerParams;
+use lha_app_server_protocol::AddConversationSubscriptionResponse;
+use lha_app_server_protocol::AppsListParams;
+use lha_app_server_protocol::AppsListResponse;
+use lha_app_server_protocol::ArchiveConversationParams;
+use lha_app_server_protocol::ArchiveConversationResponse;
+use lha_app_server_protocol::AskForApproval;
+use lha_app_server_protocol::ClientRequest;
+use lha_app_server_protocol::CommandExecParams;
+use lha_app_server_protocol::ConversationGitInfo;
+use lha_app_server_protocol::ConversationSummary;
+use lha_app_server_protocol::DynamicToolSpec as ApiDynamicToolSpec;
+use lha_app_server_protocol::ExecOneOffCommandResponse;
+use lha_app_server_protocol::FeedbackUploadParams;
+use lha_app_server_protocol::FeedbackUploadResponse;
+use lha_app_server_protocol::ForkConversationParams;
+use lha_app_server_protocol::ForkConversationResponse;
+use lha_app_server_protocol::FuzzyFileSearchParams;
+use lha_app_server_protocol::FuzzyFileSearchResponse;
+use lha_app_server_protocol::GetConversationSummaryParams;
+use lha_app_server_protocol::GetConversationSummaryResponse;
+use lha_app_server_protocol::GetUserAgentResponse;
+use lha_app_server_protocol::GetUserSavedConfigResponse;
+use lha_app_server_protocol::GitDiffToRemoteResponse;
+use lha_app_server_protocol::GitInfo as ApiGitInfo;
+use lha_app_server_protocol::IdentityListParams;
+use lha_app_server_protocol::IdentityListResponse;
+use lha_app_server_protocol::InputItem as WireInputItem;
+use lha_app_server_protocol::InterruptConversationParams;
+use lha_app_server_protocol::JSONRPCErrorError;
+use lha_app_server_protocol::ListConversationsParams;
+use lha_app_server_protocol::ListConversationsResponse;
+use lha_app_server_protocol::ListMcpServerStatusParams;
+use lha_app_server_protocol::ListMcpServerStatusResponse;
+use lha_app_server_protocol::McpServerOauthLoginCompletedNotification;
+use lha_app_server_protocol::McpServerOauthLoginParams;
+use lha_app_server_protocol::McpServerOauthLoginResponse;
+use lha_app_server_protocol::McpServerRefreshResponse;
+use lha_app_server_protocol::McpServerStatus;
+use lha_app_server_protocol::ModelListParams;
+use lha_app_server_protocol::ModelListResponse;
+use lha_app_server_protocol::NewConversationParams;
+use lha_app_server_protocol::NewConversationResponse;
+use lha_app_server_protocol::RemoveConversationListenerParams;
+use lha_app_server_protocol::RemoveConversationSubscriptionResponse;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::ResumeConversationParams;
+use lha_app_server_protocol::ResumeConversationResponse;
+use lha_app_server_protocol::ReviewStartParams;
+use lha_app_server_protocol::ReviewStartResponse;
+use lha_app_server_protocol::ReviewTarget as ApiReviewTarget;
+use lha_app_server_protocol::SandboxMode;
+use lha_app_server_protocol::SendUserMessageParams;
+use lha_app_server_protocol::SendUserMessageResponse;
+use lha_app_server_protocol::SendUserTurnParams;
+use lha_app_server_protocol::SendUserTurnResponse;
+use lha_app_server_protocol::ServerNotification;
+use lha_app_server_protocol::SessionConfiguredNotification;
+use lha_app_server_protocol::SetDefaultModelParams;
+use lha_app_server_protocol::SetDefaultModelResponse;
+use lha_app_server_protocol::SkillsConfigWriteParams;
+use lha_app_server_protocol::SkillsConfigWriteResponse;
+use lha_app_server_protocol::SkillsListParams;
+use lha_app_server_protocol::SkillsListResponse;
+use lha_app_server_protocol::Thread;
+use lha_app_server_protocol::ThreadArchiveParams;
+use lha_app_server_protocol::ThreadArchiveResponse;
+use lha_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
+use lha_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
+use lha_app_server_protocol::ThreadForkParams;
+use lha_app_server_protocol::ThreadForkResponse;
+use lha_app_server_protocol::ThreadItem;
+use lha_app_server_protocol::ThreadListParams;
+use lha_app_server_protocol::ThreadListResponse;
+use lha_app_server_protocol::ThreadLoadedListParams;
+use lha_app_server_protocol::ThreadLoadedListResponse;
+use lha_app_server_protocol::ThreadReadParams;
+use lha_app_server_protocol::ThreadReadResponse;
+use lha_app_server_protocol::ThreadResumeParams;
+use lha_app_server_protocol::ThreadResumeResponse;
+use lha_app_server_protocol::ThreadRollbackParams;
+use lha_app_server_protocol::ThreadSetNameParams;
+use lha_app_server_protocol::ThreadSetNameResponse;
+use lha_app_server_protocol::ThreadSortKey;
+use lha_app_server_protocol::ThreadSourceKind;
+use lha_app_server_protocol::ThreadStartParams;
+use lha_app_server_protocol::ThreadStartResponse;
+use lha_app_server_protocol::ThreadStartedNotification;
+use lha_app_server_protocol::ThreadUnarchiveParams;
+use lha_app_server_protocol::ThreadUnarchiveResponse;
+use lha_app_server_protocol::Turn;
+use lha_app_server_protocol::TurnError;
+use lha_app_server_protocol::TurnInterruptParams;
+use lha_app_server_protocol::TurnStartParams;
+use lha_app_server_protocol::TurnStartResponse;
+use lha_app_server_protocol::TurnStartedNotification;
+use lha_app_server_protocol::TurnStatus;
+use lha_app_server_protocol::UserInfoResponse;
+use lha_app_server_protocol::UserInput as V2UserInput;
+use lha_app_server_protocol::UserSavedConfig;
+use lha_app_server_protocol::build_turns_from_event_msgs;
+use lha_feedback::CodexFeedback;
+use lha_llm::CatalogRefreshStrategy;
+use lha_llm::RuntimeEndpoint;
+use lha_protocol::ThreadId;
+use lha_protocol::config_types::Personality;
+use lha_protocol::config_types::WindowsSandboxLevel;
+use lha_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
+use lha_protocol::items::TurnItem;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::protocol::GitInfo as CoreGitInfo;
+use lha_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
+use lha_protocol::protocol::McpServerRefreshConfig;
+use lha_protocol::protocol::RolloutItem;
+use lha_protocol::protocol::SessionMetaLine;
+use lha_protocol::protocol::USER_MESSAGE_BEGIN;
+use lha_protocol::user_input::UserInput as CoreInputItem;
+use lha_rmcp_client::perform_oauth_login_return_url;
+use lha_utils_json_to_toml::json_to_toml;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -231,7 +231,7 @@ struct EffectiveModelSelection {
     provider: RuntimeEndpoint,
 }
 
-/// Handles JSON-RPC messages for Adam threads (and legacy conversation APIs).
+/// Handles JSON-RPC messages for LHA threads (and legacy conversation APIs).
 pub(crate) struct CodexMessageProcessor {
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
@@ -322,7 +322,7 @@ impl CodexMessageProcessor {
     }
 
     async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
-        adam_agent::config::ConfigBuilder::default()
+        lha_agent::config::ConfigBuilder::default()
             .cli_overrides(self.cli_overrides.clone())
             .cloud_requirements(self.cloud_requirements.clone())
             .build()
@@ -453,7 +453,7 @@ impl CodexMessageProcessor {
             ApiReviewTarget::Custom { instructions } => CoreReviewTarget::Custom { instructions },
         };
 
-        let hint = adam_agent::review_prompts::user_facing_hint(&core_target);
+        let hint = lha_agent::review_prompts::user_facing_hint(&core_target);
         let review_request = ReviewRequest {
             target: core_target,
             user_facing_hint: Some(hint.clone()),
@@ -630,13 +630,13 @@ impl CodexMessageProcessor {
     }
 
     async fn get_user_agent(&self, request_id: RequestId) {
-        let user_agent = get_adam_user_agent();
+        let user_agent = get_lha_user_agent();
         let response = GetUserAgentResponse { user_agent };
         self.outgoing.send_response(request_id, response).await;
     }
 
     async fn get_user_saved_config(&self, request_id: RequestId) {
-        let service = ConfigService::new_with_defaults(self.config.adam_home.clone());
+        let service = ConfigService::new_with_defaults(self.config.lha_home.clone());
         let user_saved_config: UserSavedConfig = match service.load_user_saved_config().await {
             Ok(config) => config,
             Err(err) => {
@@ -709,7 +709,7 @@ impl CodexMessageProcessor {
 
         let inferred_provider = if model_provider.is_none() {
             match model.as_deref() {
-                Some(model) => match ModelsJson::load_from_adam_home(&self.config.adam_home) {
+                Some(model) => match ModelsJson::load_from_lha_home(&self.config.lha_home) {
                     Ok(models_json) => match models_json.resolve_model_provider_for_model(model) {
                         Ok(provider) => provider,
                         Err(err) => {
@@ -764,7 +764,7 @@ impl CodexMessageProcessor {
             ModelRef::new(target_provider_id, "main", target_model)
         };
 
-        let persist_result = AdamStateStore::new(&self.config.adam_home).set_last_selected_model(
+        let persist_result = LHAStateStore::new(&self.config.lha_home).set_last_selected_model(
             &model_ref,
             reasoning_effort,
             None,
@@ -886,7 +886,7 @@ impl CodexMessageProcessor {
         let sandbox_cwd = self.config.cwd.clone();
 
         tokio::spawn(async move {
-            match adam_agent::exec::process_exec_tool_call(
+            match lha_agent::exec::process_exec_tool_call(
                 exec_params,
                 &effective_policy,
                 sandbox_cwd.as_path(),
@@ -1179,7 +1179,7 @@ impl CodexMessageProcessor {
         model: Option<String>,
         model_provider: Option<String>,
         cwd: Option<String>,
-        approval_policy: Option<adam_app_server_protocol::AskForApproval>,
+        approval_policy: Option<lha_app_server_protocol::AskForApproval>,
         sandbox: Option<SandboxMode>,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
@@ -1189,7 +1189,7 @@ impl CodexMessageProcessor {
             model,
             model_provider,
             cwd: cwd.map(PathBuf::from),
-            approval_policy: approval_policy.map(adam_app_server_protocol::AskForApproval::to_core),
+            approval_policy: approval_policy.map(lha_app_server_protocol::AskForApproval::to_core),
             sandbox_mode: sandbox.map(SandboxMode::to_core),
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             base_instructions,
@@ -1214,32 +1214,28 @@ impl CodexMessageProcessor {
             }
         };
 
-        let rollout_path = match find_thread_path_by_id_str(
-            &self.config.adam_home,
-            &thread_id.to_string(),
-        )
-        .await
-        {
-            Ok(Some(p)) => p,
-            Ok(None) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("no rollout found for thread id {thread_id}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("failed to locate thread id {thread_id}: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let rollout_path =
+            match find_thread_path_by_id_str(&self.config.lha_home, &thread_id.to_string()).await {
+                Ok(Some(p)) => p,
+                Ok(None) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("no rollout found for thread id {thread_id}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("failed to locate thread id {thread_id}: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
 
         match self.archive_thread_common(thread_id, &rollout_path).await {
             Ok(()) => {
@@ -1254,7 +1250,7 @@ impl CodexMessageProcessor {
 
     async fn thread_set_name(&self, request_id: RequestId, params: ThreadSetNameParams) {
         let ThreadSetNameParams { thread_id, name } = params;
-        let Some(name) = adam_agent::util::normalize_thread_name(&name) else {
+        let Some(name) = lha_agent::util::normalize_thread_name(&name) else {
             self.send_invalid_request_error(
                 request_id,
                 "thread name must not be empty".to_string(),
@@ -1298,7 +1294,7 @@ impl CodexMessageProcessor {
         };
 
         let archived_path = match find_archived_thread_path_by_id_str(
-            &self.config.adam_home,
+            &self.config.lha_home,
             &thread_id.to_string(),
         )
         .await
@@ -1329,8 +1325,8 @@ impl CodexMessageProcessor {
         let state_db_ctx = get_state_db(&self.config, None).await;
         let archived_folder = self
             .config
-            .adam_home
-            .join(adam_agent::ARCHIVED_SESSIONS_SUBDIR);
+            .lha_home
+            .join(lha_agent::ARCHIVED_SESSIONS_SUBDIR);
 
         let result: Result<Thread, JSONRPCErrorError> = async {
             let canonical_archived_dir = tokio::fs::canonicalize(&archived_folder).await.map_err(
@@ -1388,7 +1384,7 @@ impl CodexMessageProcessor {
                 });
             };
 
-            let sessions_folder = self.config.adam_home.join(adam_agent::SESSIONS_SUBDIR);
+            let sessions_folder = self.config.lha_home.join(lha_agent::SESSIONS_SUBDIR);
             let dest_dir = sessions_folder.join(year).join(month).join(day);
             let restored_path = dest_dir.join(&file_name);
             tokio::fs::create_dir_all(&dest_dir)
@@ -1619,23 +1615,20 @@ impl CodexMessageProcessor {
             }
         };
 
-        let rollout_path = match find_thread_path_by_id_str(
-            &self.config.adam_home,
-            &thread_uuid.to_string(),
-        )
-        .await
-        {
-            Ok(Some(path)) => Some(path),
-            Ok(None) => None,
-            Err(err) => {
-                self.send_invalid_request_error(
-                    request_id,
-                    format!("failed to locate thread id {thread_uuid}: {err}"),
-                )
-                .await;
-                return;
-            }
-        };
+        let rollout_path =
+            match find_thread_path_by_id_str(&self.config.lha_home, &thread_uuid.to_string()).await
+            {
+                Ok(Some(path)) => Some(path),
+                Ok(None) => None,
+                Err(err) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to locate thread id {thread_uuid}: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
 
         let mut thread = if let Some(rollout_path) = rollout_path.as_ref() {
             let fallback_provider = self.config.model_provider_id.as_str();
@@ -1804,7 +1797,7 @@ impl CodexMessageProcessor {
             };
 
             let path = match find_thread_path_by_id_str(
-                &self.config.adam_home,
+                &self.config.lha_home,
                 &existing_thread_id.to_string(),
             )
             .await
@@ -1996,11 +1989,8 @@ impl CodexMessageProcessor {
                 }
             };
 
-            match find_thread_path_by_id_str(
-                &self.config.adam_home,
-                &existing_thread_id.to_string(),
-            )
-            .await
+            match find_thread_path_by_id_str(&self.config.lha_home, &existing_thread_id.to_string())
+                .await
             {
                 Ok(Some(p)) => p,
                 Ok(None) => {
@@ -2209,14 +2199,14 @@ impl CodexMessageProcessor {
         let path = match params {
             GetConversationSummaryParams::RolloutPath { rollout_path } => {
                 if rollout_path.is_relative() {
-                    self.config.adam_home.join(&rollout_path)
+                    self.config.lha_home.join(&rollout_path)
                 } else {
                     rollout_path
                 }
             }
             GetConversationSummaryParams::ThreadId { conversation_id } => {
-                match adam_agent::find_thread_path_by_id_str(
-                    &self.config.adam_home,
+                match lha_agent::find_thread_path_by_id_str(
+                    &self.config.lha_home,
                     &conversation_id.to_string(),
                 )
                 .await
@@ -2346,7 +2336,7 @@ impl CodexMessageProcessor {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
             let page = if archived {
                 RolloutRecorder::list_archived_threads(
-                    &self.config.adam_home,
+                    &self.config.lha_home,
                     page_size,
                     cursor_obj.as_ref(),
                     sort_key,
@@ -2363,7 +2353,7 @@ impl CodexMessageProcessor {
                 })?
             } else {
                 RolloutRecorder::list_threads(
-                    &self.config.adam_home,
+                    &self.config.lha_home,
                     page_size,
                     cursor_obj.as_ref(),
                     sort_key,
@@ -2797,7 +2787,7 @@ impl CodexMessageProcessor {
                 }
             }
         } else if let Some(conversation_id) = conversation_id {
-            match find_thread_path_by_id_str(&self.config.adam_home, &conversation_id.to_string())
+            match find_thread_path_by_id_str(&self.config.lha_home, &conversation_id.to_string())
                 .await
             {
                 Ok(Some(found_path)) => {
@@ -3005,7 +2995,7 @@ impl CodexMessageProcessor {
         let rollout_path = if let Some(path) = path {
             path
         } else if let Some(conversation_id) = conversation_id {
-            match find_thread_path_by_id_str(&self.config.adam_home, &conversation_id.to_string())
+            match find_thread_path_by_id_str(&self.config.lha_home, &conversation_id.to_string())
                 .await
             {
                 Ok(Some(found_path)) => found_path,
@@ -3239,7 +3229,7 @@ impl CodexMessageProcessor {
         rollout_path: &Path,
     ) -> Result<(), JSONRPCErrorError> {
         // Verify rollout_path is under sessions dir.
-        let rollout_folder = self.config.adam_home.join(adam_agent::SESSIONS_SUBDIR);
+        let rollout_folder = self.config.lha_home.join(lha_agent::SESSIONS_SUBDIR);
 
         let canonical_sessions_dir = match tokio::fs::canonicalize(&rollout_folder).await {
             Ok(path) => path,
@@ -3337,8 +3327,8 @@ impl CodexMessageProcessor {
         let result: std::io::Result<()> = async move {
             let archive_folder = self
                 .config
-                .adam_home
-                .join(adam_agent::ARCHIVED_SESSIONS_SUBDIR);
+                .lha_home
+                .join(lha_agent::ARCHIVED_SESSIONS_SUBDIR);
             tokio::fs::create_dir_all(&archive_folder).await?;
             let archived_path = archive_folder.join(&file_name);
             tokio::fs::rename(&canonical_rollout_path, &archived_path).await?;
@@ -3561,7 +3551,7 @@ impl CodexMessageProcessor {
             let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
             let errors = errors_to_info(&outcome.errors);
             let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
-            data.push(adam_app_server_protocol::SkillsListEntry {
+            data.push(lha_app_server_protocol::SkillsListEntry {
                 cwd,
                 skills,
                 errors,
@@ -3575,7 +3565,7 @@ impl CodexMessageProcessor {
     async fn skills_config_write(&self, request_id: RequestId, params: SkillsConfigWriteParams) {
         let SkillsConfigWriteParams { path, enabled } = params;
         let edits = vec![ConfigEdit::SetSkillConfig { path, enabled }];
-        let result = ConfigEditsBuilder::new(&self.config.adam_home)
+        let result = ConfigEditsBuilder::new(&self.config.lha_home)
             .with_edits(edits)
             .apply()
             .await;
@@ -3642,7 +3632,7 @@ impl CodexMessageProcessor {
         let selected_identity_kind = params.identity.as_ref().map(|identity| identity.kind);
         if let Some(kind) = selected_identity_kind
             && let Err(err) =
-                AdamStateStore::new(&self.config.adam_home).set_last_selected_identity(kind)
+                LHAStateStore::new(&self.config.lha_home).set_last_selected_identity(kind)
         {
             warn!("failed to persist selected identity to state.json: {err}");
         }
@@ -3984,7 +3974,7 @@ impl CodexMessageProcessor {
 
                             outgoing_for_task
                                 .send_notification(OutgoingNotification {
-                                    method: format!("adam/event/{event_formatted}"),
+                                    method: format!("lha/event/{event_formatted}"),
                                     params: Some(params.into()),
                                 })
                                 .await;
@@ -4117,11 +4107,11 @@ impl CodexMessageProcessor {
         };
         let session_source = self.thread_manager.session_source();
 
-        let adam_home = self.config.adam_home.clone();
+        let lha_home = self.config.lha_home.clone();
         let persist_result = tokio::task::spawn_blocking(move || {
             let rollout_path_ref = validated_rollout_path.as_deref();
             snapshot.persist_feedback(
-                adam_home.as_path(),
+                lha_home.as_path(),
                 &classification,
                 reason.as_deref(),
                 include_logs,
@@ -4172,19 +4162,19 @@ impl CodexMessageProcessor {
 }
 
 fn skills_to_info(
-    skills: &[adam_agent::skills::SkillMetadata],
+    skills: &[lha_agent::skills::SkillMetadata],
     disabled_paths: &std::collections::HashSet<PathBuf>,
-) -> Vec<adam_app_server_protocol::SkillMetadata> {
+) -> Vec<lha_app_server_protocol::SkillMetadata> {
     skills
         .iter()
         .map(|skill| {
             let enabled = !disabled_paths.contains(&skill.path);
-            adam_app_server_protocol::SkillMetadata {
+            lha_app_server_protocol::SkillMetadata {
                 name: skill.name.clone(),
                 description: skill.description.clone(),
                 short_description: skill.short_description.clone(),
                 interface: skill.interface.clone().map(|interface| {
-                    adam_app_server_protocol::SkillInterface {
+                    lha_app_server_protocol::SkillInterface {
                         display_name: interface.display_name,
                         short_description: interface.short_description,
                         icon_small: interface.icon_small,
@@ -4194,11 +4184,11 @@ fn skills_to_info(
                     }
                 }),
                 dependencies: skill.dependencies.clone().map(|dependencies| {
-                    adam_app_server_protocol::SkillDependencies {
+                    lha_app_server_protocol::SkillDependencies {
                         tools: dependencies
                             .tools
                             .into_iter()
-                            .map(|tool| adam_app_server_protocol::SkillToolDependency {
+                            .map(|tool| lha_app_server_protocol::SkillToolDependency {
                                 r#type: tool.r#type,
                                 value: tool.value,
                                 description: tool.description,
@@ -4218,11 +4208,11 @@ fn skills_to_info(
 }
 
 fn errors_to_info(
-    errors: &[adam_agent::skills::SkillError],
-) -> Vec<adam_app_server_protocol::SkillErrorInfo> {
+    errors: &[lha_agent::skills::SkillError],
+) -> Vec<lha_app_server_protocol::SkillErrorInfo> {
     errors
         .iter()
-        .map(|err| adam_app_server_protocol::SkillErrorInfo {
+        .map(|err| lha_app_server_protocol::SkillErrorInfo {
             path: err.path.clone(),
             message: err.message.clone(),
         })
@@ -4255,7 +4245,7 @@ fn validate_dynamic_tools(
             return Err(format!("duplicate dynamic tool name: {name}"));
         }
 
-        if let Err(err) = adam_agent::parse_tool_input_schema(&tool.input_schema) {
+        if let Err(err) = lha_agent::parse_tool_input_schema(&tool.input_schema) {
             return Err(format!(
                 "dynamic tool input schema is not supported for {name}: {err}"
             ));
@@ -4291,7 +4281,7 @@ async fn derive_config_from_params(
         )
         .collect::<Vec<_>>();
 
-    adam_agent::config::ConfigBuilder::default()
+    lha_agent::config::ConfigBuilder::default()
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .cloud_requirements(cloud_requirements.clone())
@@ -4317,7 +4307,7 @@ async fn derive_config_for_cwd(
         )
         .collect::<Vec<_>>();
 
-    adam_agent::config::ConfigBuilder::default()
+    lha_agent::config::ConfigBuilder::default()
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .fallback_cwd(cwd)
@@ -4397,7 +4387,7 @@ pub(crate) async fn read_summary_from_rollout(
 
 pub(crate) async fn read_event_msgs_from_rollout(
     path: &Path,
-) -> std::io::Result<Vec<adam_protocol::protocol::EventMsg>> {
+) -> std::io::Result<Vec<lha_protocol::protocol::EventMsg>> {
     let items = match RolloutRecorder::get_rollout_history(path).await? {
         InitialHistory::New => Vec::new(),
         InitialHistory::Forked(items) => items,
@@ -4425,7 +4415,7 @@ fn extract_conversation_summary(
     let preview = head
         .iter()
         .filter_map(|value| serde_json::from_value::<TranscriptItem>(value.clone()).ok())
-        .find_map(|item| match adam_agent::parse_turn_item(&item) {
+        .find_map(|item| match lha_agent::parse_turn_item(&item) {
             Some(TurnItem::UserMessage(user)) => Some(user.message()),
             _ => None,
         })?;
@@ -4549,8 +4539,8 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_protocol::protocol::SessionSource;
     use anyhow::Result;
+    use lha_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::TempDir;
@@ -4588,9 +4578,9 @@ mod tests {
                 "id": conversation_id.to_string(),
                 "timestamp": timestamp,
                 "cwd": "/",
-                "originator": "adam",
+                "originator": "lha",
                 "cli_version": "0.0.0",
-                "rollout_schema_version": adam_protocol::protocol::current_rollout_schema_version(),
+                "rollout_schema_version": lha_protocol::protocol::current_rollout_schema_version(),
                 "model_provider": "test-provider"
             }),
             json!({
@@ -4643,9 +4633,9 @@ mod tests {
 
     #[tokio::test]
     async fn read_summary_from_rollout_returns_empty_preview_when_no_user_message() -> Result<()> {
-        use adam_protocol::protocol::RolloutItem;
-        use adam_protocol::protocol::RolloutLine;
-        use adam_protocol::protocol::SessionMetaLine;
+        use lha_protocol::protocol::RolloutItem;
+        use lha_protocol::protocol::RolloutLine;
+        use lha_protocol::protocol::SessionMetaLine;
         use std::fs;
         use std::fs::FileTimes;
 

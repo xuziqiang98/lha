@@ -1,9 +1,9 @@
-use adam_execpolicy::Decision;
-use adam_execpolicy::Policy;
-use adam_execpolicy::rule::PatternToken;
-use adam_execpolicy::rule::PrefixPattern;
-use adam_execpolicy::rule::PrefixRule;
-use adam_execpolicy::rule::RuleRef;
+use lha_execpolicy::Decision;
+use lha_execpolicy::Policy;
+use lha_execpolicy::rule::PatternToken;
+use lha_execpolicy::rule::PrefixPattern;
+use lha_execpolicy::rule::PrefixRule;
+use lha_execpolicy::rule::RuleRef;
 use multimap::MultiMap;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -114,14 +114,14 @@ pub enum RequirementsExecPolicyParseError {
     MissingDecision { rule_index: usize },
 
     #[error(
-        "rules prefix_rule at index {rule_index} has decision 'allow', which is not permitted in requirements.toml: Adam merges these rules with other config and uses the most restrictive result (use 'prompt' or 'forbidden')"
+        "rules prefix_rule at index {rule_index} has decision 'allow', which is not permitted in requirements.toml: LHA merges these rules with other config and uses the most restrictive result (use 'prompt' or 'forbidden')"
     )]
     AllowDecisionNotAllowed { rule_index: usize },
 }
 
 impl RequirementsExecPolicyToml {
     /// Convert requirements TOML rules into the internal `.rules`
-    /// representation used by `adam-execpolicy`.
+    /// representation used by `lha-execpolicy`.
     pub fn to_policy(&self) -> Result<Policy, RequirementsExecPolicyParseError> {
         if self.prefix_rules.is_empty() {
             return Err(RequirementsExecPolicyParseError::EmptyPrefixRules);

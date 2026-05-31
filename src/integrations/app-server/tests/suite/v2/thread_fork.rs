@@ -1,18 +1,18 @@
-use adam_app_server_protocol::JSONRPCNotification;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::SessionSource;
-use adam_app_server_protocol::ThreadForkParams;
-use adam_app_server_protocol::ThreadForkResponse;
-use adam_app_server_protocol::ThreadItem;
-use adam_app_server_protocol::ThreadStartedNotification;
-use adam_app_server_protocol::TurnStatus;
-use adam_app_server_protocol::UserInput;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
+use lha_app_server_protocol::JSONRPCNotification;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::SessionSource;
+use lha_app_server_protocol::ThreadForkParams;
+use lha_app_server_protocol::ThreadForkResponse;
+use lha_app_server_protocol::ThreadItem;
+use lha_app_server_protocol::ThreadStartedNotification;
+use lha_app_server_protocol::TurnStatus;
+use lha_app_server_protocol::UserInput;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -23,12 +23,12 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 #[tokio::test]
 async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
     let preview = "Saved user message";
     let conversation_id = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-05T12-00-00",
         "2025-01-05T12:00:00Z",
         preview,
@@ -36,7 +36,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
         None,
     )?;
 
-    let original_path = adam_home
+    let original_path = lha_home
         .path()
         .join("sessions")
         .join("2025")
@@ -52,7 +52,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     );
     let original_contents = std::fs::read_to_string(&original_path)?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let fork_id = mcp
@@ -118,9 +118,9 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
 }
 
 // Helper to create a config.toml pointing at the mock model server.
-fn create_config_toml(adam_home: &Path, server_uri: &str) -> std::io::Result<()> {
+fn create_config_toml(lha_home: &Path, server_uri: &str) -> std::io::Result<()> {
     app_test_support::write_mock_responses_config_toml_with_options(
-        adam_home,
+        lha_home,
         server_uri,
         &std::collections::BTreeMap::new(),
         20_000,

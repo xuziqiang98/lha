@@ -1,6 +1,6 @@
 //! Rollout module: persistence and discovery of session rollout files.
 
-use adam_protocol::protocol::SessionSource;
+use lha_protocol::protocol::SessionSource;
 
 pub const SESSIONS_SUBDIR: &str = "sessions";
 pub const ARCHIVED_SESSIONS_SUBDIR: &str = "archived_sessions";
@@ -15,8 +15,8 @@ pub mod recorder;
 pub(crate) mod session_index;
 pub(crate) mod truncation;
 
-pub use adam_protocol::protocol::SessionMeta;
 pub(crate) use error::map_session_init_error;
+pub use lha_protocol::protocol::SessionMeta;
 pub use list::find_archived_thread_path_by_id_str;
 pub use list::find_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]

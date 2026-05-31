@@ -1,10 +1,10 @@
 use crate::Result;
 use crate::auth::auth_provider_from_endpoint;
-use adam_api::ModelsClient;
-use adam_api::ReqwestTransport;
-use adam_client::HttpTransport;
-use adam_llm_types::ModelInfo;
 use http::HeaderMap;
+use lha_api::ModelsClient;
+use lha_api::ReqwestTransport;
+use lha_client::HttpTransport;
+use lha_llm_types::ModelInfo;
 use reqwest::Client;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -41,7 +41,7 @@ pub async fn fetch_remote_models(
 
 async fn fetch_remote_models_with_transport<T, A>(
     transport: T,
-    provider: adam_api::Provider,
+    provider: lha_api::Provider,
     auth: A,
     client_version: &str,
     extra_headers: HeaderMap,
@@ -49,7 +49,7 @@ async fn fetch_remote_models_with_transport<T, A>(
 ) -> Result<(Vec<ModelInfo>, Option<String>)>
 where
     T: HttpTransport,
-    A: adam_api::AuthProvider,
+    A: lha_api::AuthProvider,
 {
     let client = ModelsClient::new(transport, provider, auth);
     timeout(

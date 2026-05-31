@@ -74,7 +74,7 @@
           "type": "object"
         },
         {
-          "description": "User config layer from $ADAM_HOME/config.toml. This layer is special in that it is expected to be: - writable by the user - generally outside the workspace directory",
+          "description": "User config layer from $LHA_HOME/config.toml. This layer is special in that it is expected to be: - writable by the user - generally outside the workspace directory",
           "properties": {
             "file": {
               "allOf": [
@@ -100,9 +100,9 @@
           "type": "object"
         },
         {
-          "description": "Path to a .adam/ folder within a project. There could be multiple of these between `cwd` and the project/repo root.",
+          "description": "Path to a .lha/ folder within a project. There could be multiple of these between `cwd` and the project/repo root.",
           "properties": {
-            "dotAdamFolder": {
+            "dotLHAFolder": {
               "$ref": "#/definitions/AbsolutePathBuf"
             },
             "type": {
@@ -114,7 +114,7 @@
             }
           },
           "required": [
-            "dotAdamFolder",
+            "dotLHAFolder",
             "type"
           ],
           "title": "ProjectConfigLayerSource",

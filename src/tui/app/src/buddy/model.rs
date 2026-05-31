@@ -1,8 +1,8 @@
-use adam_agent::config::types::BuddyEye;
-use adam_agent::config::types::BuddyHat;
-use adam_agent::config::types::BuddyRarity;
-use adam_agent::config::types::BuddySpecies;
-use adam_protocol::config_types::IdentityKind;
+use lha_agent::config::types::BuddyEye;
+use lha_agent::config::types::BuddyHat;
+use lha_agent::config::types::BuddyRarity;
+use lha_agent::config::types::BuddySpecies;
+use lha_protocol::config_types::IdentityKind;
 use rand::Rng;
 
 pub(crate) const DEFAULT_BUDDY_RARITY: BuddyRarity = BuddyRarity::Common;

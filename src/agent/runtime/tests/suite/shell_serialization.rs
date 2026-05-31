@@ -1,7 +1,6 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::expect_used)]
 
-use adam_agent::protocol::SandboxPolicy;
 use anyhow::Result;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
@@ -17,6 +16,7 @@ use core_test_support::test_codex::ApplyPatchModelOutput;
 use core_test_support::test_codex::ShellModelOutput;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
+use lha_agent::protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;

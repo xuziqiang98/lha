@@ -1,15 +1,15 @@
 [package]
-name = "adam-llm-types"
+name = "lha-llm-types"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "adam_llm_types"
+name = "lha_llm_types"
 path = "src/lib.rs"
 
 [dependencies]
-adam-git = { workspace = true }
+lha-git = { workspace = true }
 mcp-types = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

@@ -5,7 +5,6 @@ mod models_cache;
 mod responses;
 mod rollout;
 
-use adam_app_server_protocol::JSONRPCResponse;
 pub use config::write_mock_responses_config_toml;
 pub use config::write_mock_responses_config_toml_with_options;
 pub use config::write_mock_responses_models_json;
@@ -17,6 +16,7 @@ pub use core_test_support::format_with_current_shell_non_login;
 pub use core_test_support::test_path_buf_with_windows;
 pub use core_test_support::test_tmp_path;
 pub use core_test_support::test_tmp_path_buf;
+use lha_app_server_protocol::JSONRPCResponse;
 pub use mcp_process::DEFAULT_CLIENT_NAME;
 pub use mcp_process::McpProcess;
 pub use mock_model_server::create_mock_responses_server_repeating_assistant;

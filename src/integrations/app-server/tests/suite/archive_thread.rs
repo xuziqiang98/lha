@@ -1,15 +1,15 @@
-use adam_agent::ARCHIVED_SESSIONS_SUBDIR;
-use adam_app_server_protocol::ArchiveConversationParams;
-use adam_app_server_protocol::ArchiveConversationResponse;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::NewConversationParams;
-use adam_app_server_protocol::NewConversationResponse;
-use adam_app_server_protocol::RequestId;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_models_json;
 use app_test_support::write_state_json;
+use lha_agent::ARCHIVED_SESSIONS_SUBDIR;
+use lha_app_server_protocol::ArchiveConversationParams;
+use lha_app_server_protocol::ArchiveConversationResponse;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::NewConversationParams;
+use lha_app_server_protocol::NewConversationResponse;
+use lha_app_server_protocol::RequestId;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -18,10 +18,10 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn archive_conversation_moves_rollout_into_archived_directory() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let new_request_id = mcp
@@ -63,7 +63,7 @@ async fn archive_conversation_moves_rollout_into_archived_directory() -> Result<
     let _: ArchiveConversationResponse =
         to_response::<ArchiveConversationResponse>(archive_response)?;
 
-    let archived_directory = adam_home.path().join(ARCHIVED_SESSIONS_SUBDIR);
+    let archived_directory = lha_home.path().join(ARCHIVED_SESSIONS_SUBDIR);
     let archived_rollout_path =
         archived_directory.join(rollout_path.file_name().unwrap_or_else(|| {
             panic!("rollout path {} missing file name", rollout_path.display())
@@ -83,18 +83,18 @@ async fn archive_conversation_moves_rollout_into_archived_directory() -> Result<
     Ok(())
 }
 
-fn create_config_toml(adam_home: &Path) -> std::io::Result<()> {
-    let config_toml = adam_home.join("config.toml");
+fn create_config_toml(lha_home: &Path) -> std::io::Result<()> {
+    let config_toml = lha_home.join("config.toml");
     std::fs::write(config_toml, config_contents())?;
     write_mock_responses_models_json(
-        adam_home,
+        lha_home,
         "https://example.com",
         "mock_provider",
         false,
         None,
         "mock-model",
     )?;
-    write_state_json(adam_home, "mock_provider.main:mock-model")
+    write_state_json(lha_home, "mock_provider.main:mock-model")
 }
 
 fn config_contents() -> &'static str {

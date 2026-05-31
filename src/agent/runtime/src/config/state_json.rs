@@ -1,8 +1,8 @@
 use crate::config::model_ref::ModelRef;
 use crate::path_utils::write_atomically;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::Verbosity;
-use adam_protocol::openai_models::ReasoningEffort;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::Verbosity;
+use lha_protocol::openai_models::ReasoningEffort;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -17,7 +17,7 @@ pub const STATE_JSON_FILE: &str = "state.json";
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
-pub struct AdamStateJson {
+pub struct LHAStateJson {
     pub last_selected_model: Option<LastSelectedModel>,
     pub last_reasoning_effort: Option<ReasoningEffort>,
     pub last_model_verbosity: Option<Verbosity>,
@@ -32,18 +32,18 @@ pub struct LastSelectedModel {
     pub selected_at: Option<String>,
 }
 
-pub struct AdamStateStore {
+pub struct LHAStateStore {
     path: PathBuf,
 }
 
-impl AdamStateStore {
-    pub fn new(adam_home: &Path) -> Self {
+impl LHAStateStore {
+    pub fn new(lha_home: &Path) -> Self {
         Self {
-            path: adam_home.join(STATE_JSON_FILE),
+            path: lha_home.join(STATE_JSON_FILE),
         }
     }
 
-    pub fn load(&self) -> io::Result<AdamStateJson> {
+    pub fn load(&self) -> io::Result<LHAStateJson> {
         match std::fs::read_to_string(&self.path) {
             Ok(contents) => serde_json::from_str(&contents).map_err(|err| {
                 io::Error::new(
@@ -51,7 +51,7 @@ impl AdamStateStore {
                     format!("failed to parse {}: {err}", self.path.display()),
                 )
             }),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(AdamStateJson::default()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(LHAStateJson::default()),
             Err(err) => Err(err),
         }
     }
@@ -85,19 +85,19 @@ impl AdamStateStore {
     }
 }
 
-pub fn load_state(adam_home: &Path) -> io::Result<AdamStateJson> {
-    AdamStateStore::new(adam_home).load()
+pub fn load_state(lha_home: &Path) -> io::Result<LHAStateJson> {
+    LHAStateStore::new(lha_home).load()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::AdamStateJson;
-    use super::AdamStateStore;
+    use super::LHAStateJson;
+    use super::LHAStateStore;
     use super::LastSelectedModel;
     use super::STATE_JSON_FILE;
     use crate::config::model_ref::ModelRef;
-    use adam_protocol::config_types::IdentityKind;
-    use adam_protocol::openai_models::ReasoningEffort;
+    use lha_protocol::config_types::IdentityKind;
+    use lha_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
     use std::io::ErrorKind;
     use tempfile::TempDir;
@@ -105,14 +105,14 @@ mod tests {
     #[test]
     fn missing_state_loads_empty() {
         let temp = TempDir::new().unwrap();
-        let state = AdamStateStore::new(temp.path()).load().unwrap();
-        assert_eq!(state, AdamStateJson::default());
+        let state = LHAStateStore::new(temp.path()).load().unwrap();
+        assert_eq!(state, LHAStateJson::default());
     }
 
     #[test]
     fn writes_last_selected_model() {
         let temp = TempDir::new().unwrap();
-        let store = AdamStateStore::new(temp.path());
+        let store = LHAStateStore::new(temp.path());
         let model_ref = ModelRef::parse("openrouter.main:anthropic/claude-sonnet-4").unwrap();
         store
             .set_last_selected_model(&model_ref, None, None)
@@ -127,7 +127,7 @@ mod tests {
     #[test]
     fn writes_last_selected_identity() {
         let temp = TempDir::new().unwrap();
-        let store = AdamStateStore::new(temp.path());
+        let store = LHAStateStore::new(temp.path());
 
         store
             .set_last_selected_identity(IdentityKind::Planner)
@@ -136,7 +136,7 @@ mod tests {
         let state = store.load().unwrap();
         assert_eq!(
             state,
-            AdamStateJson {
+            LHAStateJson {
                 last_selected_identity: Some(IdentityKind::Planner),
                 ..Default::default()
             }
@@ -146,7 +146,7 @@ mod tests {
     #[test]
     fn identity_write_preserves_model_selection() {
         let temp = TempDir::new().unwrap();
-        let store = AdamStateStore::new(temp.path());
+        let store = LHAStateStore::new(temp.path());
         let model_ref = ModelRef::parse("openrouter.main:anthropic/claude-sonnet-4").unwrap();
         store
             .set_last_selected_model(&model_ref, Some(ReasoningEffort::High), None)
@@ -159,7 +159,7 @@ mod tests {
         let state = store.load().unwrap();
         assert_eq!(
             state,
-            AdamStateJson {
+            LHAStateJson {
                 last_selected_model: Some(LastSelectedModel {
                     model_ref: model_ref.to_string(),
                     selected_at: state
@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn model_write_preserves_identity() {
         let temp = TempDir::new().unwrap();
-        let store = AdamStateStore::new(temp.path());
+        let store = LHAStateStore::new(temp.path());
         let model_ref = ModelRef::parse("openrouter.main:anthropic/claude-sonnet-4").unwrap();
         store
             .set_last_selected_identity(IdentityKind::Planner)
@@ -203,7 +203,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join(STATE_JSON_FILE);
         std::fs::write(&path, "{").unwrap();
-        let store = AdamStateStore::new(temp.path());
+        let store = LHAStateStore::new(temp.path());
         let model_ref = ModelRef::parse("openrouter.main:anthropic/claude-sonnet-4").unwrap();
 
         let err = store
@@ -218,7 +218,7 @@ mod tests {
     fn unknown_fields_are_rejected() {
         let temp = TempDir::new().unwrap();
         std::fs::write(temp.path().join(STATE_JSON_FILE), r#"{"unknown":true}"#).unwrap();
-        let err = AdamStateStore::new(temp.path()).load().unwrap_err();
+        let err = LHAStateStore::new(temp.path()).load().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidData);
     }
 }

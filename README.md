@@ -4,14 +4,14 @@
 From the repository root:
 
 ```
-cargo build -p adam-cli --bin adam --release
-cargo build -p adam-exec --bin adam-exec --release
+cargo build -p lha-cli --bin lha --release
+cargo build -p lha-exec --bin lha-exec --release
 
-export PATH="<adam binary path>:$PATH" >> ~/.bashrc
+export PATH="<lha binary path>:$PATH" >> ~/.bashrc
 ```
 
-The resulting binary is written to `target/release/adam`.
-The `adam-exec` binary is written to `target/release/adam-exec`.
+The resulting binary is written to `target/release/lha`.
+The `lha-exec` binary is written to `target/release/lha-exec`.
 
 ## Documentation
 
@@ -25,7 +25,7 @@ The workspace is organized under [`src/`](./src) with seven top-level domains:
 
 - `llm`: model runtime SDK, provider adapters, and wire-level API clients
 - `core`: shared protocol and session state types
-- `coding-agent`: Adam-specific runtime, CLI, login, and product logic
+- `coding-agent`: LHA-specific runtime, CLI, login, and product logic
 - `tui`: terminal user interface application
 - `integrations`: app-server, MCP, backend, and cloud-facing adapters
 - `platform`: sandboxing, execution, and IPC primitives

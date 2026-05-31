@@ -1,14 +1,14 @@
-use adam_utils_absolute_path::AbsolutePathBuf;
+use lha_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::config::types::Personality;
 use crate::protocol::AskForApproval;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::config_types::SandboxMode;
-use adam_protocol::config_types::Verbosity;
-use adam_protocol::config_types::WebSearchMode;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::config_types::SandboxMode;
+use lha_protocol::config_types::Verbosity;
+use lha_protocol::config_types::WebSearchMode;
 
 /// Collection of common configuration options that a user can define as a unit
 /// in `config.toml`.
@@ -45,7 +45,7 @@ pub struct ConfigProfile {
     pub oss_provider: Option<String>,
 }
 
-impl From<ConfigProfile> for adam_app_server_protocol::Profile {
+impl From<ConfigProfile> for lha_app_server_protocol::Profile {
     fn from(config_profile: ConfigProfile) -> Self {
         Self {
             approval_policy: config_profile.approval_policy,

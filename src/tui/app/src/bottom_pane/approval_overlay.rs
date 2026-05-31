@@ -16,17 +16,17 @@ use crate::key_hint::KeyBinding;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
-use adam_agent::features::Feature;
-use adam_agent::features::Features;
-use adam_agent::protocol::ElicitationAction;
-use adam_agent::protocol::ExecPolicyAmendment;
-use adam_agent::protocol::FileChange;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::ReviewDecision;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use lha_agent::features::Feature;
+use lha_agent::features::Features;
+use lha_agent::protocol::ElicitationAction;
+use lha_agent::protocol::ExecPolicyAmendment;
+use lha_agent::protocol::FileChange;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::ReviewDecision;
 use mcp_types::RequestId;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -482,7 +482,7 @@ fn exec_options(
             }),
     )
     .chain([ApprovalOption {
-        label: "No, and tell Adam what to do differently".to_string(),
+        label: "No, and tell LHA what to do differently".to_string(),
         decision: ApprovalDecision::Review(ReviewDecision::Abort),
         display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
         additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
@@ -505,7 +505,7 @@ fn patch_options() -> Vec<ApprovalOption> {
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
         },
         ApprovalOption {
-            label: "No, and tell Adam what to do differently".to_string(),
+            label: "No, and tell LHA what to do differently".to_string(),
             decision: ApprovalDecision::Review(ReviewDecision::Abort),
             display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],

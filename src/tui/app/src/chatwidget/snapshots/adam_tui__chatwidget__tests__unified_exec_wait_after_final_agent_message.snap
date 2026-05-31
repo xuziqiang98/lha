@@ -1,9 +1,0 @@
----
-source: src/tui/app/src/chatwidget/tests.rs
-assertion_line: 2849
-expression: combined
----
-↳ Interacted with background terminal · cargo test -p adam-agent
-  └ (waited)
-
-• Final response.

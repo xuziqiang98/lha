@@ -1,8 +1,8 @@
-use adam_protocol::custom_prompts::CustomPrompt;
-use adam_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
-use adam_protocol::user_input::ByteRange;
-use adam_protocol::user_input::TextElement;
 use lazy_static::lazy_static;
+use lha_protocol::custom_prompts::CustomPrompt;
+use lha_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
+use lha_protocol::user_input::ByteRange;
+use lha_protocol::user_input::TextElement;
 use regex_lite::Regex;
 use shlex::Shlex;
 use std::collections::HashMap;

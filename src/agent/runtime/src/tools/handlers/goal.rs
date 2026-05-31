@@ -8,13 +8,13 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::protocol::EventMsg;
-use adam_protocol::protocol::ThreadGoal;
-use adam_protocol::protocol::ThreadGoalStatus;
-use adam_protocol::protocol::ThreadGoalUpdatedEvent;
-use adam_protocol::protocol::validate_thread_goal_objective;
 use async_trait::async_trait;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::protocol::EventMsg;
+use lha_protocol::protocol::ThreadGoal;
+use lha_protocol::protocol::ThreadGoalStatus;
+use lha_protocol::protocol::ThreadGoalUpdatedEvent;
+use lha_protocol::protocol::validate_thread_goal_objective;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -118,7 +118,7 @@ async fn create_goal(
         .insert_thread_goal_or_replace_completed(
             session.conversation_id,
             &args.objective,
-            adam_state::ThreadGoalStatus::Active,
+            lha_state::ThreadGoalStatus::Active,
             None,
         )
         .await
@@ -154,8 +154,8 @@ async fn update_goal(
     ensure_goal_tool_allowed(session, turn_context).await?;
     let args: UpdateGoalArgs = parse_arguments(&arguments)?;
     let status = match args.status.as_str() {
-        "complete" => adam_state::ThreadGoalStatus::Complete,
-        "blocked" => adam_state::ThreadGoalStatus::Blocked,
+        "complete" => lha_state::ThreadGoalStatus::Complete,
+        "blocked" => lha_state::ThreadGoalStatus::Blocked,
         _ => {
             return Err(FunctionCallError::RespondToModel(
                 "update_goal status must be `complete` or `blocked`".to_string(),
@@ -185,7 +185,7 @@ async fn update_goal(
     let goal = state_db
         .update_thread_goal(
             session.conversation_id,
-            adam_state::GoalUpdate {
+            lha_state::GoalUpdate {
                 objective: None,
                 status: Some(status),
                 token_budget: None,
@@ -236,7 +236,7 @@ fn tool_error(err: anyhow::Error) -> FunctionCallError {
 async fn emit_goal_updated(
     session: &Session,
     turn_context: &TurnContext,
-    goal: &adam_state::ThreadGoal,
+    goal: &lha_state::ThreadGoal,
 ) {
     session
         .send_event(
@@ -250,7 +250,7 @@ async fn emit_goal_updated(
         .await;
 }
 
-fn protocol_goal_from_state(goal: adam_state::ThreadGoal) -> ThreadGoal {
+fn protocol_goal_from_state(goal: lha_state::ThreadGoal) -> ThreadGoal {
     ThreadGoal {
         thread_id: goal.thread_id,
         goal_id: goal.goal_id,
@@ -264,14 +264,14 @@ fn protocol_goal_from_state(goal: adam_state::ThreadGoal) -> ThreadGoal {
     }
 }
 
-fn protocol_goal_status_from_state(status: adam_state::ThreadGoalStatus) -> ThreadGoalStatus {
+fn protocol_goal_status_from_state(status: lha_state::ThreadGoalStatus) -> ThreadGoalStatus {
     match status {
-        adam_state::ThreadGoalStatus::Active => ThreadGoalStatus::Active,
-        adam_state::ThreadGoalStatus::Paused => ThreadGoalStatus::Paused,
-        adam_state::ThreadGoalStatus::Blocked => ThreadGoalStatus::Blocked,
-        adam_state::ThreadGoalStatus::UsageLimited => ThreadGoalStatus::UsageLimited,
-        adam_state::ThreadGoalStatus::BudgetLimited => ThreadGoalStatus::BudgetLimited,
-        adam_state::ThreadGoalStatus::Complete => ThreadGoalStatus::Complete,
+        lha_state::ThreadGoalStatus::Active => ThreadGoalStatus::Active,
+        lha_state::ThreadGoalStatus::Paused => ThreadGoalStatus::Paused,
+        lha_state::ThreadGoalStatus::Blocked => ThreadGoalStatus::Blocked,
+        lha_state::ThreadGoalStatus::UsageLimited => ThreadGoalStatus::UsageLimited,
+        lha_state::ThreadGoalStatus::BudgetLimited => ThreadGoalStatus::BudgetLimited,
+        lha_state::ThreadGoalStatus::Complete => ThreadGoalStatus::Complete,
     }
 }
 
@@ -289,7 +289,7 @@ mod tests {
     ) {
         let (mut session, mut turn_context) = make_session_and_context().await;
         let state_home = tempfile::tempdir().expect("create state temp dir");
-        let state_db = adam_state::StateRuntime::init(
+        let state_db = lha_state::StateRuntime::init(
             state_home.path().to_path_buf(),
             "test".to_string(),
             None,

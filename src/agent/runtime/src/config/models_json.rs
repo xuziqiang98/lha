@@ -1,9 +1,9 @@
 use crate::config::model_ref::ModelRef;
 use crate::path_utils::write_atomically;
-use adam_llm::RuntimeEndpoint;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::config_types::Verbosity;
-use adam_protocol::openai_models::ReasoningEffort;
+use lha_llm::RuntimeEndpoint;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::config_types::Verbosity;
+use lha_protocol::openai_models::ReasoningEffort;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -15,12 +15,12 @@ use std::path::Path;
 
 pub const MODELS_JSON_FILE: &str = "models.json";
 
-pub fn models_json_path(adam_home: &Path) -> std::path::PathBuf {
-    adam_home.join(MODELS_JSON_FILE)
+pub fn models_json_path(lha_home: &Path) -> std::path::PathBuf {
+    lha_home.join(MODELS_JSON_FILE)
 }
 
-pub fn has_models_json(adam_home: &Path) -> bool {
-    models_json_path(adam_home).is_file()
+pub fn has_models_json(lha_home: &Path) -> bool {
+    models_json_path(lha_home).is_file()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, JsonSchema)]
@@ -137,8 +137,8 @@ pub struct ModelMetadata {
 }
 
 impl ModelsJson {
-    pub fn load_from_adam_home(adam_home: &Path) -> io::Result<Self> {
-        let path = models_json_path(adam_home);
+    pub fn load_from_lha_home(lha_home: &Path) -> io::Result<Self> {
+        let path = models_json_path(lha_home);
         match std::fs::read_to_string(&path) {
             Ok(contents) => {
                 let config: Self = serde_json::from_str(&contents).map_err(|err| {
@@ -155,11 +155,11 @@ impl ModelsJson {
         }
     }
 
-    pub fn save_to_adam_home(&self, adam_home: &Path) -> io::Result<()> {
+    pub fn save_to_lha_home(&self, lha_home: &Path) -> io::Result<()> {
         self.validate()?;
         let contents = serde_json::to_string_pretty(self)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-        write_atomically(&adam_home.join(MODELS_JSON_FILE), &format!("{contents}\n"))
+        write_atomically(&lha_home.join(MODELS_JSON_FILE), &format!("{contents}\n"))
     }
 
     pub fn validate(&self) -> io::Result<()> {
@@ -520,7 +520,7 @@ mod tests {
     #[test]
     fn missing_file_loads_empty() {
         let temp = TempDir::new().unwrap();
-        let config = ModelsJson::load_from_adam_home(temp.path()).unwrap();
+        let config = ModelsJson::load_from_lha_home(temp.path()).unwrap();
         assert_eq!(config, ModelsJson::default());
     }
 
@@ -528,7 +528,7 @@ mod tests {
     fn invalid_json_returns_invalid_data() {
         let temp = TempDir::new().unwrap();
         std::fs::write(temp.path().join(MODELS_JSON_FILE), "{").unwrap();
-        let err = ModelsJson::load_from_adam_home(temp.path()).unwrap_err();
+        let err = ModelsJson::load_from_lha_home(temp.path()).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidData);
     }
 
@@ -536,7 +536,7 @@ mod tests {
     fn unknown_fields_are_rejected() {
         let temp = TempDir::new().unwrap();
         std::fs::write(temp.path().join(MODELS_JSON_FILE), r#"{"unknown":true}"#).unwrap();
-        let err = ModelsJson::load_from_adam_home(temp.path()).unwrap_err();
+        let err = ModelsJson::load_from_lha_home(temp.path()).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidData);
     }
 
@@ -562,7 +562,7 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let err = ModelsJson::load_from_adam_home(temp.path()).unwrap_err();
+        let err = ModelsJson::load_from_lha_home(temp.path()).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidData);
         assert!(err.to_string().contains("experimental_bearer_token"));
     }
@@ -575,7 +575,7 @@ mod tests {
             r#"{"providers":{"bad.provider":{"endpoints":{"main":{}}}}}"#,
         )
         .unwrap();
-        let err = ModelsJson::load_from_adam_home(temp.path()).unwrap_err();
+        let err = ModelsJson::load_from_lha_home(temp.path()).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidData);
     }
 
@@ -587,7 +587,7 @@ mod tests {
             r#"{"providers":{"openrouter":{"endpoints":{"bad.endpoint":{}}}}}"#,
         )
         .unwrap();
-        let err = ModelsJson::load_from_adam_home(temp.path()).unwrap_err();
+        let err = ModelsJson::load_from_lha_home(temp.path()).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidData);
     }
 }

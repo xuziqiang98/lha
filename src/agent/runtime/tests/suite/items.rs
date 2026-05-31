@@ -1,18 +1,5 @@
 #![cfg(not(target_os = "windows"))]
 
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::ItemCompletedEvent;
-use adam_agent::protocol::ItemStartedEvent;
-use adam_agent::protocol::Op;
-use adam_protocol::config_types::Identity;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::Settings;
-use adam_protocol::items::AgentMessageContent;
-use adam_protocol::items::TurnItem;
-use adam_protocol::models::WebSearchAction;
-use adam_protocol::user_input::ByteRange;
-use adam_protocol::user_input::TextElement;
-use adam_protocol::user_input::UserInput;
 use anyhow::Ok;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -33,6 +20,19 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::ItemCompletedEvent;
+use lha_agent::protocol::ItemStartedEvent;
+use lha_agent::protocol::Op;
+use lha_protocol::config_types::Identity;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::Settings;
+use lha_protocol::items::AgentMessageContent;
+use lha_protocol::items::TurnItem;
+use lha_protocol::models::WebSearchAction;
+use lha_protocol::user_input::ByteRange;
+use lha_protocol::user_input::TextElement;
+use lha_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -136,7 +136,7 @@ async fn assistant_message_item_is_emitted() -> anyhow::Result<()> {
     .await;
 
     assert_eq!(started.id, completed.id);
-    let Some(adam_protocol::items::AgentMessageContent::Text { text }) = completed.content.first()
+    let Some(lha_protocol::items::AgentMessageContent::Text { text }) = completed.content.first()
     else {
         panic!("expected agent message text content");
     };
@@ -373,11 +373,11 @@ async fn plan_mode_emits_plan_item_from_proposed_plan_block() -> anyhow::Result<
             }],
             final_output_json_schema: None,
             cwd: std::env::current_dir()?,
-            approval_policy: adam_agent::protocol::AskForApproval::Never,
-            sandbox_policy: adam_agent::protocol::SandboxPolicy::DangerFullAccess,
+            approval_policy: lha_agent::protocol::AskForApproval::Never,
+            sandbox_policy: lha_agent::protocol::SandboxPolicy::DangerFullAccess,
             model: session_configured.model.clone(),
             effort: None,
-            summary: adam_protocol::config_types::ReasoningSummary::Auto,
+            summary: lha_protocol::config_types::ReasoningSummary::Auto,
             identity: Some(identity),
             personality: None,
             tui_buddy: None,
@@ -449,11 +449,11 @@ async fn plan_mode_strips_plan_from_agent_messages() -> anyhow::Result<()> {
             }],
             final_output_json_schema: None,
             cwd: std::env::current_dir()?,
-            approval_policy: adam_agent::protocol::AskForApproval::Never,
-            sandbox_policy: adam_agent::protocol::SandboxPolicy::DangerFullAccess,
+            approval_policy: lha_agent::protocol::AskForApproval::Never,
+            sandbox_policy: lha_agent::protocol::SandboxPolicy::DangerFullAccess,
             model: session_configured.model.clone(),
             effort: None,
-            summary: adam_protocol::config_types::ReasoningSummary::Auto,
+            summary: lha_protocol::config_types::ReasoningSummary::Auto,
             identity: Some(identity),
             personality: None,
             tui_buddy: None,
@@ -546,11 +546,11 @@ async fn plan_mode_handles_missing_plan_close_tag() -> anyhow::Result<()> {
             }],
             final_output_json_schema: None,
             cwd: std::env::current_dir()?,
-            approval_policy: adam_agent::protocol::AskForApproval::Never,
-            sandbox_policy: adam_agent::protocol::SandboxPolicy::DangerFullAccess,
+            approval_policy: lha_agent::protocol::AskForApproval::Never,
+            sandbox_policy: lha_agent::protocol::SandboxPolicy::DangerFullAccess,
             model: session_configured.model.clone(),
             effort: None,
-            summary: adam_protocol::config_types::ReasoningSummary::Auto,
+            summary: lha_protocol::config_types::ReasoningSummary::Auto,
             identity: Some(identity),
             personality: None,
             tui_buddy: None,

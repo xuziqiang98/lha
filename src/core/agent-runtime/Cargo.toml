@@ -1,12 +1,12 @@
 [package]
 edition.workspace = true
 license.workspace = true
-name = "adam-agent-runtime"
+name = "lha-agent-runtime"
 version.workspace = true
 
 [lib]
 doctest = false
-name = "adam_agent_runtime"
+name = "lha_agent_runtime"
 path = "src/lib.rs"
 
 [lints]
@@ -15,9 +15,9 @@ workspace = true
 [dependencies]
 async-channel = { workspace = true }
 async-trait = { workspace = true }
-adam-agent-core = { workspace = true }
-adam-llm = { workspace = true }
-adam-llm-types = { workspace = true }
+lha-agent-core = { workspace = true }
+lha-llm = { workspace = true }
+lha-llm-types = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync"] }

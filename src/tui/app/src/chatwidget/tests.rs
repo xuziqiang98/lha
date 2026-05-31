@@ -1,6 +1,6 @@
 //! Exercises `ChatWidget` event handling and rendering invariants.
 //!
-//! These tests treat the widget as the adapter between `adam_agent::protocol::EventMsg` inputs and
+//! These tests treat the widget as the adapter between `lha_agent::protocol::EventMsg` inputs and
 //! the TUI output. Many assertions are snapshot-based so that layout regressions and status/header
 //! changes show up as stable, reviewable diffs.
 
@@ -19,78 +19,6 @@ use crate::transcript_selection::TranscriptSelectionPoint;
 use crate::transcript_view::TranscriptRenderMode;
 use crate::transcript_view::TranscriptView;
 use crate::tui::FrameRequester;
-use adam_agent::AuthManager;
-use adam_agent::CodexAuth;
-use adam_agent::auth::AuthCredentialsStoreMode;
-use adam_agent::config::Config;
-use adam_agent::config::ConfigBuilder;
-use adam_agent::config::Constrained;
-use adam_agent::config::ConstraintError;
-use adam_agent::config::model_ref::ModelRef;
-use adam_agent::config::state_json::AdamStateStore;
-use adam_agent::config::types::BuddyObserverConfig;
-use adam_agent::config::types::TuiBuddy;
-use adam_agent::config_loader::RequirementSource;
-use adam_agent::features::Feature;
-use adam_agent::models_manager::manager::ModelsManager;
-use adam_agent::protocol::AgentMessageDeltaEvent;
-use adam_agent::protocol::AgentMessageEvent;
-use adam_agent::protocol::AgentReasoningDeltaEvent;
-use adam_agent::protocol::AgentReasoningEvent;
-use adam_agent::protocol::ApplyPatchApprovalRequestEvent;
-use adam_agent::protocol::BackgroundEventEvent;
-use adam_agent::protocol::Event;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::ExecApprovalRequestEvent;
-use adam_agent::protocol::ExecCommandBeginEvent;
-use adam_agent::protocol::ExecCommandEndEvent;
-use adam_agent::protocol::ExecCommandOutputDeltaEvent;
-use adam_agent::protocol::ExecCommandSource;
-use adam_agent::protocol::ExecOutputStream;
-use adam_agent::protocol::ExecPolicyAmendment;
-use adam_agent::protocol::ExitedReviewModeEvent;
-use adam_agent::protocol::FileChange;
-use adam_agent::protocol::ItemCompletedEvent;
-use adam_agent::protocol::McpStartupCompleteEvent;
-use adam_agent::protocol::McpStartupStatus;
-use adam_agent::protocol::McpStartupUpdateEvent;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::PatchApplyBeginEvent;
-use adam_agent::protocol::PatchApplyEndEvent;
-use adam_agent::protocol::ReviewRequest;
-use adam_agent::protocol::ReviewTarget;
-use adam_agent::protocol::SessionSource;
-use adam_agent::protocol::StreamErrorEvent;
-use adam_agent::protocol::TerminalInteractionEvent;
-use adam_agent::protocol::TokenCountEvent;
-use adam_agent::protocol::TokenUsage;
-use adam_agent::protocol::TokenUsageInfo;
-use adam_agent::protocol::TurnCompleteEvent;
-use adam_agent::protocol::TurnStartedEvent;
-use adam_agent::protocol::UndoCompletedEvent;
-use adam_agent::protocol::UndoStartedEvent;
-use adam_agent::protocol::ViewImageToolCallEvent;
-use adam_agent::protocol::WarningEvent;
-use adam_common::approval_presets::builtin_approval_presets;
-use adam_otel::OtelManager;
-use adam_protocol::ThreadId;
-use adam_protocol::config_types::Identity;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::Personality;
-use adam_protocol::config_types::Settings;
-use adam_protocol::items::ContextCompactionItem;
-use adam_protocol::items::TurnItem;
-use adam_protocol::openai_models::ModelPreset;
-use adam_protocol::openai_models::ReasoningEffortPreset;
-use adam_protocol::parse_command::ParsedCommand;
-use adam_protocol::plan_tool::PlanItemArg;
-use adam_protocol::plan_tool::StepStatus;
-use adam_protocol::plan_tool::UpdatePlanArgs;
-use adam_protocol::protocol::CodexErrorInfo;
-use adam_protocol::user_input::TextElement;
-use adam_protocol::user_input::UserInput;
-use adam_utils_absolute_path::AbsolutePathBuf;
-use adam_utils_sleep_inhibitor::SleepInhibitor;
 use assert_matches::assert_matches;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -100,6 +28,78 @@ use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
 use dirs::home_dir;
 use insta::assert_snapshot;
+use lha_agent::AuthManager;
+use lha_agent::CodexAuth;
+use lha_agent::auth::AuthCredentialsStoreMode;
+use lha_agent::config::Config;
+use lha_agent::config::ConfigBuilder;
+use lha_agent::config::Constrained;
+use lha_agent::config::ConstraintError;
+use lha_agent::config::model_ref::ModelRef;
+use lha_agent::config::state_json::LHAStateStore;
+use lha_agent::config::types::BuddyObserverConfig;
+use lha_agent::config::types::TuiBuddy;
+use lha_agent::config_loader::RequirementSource;
+use lha_agent::features::Feature;
+use lha_agent::models_manager::manager::ModelsManager;
+use lha_agent::protocol::AgentMessageDeltaEvent;
+use lha_agent::protocol::AgentMessageEvent;
+use lha_agent::protocol::AgentReasoningDeltaEvent;
+use lha_agent::protocol::AgentReasoningEvent;
+use lha_agent::protocol::ApplyPatchApprovalRequestEvent;
+use lha_agent::protocol::BackgroundEventEvent;
+use lha_agent::protocol::Event;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::ExecApprovalRequestEvent;
+use lha_agent::protocol::ExecCommandBeginEvent;
+use lha_agent::protocol::ExecCommandEndEvent;
+use lha_agent::protocol::ExecCommandOutputDeltaEvent;
+use lha_agent::protocol::ExecCommandSource;
+use lha_agent::protocol::ExecOutputStream;
+use lha_agent::protocol::ExecPolicyAmendment;
+use lha_agent::protocol::ExitedReviewModeEvent;
+use lha_agent::protocol::FileChange;
+use lha_agent::protocol::ItemCompletedEvent;
+use lha_agent::protocol::McpStartupCompleteEvent;
+use lha_agent::protocol::McpStartupStatus;
+use lha_agent::protocol::McpStartupUpdateEvent;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::PatchApplyBeginEvent;
+use lha_agent::protocol::PatchApplyEndEvent;
+use lha_agent::protocol::ReviewRequest;
+use lha_agent::protocol::ReviewTarget;
+use lha_agent::protocol::SessionSource;
+use lha_agent::protocol::StreamErrorEvent;
+use lha_agent::protocol::TerminalInteractionEvent;
+use lha_agent::protocol::TokenCountEvent;
+use lha_agent::protocol::TokenUsage;
+use lha_agent::protocol::TokenUsageInfo;
+use lha_agent::protocol::TurnCompleteEvent;
+use lha_agent::protocol::TurnStartedEvent;
+use lha_agent::protocol::UndoCompletedEvent;
+use lha_agent::protocol::UndoStartedEvent;
+use lha_agent::protocol::ViewImageToolCallEvent;
+use lha_agent::protocol::WarningEvent;
+use lha_common::approval_presets::builtin_approval_presets;
+use lha_otel::OtelManager;
+use lha_protocol::ThreadId;
+use lha_protocol::config_types::Identity;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::Personality;
+use lha_protocol::config_types::Settings;
+use lha_protocol::items::ContextCompactionItem;
+use lha_protocol::items::TurnItem;
+use lha_protocol::openai_models::ModelPreset;
+use lha_protocol::openai_models::ReasoningEffortPreset;
+use lha_protocol::parse_command::ParsedCommand;
+use lha_protocol::plan_tool::PlanItemArg;
+use lha_protocol::plan_tool::StepStatus;
+use lha_protocol::plan_tool::UpdatePlanArgs;
+use lha_protocol::protocol::CodexErrorInfo;
+use lha_protocol::user_input::TextElement;
+use lha_protocol::user_input::UserInput;
+use lha_utils_absolute_path::AbsolutePathBuf;
+use lha_utils_sleep_inhibitor::SleepInhibitor;
 use pretty_assertions::assert_eq;
 #[cfg(target_os = "windows")]
 use serial_test::serial;
@@ -118,11 +118,11 @@ use crate::provider_config::persist_custom_provider_files;
 
 async fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
-    let adam_home = tempdir().expect("tempdir");
-    let adam_home_path = adam_home.path().to_path_buf();
-    std::mem::forget(adam_home);
+    let lha_home = tempdir().expect("tempdir");
+    let lha_home_path = lha_home.path().to_path_buf();
+    std::mem::forget(lha_home);
     ConfigBuilder::default()
-        .adam_home(adam_home_path)
+        .lha_home(lha_home_path)
         .provider_config_required(false)
         .build()
         .await
@@ -131,7 +131,7 @@ async fn test_config() -> Config {
 
 fn stable_snapshot_cwd() -> PathBuf {
     let mut cwd = home_dir().expect("home directory");
-    cwd.push("Workspace/adam/src/tui/app");
+    cwd.push("Workspace/lha/src/tui/app");
     cwd
 }
 
@@ -155,7 +155,7 @@ async fn resumed_initial_messages_render_history() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = adam_agent::protocol::SessionConfiguredEvent {
+    let configured = lha_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -211,13 +211,13 @@ async fn resumed_initial_messages_render_history() {
 
 #[tokio::test]
 async fn session_configured_updates_footer_reasoning_effort_immediately() {
-    let adam_home = tempdir().expect("tempdir");
+    let lha_home = tempdir().expect("tempdir");
     let model_ref = ModelRef::new("openai", "main", "gpt-5");
-    AdamStateStore::new(adam_home.path())
+    LHAStateStore::new(lha_home.path())
         .set_last_selected_model(&model_ref, Some(ReasoningEffortConfig::High), None)
         .expect("persist model effort");
     let cfg = ConfigBuilder::default()
-        .adam_home(adam_home.path().to_path_buf())
+        .lha_home(lha_home.path().to_path_buf())
         .provider_config_required(false)
         .cli_overrides(vec![(
             "features.identities".to_string(),
@@ -241,7 +241,7 @@ async fn session_configured_updates_footer_reasoning_effort_immediately() {
         initial_user_message: None,
         enhanced_keys_supported: false,
         auth_manager,
-        feedback: adam_feedback::CodexFeedback::new(),
+        feedback: lha_feedback::CodexFeedback::new(),
         is_first_run: true,
         startup: ChatWidgetStartup::Configured {
             model: Some(resolved_model.clone()),
@@ -278,7 +278,7 @@ async fn session_configured_updates_footer_reasoning_effort_immediately() {
     );
 
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = adam_agent::protocol::SessionConfiguredEvent {
+    let configured = lha_agent::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
         thread_name: None,
@@ -603,7 +603,7 @@ async fn history_insertions_are_thread_scoped_after_session_configuration() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     let thread_id = ThreadId::new();
-    let configured = adam_agent::protocol::SessionConfiguredEvent {
+    let configured = lha_agent::protocol::SessionConfiguredEvent {
         session_id: thread_id,
         forked_from_id: None,
         thread_name: None,
@@ -650,7 +650,7 @@ async fn session_configured_suppression_updates_footer_without_requesting_redraw
     chat.suppress_session_configured_redraw = true;
     drain_draw_requests(&mut draw_rx).await;
 
-    let configured = adam_agent::protocol::SessionConfiguredEvent {
+    let configured = lha_agent::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
         thread_name: None,
@@ -717,7 +717,7 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = adam_agent::protocol::SessionConfiguredEvent {
+    let configured = lha_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -771,7 +771,7 @@ async fn status_hides_zero_context_compact_count() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = adam_agent::protocol::SessionConfiguredEvent {
+    let configured = lha_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -807,7 +807,7 @@ async fn status_shows_live_context_compact_count() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = adam_agent::protocol::SessionConfiguredEvent {
+    let configured = lha_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -855,7 +855,7 @@ async fn status_counts_multiple_live_context_compactions_in_same_turn() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = adam_agent::protocol::SessionConfiguredEvent {
+    let configured = lha_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -911,7 +911,7 @@ async fn status_resume_restores_context_compact_count_from_replay() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = adam_agent::protocol::SessionConfiguredEvent {
+    let configured = lha_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -960,7 +960,7 @@ async fn status_resume_restores_multiple_same_turn_context_compactions_from_repl
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = adam_agent::protocol::SessionConfiguredEvent {
+    let configured = lha_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -1010,7 +1010,7 @@ async fn status_fork_resume_counts_only_child_thread_compactions() {
     let conversation_id = ThreadId::new();
     let parent_thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = adam_agent::protocol::SessionConfiguredEvent {
+    let configured = lha_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: Some(parent_thread_id),
         thread_name: None,
@@ -1029,19 +1029,19 @@ async fn status_fork_resume_counts_only_child_thread_compactions() {
                 turn_id: "turn-parent-1".to_string(),
                 item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
             }),
-            EventMsg::ContextCompacted(adam_agent::protocol::ContextCompactedEvent {}),
+            EventMsg::ContextCompacted(lha_agent::protocol::ContextCompactedEvent {}),
             EventMsg::ItemCompleted(ItemCompletedEvent {
                 thread_id: parent_thread_id,
                 turn_id: "turn-parent-2".to_string(),
                 item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
             }),
-            EventMsg::ContextCompacted(adam_agent::protocol::ContextCompactedEvent {}),
+            EventMsg::ContextCompacted(lha_agent::protocol::ContextCompactedEvent {}),
             EventMsg::ItemCompleted(ItemCompletedEvent {
                 thread_id: conversation_id,
                 turn_id: "turn-child-1".to_string(),
                 item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
             }),
-            EventMsg::ContextCompacted(adam_agent::protocol::ContextCompactedEvent {}),
+            EventMsg::ContextCompacted(lha_agent::protocol::ContextCompactedEvent {}),
         ]),
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -1067,7 +1067,7 @@ async fn legacy_context_compacted_event_increments_count() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = adam_agent::protocol::SessionConfiguredEvent {
+    let configured = lha_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -1092,7 +1092,7 @@ async fn legacy_context_compacted_event_increments_count() {
 
     chat.handle_codex_event(Event {
         id: "compact-1".into(),
-        msg: EventMsg::ContextCompacted(adam_agent::protocol::ContextCompactedEvent {}),
+        msg: EventMsg::ContextCompacted(lha_agent::protocol::ContextCompactedEvent {}),
     });
 
     let cells = drain_insert_history(&mut rx);
@@ -1117,7 +1117,7 @@ async fn legacy_context_compacted_event_does_not_double_count_after_structured_e
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = adam_agent::protocol::SessionConfiguredEvent {
+    let configured = lha_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -1150,7 +1150,7 @@ async fn legacy_context_compacted_event_does_not_double_count_after_structured_e
     });
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::ContextCompacted(adam_agent::protocol::ContextCompactedEvent {}),
+        msg: EventMsg::ContextCompacted(lha_agent::protocol::ContextCompactedEvent {}),
     });
     drain_insert_history(&mut rx);
 
@@ -1169,7 +1169,7 @@ async fn legacy_context_compacted_event_does_not_double_count_multiple_same_turn
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = adam_agent::protocol::SessionConfiguredEvent {
+    let configured = lha_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -1203,7 +1203,7 @@ async fn legacy_context_compacted_event_does_not_double_count_multiple_same_turn
         });
         chat.handle_codex_event(Event {
             id: "turn-1".into(),
-            msg: EventMsg::ContextCompacted(adam_agent::protocol::ContextCompactedEvent {}),
+            msg: EventMsg::ContextCompacted(lha_agent::protocol::ContextCompactedEvent {}),
         });
     }
     drain_insert_history(&mut rx);
@@ -1223,7 +1223,7 @@ async fn status_resume_does_not_double_count_structured_and_legacy_compactions()
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = adam_agent::protocol::SessionConfiguredEvent {
+    let configured = lha_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -1242,7 +1242,7 @@ async fn status_resume_does_not_double_count_structured_and_legacy_compactions()
                 turn_id: "turn-1".to_string(),
                 item: TurnItem::ContextCompaction(ContextCompactionItem::new()),
             }),
-            EventMsg::ContextCompacted(adam_agent::protocol::ContextCompactedEvent {}),
+            EventMsg::ContextCompacted(lha_agent::protocol::ContextCompactedEvent {}),
         ]),
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -1268,7 +1268,7 @@ async fn status_resume_restores_legacy_only_context_compactions() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = adam_agent::protocol::SessionConfiguredEvent {
+    let configured = lha_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -1282,8 +1282,8 @@ async fn status_resume_restores_legacy_only_context_compactions() {
         history_log_id: 0,
         history_entry_count: 0,
         initial_messages: Some(vec![
-            EventMsg::ContextCompacted(adam_agent::protocol::ContextCompactedEvent {}),
-            EventMsg::ContextCompacted(adam_agent::protocol::ContextCompactedEvent {}),
+            EventMsg::ContextCompacted(lha_agent::protocol::ContextCompactedEvent {}),
+            EventMsg::ContextCompacted(lha_agent::protocol::ContextCompactedEvent {}),
         ]),
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -1309,7 +1309,7 @@ async fn submission_preserves_text_elements_and_local_images() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = adam_agent::protocol::SessionConfiguredEvent {
+    let configured = lha_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -1438,7 +1438,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
     // must be renumbered to match the combined local image list.
     chat.handle_codex_event(Event {
         id: "interrupt".into(),
-        msg: EventMsg::TurnAborted(adam_agent::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(lha_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -1736,9 +1736,9 @@ async fn pending_review_start_error_clears_transition() {
     chat.prepare_for_review_start_transition();
     chat.handle_codex_event(Event {
         id: "review-error".into(),
-        msg: EventMsg::Error(adam_agent::protocol::ErrorEvent {
+        msg: EventMsg::Error(lha_agent::protocol::ErrorEvent {
             message: "Review prompt cannot be empty".to_string(),
-            codex_error_info: Some(adam_agent::protocol::CodexErrorInfo::Other),
+            codex_error_info: Some(lha_agent::protocol::CodexErrorInfo::Other),
         }),
     });
 
@@ -1987,7 +1987,7 @@ async fn sidebar_status_includes_context_compact_count() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    let configured = adam_agent::protocol::SessionConfiguredEvent {
+    let configured = lha_agent::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -2126,7 +2126,7 @@ async fn helpers_are_available_and_do_not_panic() {
         initial_user_message: None,
         enhanced_keys_supported: false,
         auth_manager,
-        feedback: adam_feedback::CodexFeedback::new(),
+        feedback: lha_feedback::CodexFeedback::new(),
         is_first_run: true,
         startup: ChatWidgetStartup::Configured {
             model: Some(resolved_model),
@@ -2188,7 +2188,7 @@ async fn make_chatwidget_manual_inner(
         frame_requester: FrameRequester::test_dummy(),
         has_input_focus: true,
         enhanced_keys_supported: false,
-        placeholder_text: "Ask Adam to do anything".to_string(),
+        placeholder_text: "Ask LHA to do anything".to_string(),
         disable_paste_burst: false,
         animations_enabled: cfg.animations,
         skills: None,
@@ -2196,9 +2196,9 @@ async fn make_chatwidget_manual_inner(
     bottom.set_steer_enabled(true);
     bottom.set_identities_enabled(cfg.features.enabled(Feature::Identities));
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
-    let adam_home = cfg.adam_home.clone();
+    let lha_home = cfg.lha_home.clone();
     let thread_manager = Arc::new(ThreadManager::new(
-        adam_home,
+        lha_home,
         auth_manager.clone(),
         cfg.model_provider_id.as_str(),
         cfg.model_provider.clone(),
@@ -2295,7 +2295,7 @@ async fn make_chatwidget_manual_inner(
         last_rendered_width: std::cell::Cell::new(None),
         last_transcript_area: std::cell::Cell::new(None),
         last_bottom_area: std::cell::Cell::new(None),
-        feedback: adam_feedback::CodexFeedback::new(),
+        feedback: lha_feedback::CodexFeedback::new(),
         current_rollout_path: None,
         current_goal: None,
         current_goal_state_known: false,
@@ -2310,9 +2310,9 @@ async fn make_chatwidget_manual_inner(
 async fn make_provider_required_chatwidget(
     auto_open: bool,
 ) -> (ChatWidget, tokio::sync::mpsc::UnboundedReceiver<AppEvent>) {
-    let adam_home = tempdir().expect("tempdir");
+    let lha_home = tempdir().expect("tempdir");
     let mut cfg = ConfigBuilder::default()
-        .adam_home(adam_home.path().to_path_buf())
+        .lha_home(lha_home.path().to_path_buf())
         .provider_config_required(false)
         .build()
         .await
@@ -2320,7 +2320,7 @@ async fn make_provider_required_chatwidget(
     cfg.provider_config_required = true;
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let thread_manager = Arc::new(ThreadManager::new(
-        cfg.adam_home.clone(),
+        cfg.lha_home.clone(),
         auth_manager.clone(),
         cfg.model_provider_id.as_str(),
         cfg.model_provider.clone(),
@@ -2336,7 +2336,7 @@ async fn make_provider_required_chatwidget(
         initial_user_message: None,
         enhanced_keys_supported: false,
         auth_manager,
-        feedback: adam_feedback::CodexFeedback::new(),
+        feedback: lha_feedback::CodexFeedback::new(),
         is_first_run: true,
         startup: ChatWidgetStartup::NeedsProviderConfig { auto_open },
         otel_manager: test_otel_manager(&cfg, "No provider configured"),
@@ -2369,7 +2369,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         frame_requester: frame_requester.clone(),
         has_input_focus: true,
         enhanced_keys_supported: false,
-        placeholder_text: "Ask Adam to do anything".to_string(),
+        placeholder_text: "Ask LHA to do anything".to_string(),
         disable_paste_burst: false,
         animations_enabled: cfg.animations,
         skills: None,
@@ -2377,9 +2377,9 @@ async fn make_chatwidget_manual_with_frame_requester(
     bottom.set_steer_enabled(true);
     bottom.set_identities_enabled(cfg.features.enabled(Feature::Identities));
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
-    let adam_home = cfg.adam_home.clone();
+    let lha_home = cfg.lha_home.clone();
     let thread_manager = Arc::new(ThreadManager::new(
-        adam_home,
+        lha_home,
         auth_manager.clone(),
         cfg.model_provider_id.as_str(),
         cfg.model_provider.clone(),
@@ -2474,7 +2474,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         last_rendered_width: std::cell::Cell::new(None),
         last_transcript_area: std::cell::Cell::new(None),
         last_bottom_area: std::cell::Cell::new(None),
-        feedback: adam_feedback::CodexFeedback::new(),
+        feedback: lha_feedback::CodexFeedback::new(),
         current_rollout_path: None,
         current_goal: None,
         current_goal_state_known: false,
@@ -2512,24 +2512,24 @@ async fn reload_chat_config_with_saved_providers(
 ) {
     let mut last_selection = None;
     for config in &configs {
-        persist_custom_provider_files(&chat.config.adam_home, config)
+        persist_custom_provider_files(&chat.config.lha_home, config)
             .expect("persist provider config");
         last_selection = Some((custom_provider_ref(config), config.model.clone()));
     }
     if let Some((provider_id, model)) = last_selection {
         let model_ref = ModelRef::parse(&format!("{provider_id}:{model}")).expect("model ref");
-        AdamStateStore::new(&chat.config.adam_home)
+        LHAStateStore::new(&chat.config.lha_home)
             .set_last_selected_model(&model_ref, None, None)
             .expect("persist active model selection");
     }
 
     chat.config = ConfigBuilder::default()
-        .adam_home(chat.config.adam_home.clone())
+        .lha_home(chat.config.lha_home.clone())
         .build()
         .await
         .expect("reload config");
     chat.thread_manager = Arc::new(ThreadManager::new(
-        chat.config.adam_home.clone(),
+        chat.config.lha_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
@@ -2596,7 +2596,7 @@ fn configured_event_with_identity(identity_kind: IdentityKind) -> Event {
 fn configured_event_with_identity_and_model(identity_kind: IdentityKind, model: &str) -> Event {
     Event {
         id: "session".to_string(),
-        msg: EventMsg::SessionConfigured(adam_agent::protocol::SessionConfiguredEvent {
+        msg: EventMsg::SessionConfigured(lha_agent::protocol::SessionConfiguredEvent {
             session_id: ThreadId::new(),
             forked_from_id: None,
             thread_name: None,
@@ -4258,7 +4258,7 @@ fn begin_exec_with_source(
     // Build the full command vec and parse it using core's parser,
     // then convert to protocol variants for the event payload.
     let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
-    let parsed_cmd: Vec<ParsedCommand> = adam_agent::parse_command::parse_command(&command);
+    let parsed_cmd: Vec<ParsedCommand> = lha_agent::parse_command::parse_command(&command);
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let interaction_input = None;
     let event = ExecCommandBeginEvent {
@@ -4782,7 +4782,7 @@ async fn exec_end_without_begin_uses_event_command() {
         "-lc".to_string(),
         "echo orphaned".to_string(),
     ];
-    let parsed_cmd = adam_agent::parse_command::parse_command(&command);
+    let parsed_cmd = lha_agent::parse_command::parse_command(&command);
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     chat.handle_codex_event(Event {
         id: "call-orphan".to_string(),
@@ -4917,7 +4917,7 @@ async fn unified_exec_wait_after_final_agent_message_snapshot() {
         }),
     });
 
-    begin_unified_exec_startup(&mut chat, "call-wait", "proc-1", "cargo test -p adam-agent");
+    begin_unified_exec_startup(&mut chat, "call-wait", "proc-1", "cargo test -p lha-agent");
     terminal_interaction(&mut chat, "call-wait-stdin", "proc-1", "");
 
     chat.handle_codex_event(Event {
@@ -4956,7 +4956,7 @@ async fn unified_exec_wait_before_streamed_agent_message_snapshot() {
         &mut chat,
         "call-wait-stream",
         "proc-1",
-        "cargo test -p adam-agent",
+        "cargo test -p lha-agent",
     );
     terminal_interaction(&mut chat, "call-wait-stream-stdin", "proc-1", "");
 
@@ -5049,7 +5049,7 @@ async fn unified_exec_wait_status_renders_command_in_single_details_row() {
         &mut chat,
         "call-wait-ui",
         "proc-ui",
-        "cargo test -p adam-agent -- --exact",
+        "cargo test -p lha-agent -- --exact",
     );
 
     terminal_interaction(&mut chat, "call-wait-ui-stdin", "proc-ui", "");
@@ -5240,8 +5240,8 @@ async fn skills_modal_items_reports_loading_before_first_response() {
 #[tokio::test]
 async fn skills_modal_items_reports_empty_after_empty_response() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.set_skills_from_response(&adam_agent::protocol::ListSkillsResponseEvent {
-        skills: vec![adam_agent::protocol::SkillsListEntry {
+    chat.set_skills_from_response(&lha_agent::protocol::ListSkillsResponseEvent {
+        skills: vec![lha_agent::protocol::SkillsListEntry {
             cwd: chat.config.cwd.clone(),
             skills: Vec::new(),
             errors: Vec::new(),
@@ -5254,17 +5254,17 @@ async fn skills_modal_items_reports_empty_after_empty_response() {
 #[tokio::test]
 async fn skills_modal_items_returns_cached_items_while_refreshing() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.set_skills_from_response(&adam_agent::protocol::ListSkillsResponseEvent {
-        skills: vec![adam_agent::protocol::SkillsListEntry {
+    chat.set_skills_from_response(&lha_agent::protocol::ListSkillsResponseEvent {
+        skills: vec![lha_agent::protocol::SkillsListEntry {
             cwd: chat.config.cwd.clone(),
-            skills: vec![adam_agent::protocol::SkillMetadata {
+            skills: vec![lha_agent::protocol::SkillMetadata {
                 name: "repo_scout".to_string(),
                 description: "Summarize the repo layout".to_string(),
                 short_description: None,
                 interface: None,
                 dependencies: None,
                 path: PathBuf::from("/tmp/skills/repo_scout.toml"),
-                scope: adam_agent::protocol::SkillScope::User,
+                scope: lha_agent::protocol::SkillScope::User,
                 enabled: true,
             }],
             errors: Vec::new(),
@@ -5326,8 +5326,8 @@ async fn skills_request_in_flight_accessor_tracks_refresh_state() {
     chat.request_skills_refresh(true);
     assert!(chat.skills_request_in_flight());
 
-    chat.set_skills_from_response(&adam_agent::protocol::ListSkillsResponseEvent {
-        skills: vec![adam_agent::protocol::SkillsListEntry {
+    chat.set_skills_from_response(&lha_agent::protocol::ListSkillsResponseEvent {
+        skills: vec![lha_agent::protocol::SkillsListEntry {
             cwd: chat.config.cwd.clone(),
             skills: Vec::new(),
             errors: Vec::new(),
@@ -5342,8 +5342,8 @@ async fn skills_response_sends_pending_refresh() {
     chat.skills_request_in_flight = true;
 
     chat.request_skills_refresh(true);
-    chat.set_skills_from_response(&adam_agent::protocol::ListSkillsResponseEvent {
-        skills: vec![adam_agent::protocol::SkillsListEntry {
+    chat.set_skills_from_response(&lha_agent::protocol::ListSkillsResponseEvent {
+        skills: vec![lha_agent::protocol::SkillsListEntry {
             cwd: chat.config.cwd.clone(),
             skills: Vec::new(),
             errors: Vec::new(),
@@ -5390,7 +5390,7 @@ async fn slash_init_skips_when_project_doc_exists() {
 
     match op_rx.try_recv() {
         Err(TryRecvError::Empty) => {}
-        other => panic!("expected no Adam op to be sent, got {other:?}"),
+        other => panic!("expected no LHA op to be sent, got {other:?}"),
     }
 
     let cells = drain_insert_history(&mut rx);
@@ -5873,9 +5873,9 @@ async fn identity_slash_command_disabled_during_task() {
 
 #[tokio::test]
 async fn identities_default_to_nobody_on_startup() {
-    let adam_home = tempdir().expect("tempdir");
+    let lha_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()
-        .adam_home(adam_home.path().to_path_buf())
+        .lha_home(lha_home.path().to_path_buf())
         .provider_config_required(false)
         .cli_overrides(vec![(
             "features.identities".to_string(),
@@ -5899,7 +5899,7 @@ async fn identities_default_to_nobody_on_startup() {
         initial_user_message: None,
         enhanced_keys_supported: false,
         auth_manager,
-        feedback: adam_feedback::CodexFeedback::new(),
+        feedback: lha_feedback::CodexFeedback::new(),
         is_first_run: true,
         startup: ChatWidgetStartup::Configured {
             model: Some(resolved_model.clone()),
@@ -5914,9 +5914,9 @@ async fn identities_default_to_nobody_on_startup() {
 
 #[tokio::test]
 async fn deferred_startup_does_not_configure_session() {
-    let adam_home = tempdir().expect("tempdir");
+    let lha_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()
-        .adam_home(adam_home.path().to_path_buf())
+        .lha_home(lha_home.path().to_path_buf())
         .provider_config_required(false)
         .build()
         .await
@@ -5937,7 +5937,7 @@ async fn deferred_startup_does_not_configure_session() {
         initial_user_message: None,
         enhanced_keys_supported: false,
         auth_manager,
-        feedback: adam_feedback::CodexFeedback::new(),
+        feedback: lha_feedback::CodexFeedback::new(),
         is_first_run: true,
         startup: ChatWidgetStartup::Deferred,
         otel_manager,
@@ -5952,12 +5952,12 @@ async fn deferred_startup_does_not_configure_session() {
 
 #[tokio::test]
 async fn last_selected_identity_plan_applies_on_startup() {
-    let adam_home = tempdir().expect("tempdir");
-    AdamStateStore::new(adam_home.path())
+    let lha_home = tempdir().expect("tempdir");
+    LHAStateStore::new(lha_home.path())
         .set_last_selected_identity(IdentityKind::Planner)
         .expect("persist identity");
     let cfg = ConfigBuilder::default()
-        .adam_home(adam_home.path().to_path_buf())
+        .lha_home(lha_home.path().to_path_buf())
         .provider_config_required(false)
         .cli_overrides(vec![(
             "features.identities".to_string(),
@@ -5981,7 +5981,7 @@ async fn last_selected_identity_plan_applies_on_startup() {
         initial_user_message: None,
         enhanced_keys_supported: false,
         auth_manager,
-        feedback: adam_feedback::CodexFeedback::new(),
+        feedback: lha_feedback::CodexFeedback::new(),
         is_first_run: true,
         startup: ChatWidgetStartup::Configured {
             model: Some(resolved_model.clone()),
@@ -5996,16 +5996,16 @@ async fn last_selected_identity_plan_applies_on_startup() {
 
 #[tokio::test]
 async fn last_selected_identity_plan_preserves_configured_effort_on_startup() {
-    let adam_home = tempdir().expect("tempdir");
+    let lha_home = tempdir().expect("tempdir");
     let model_ref = ModelRef::new("openai", "main", "gpt-5");
-    AdamStateStore::new(adam_home.path())
+    LHAStateStore::new(lha_home.path())
         .set_last_selected_model(&model_ref, Some(ReasoningEffortConfig::High), None)
         .expect("persist model effort");
-    AdamStateStore::new(adam_home.path())
+    LHAStateStore::new(lha_home.path())
         .set_last_selected_identity(IdentityKind::Planner)
         .expect("persist identity");
     let cfg = ConfigBuilder::default()
-        .adam_home(adam_home.path().to_path_buf())
+        .lha_home(lha_home.path().to_path_buf())
         .provider_config_required(false)
         .cli_overrides(vec![(
             "features.identities".to_string(),
@@ -6029,7 +6029,7 @@ async fn last_selected_identity_plan_preserves_configured_effort_on_startup() {
         initial_user_message: None,
         enhanced_keys_supported: false,
         auth_manager,
-        feedback: adam_feedback::CodexFeedback::new(),
+        feedback: lha_feedback::CodexFeedback::new(),
         is_first_run: true,
         startup: ChatWidgetStartup::Configured {
             model: Some(resolved_model.clone()),
@@ -6557,7 +6557,7 @@ async fn interrupt_exec_marks_failed_snapshot() {
     // cause the active exec cell to be finalized as failed and flushed.
     chat.handle_codex_event(Event {
         id: "call-int".into(),
-        msg: EventMsg::TurnAborted(adam_agent::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(lha_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -6591,7 +6591,7 @@ async fn interrupted_turn_error_message_snapshot() {
     // Abort the turn (like pressing Esc) and drain inserted history.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
-        msg: EventMsg::TurnAborted(adam_agent::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(lha_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -6721,12 +6721,12 @@ async fn model_picker_without_auth_shows_only_configured_custom_model() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("mock-model")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.auth_manager = Arc::new(AuthManager::new(
-        chat.config.adam_home.clone(),
+        chat.config.lha_home.clone(),
         false,
         AuthCredentialsStoreMode::File,
     ));
     chat.thread_manager = Arc::new(ThreadManager::new(
-        chat.config.adam_home.clone(),
+        chat.config.lha_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
@@ -6770,12 +6770,12 @@ async fn model_picker_without_auth_shows_all_models_saved_in_config_toml() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("mock-model")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.auth_manager = Arc::new(AuthManager::new(
-        chat.config.adam_home.clone(),
+        chat.config.lha_home.clone(),
         false,
         AuthCredentialsStoreMode::File,
     ));
     chat.thread_manager = Arc::new(ThreadManager::new(
-        chat.config.adam_home.clone(),
+        chat.config.lha_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
@@ -6846,12 +6846,12 @@ async fn model_picker_without_auth_shows_same_model_for_different_custom_provide
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("glm-5")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.auth_manager = Arc::new(AuthManager::new(
-        chat.config.adam_home.clone(),
+        chat.config.lha_home.clone(),
         false,
         AuthCredentialsStoreMode::File,
     ));
     chat.thread_manager = Arc::new(ThreadManager::new(
-        chat.config.adam_home.clone(),
+        chat.config.lha_home.clone(),
         chat.auth_manager.clone(),
         chat.config.model_provider_id.as_str(),
         chat.config.model_provider.clone(),
@@ -7838,7 +7838,7 @@ async fn approvals_popup_navigation_skips_disabled() {
 //
 // Snapshot test: command approval modal
 //
-// Synthesizes a Adam ExecApprovalRequest event to trigger the approval modal
+// Synthesizes a LHA ExecApprovalRequest event to trigger the approval modal
 // and snapshots the visual output using the ratatui TestBackend.
 #[tokio::test]
 async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
@@ -8037,7 +8037,7 @@ async fn interrupt_restores_queued_messages_into_composer() {
     // Deliver a TurnAborted event with Interrupted reason (as if Esc was pressed).
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(adam_agent::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(lha_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -8075,7 +8075,7 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(adam_agent::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(lha_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -8103,7 +8103,7 @@ async fn interrupt_preserves_unified_exec_processes() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(adam_agent::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(lha_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -8130,7 +8130,7 @@ async fn interrupt_preserves_unified_exec_wait_streak_snapshot() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(adam_agent::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(lha_agent::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -8219,7 +8219,7 @@ async fn ui_snapshots_small_heights_task_running() {
 // task (status indicator active) while an approval request is shown.
 #[tokio::test]
 async fn status_widget_and_approval_modal_snapshot() {
-    use adam_agent::protocol::ExecApprovalRequestEvent;
+    use lha_agent::protocol::ExecApprovalRequestEvent;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     // Begin a running task so the status indicator would be active.
@@ -8598,7 +8598,7 @@ async fn apply_patch_approval_sends_op_with_submission_id() {
     while let Ok(app_ev) = rx.try_recv() {
         if let AppEvent::CodexOp(Op::PatchApproval { id, decision }) = app_ev {
             assert_eq!(id, "sub-123");
-            assert_matches!(decision, adam_agent::protocol::ReviewDecision::Approved);
+            assert_matches!(decision, lha_agent::protocol::ReviewDecision::Approved);
             found = true;
             break;
         }
@@ -8646,7 +8646,7 @@ async fn apply_patch_full_flow_integration_like() {
     match forwarded {
         Op::PatchApproval { id, decision } => {
             assert_eq!(id, "sub-xyz");
-            assert_matches!(decision, adam_agent::protocol::ReviewDecision::Approved);
+            assert_matches!(decision, lha_agent::protocol::ReviewDecision::Approved);
         }
         other => panic!("unexpected op forwarded: {other:?}"),
     }
@@ -8886,7 +8886,7 @@ async fn plan_update_populates_sidebar_todo() {
 #[tokio::test]
 async fn loaded_skills_are_tracked_once_by_path() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    let skill_path = PathBuf::from("/tmp/adam-test-skill/SKILL.md");
+    let skill_path = PathBuf::from("/tmp/lha-test-skill/SKILL.md");
     let items = vec![
         UserInput::Skill {
             name: "skill-one".to_string(),
@@ -8910,7 +8910,7 @@ async fn loaded_skills_are_tracked_once_by_path() {
     );
     assert_eq!(
         skills[0].path,
-        PathBuf::from("/tmp/adam-test-skill/SKILL.md")
+        PathBuf::from("/tmp/lha-test-skill/SKILL.md")
     );
 }
 

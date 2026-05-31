@@ -1,19 +1,19 @@
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::ThreadItem;
-use adam_app_server_protocol::ThreadResumeParams;
-use adam_app_server_protocol::ThreadResumeResponse;
-use adam_app_server_protocol::ThreadRollbackParams;
-use adam_app_server_protocol::ThreadRollbackResponse;
-use adam_app_server_protocol::ThreadStartParams;
-use adam_app_server_protocol::ThreadStartResponse;
-use adam_app_server_protocol::TurnStartParams;
-use adam_app_server_protocol::UserInput as V2UserInput;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::ThreadItem;
+use lha_app_server_protocol::ThreadResumeParams;
+use lha_app_server_protocol::ThreadResumeResponse;
+use lha_app_server_protocol::ThreadRollbackParams;
+use lha_app_server_protocol::ThreadRollbackResponse;
+use lha_app_server_protocol::ThreadStartParams;
+use lha_app_server_protocol::ThreadStartResponse;
+use lha_app_server_protocol::TurnStartParams;
+use lha_app_server_protocol::UserInput as V2UserInput;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -22,7 +22,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test]
 async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()> {
-    // Three Adam turns hit the mock model (session start + two turn/start calls).
+    // Three LHA turns hit the mock model (session start + two turn/start calls).
     let responses = vec![
         create_final_assistant_message_sse_response("Done")?,
         create_final_assistant_message_sse_response("Done")?,
@@ -30,10 +30,10 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
     ];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Start a thread.
@@ -157,9 +157,9 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
     Ok(())
 }
 
-fn create_config_toml(adam_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
+fn create_config_toml(lha_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
     app_test_support::write_mock_responses_config_toml_with_options(
-        adam_home,
+        lha_home,
         server_uri,
         &std::collections::BTreeMap::new(),
         20_000,

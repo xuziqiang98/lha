@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
-use adam_app_server_protocol::JSONRPCErrorError;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::Result;
-use adam_app_server_protocol::ServerNotification;
-use adam_app_server_protocol::ServerRequest;
-use adam_app_server_protocol::ServerRequestPayload;
+use lha_app_server_protocol::JSONRPCErrorError;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::Result;
+use lha_app_server_protocol::ServerNotification;
+use lha_app_server_protocol::ServerRequest;
+use lha_app_server_protocol::ServerRequestPayload;
 use serde::Serialize;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -179,7 +179,7 @@ pub(crate) struct OutgoingError {
 
 #[cfg(test)]
 mod tests {
-    use adam_app_server_protocol::ConfigWarningNotification;
+    use lha_app_server_protocol::ConfigWarningNotification;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 

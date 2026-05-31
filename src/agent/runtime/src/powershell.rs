@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 #[cfg(any(windows, test))]
-use adam_utils_absolute_path::AbsolutePathBuf;
+use lha_utils_absolute_path::AbsolutePathBuf;
 
 use crate::shell::ShellType;
 use crate::shell::detect_shell_type;

@@ -1,20 +1,20 @@
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::SandboxPolicy;
-use adam_app_server_protocol::AddConversationListenerParams;
-use adam_app_server_protocol::InputItem;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::NewConversationParams;
-use adam_app_server_protocol::NewConversationResponse;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::SendUserTurnParams;
-use adam_app_server_protocol::SendUserTurnResponse;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::openai_models::ReasoningEffort;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::SandboxPolicy;
+use lha_app_server_protocol::AddConversationListenerParams;
+use lha_app_server_protocol::InputItem;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::NewConversationParams;
+use lha_app_server_protocol::NewConversationResponse;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::SendUserTurnParams;
+use lha_app_server_protocol::SendUserTurnResponse;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -34,10 +34,10 @@ async fn send_user_turn_accepts_output_schema_v1() -> Result<()> {
     ]);
     let response_mock = responses::mount_sse_once(&server, body).await;
 
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let new_conv_id = mcp
@@ -79,7 +79,7 @@ async fn send_user_turn_accepts_output_schema_v1() -> Result<()> {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            cwd: adam_home.path().to_path_buf(),
+            cwd: lha_home.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: "mock-model".to_string(),
@@ -98,7 +98,7 @@ async fn send_user_turn_accepts_output_schema_v1() -> Result<()> {
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/task_complete"),
+        mcp.read_stream_until_notification_message("lha/event/task_complete"),
     )
     .await??;
 
@@ -133,10 +133,10 @@ async fn send_user_turn_output_schema_is_per_turn_v1() -> Result<()> {
     ]);
     let response_mock1 = responses::mount_sse_once(&server, body1).await;
 
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let new_conv_id = mcp
@@ -178,7 +178,7 @@ async fn send_user_turn_output_schema_is_per_turn_v1() -> Result<()> {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            cwd: adam_home.path().to_path_buf(),
+            cwd: lha_home.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: "mock-model".to_string(),
@@ -197,7 +197,7 @@ async fn send_user_turn_output_schema_is_per_turn_v1() -> Result<()> {
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/task_complete"),
+        mcp.read_stream_until_notification_message("lha/event/task_complete"),
     )
     .await??;
 
@@ -226,7 +226,7 @@ async fn send_user_turn_output_schema_is_per_turn_v1() -> Result<()> {
                 text: "Hello again".to_string(),
                 text_elements: Vec::new(),
             }],
-            cwd: adam_home.path().to_path_buf(),
+            cwd: lha_home.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: "mock-model".to_string(),
@@ -245,7 +245,7 @@ async fn send_user_turn_output_schema_is_per_turn_v1() -> Result<()> {
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/task_complete"),
+        mcp.read_stream_until_notification_message("lha/event/task_complete"),
     )
     .await??;
 
@@ -255,9 +255,9 @@ async fn send_user_turn_output_schema_is_per_turn_v1() -> Result<()> {
     Ok(())
 }
 
-fn create_config_toml(adam_home: &Path, server_uri: &str) -> std::io::Result<()> {
+fn create_config_toml(lha_home: &Path, server_uri: &str) -> std::io::Result<()> {
     app_test_support::write_mock_responses_config_toml_with_options(
-        adam_home,
+        lha_home,
         server_uri,
         &std::collections::BTreeMap::new(),
         20_000,

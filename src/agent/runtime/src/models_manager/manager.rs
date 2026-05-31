@@ -13,15 +13,15 @@ use crate::features::Feature;
 use crate::models_manager::identity_presets::builtin_identity_presets;
 use crate::models_manager::model_info;
 use crate::models_manager::model_presets::builtin_model_presets;
-pub use adam_llm::CatalogRefreshStrategy as RefreshStrategy;
-use adam_llm::RuntimeEndpoint;
-use adam_llm::fetch_remote_models;
-use adam_protocol::config_types::IdentityMask;
-use adam_protocol::openai_models::ModelInfo;
-use adam_protocol::openai_models::ModelPreset;
-use adam_protocol::openai_models::ModelsResponse;
-use adam_protocol::openai_models::ReasoningEffort;
 use http::HeaderMap;
+pub use lha_llm::CatalogRefreshStrategy as RefreshStrategy;
+use lha_llm::RuntimeEndpoint;
+use lha_llm::fetch_remote_models;
+use lha_protocol::config_types::IdentityMask;
+use lha_protocol::openai_models::ModelInfo;
+use lha_protocol::openai_models::ModelPreset;
+use lha_protocol::openai_models::ModelsResponse;
+use lha_protocol::openai_models::ReasoningEffort;
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -48,7 +48,7 @@ static BUNDLED_REMOTE_MODEL_SLUGS: Lazy<HashSet<String>> = Lazy::new(|| {
 /// Coordinates remote model discovery plus cached metadata on disk.
 #[derive(Debug)]
 pub struct ModelsManager {
-    adam_home: PathBuf,
+    lha_home: PathBuf,
     local_models: Vec<ModelPreset>,
     remote_models: RwLock<Vec<ModelInfo>>,
     etag: RwLock<Option<String>>,
@@ -60,15 +60,15 @@ pub struct ModelsManager {
 impl ModelsManager {
     /// Construct a manager scoped to the provided `AuthManager` and model provider.
     ///
-    /// Uses `adam_home` to store provider-scoped cached model metadata and initializes with
+    /// Uses `lha_home` to store provider-scoped cached model metadata and initializes with
     /// built-in presets.
     pub fn new(
-        adam_home: PathBuf,
+        lha_home: PathBuf,
         _auth_manager: Arc<AuthManager>,
         model_provider_id: &str,
         provider: RuntimeEndpoint,
     ) -> Self {
-        let cache_path = models_cache_path(&adam_home, model_provider_id);
+        let cache_path = models_cache_path(&lha_home, model_provider_id);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         let remote_models = if Self::provider_uses_model_catalog(&provider) {
             Self::load_remote_models_from_file().unwrap_or_default()
@@ -77,7 +77,7 @@ impl ModelsManager {
         };
 
         Self {
-            adam_home,
+            lha_home,
             local_models: builtin_model_presets(),
             remote_models: RwLock::new(remote_models),
             etag: RwLock::new(None),
@@ -100,7 +100,7 @@ impl ModelsManager {
             .cache_manager
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = ModelsCacheManager::new(
-            models_cache_path(&self.adam_home, model_provider_id),
+            models_cache_path(&self.lha_home, model_provider_id),
             DEFAULT_MODEL_CACHE_TTL,
         );
         *self
@@ -231,7 +231,7 @@ impl ModelsManager {
     ) -> CoreResult<String> {
         if config.provider_config_required {
             return Err(CodexErr::Fatal(
-                "No model provider is configured. Add a provider to ~/.adam/models.json before starting a session."
+                "No model provider is configured. Add a provider to ~/.lha/models.json before starting a session."
                     .to_string(),
             ));
         }
@@ -334,7 +334,7 @@ impl ModelsManager {
 
     async fn fetch_and_update_models(&self) -> CoreResult<()> {
         let _timer =
-            adam_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
+            lha_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
         if !Self::provider_uses_model_catalog(&self.provider_snapshot()) {
             self.clear_remote_model_state().await;
             return Ok(());
@@ -390,7 +390,7 @@ impl ModelsManager {
     /// Attempt to satisfy the refresh from the cache when it matches the provider and TTL.
     async fn try_load_cache(&self) -> bool {
         let _timer =
-            adam_otel::start_global_timer("codex.remote_models.load_cache.duration_ms", &[]);
+            lha_otel::start_global_timer("codex.remote_models.load_cache.duration_ms", &[]);
         if !Self::provider_uses_model_catalog(&self.provider_snapshot()) {
             self.clear_remote_model_state().await;
             return false;
@@ -537,7 +537,7 @@ impl ModelsManager {
             }
         }
 
-        if let Ok(models_json) = ModelsJson::load_from_adam_home(&config.adam_home) {
+        if let Ok(models_json) = ModelsJson::load_from_lha_home(&config.lha_home) {
             for (model, provider_id) in models_json.model_entries() {
                 let provider_id = Some(provider_id);
                 let key = (model.clone(), provider_id.clone());
@@ -697,7 +697,7 @@ impl ModelsManager {
     ) -> ModelPreset {
         let id = generated_provider_profile_name(provider_id, model);
         let is_user_defined_provider = provider_id != OPENAI_PROVIDER_ID
-            && ModelsJson::load_from_adam_home(&config.adam_home)
+            && ModelsJson::load_from_lha_home(&config.lha_home)
                 .ok()
                 .is_some_and(|models_json| {
                     models_json
@@ -914,12 +914,12 @@ impl ModelsManager {
     #[cfg(any(test, feature = "test-support"))]
     /// Construct a manager with a specific provider for testing.
     pub fn with_provider(
-        adam_home: PathBuf,
+        lha_home: PathBuf,
         _auth_manager: Arc<AuthManager>,
         model_provider_id: &str,
         provider: RuntimeEndpoint,
     ) -> Self {
-        Self::new(adam_home, _auth_manager, model_provider_id, provider)
+        Self::new(lha_home, _auth_manager, model_provider_id, provider)
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -944,8 +944,8 @@ impl ModelsManager {
     }
 }
 
-fn models_cache_path(adam_home: &std::path::Path, model_provider_id: &str) -> PathBuf {
-    adam_home
+fn models_cache_path(lha_home: &std::path::Path, model_provider_id: &str) -> PathBuf {
+    lha_home
         .join("remote_models")
         .join(model_provider_cache_key(model_provider_id))
         .join(MODEL_CACHE_FILE)
@@ -968,9 +968,9 @@ mod tests {
     use crate::auth::AuthCredentialsStoreMode;
     use crate::config::ConfigBuilder;
     use crate::features::Feature;
-    use adam_protocol::openai_models::ModelsResponse;
     use chrono::Utc;
     use core_test_support::responses::mount_models_once;
+    use lha_protocol::openai_models::ModelsResponse;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::tempdir;
@@ -1035,19 +1035,19 @@ mod tests {
         provider
     }
 
-    async fn load_config_from_toml(adam_home: &tempfile::TempDir, config_toml: &str) -> Config {
-        let config_toml = prepare_legacy_model_fixture(adam_home.path(), config_toml);
-        tokio::fs::write(adam_home.path().join("config.toml"), config_toml)
+    async fn load_config_from_toml(lha_home: &tempfile::TempDir, config_toml: &str) -> Config {
+        let config_toml = prepare_legacy_model_fixture(lha_home.path(), config_toml);
+        tokio::fs::write(lha_home.path().join("config.toml"), config_toml)
             .await
             .expect("write config.toml");
         ConfigBuilder::default()
-            .adam_home(adam_home.path().to_path_buf())
+            .lha_home(lha_home.path().to_path_buf())
             .build()
             .await
             .expect("load test config")
     }
 
-    fn prepare_legacy_model_fixture(adam_home: &std::path::Path, config_toml: &str) -> String {
+    fn prepare_legacy_model_fixture(lha_home: &std::path::Path, config_toml: &str) -> String {
         let mut doc = config_toml
             .parse::<toml_edit::DocumentMut>()
             .expect("test config should parse");
@@ -1087,7 +1087,7 @@ mod tests {
             .to_string();
         if let Some(model) = top_model.as_deref() {
             insert_models_entry(&mut models_json, &top_provider, model, None);
-            write_test_state_json(adam_home, &top_provider, model);
+            write_test_state_json(lha_home, &top_provider, model);
         }
 
         if let Some(profiles) = doc["profiles"].as_table_mut() {
@@ -1125,7 +1125,7 @@ mod tests {
             .is_some_and(|providers| !providers.is_empty())
         {
             std::fs::write(
-                adam_home.join("models.json"),
+                lha_home.join("models.json"),
                 serde_json::to_string_pretty(&models_json).expect("serialize models fixture"),
             )
             .expect("write models.json");
@@ -1193,9 +1193,9 @@ mod tests {
         };
     }
 
-    fn write_test_state_json(adam_home: &std::path::Path, provider_ref: &str, model: &str) {
+    fn write_test_state_json(lha_home: &std::path::Path, provider_ref: &str, model: &str) {
         std::fs::write(
-            adam_home.join("state.json"),
+            lha_home.join("state.json"),
             serde_json::to_string_pretty(&json!({
                 "last_selected_model": {
                     "model_ref": model_ref_string(provider_ref, model),
@@ -1235,9 +1235,9 @@ mod tests {
         )
         .await;
 
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let mut config = ConfigBuilder::default()
-            .adam_home(adam_home.path().to_path_buf())
+            .lha_home(lha_home.path().to_path_buf())
             .build()
             .await
             .expect("load default test config");
@@ -1246,7 +1246,7 @@ mod tests {
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let provider = provider_for(server.uri());
         let manager = ModelsManager::with_provider(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             provider,
@@ -1295,9 +1295,9 @@ mod tests {
         )
         .await;
 
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let mut config = ConfigBuilder::default()
-            .adam_home(adam_home.path().to_path_buf())
+            .lha_home(lha_home.path().to_path_buf())
             .build()
             .await
             .expect("load default test config");
@@ -1306,7 +1306,7 @@ mod tests {
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let provider = provider_for(server.uri());
         let manager = ModelsManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "custom-provider",
             provider,
@@ -1338,21 +1338,21 @@ mod tests {
         )
         .await;
 
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let mut config = ConfigBuilder::default()
-            .adam_home(adam_home.path().to_path_buf())
+            .lha_home(lha_home.path().to_path_buf())
             .build()
             .await
             .expect("load default test config");
         config.features.enable(Feature::RemoteModels);
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let provider = provider_for(server.uri());
         let manager = ModelsManager::with_provider(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             provider,
@@ -1401,21 +1401,21 @@ mod tests {
         )
         .await;
 
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let mut config = ConfigBuilder::default()
-            .adam_home(adam_home.path().to_path_buf())
+            .lha_home(lha_home.path().to_path_buf())
             .build()
             .await
             .expect("load default test config");
         config.features.enable(Feature::RemoteModels);
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
 
         let manager_a = ModelsManager::with_provider(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             Arc::clone(&auth_manager),
             "mock-provider-a",
             provider_for(server_a.uri()),
@@ -1427,7 +1427,7 @@ mod tests {
         assert_models_contain(&manager_a.get_remote_models(&config).await, &models_a);
 
         let manager_b = ModelsManager::with_provider(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "mock-provider-b",
             provider_for(server_b.uri()),
@@ -1469,21 +1469,21 @@ mod tests {
         )
         .await;
 
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let mut config = ConfigBuilder::default()
-            .adam_home(adam_home.path().to_path_buf())
+            .lha_home(lha_home.path().to_path_buf())
             .build()
             .await
             .expect("load default test config");
         config.features.enable(Feature::RemoteModels);
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let provider = provider_for(server.uri());
         let manager = ModelsManager::with_provider(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             provider,
@@ -1548,9 +1548,9 @@ mod tests {
         )
         .await;
 
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let mut config = ConfigBuilder::default()
-            .adam_home(adam_home.path().to_path_buf())
+            .lha_home(lha_home.path().to_path_buf())
             .build()
             .await
             .expect("load default test config");
@@ -1559,7 +1559,7 @@ mod tests {
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let provider = provider_for(server.uri());
         let manager = ModelsManager::with_provider(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             provider,
@@ -1615,12 +1615,12 @@ mod tests {
 
     #[test]
     fn build_available_models_picks_default_after_hiding_hidden_models() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let provider = provider_for("http://example.test".to_string());
         let mut manager = ModelsManager::with_provider(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             provider,
@@ -1673,18 +1673,18 @@ mod tests {
 
     #[test]
     fn models_cache_path_uses_readable_prefix_and_hash() {
-        let path = models_cache_path(std::path::Path::new("/tmp/adam"), "mock/provider:beta");
+        let path = models_cache_path(std::path::Path::new("/tmp/lha"), "mock/provider:beta");
         assert_eq!(
             path,
             PathBuf::from(
-                "/tmp/adam/remote_models/mock_provider_beta__70b0afe22d/models_cache.json"
+                "/tmp/lha/remote_models/mock_provider_beta__70b0afe22d/models_cache.json"
             )
         );
     }
 
     #[test]
     fn models_cache_path_avoids_variant_collisions() {
-        let base = std::path::Path::new("/tmp/adam");
+        let base = std::path::Path::new("/tmp/lha");
         let plain = models_cache_path(base, "acme_chat");
         let variant = models_cache_path(base, "acme.chat");
 
@@ -1693,20 +1693,20 @@ mod tests {
 
     #[tokio::test]
     async fn list_model_switcher_models_without_auth_returns_only_configured_custom_model() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &adam_home,
+            &lha_home,
             r#"
 model = "mock-model"
 "#,
@@ -1735,20 +1735,20 @@ model = "mock-model"
 
     #[tokio::test]
     async fn list_model_switcher_models_returns_all_models_in_config_toml() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &adam_home,
+            &lha_home,
             r#"
 model = "mock-model"
 
@@ -1787,20 +1787,20 @@ model = "deepseek-r1"
 
     #[tokio::test]
     async fn list_model_switcher_models_keeps_same_model_for_custom_providers() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &adam_home,
+            &lha_home,
             r#"
 model = "gpt-5.2"
 model_provider = "provider_a"
@@ -1869,20 +1869,20 @@ model_provider = "provider_b"
 
     #[tokio::test]
     async fn list_model_switcher_models_keeps_same_model_for_provider_variants() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &adam_home,
+            &lha_home,
             r#"
 model = "claude-sonnet-4-5"
 model_provider = "anthropic.messages"
@@ -1936,20 +1936,20 @@ model_provider = "anthropic.chat"
 
     #[tokio::test]
     async fn list_model_switcher_models_preserves_configured_provider_ids() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &adam_home,
+            &lha_home,
             r#"
 model = "gpt-5.2"
 model_provider = "openai"
@@ -2025,20 +2025,20 @@ model_provider = "anthropic.messages"
 
     #[tokio::test]
     async fn list_model_switcher_models_appends_configured_models() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &adam_home,
+            &lha_home,
             r#"
 model = "mock-model"
 
@@ -2087,17 +2087,17 @@ model = "deepseek-r1"
     }
     #[tokio::test]
     async fn try_is_official_openai_model_returns_true_for_official_openai_model() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let manager = ModelsManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &adam_home,
+            &lha_home,
             r#"
 model = "gpt-5.2"
 model_provider = "openai"
@@ -2114,17 +2114,17 @@ model_provider = "openai"
 
     #[tokio::test]
     async fn try_is_official_openai_model_returns_false_for_custom_provider_variant() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let manager = ModelsManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &adam_home,
+            &lha_home,
             r#"
 model = "gpt-5.2"
 model_provider = "provider_a"
@@ -2147,17 +2147,17 @@ bearer_token = "sk-a"
 
     #[tokio::test]
     async fn try_is_official_openai_model_returns_false_for_unknown_openai_model() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let manager = ModelsManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &adam_home,
+            &lha_home,
             r#"
 model = "custom-openai-model"
 model_provider = "openai"
@@ -2173,17 +2173,17 @@ model_provider = "openai"
     }
     #[tokio::test]
     async fn list_picker_models_without_remote_models_uses_builtin_gpt_5_3_codex_default() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let manager = ModelsManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &adam_home,
+            &lha_home,
             r#"
 [features]
 remote_models = false
@@ -2208,19 +2208,19 @@ remote_models = false
 
     #[tokio::test]
     async fn get_default_model_without_remote_models_uses_builtin_gpt_5_3_codex() {
-        let adam_home = tempdir().expect("temp dir");
-        std::fs::write(adam_home.path().join("models.json"), r#"{"providers":{}}"#)
+        let lha_home = tempdir().expect("temp dir");
+        std::fs::write(lha_home.path().join("models.json"), r#"{"providers":{}}"#)
             .expect("write models.json");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let manager = ModelsManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &adam_home,
+            &lha_home,
             r#"
 [features]
 remote_models = false
@@ -2237,20 +2237,20 @@ remote_models = false
     }
     #[tokio::test]
     async fn list_model_switcher_models_preserves_providerless_top_level_entry() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &adam_home,
+            &lha_home,
             r#"
 model = "shared-model"
 
@@ -2303,20 +2303,20 @@ bearer_token = "sk-a"
 
     #[tokio::test]
     async fn list_model_switcher_models_keeps_ambiguous_providerless_entry() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &adam_home,
+            &lha_home,
             r#"
 model = "shared-model"
 
@@ -2382,16 +2382,16 @@ bearer_token = "sk-b"
     }
     #[tokio::test]
     async fn list_model_switcher_models_with_api_key_auth_returns_only_models_in_config_toml() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("sk-test"));
         let manager = ModelsManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "openai",
             RuntimeEndpoint::openai(),
         );
         let config = load_config_from_toml(
-            &adam_home,
+            &lha_home,
             r#"
 model = "mock-model"
 "#,
@@ -2413,19 +2413,19 @@ model = "mock-model"
 
     #[tokio::test]
     async fn messages_provider_starts_with_empty_remote_models() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::with_provider(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             messages_provider_for("http://example.test".to_string()),
         );
-        let mut config = load_config_from_toml(&adam_home, "").await;
+        let mut config = load_config_from_toml(&lha_home, "").await;
         config.features.enable(Feature::RemoteModels);
 
         assert!(manager.get_remote_models(&config).await.is_empty());
@@ -2439,14 +2439,14 @@ model = "mock-model"
 
     #[tokio::test]
     async fn switch_provider_to_messages_clears_remote_state() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::with_provider(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             provider_for("http://example.test".to_string()),
@@ -2467,7 +2467,7 @@ model = "mock-model"
             )
             .await;
 
-        let mut config = load_config_from_toml(&adam_home, "").await;
+        let mut config = load_config_from_toml(&lha_home, "").await;
         config.features.enable(Feature::RemoteModels);
         assert!(manager.get_remote_models(&config).await.is_empty());
         assert_eq!(manager.get_etag().await, None);
@@ -2475,20 +2475,20 @@ model = "mock-model"
 
     #[tokio::test]
     async fn list_picker_models_with_messages_provider_only_shows_configured_model() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::with_provider(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "anthropic",
             messages_provider_for("https://api.anthropic.com/v1".to_string()),
         );
         let config = load_config_from_toml(
-            &adam_home,
+            &lha_home,
             r#"
 model = "claude-sonnet-4-5"
 "#,
@@ -2505,21 +2505,21 @@ model = "claude-sonnet-4-5"
     }
     #[tokio::test]
     async fn get_default_model_with_messages_provider_requires_explicit_model() {
-        let adam_home = tempdir().expect("temp dir");
-        std::fs::write(adam_home.path().join("models.json"), r#"{"providers":{}}"#)
+        let lha_home = tempdir().expect("temp dir");
+        std::fs::write(lha_home.path().join("models.json"), r#"{"providers":{}}"#)
             .expect("write models.json");
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::with_provider(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "anthropic",
             messages_provider_for("https://api.anthropic.com/v1".to_string()),
         );
-        let config = load_config_from_toml(&adam_home, "").await;
+        let config = load_config_from_toml(&lha_home, "").await;
 
         let err = manager
             .get_default_model(&None, &config, RefreshStrategy::Offline)
@@ -2534,20 +2534,20 @@ model = "claude-sonnet-4-5"
 
     #[tokio::test]
     async fn get_default_model_requires_provider_config_when_models_json_missing() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::with_provider(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             OPENAI_PROVIDER_ID,
             RuntimeEndpoint::openai(),
         );
         let mut config = ConfigBuilder::default()
-            .adam_home(adam_home.path().to_path_buf())
+            .lha_home(lha_home.path().to_path_buf())
             .build()
             .await
             .expect("load config");
@@ -2560,26 +2560,26 @@ model = "claude-sonnet-4-5"
 
         assert_eq!(
             err.to_string(),
-            "Fatal error: No model provider is configured. Add a provider to ~/.adam/models.json before starting a session."
+            "Fatal error: No model provider is configured. Add a provider to ~/.lha/models.json before starting a session."
         );
     }
 
     #[tokio::test]
     async fn get_default_model_with_messages_provider_uses_configured_model() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::with_provider(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "anthropic",
             messages_provider_for("https://api.anthropic.com/v1".to_string()),
         );
         let config = load_config_from_toml(
-            &adam_home,
+            &lha_home,
             r#"
 model = "claude-sonnet-4-5"
 "#,
@@ -2597,22 +2597,22 @@ model = "claude-sonnet-4-5"
     #[tokio::test]
     async fn list_model_switcher_models_with_provider_bearer_token_returns_only_models_in_config_toml()
      {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let mut provider = provider_for("http://example.test".to_string());
         provider.bearer_token = Some("sk-test".to_string());
         let manager = ModelsManager::with_provider(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             provider,
         );
         let config = load_config_from_toml(
-            &adam_home,
+            &lha_home,
             r#"
 model = "mock-model"
 "#,
@@ -2629,22 +2629,22 @@ model = "mock-model"
 
     #[tokio::test]
     async fn list_model_switcher_models_with_provider_env_key_returns_only_models_in_config_toml() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let mut provider = provider_for("http://example.test".to_string());
         provider.env_key = Some("PATH".to_string());
         let manager = ModelsManager::with_provider(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             provider,
         );
         let config = load_config_from_toml(
-            &adam_home,
+            &lha_home,
             r#"
 model = "mock-model"
 "#,
@@ -2661,20 +2661,20 @@ model = "mock-model"
 
     #[tokio::test]
     async fn set_provider_does_not_expand_model_switcher() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let manager = ModelsManager::with_provider(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             auth_manager,
             "mock-provider",
             provider_for("http://example.test".to_string()),
         );
         let config = load_config_from_toml(
-            &adam_home,
+            &lha_home,
             r#"
 model = "mock-model"
 "#,
@@ -2700,14 +2700,14 @@ model = "mock-model"
 
     #[tokio::test]
     async fn configured_custom_model_detection_matches_picker_behavior() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
         let _auth_manager = Arc::new(AuthManager::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             false,
             AuthCredentialsStoreMode::File,
         ));
         let mut config = ConfigBuilder::default()
-            .adam_home(adam_home.path().to_path_buf())
+            .lha_home(lha_home.path().to_path_buf())
             .build()
             .await
             .expect("load default test config");

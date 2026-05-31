@@ -1,12 +1,12 @@
 [package]
-name = "adam-otel"
+name = "lha-otel"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
 doctest = false
-name = "adam_otel"
+name = "lha_otel"
 path = "src/lib.rs"
 
 [lints]
@@ -21,11 +21,11 @@ disable-default-metrics-exporter = []
 
 [dependencies]
 chrono = { workspace = true }
-adam-app-server-protocol = { workspace = true }
-adam-utils-absolute-path = { workspace = true }
-adam-api = { workspace = true }
-adam-llm-types = { workspace = true }
-adam-protocol = { workspace = true }
+lha-app-server-protocol = { workspace = true }
+lha-utils-absolute-path = { workspace = true }
+lha-api = { workspace = true }
+lha-llm-types = { workspace = true }
+lha-protocol = { workspace = true }
 eventsource-stream = { workspace = true }
 opentelemetry = { workspace = true, features = ["logs", "metrics", "trace"] }
 opentelemetry-appender-tracing = { workspace = true }

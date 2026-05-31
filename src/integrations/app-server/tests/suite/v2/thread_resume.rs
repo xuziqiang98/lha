@@ -1,20 +1,3 @@
-use adam_app_server_protocol::JSONRPCError;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::SessionSource;
-use adam_app_server_protocol::ThreadItem;
-use adam_app_server_protocol::ThreadResumeParams;
-use adam_app_server_protocol::ThreadResumeResponse;
-use adam_app_server_protocol::ThreadStartParams;
-use adam_app_server_protocol::ThreadStartResponse;
-use adam_app_server_protocol::TurnStartParams;
-use adam_app_server_protocol::TurnStatus;
-use adam_app_server_protocol::UserInput;
-use adam_protocol::config_types::Personality;
-use adam_protocol::models::ContentItem;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::user_input::ByteRange;
-use adam_protocol::user_input::TextElement;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout_with_schema_version;
@@ -25,6 +8,23 @@ use app_test_support::to_response;
 use chrono::Utc;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
+use lha_app_server_protocol::JSONRPCError;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::SessionSource;
+use lha_app_server_protocol::ThreadItem;
+use lha_app_server_protocol::ThreadResumeParams;
+use lha_app_server_protocol::ThreadResumeResponse;
+use lha_app_server_protocol::ThreadStartParams;
+use lha_app_server_protocol::ThreadStartResponse;
+use lha_app_server_protocol::TurnStartParams;
+use lha_app_server_protocol::TurnStatus;
+use lha_app_server_protocol::UserInput;
+use lha_protocol::config_types::Personality;
+use lha_protocol::models::ContentItem;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::user_input::ByteRange;
+use lha_protocol::user_input::TextElement;
 use pretty_assertions::assert_eq;
 use std::fs::FileTimes;
 use std::path::Path;
@@ -33,15 +33,15 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Adam, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
+const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are LHA, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
 
 #[tokio::test]
 async fn thread_resume_returns_original_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Start a thread.
@@ -83,20 +83,20 @@ async fn thread_resume_returns_original_thread() -> Result<()> {
 #[tokio::test]
 async fn thread_resume_path_rejects_v2_rollout() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
     let filename_ts = "2025-01-06T12-00-00";
     let conversation_id = create_fake_rollout_with_schema_version(
-        adam_home.path(),
+        lha_home.path(),
         filename_ts,
         "2025-01-06T12:00:00Z",
         "legacy message",
         Some("mock_provider"),
         Some(2),
     )?;
-    let path = rollout_path(adam_home.path(), filename_ts, &conversation_id);
+    let path = rollout_path(lha_home.path(), filename_ts, &conversation_id);
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let resume_id = mcp
@@ -124,10 +124,10 @@ async fn thread_resume_path_rejects_v2_rollout() -> Result<()> {
 #[tokio::test]
 async fn thread_resume_thread_id_rejects_missing_schema_version_rollout() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
     let conversation_id = create_fake_rollout_with_schema_version(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-07T12-00-00",
         "2025-01-07T12:00:00Z",
         "legacy message",
@@ -135,7 +135,7 @@ async fn thread_resume_thread_id_rejects_missing_schema_version_rollout() -> Res
         None,
     )?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let resume_id = mcp
@@ -162,8 +162,8 @@ async fn thread_resume_thread_id_rejects_missing_schema_version_rollout() -> Res
 #[tokio::test]
 async fn thread_resume_returns_rollout_history() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
     let preview = "Saved user message";
     let text_elements = vec![TextElement::new(
@@ -171,7 +171,7 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
         Some("<note>".into()),
     )];
     let conversation_id = create_fake_rollout_with_text_elements(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-05T12-00-00",
         "2025-01-05T12:00:00Z",
         preview,
@@ -183,7 +183,7 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
         None,
     )?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let resume_id = mcp
@@ -235,11 +235,11 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
 #[tokio::test]
 async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let adam_home = TempDir::new()?;
-    let rollout = setup_rollout_fixture(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    let rollout = setup_rollout_fixture(lha_home.path(), &server.uri())?;
     let thread_id = rollout.conversation_id.clone();
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let resume_id = mcp
@@ -290,10 +290,10 @@ async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -
 #[tokio::test]
 async fn thread_resume_with_overrides_defers_updated_at_until_turn_start() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let adam_home = TempDir::new()?;
-    let rollout = setup_rollout_fixture(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    let rollout = setup_rollout_fixture(lha_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let resume_id = mcp
@@ -345,10 +345,10 @@ async fn thread_resume_with_overrides_defers_updated_at_until_turn_start() -> Re
 #[tokio::test]
 async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -391,10 +391,10 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
 #[tokio::test]
 async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Start a thread.
@@ -460,10 +460,10 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
     ]);
     let response_mock = responses::mount_sse_once(&server, body).await;
 
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -534,11 +534,11 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
 }
 
 // Helper to create a config.toml pointing at the mock model server.
-fn create_config_toml(adam_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
+fn create_config_toml(lha_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
     let features =
-        std::collections::BTreeMap::from([(adam_agent::features::Feature::Personality, true)]);
+        std::collections::BTreeMap::from([(lha_agent::features::Feature::Personality, true)]);
     app_test_support::write_mock_responses_config_toml_with_options(
-        adam_home,
+        lha_home,
         server_uri,
         &features,
         20_000,
@@ -568,15 +568,15 @@ struct RolloutFixture {
     expected_updated_at: i64,
 }
 
-fn setup_rollout_fixture(adam_home: &Path, server_uri: &str) -> Result<RolloutFixture> {
-    create_config_toml(adam_home, server_uri)?;
+fn setup_rollout_fixture(lha_home: &Path, server_uri: &str) -> Result<RolloutFixture> {
+    create_config_toml(lha_home, server_uri)?;
 
     let preview = "Saved user message";
     let filename_ts = "2025-01-05T12-00-00";
     let meta_rfc3339 = "2025-01-05T12:00:00Z";
     let expected_updated_at_rfc3339 = "2025-01-07T00:00:00Z";
     let conversation_id = create_fake_rollout_with_text_elements(
-        adam_home,
+        lha_home,
         filename_ts,
         meta_rfc3339,
         preview,
@@ -584,7 +584,7 @@ fn setup_rollout_fixture(adam_home: &Path, server_uri: &str) -> Result<RolloutFi
         Some("mock_provider"),
         None,
     )?;
-    let rollout_file_path = rollout_path(adam_home, filename_ts, &conversation_id);
+    let rollout_file_path = rollout_path(lha_home, filename_ts, &conversation_id);
     set_rollout_mtime(rollout_file_path.as_path(), expected_updated_at_rfc3339)?;
     let before_modified = std::fs::metadata(&rollout_file_path)?.modified()?;
     let expected_updated_at = chrono::DateTime::parse_from_rfc3339(expected_updated_at_rfc3339)?

@@ -1,14 +1,14 @@
 #![allow(clippy::unwrap_used)]
 
-use adam_agent::features::Feature;
-use adam_agent::protocol::SandboxPolicy;
-use adam_llm::built_in_runtime_endpoints;
-use adam_protocol::config_types::WebSearchMode;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
+use lha_agent::features::Feature;
+use lha_agent::protocol::SandboxPolicy;
+use lha_llm::built_in_runtime_endpoints;
+use lha_protocol::config_types::WebSearchMode;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 
@@ -51,7 +51,7 @@ async fn web_search_mode_cached_sets_external_web_access_false() {
     let test = builder
         .build(&server)
         .await
-        .expect("create test Adam conversation");
+        .expect("create test LHA conversation");
 
     test.submit_turn("hello cached web search")
         .await
@@ -83,7 +83,7 @@ async fn web_search_mode_takes_precedence_over_legacy_flags() {
     let test = builder
         .build(&server)
         .await
-        .expect("create test Adam conversation");
+        .expect("create test LHA conversation");
 
     test.submit_turn("hello cached+live flags")
         .await
@@ -116,7 +116,7 @@ async fn web_search_mode_defaults_to_cached_when_unset() {
     let test = builder
         .build(&server)
         .await
-        .expect("create test Adam conversation");
+        .expect("create test LHA conversation");
 
     test.submit_turn_with_policy("hello default cached web search", SandboxPolicy::ReadOnly)
         .await
@@ -152,7 +152,7 @@ async fn web_search_mode_updates_between_turns_with_sandbox_policy() {
     let test = builder
         .build(&server)
         .await
-        .expect("create test Adam conversation");
+        .expect("create test LHA conversation");
 
     test.submit_turn_with_policy("hello cached", SandboxPolicy::ReadOnly)
         .await
@@ -210,7 +210,7 @@ async fn web_search_mode_defaults_to_disabled_for_azure_responses() {
     let test = builder
         .build(&server)
         .await
-        .expect("create test Adam conversation");
+        .expect("create test LHA conversation");
 
     test.submit_turn_with_policy(
         "hello azure default web search",

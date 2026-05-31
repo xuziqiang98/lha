@@ -2,18 +2,6 @@
 
 use std::collections::HashMap;
 
-use adam_agent::features::Feature;
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::SandboxPolicy;
-use adam_protocol::config_types::Identity;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::config_types::Settings;
-use adam_protocol::request_user_input::RequestUserInputAnswer;
-use adam_protocol::request_user_input::RequestUserInputResponse;
-use adam_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
@@ -27,6 +15,18 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use lha_agent::features::Feature;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::SandboxPolicy;
+use lha_protocol::config_types::Identity;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::config_types::Settings;
+use lha_protocol::request_user_input::RequestUserInputAnswer;
+use lha_protocol::request_user_input::RequestUserInputResponse;
+use lha_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;

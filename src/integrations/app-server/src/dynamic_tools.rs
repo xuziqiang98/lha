@@ -1,7 +1,7 @@
-use adam_agent::CodexThread;
-use adam_app_server_protocol::DynamicToolCallResponse;
-use adam_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
-use adam_protocol::protocol::Op;
+use lha_agent::CodexThread;
+use lha_app_server_protocol::DynamicToolCallResponse;
+use lha_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
+use lha_protocol::protocol::Op;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::error;

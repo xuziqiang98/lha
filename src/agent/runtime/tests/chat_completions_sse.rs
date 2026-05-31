@@ -1,24 +1,24 @@
-use adam_agent::AuthManager;
 use assert_matches::assert_matches;
+use lha_agent::AuthManager;
 use std::sync::Arc;
 use tracing_test::traced_test;
 
-use adam_agent::CodexAuth;
-use adam_agent::ContentItem;
-use adam_agent::models_manager::manager::ModelsManager;
-use adam_llm::OutputItem;
-use adam_llm::RuntimeEndpoint;
-use adam_llm::TranscriptItem;
-use adam_llm::TurnEvent;
-use adam_llm::TurnRequest;
-use adam_otel::OtelManager;
-use adam_protocol::ThreadId;
-use adam_protocol::models::ReasoningItemContent;
-use adam_protocol::protocol::SessionSource;
 use core_test_support::load_default_config_for_test;
 use core_test_support::runtime_client::TestRuntimeClient;
 use core_test_support::skip_if_no_network;
 use futures::StreamExt;
+use lha_agent::CodexAuth;
+use lha_agent::ContentItem;
+use lha_agent::models_manager::manager::ModelsManager;
+use lha_llm::OutputItem;
+use lha_llm::RuntimeEndpoint;
+use lha_llm::TranscriptItem;
+use lha_llm::TurnEvent;
+use lha_llm::TurnRequest;
+use lha_otel::OtelManager;
+use lha_protocol::ThreadId;
+use lha_protocol::models::ReasoningItemContent;
+use lha_protocol::protocol::SessionSource;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use wiremock::Mock;
@@ -57,11 +57,11 @@ async fn run_stream_with_show_raw_agent_reasoning(
         .with_stream_max_retries(Some(0))
         .with_stream_idle_timeout_ms(Some(5_000));
 
-    let adam_home = match TempDir::new() {
+    let lha_home = match TempDir::new() {
         Ok(dir) => dir,
         Err(e) => panic!("failed to create TempDir: {e}"),
     };
-    let mut config = load_default_config_for_test(&adam_home).await;
+    let mut config = load_default_config_for_test(&lha_home).await;
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();
     config.show_raw_agent_reasoning = show_raw_agent_reasoning;
@@ -528,7 +528,7 @@ async fn streams_reasoning_before_tool_call() {
         TurnEvent::ToolCall(call) => {
             assert_eq!(call.tool_name, "run");
             match &call.payload {
-                adam_llm::ToolCallPayload::JsonArguments { arguments } => {
+                lha_llm::ToolCallPayload::JsonArguments { arguments } => {
                     assert_eq!(arguments, "{}");
                 }
                 other => panic!("expected function payload, got {other:?}"),

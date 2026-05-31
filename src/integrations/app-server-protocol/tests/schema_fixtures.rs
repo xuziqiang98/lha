@@ -1,7 +1,7 @@
-use adam_app_server_protocol::read_schema_fixture_tree;
-use adam_app_server_protocol::write_schema_fixtures;
 use anyhow::Context;
 use anyhow::Result;
+use lha_app_server_protocol::read_schema_fixture_tree;
+use lha_app_server_protocol::write_schema_fixtures;
 use similar::TextDiff;
 use std::path::Path;
 
@@ -65,7 +65,7 @@ Run `just write-app-server-schema` to overwrite with your changes.\n\n{diff}",
 
 fn schema_root() -> Result<std::path::PathBuf> {
     // Resolve a known file, then walk up to the schema root.
-    let typescript_index = adam_utils_cargo_bin::find_resource!("schema/typescript/index.ts")
+    let typescript_index = lha_utils_cargo_bin::find_resource!("schema/typescript/index.ts")
         .context("resolve TypeScript schema index.ts")?;
     let schema_root = typescript_index
         .parent()
@@ -75,12 +75,12 @@ fn schema_root() -> Result<std::path::PathBuf> {
 
     // Sanity check that the JSON fixtures resolve to the same schema root.
     let json_bundle =
-        adam_utils_cargo_bin::find_resource!("schema/json/adam_app_server_protocol.schemas.json")
+        lha_utils_cargo_bin::find_resource!("schema/json/lha_app_server_protocol.schemas.json")
             .context("resolve JSON schema bundle")?;
     let json_root = json_bundle
         .parent()
         .and_then(|p| p.parent())
-        .context("derive schema root from schema/json/adam_app_server_protocol.schemas.json")?;
+        .context("derive schema root from schema/json/lha_app_server_protocol.schemas.json")?;
     anyhow::ensure!(
         schema_root == json_root,
         "schema roots disagree: typescript={} json={}",

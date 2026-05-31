@@ -19,7 +19,7 @@ use crate::app_event::FeedbackCategory;
 use crate::app_event_sender::AppEventSender;
 use crate::history_cell;
 use crate::render::renderable::Renderable;
-use adam_agent::protocol::SessionSource;
+use lha_agent::protocol::SessionSource;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -27,14 +27,14 @@ use super::popup_consts::standard_popup_hint_line;
 use super::textarea::TextArea;
 use super::textarea::TextAreaState;
 
-const ADAM_ISSUE_REPO_URL: &str = "https://github.com/xuziqiang98/adam";
+const LHA_ISSUE_REPO_URL: &str = "https://github.com/xuziqiang98/lha";
 
 /// Minimal input overlay to collect an optional feedback note, then persist
 /// logs and rollout locally with classification + metadata.
 pub(crate) struct FeedbackNoteView {
     category: FeedbackCategory,
-    adam_home: PathBuf,
-    snapshot: adam_feedback::CodexLogSnapshot,
+    lha_home: PathBuf,
+    snapshot: lha_feedback::CodexLogSnapshot,
     rollout_path: Option<PathBuf>,
     app_event_tx: AppEventSender,
     include_logs: bool,
@@ -48,15 +48,15 @@ pub(crate) struct FeedbackNoteView {
 impl FeedbackNoteView {
     pub(crate) fn new(
         category: FeedbackCategory,
-        adam_home: PathBuf,
-        snapshot: adam_feedback::CodexLogSnapshot,
+        lha_home: PathBuf,
+        snapshot: lha_feedback::CodexLogSnapshot,
         rollout_path: Option<PathBuf>,
         app_event_tx: AppEventSender,
         include_logs: bool,
     ) -> Self {
         Self {
             category,
-            adam_home,
+            lha_home,
             snapshot,
             rollout_path,
             app_event_tx,
@@ -76,7 +76,7 @@ impl FeedbackNoteView {
         };
         let classification = feedback_classification(self.category);
         let result = self.snapshot.persist_feedback(
-            self.adam_home.as_path(),
+            self.lha_home.as_path(),
             classification,
             reason_opt,
             self.include_logs,
@@ -104,7 +104,7 @@ impl FeedbackNoteView {
                     "".into(),
                     Line::from(vec![
                         "  You can also open an issue at ".into(),
-                        ADAM_ISSUE_REPO_URL.cyan().underlined(),
+                        LHA_ISSUE_REPO_URL.cyan().underlined(),
                     ]),
                     Line::from("  Thanks for the feedback!"),
                 ];
@@ -430,8 +430,8 @@ pub(crate) fn feedback_upload_consent_params(
     let mut header_lines: Vec<Box<dyn crate::render::renderable::Renderable>> = vec![
         Line::from("Save logs locally?".bold()).into(),
         Line::from("").into(),
-        Line::from("The following files will be saved under ADAM_HOME/feedback:".dim()).into(),
-        Line::from(vec!["  • ".into(), "adam-logs.log".into()]).into(),
+        Line::from("The following files will be saved under LHA_HOME/feedback:".dim()).into(),
+        Line::from(vec!["  • ".into(), "lha-logs.log".into()]).into(),
     ];
     if let Some(path) = rollout_path.as_deref()
         && let Some(name) = path.file_name().map(|s| s.to_string_lossy().to_string())
@@ -445,7 +445,7 @@ pub(crate) fn feedback_upload_consent_params(
             super::SelectionItem {
                 name: "Yes".to_string(),
                 description: Some(
-                    "Save the current Adam session logs locally for troubleshooting.".to_string(),
+                    "Save the current LHA session logs locally for troubleshooting.".to_string(),
                 ),
                 actions: vec![yes_action],
                 dismiss_on_select: true,
@@ -506,7 +506,7 @@ mod tests {
     fn make_view(category: FeedbackCategory) -> FeedbackNoteView {
         let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let snapshot = adam_feedback::CodexFeedback::new().snapshot(None);
+        let snapshot = lha_feedback::CodexFeedback::new().snapshot(None);
         FeedbackNoteView::new(category, std::env::temp_dir(), snapshot, None, tx, true)
     }
 
@@ -540,13 +540,13 @@ mod tests {
 
     #[test]
     fn submit_feedback_emits_local_save_details_with_issue_prompt() {
-        let adam_home = tempfile::TempDir::new().expect("tempdir");
+        let lha_home = tempfile::TempDir::new().expect("tempdir");
         let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let snapshot = adam_feedback::CodexFeedback::new().snapshot(None);
+        let snapshot = lha_feedback::CodexFeedback::new().snapshot(None);
         let mut view = FeedbackNoteView::new(
             FeedbackCategory::Bug,
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             snapshot,
             None,
             tx,
@@ -570,6 +570,6 @@ mod tests {
         assert!(rendered.contains("Thread ID:"));
         assert!(rendered.contains("Thanks for the feedback!"));
         assert!(rendered.contains("open an issue"));
-        assert!(rendered.contains("https://github.com/xuziqiang98/adam"));
+        assert!(rendered.contains("https://github.com/xuziqiang98/lha"));
     }
 }

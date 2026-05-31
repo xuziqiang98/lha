@@ -1,13 +1,3 @@
-use adam_agent::features::Feature;
-use adam_protocol::ThreadId;
-use adam_protocol::protocol::EventMsg;
-use adam_protocol::protocol::RolloutItem;
-use adam_protocol::protocol::RolloutLine;
-use adam_protocol::protocol::SessionMeta;
-use adam_protocol::protocol::SessionMetaLine;
-use adam_protocol::protocol::SessionSource;
-use adam_protocol::protocol::UserMessageEvent;
-use adam_state::STATE_DB_FILENAME;
 use anyhow::Result;
 use anyhow::anyhow;
 use core_test_support::load_sse_fixture_with_id;
@@ -18,6 +8,16 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
+use lha_agent::features::Feature;
+use lha_protocol::ThreadId;
+use lha_protocol::protocol::EventMsg;
+use lha_protocol::protocol::RolloutItem;
+use lha_protocol::protocol::RolloutLine;
+use lha_protocol::protocol::SessionMeta;
+use lha_protocol::protocol::SessionMetaLine;
+use lha_protocol::protocol::SessionSource;
+use lha_protocol::protocol::UserMessageEvent;
+use lha_state::STATE_DB_FILENAME;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::fs;
@@ -31,12 +31,12 @@ fn sse_completed(id: &str) -> String {
 }
 
 fn write_rollout_with_schema_version(
-    adam_home: &Path,
+    lha_home: &Path,
     uuid: Uuid,
     schema_version: Option<u32>,
 ) -> Result<std::path::PathBuf> {
     let thread_id = ThreadId::from_string(&uuid.to_string())?;
-    let rollout_path = adam_home.join(format!(
+    let rollout_path = lha_home.join(format!(
         "sessions/2026/01/27/rollout-2026-01-27T12-00-00-{uuid}.jsonl"
     ));
     let parent = rollout_path
@@ -49,11 +49,11 @@ fn write_rollout_with_schema_version(
             id: thread_id,
             forked_from_id: None,
             timestamp: "2026-01-27T12:00:00Z".to_string(),
-            cwd: adam_home.to_path_buf(),
+            cwd: lha_home.to_path_buf(),
             originator: "test".to_string(),
             cli_version: "test".to_string(),
             rollout_schema_version: schema_version
-                .unwrap_or(adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3),
+                .unwrap_or(lha_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3),
             source: SessionSource::default(),
             model_provider: None,
             base_instructions: None,
@@ -102,7 +102,7 @@ async fn new_thread_is_recorded_in_state_db() -> Result<()> {
 
     let thread_id = test.session_configured.session_id;
     let rollout_path = test.codex.rollout_path().expect("rollout path");
-    let db_path = test.config.adam_home.join(STATE_DB_FILENAME);
+    let db_path = test.config.lha_home.join(STATE_DB_FILENAME);
 
     for _ in 0..100 {
         if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
@@ -141,8 +141,8 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
     let rollout_rel_path_for_hook = rollout_rel_path.clone();
 
     let mut builder = test_codex()
-        .with_pre_build_hook(move |adam_home| {
-            let rollout_path = adam_home.join(&rollout_rel_path_for_hook);
+        .with_pre_build_hook(move |lha_home| {
+            let rollout_path = lha_home.join(&rollout_rel_path_for_hook);
             let parent = rollout_path
                 .parent()
                 .expect("rollout path should have parent");
@@ -153,10 +153,10 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                     id: thread_id,
                     forked_from_id: None,
                     timestamp: "2026-01-27T12:00:00Z".to_string(),
-                    cwd: adam_home.to_path_buf(),
+                    cwd: lha_home.to_path_buf(),
                     originator: "test".to_string(),
                     cli_version: "test".to_string(),
-                    rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+                    rollout_schema_version: lha_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
                     source: SessionSource::default(),
                     model_provider: None,
                     base_instructions: None,
@@ -194,8 +194,8 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
 
     let test = builder.build(&server).await?;
 
-    let db_path = test.config.adam_home.join(STATE_DB_FILENAME);
-    let rollout_path = test.config.adam_home.join(&rollout_rel_path);
+    let db_path = test.config.lha_home.join(STATE_DB_FILENAME);
+    let rollout_path = test.config.lha_home.join(&rollout_rel_path);
     let default_provider = test.config.model_provider_id.clone();
 
     for _ in 0..20 {
@@ -236,10 +236,10 @@ async fn backfill_skips_unsupported_rollouts() -> Result<()> {
     let missing_thread_id = ThreadId::from_string(&missing_uuid.to_string())?;
 
     let mut builder = test_codex()
-        .with_pre_build_hook(move |adam_home| {
-            write_rollout_with_schema_version(adam_home, v2_uuid, Some(2))
+        .with_pre_build_hook(move |lha_home| {
+            write_rollout_with_schema_version(lha_home, v2_uuid, Some(2))
                 .expect("should write v2 rollout");
-            write_rollout_with_schema_version(adam_home, missing_uuid, None)
+            write_rollout_with_schema_version(lha_home, missing_uuid, None)
                 .expect("should write missing-schema rollout");
         })
         .with_config(|config| {
@@ -247,7 +247,7 @@ async fn backfill_skips_unsupported_rollouts() -> Result<()> {
         });
 
     let test = builder.build(&server).await?;
-    let db_path = test.config.adam_home.join(STATE_DB_FILENAME);
+    let db_path = test.config.lha_home.join(STATE_DB_FILENAME);
     for _ in 0..20 {
         if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
             break;
@@ -276,9 +276,9 @@ async fn reconcile_skips_unsupported_rollout() -> Result<()> {
     });
     let test = builder.build(&server).await?;
     let db = test.codex.state_db().expect("state db enabled");
-    let rollout_path = write_rollout_with_schema_version(&test.config.adam_home, uuid, Some(2))?;
+    let rollout_path = write_rollout_with_schema_version(&test.config.lha_home, uuid, Some(2))?;
 
-    adam_agent::state_db::reconcile_rollout(
+    lha_agent::state_db::reconcile_rollout(
         Some(db.as_ref()),
         &rollout_path,
         test.config.model_provider_id.as_str(),
@@ -307,7 +307,7 @@ async fn user_messages_persist_in_state_db() -> Result<()> {
     });
     let test = builder.build(&server).await?;
 
-    let db_path = test.config.adam_home.join(STATE_DB_FILENAME);
+    let db_path = test.config.lha_home.join(STATE_DB_FILENAME);
     for _ in 0..100 {
         if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
             break;
@@ -373,7 +373,7 @@ async fn tool_call_logs_include_thread_id() -> Result<()> {
     let expected_thread_id = test.session_configured.session_id.to_string();
 
     test.submit_turn("run a shell command").await?;
-    let subscriber = tracing_subscriber::registry().with(adam_state::log_db::start(db.clone()));
+    let subscriber = tracing_subscriber::registry().with(lha_state::log_db::start(db.clone()));
     let dispatch = tracing::Dispatch::new(subscriber);
     tracing::dispatcher::with_default(&dispatch, || {
         let span = tracing::info_span!("test_log_span", thread_id = %expected_thread_id);
@@ -383,7 +383,7 @@ async fn tool_call_logs_include_thread_id() -> Result<()> {
 
     let mut found = None;
     for _ in 0..80 {
-        let query = adam_state::LogQuery {
+        let query = lha_state::LogQuery {
             descending: true,
             limit: Some(20),
             ..Default::default()

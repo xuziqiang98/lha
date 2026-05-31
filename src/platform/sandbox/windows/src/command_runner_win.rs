@@ -1,18 +1,18 @@
 #![cfg(target_os = "windows")]
 
-use adam_windows_sandbox::allow_null_device;
-use adam_windows_sandbox::convert_string_sid_to_sid;
-use adam_windows_sandbox::create_process_as_user;
-use adam_windows_sandbox::create_readonly_token_with_cap_from;
-use adam_windows_sandbox::create_workspace_write_token_with_cap_from;
-use adam_windows_sandbox::get_current_token_for_restriction;
-use adam_windows_sandbox::hide_current_user_profile_dir;
-use adam_windows_sandbox::log_note;
-use adam_windows_sandbox::parse_policy;
-use adam_windows_sandbox::to_wide;
-use adam_windows_sandbox::SandboxPolicy;
 use anyhow::Context;
 use anyhow::Result;
+use lha_windows_sandbox::allow_null_device;
+use lha_windows_sandbox::convert_string_sid_to_sid;
+use lha_windows_sandbox::create_process_as_user;
+use lha_windows_sandbox::create_readonly_token_with_cap_from;
+use lha_windows_sandbox::create_workspace_write_token_with_cap_from;
+use lha_windows_sandbox::get_current_token_for_restriction;
+use lha_windows_sandbox::hide_current_user_profile_dir;
+use lha_windows_sandbox::log_note;
+use lha_windows_sandbox::parse_policy;
+use lha_windows_sandbox::to_wide;
+use lha_windows_sandbox::SandboxPolicy;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -44,10 +44,10 @@ mod read_acl_mutex;
 #[derive(Debug, Deserialize)]
 struct RunnerRequest {
     policy_json_or_preset: String,
-    // Writable location for logs (sandbox user's .adam).
-    adam_home: PathBuf,
-    // Real user's ADAM_HOME for shared data (caps, config).
-    real_adam_home: PathBuf,
+    // Writable location for logs (sandbox user's .lha).
+    lha_home: PathBuf,
+    // Real user's LHA_HOME for shared data (caps, config).
+    real_lha_home: PathBuf,
     cap_sid: String,
     command: Vec<String>,
     cwd: PathBuf,
@@ -99,16 +99,16 @@ pub fn main() -> Result<()> {
         anyhow::bail!("runner: no request-file provided");
     }
     let req: RunnerRequest = serde_json::from_str(&input).context("parse runner request json")?;
-    let log_dir = Some(req.adam_home.as_path());
-    hide_current_user_profile_dir(req.adam_home.as_path());
+    let log_dir = Some(req.lha_home.as_path());
+    hide_current_user_profile_dir(req.lha_home.as_path());
     log_note(
         &format!(
-            "runner start cwd={} cmd={:?} real_adam_home={}",
+            "runner start cwd={} cmd={:?} real_lha_home={}",
             req.cwd.display(),
             req.command,
-            req.real_adam_home.display()
+            req.real_lha_home.display()
         ),
-        Some(&req.adam_home),
+        Some(&req.lha_home),
     );
 
     let policy = parse_policy(&req.policy_json_or_preset).context("parse policy_json_or_preset")?;
@@ -153,7 +153,7 @@ pub fn main() -> Result<()> {
             let err = unsafe { GetLastError() };
             log_note(
                 &format!("CreateFileW failed for pipe {name}: {err}"),
-                Some(&req.adam_home),
+                Some(&req.lha_home),
             );
             return Err(anyhow::anyhow!("CreateFileW failed for pipe {name}: {err}"));
         }
@@ -206,7 +206,7 @@ pub fn main() -> Result<()> {
             &req.command,
             &effective_cwd,
             &req.env_map,
-            Some(&req.adam_home),
+            Some(&req.lha_home),
             stdio,
         )
     };

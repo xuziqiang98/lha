@@ -1,5 +1,5 @@
-use adam_agent::config::Config;
-use adam_protocol::config_types::IdentityKind;
+use lha_agent::config::Config;
+use lha_protocol::config_types::IdentityKind;
 
 use crate::sandbox_summary::summarize_sandbox_policy;
 

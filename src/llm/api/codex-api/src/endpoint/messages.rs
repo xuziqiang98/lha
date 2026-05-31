@@ -9,10 +9,10 @@ use crate::requests::MessagesRequest;
 use crate::requests::MessagesRequestBuilder;
 use crate::sse::spawn_messages_stream;
 use crate::telemetry::SseTelemetry;
-use adam_client::HttpTransport;
-use adam_client::RequestCompression;
-use adam_client::RequestTelemetry;
 use http::HeaderMap;
+use lha_client::HttpTransport;
+use lha_client::RequestCompression;
+use lha_client::RequestTelemetry;
 use std::sync::Arc;
 
 pub struct MessagesClient<T: HttpTransport, A: AuthProvider> {

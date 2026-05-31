@@ -2,12 +2,12 @@ use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 
-use adam_agent::CODEX_APPLY_PATCH_ARG1;
+use lha_agent::CODEX_APPLY_PATCH_ARG1;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 use tempfile::TempDir;
 
-const LINUX_SANDBOX_ARG0: &str = "adam-linux-sandbox";
+const LINUX_SANDBOX_ARG0: &str = "lha-linux-sandbox";
 const APPLY_PATCH_ARG0: &str = "apply_patch";
 const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
 
@@ -22,9 +22,9 @@ pub fn arg0_dispatch() -> Option<TempDir> {
 
     if exe_name == LINUX_SANDBOX_ARG0 {
         // Safety: [`run_main`] never returns.
-        adam_linux_sandbox::run_main();
+        lha_linux_sandbox::run_main();
     } else if exe_name == APPLY_PATCH_ARG0 || exe_name == MISSPELLED_APPLY_PATCH_ARG0 {
-        adam_apply_patch::main();
+        lha_apply_patch::main();
     }
 
     let argv1 = args.next().unwrap_or_default();
@@ -34,7 +34,7 @@ pub fn arg0_dispatch() -> Option<TempDir> {
             Some(patch_arg) => {
                 let mut stdout = std::io::stdout();
                 let mut stderr = std::io::stderr();
-                match adam_apply_patch::apply_patch(&patch_arg, &mut stdout, &mut stderr) {
+                match lha_apply_patch::apply_patch(&patch_arg, &mut stdout, &mut stderr) {
                     Ok(()) => 0,
                     Err(_) => 1,
                 }
@@ -54,7 +54,7 @@ pub fn arg0_dispatch() -> Option<TempDir> {
     match prepend_path_entry_for_codex_aliases() {
         Ok(path_entry) => Some(path_entry),
         Err(err) => {
-            // It is possible that Adam will proceed successfully even if
+            // It is possible that LHA will proceed successfully even if
             // updating the PATH fails, so warn the user and move on.
             eprintln!("WARNING: proceeding, even though we could not update PATH: {err}");
             None
@@ -62,24 +62,24 @@ pub fn arg0_dispatch() -> Option<TempDir> {
     }
 }
 
-/// While we want to deploy the Adam CLI as a single executable for simplicity,
+/// While we want to deploy the LHA CLI as a single executable for simplicity,
 /// we also want to expose some of its functionality as distinct CLIs, so we use
 /// the "arg0 trick" to determine which CLI to dispatch. This effectively allows
 /// us to simulate deploying multiple executables as a single binary on Mac and
 /// Linux (but not Windows).
 ///
 /// When the current executable is invoked through the hard-link or alias named
-/// `adam-linux-sandbox` we *directly* execute
-/// [`adam_linux_sandbox::run_main`] (which never returns). Otherwise we:
+/// `lha-linux-sandbox` we *directly* execute
+/// [`lha_linux_sandbox::run_main`] (which never returns). Otherwise we:
 ///
-/// 1.  Load `.env` values from `~/.adam/.env` before creating any threads.
+/// 1.  Load `.env` values from `~/.lha/.env` before creating any threads.
 /// 2.  Construct a Tokio multi-thread runtime.
 /// 3.  Derive the path to the current executable (so children can re-invoke the
 ///     sandbox) when running on Linux.
 /// 4.  Execute the provided async `main_fn` inside that runtime, forwarding any
 ///     error. Note that `main_fn` receives `codex_linux_sandbox_exe:
 ///     Option<PathBuf>`, as an argument, which is generally needed as part of
-///     constructing [`adam_agent::config::Config`].
+///     constructing [`lha_agent::config::Config`].
 ///
 /// This function should be used to wrap any `main()` function in binary crates
 /// in this workspace that depends on these helper CLIs.
@@ -109,13 +109,13 @@ where
 
 const ILLEGAL_ENV_VAR_PREFIX: &str = "CODEX_";
 
-/// Load env vars from ~/.adam/.env.
+/// Load env vars from ~/.lha/.env.
 ///
 /// Security: Do not allow `.env` files to create or modify any variables
 /// with names starting with `CODEX_`.
 fn load_dotenv() {
-    if let Ok(adam_home) = adam_agent::config::find_adam_home()
-        && let Ok(iter) = dotenvy::from_path_iter(adam_home.join(".env"))
+    if let Ok(lha_home) = lha_agent::config::find_lha_home()
+        && let Ok(iter) = dotenvy::from_path_iter(lha_home.join(".env"))
     {
         set_filtered(iter);
     }
@@ -144,30 +144,30 @@ where
 /// This temporary directory is prepended to the PATH environment variable so
 /// that `apply_patch` can be on the PATH without requiring the user to
 /// install a separate `apply_patch` executable, simplifying the deployment of
-/// Adam CLI.
+/// LHA CLI.
 /// Note: In debug builds the temp-dir guard is disabled to ease local testing.
 ///
 /// IMPORTANT: This function modifies the PATH environment variable, so it MUST
 /// be called before multiple threads are spawned.
 pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
-    let adam_home = adam_agent::config::find_adam_home()?;
+    let lha_home = lha_agent::config::find_lha_home()?;
     #[cfg(not(debug_assertions))]
     {
         // Guard against placing helpers in system temp directories outside debug builds.
         let temp_root = std::env::temp_dir();
-        if adam_home.starts_with(&temp_root) {
+        if lha_home.starts_with(&temp_root) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!(
-                    "Refusing to create helper binaries under temporary dir {temp_root:?} (adam_home: {adam_home:?})"
+                    "Refusing to create helper binaries under temporary dir {temp_root:?} (lha_home: {lha_home:?})"
                 ),
             ));
         }
     }
 
-    std::fs::create_dir_all(&adam_home)?;
-    // Use a ADAM_HOME-scoped temp root to avoid cluttering the top-level directory.
-    let temp_root = adam_home.join("tmp").join("path");
+    std::fs::create_dir_all(&lha_home)?;
+    // Use a LHA_HOME-scoped temp root to avoid cluttering the top-level directory.
+    let temp_root = lha_home.join("tmp").join("path");
     std::fs::create_dir_all(&temp_root)?;
     #[cfg(unix)]
     {
@@ -178,7 +178,7 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
     }
 
     let temp_dir = tempfile::Builder::new()
-        .prefix("adam-arg0")
+        .prefix("lha-arg0")
         .tempdir_in(&temp_root)?;
     let path = temp_dir.path();
 

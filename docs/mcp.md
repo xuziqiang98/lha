@@ -1,53 +1,53 @@
 # MCP Configuration
 
-Adam can connect to Model Context Protocol (MCP) servers and expose their tools
-to the agent. The preferred way to manage MCP servers is with the `adam mcp`
+LHA can connect to Model Context Protocol (MCP) servers and expose their tools
+to the agent. The preferred way to manage MCP servers is with the `lha mcp`
 commands, but advanced users can edit `config.toml` directly.
 
 ## Configuration locations
 
-Adam reads MCP server definitions from the same configuration layers as the rest
-of the agent runtime. The global user config is `${ADAM_HOME}/config.toml`,
-usually `~/.adam/config.toml`.
+LHA reads MCP server definitions from the same configuration layers as the rest
+of the agent runtime. The global user config is `${LHA_HOME}/config.toml`,
+usually `~/.lha/config.toml`.
 
-Project-specific configuration can also live in `.adam/config.toml` inside a
+Project-specific configuration can also live in `.lha/config.toml` inside a
 project. Project config is loaded only in trusted project contexts. Use global
 configuration for personal MCP servers and project configuration for servers
 that should apply only to one repository.
 
-`adam mcp add` writes MCP server entries to the global config. If you edit TOML
+`lha mcp add` writes MCP server entries to the global config. If you edit TOML
 by hand while a long-running client is active, restart the client or reload MCP
 configuration before expecting new servers or tools to appear.
 
 ## Inspect configured servers
 
-Use the CLI to inspect the MCP servers Adam can see:
+Use the CLI to inspect the MCP servers LHA can see:
 
 ```sh
-adam mcp list
-adam mcp list --json
-adam mcp get <name>
-adam mcp get <name> --json
+lha mcp list
+lha mcp list --json
+lha mcp get <name>
+lha mcp get <name> --json
 ```
 
 In the TUI, use `/mcp` to view available MCP tools.
 
 ## Add a local stdio server
 
-Stdio MCP servers are launched locally and communicate with Adam over
+Stdio MCP servers are launched locally and communicate with LHA over
 stdin/stdout. This is the common transport for local filesystem, browser,
 database, and custom development tools.
 
 Add a local server with a command after `--`:
 
 ```sh
-adam mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem /path/to/allowed/dir
+lha mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem /path/to/allowed/dir
 ```
 
 Pass environment variables to the launched process when needed:
 
 ```sh
-adam mcp add my-server --env API_KEY=secret -- my-mcp-command --flag value
+lha mcp add my-server --env API_KEY=secret -- my-mcp-command --flag value
 ```
 
 The equivalent TOML shape is:
@@ -74,7 +74,7 @@ env_vars = ["API_KEY"]
 NODE_ENV = "production"
 ```
 
-`env_vars` copies values from Adam's current environment. The `env` table sets
+`env_vars` copies values from LHA's current environment. The `env` table sets
 explicit environment variables for the MCP process.
 
 ## Add a streamable HTTP server
@@ -83,14 +83,14 @@ Streamable HTTP MCP servers are reached by URL instead of being launched as a
 local process.
 
 ```sh
-adam mcp add issues --url https://example.com/mcp
+lha mcp add issues --url https://example.com/mcp
 ```
 
 If the server expects an HTTP bearer token, provide the name of an environment
 variable that contains the token:
 
 ```sh
-adam mcp add issues --url https://example.com/mcp --bearer-token-env-var GITHUB_TOKEN
+lha mcp add issues --url https://example.com/mcp --bearer-token-env-var GITHUB_TOKEN
 ```
 
 The equivalent TOML shape is:
@@ -109,7 +109,7 @@ variables:
 url = "https://example.com/mcp"
 
 [mcp_servers.issues.http_headers]
-"X-Client" = "adam"
+"X-Client" = "lha"
 
 [mcp_servers.issues.env_http_headers]
 "X-API-Key" = "ISSUES_API_KEY"
@@ -132,13 +132,13 @@ url = "https://example.com/mcp"
 Then run:
 
 ```sh
-adam mcp login remote
+lha mcp login remote
 ```
 
 Request scopes on the command line when the server requires them:
 
 ```sh
-adam mcp login remote --scopes scope1,scope2
+lha mcp login remote --scopes scope1,scope2
 ```
 
 You can also store default scopes in TOML:
@@ -152,16 +152,16 @@ scopes = ["scope1", "scope2"]
 Remove stored OAuth credentials with:
 
 ```sh
-adam mcp logout remote
+lha mcp logout remote
 ```
 
 OAuth credentials are stored according to `mcp_oauth_credentials_store`:
 
 - `auto`: use the OS keyring when available and fall back to file storage.
 - `keyring`: require the OS keyring.
-- `file`: store credentials in the Adam home directory.
+- `file`: store credentials in the LHA home directory.
 
-By default, Adam binds an ephemeral local callback port during OAuth login. Set
+By default, LHA binds an ephemeral local callback port during OAuth login. Set
 a fixed callback port only if your environment requires one:
 
 ```toml
@@ -195,7 +195,7 @@ startup_timeout_sec = 30
 tool_timeout_sec = 120
 ```
 
-`startup_timeout_sec` controls how long Adam waits for the server to initialize
+`startup_timeout_sec` controls how long LHA waits for the server to initialize
 and list its tools. `tool_timeout_sec` controls the default timeout for MCP tool
 calls made through that server.
 
@@ -205,7 +205,7 @@ calls made through that server.
 - Do not use inline `bearer_token`; use `bearer_token_env_var` or
   `env_http_headers` instead.
 - Prefer `env_vars` for inherited local-process secrets.
-- Keep project `.adam/config.toml` secret-free if the project config is
+- Keep project `.lha/config.toml` secret-free if the project config is
   committed.
 - For OAuth, prefer `auto` or `keyring` unless file storage is required.
 
@@ -213,23 +213,23 @@ calls made through that server.
 
 If a server does not appear:
 
-- Run `adam mcp list`.
+- Run `lha mcp list`.
 - Check that the server name contains only letters, numbers, `-`, or `_`.
-- If the server is in `.adam/config.toml`, check that the project context is
+- If the server is in `.lha/config.toml`, check that the project context is
   trusted.
 
 If tools do not appear:
 
-- Run `adam mcp get <name> --json`.
+- Run `lha mcp get <name> --json`.
 - Open `/mcp` in the TUI.
 - Increase `startup_timeout_sec` for slow servers.
 - Check `enabled_tools` and `disabled_tools` filters.
 
 If HTTP authentication fails:
 
-- Ensure the token environment variable is exported before launching Adam.
+- Ensure the token environment variable is exported before launching LHA.
 - Check `bearer_token_env_var` and `env_http_headers`.
-- For OAuth servers, rerun `adam mcp login <name>`.
+- For OAuth servers, rerun `lha mcp login <name>`.
 
 If a local command fails:
 

@@ -1,37 +1,37 @@
 // Forbid accidental stdout/stderr writes in the *library* portion of the TUI.
-// The standalone `adam-tui` binary prints a short help message before the
+// The standalone `lha-tui` binary prints a short help message before the
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 #![deny(clippy::disallowed_methods)]
-use adam_agent::AuthManager;
-use adam_agent::INTERACTIVE_SESSION_SOURCES;
-use adam_agent::RolloutRecorder;
-use adam_agent::ThreadSortKey;
-use adam_agent::config::Config;
-use adam_agent::config::ConfigBuilder;
-use adam_agent::config::ConfigOverrides;
-use adam_agent::config::find_adam_home;
-use adam_agent::config::load_config_as_toml_with_cli_overrides;
-use adam_agent::config_loader::CloudRequirementsLoader;
-use adam_agent::config_loader::ConfigLoadError;
-use adam_agent::config_loader::format_config_error_with_source;
-use adam_agent::default_client::set_default_client_residency_requirement;
-use adam_agent::find_thread_path_by_id_str;
-use adam_agent::find_thread_path_by_name_str;
-use adam_agent::path_utils;
-use adam_agent::protocol::AskForApproval;
-use adam_agent::read_effective_thread_cwd;
-use adam_agent::windows_sandbox::WindowsSandboxLevelExt;
-use adam_protocol::config_types::SandboxMode;
-use adam_protocol::config_types::WindowsSandboxLevel;
-use adam_state::log_db;
-use adam_utils_absolute_path::AbsolutePathBuf;
 use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
 pub use app::ExitReason;
 use cwd_prompt::CwdPromptAction;
 use cwd_prompt::CwdSelection;
+use lha_agent::AuthManager;
+use lha_agent::INTERACTIVE_SESSION_SOURCES;
+use lha_agent::RolloutRecorder;
+use lha_agent::ThreadSortKey;
+use lha_agent::config::Config;
+use lha_agent::config::ConfigBuilder;
+use lha_agent::config::ConfigOverrides;
+use lha_agent::config::find_lha_home;
+use lha_agent::config::load_config_as_toml_with_cli_overrides;
+use lha_agent::config_loader::CloudRequirementsLoader;
+use lha_agent::config_loader::ConfigLoadError;
+use lha_agent::config_loader::format_config_error_with_source;
+use lha_agent::default_client::set_default_client_residency_requirement;
+use lha_agent::find_thread_path_by_id_str;
+use lha_agent::find_thread_path_by_name_str;
+use lha_agent::path_utils;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::read_effective_thread_cwd;
+use lha_agent::windows_sandbox::WindowsSandboxLevelExt;
+use lha_protocol::config_types::SandboxMode;
+use lha_protocol::config_types::WindowsSandboxLevel;
+use lha_state::log_db;
+use lha_utils_absolute_path::AbsolutePathBuf;
 use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
@@ -155,7 +155,7 @@ pub async fn run_main(
     }
 
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
-    let overrides_cli = adam_common::CliConfigOverrides { raw_overrides };
+    let overrides_cli = lha_common::CliConfigOverrides { raw_overrides };
     let cli_kv_overrides = match overrides_cli.parse_overrides() {
         // Parse `-c` overrides from the CLI.
         Ok(v) => v,
@@ -168,8 +168,8 @@ pub async fn run_main(
 
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]
-    let adam_home = match find_adam_home() {
-        Ok(adam_home) => adam_home.to_path_buf(),
+    let lha_home = match find_lha_home() {
+        Ok(lha_home) => lha_home.to_path_buf(),
         Err(err) => {
             eprintln!("Error finding codex home: {err}");
             std::process::exit(1);
@@ -184,7 +184,7 @@ pub async fn run_main(
 
     #[allow(clippy::print_stderr)]
     let config_toml = match load_config_as_toml_with_cli_overrides(
-        &adam_home,
+        &lha_home,
         &config_cwd,
         cli_kv_overrides.clone(),
     )
@@ -209,7 +209,7 @@ pub async fn run_main(
     };
 
     if let Err(err) =
-        adam_agent::personality_migration::maybe_migrate_personality(&adam_home, &config_toml).await
+        lha_agent::personality_migration::maybe_migrate_personality(&lha_home, &config_toml).await
     {
         tracing::warn!(error = %err, "failed to run personality migration");
     }
@@ -249,7 +249,7 @@ pub async fn run_main(
         }
     }
 
-    let log_dir = adam_agent::config::log_dir(&config)?;
+    let log_dir = lha_agent::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
     let mut log_file_opts = OpenOptions::new();
@@ -258,23 +258,22 @@ pub async fn run_main(
     // Ensure the file is only readable and writable by the current user.
     // Doing the equivalent to `chmod 600` on Windows is quite a bit more code
     // and requires the Windows API crates, so we can reconsider that when
-    // Adam CLI is officially supported on Windows.
+    // LHA CLI is officially supported on Windows.
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         log_file_opts.mode(0o600);
     }
 
-    let log_file = log_file_opts.open(log_dir.join("adam-tui.log"))?;
+    let log_file = log_file_opts.open(log_dir.join("lha-tui.log"))?;
 
     // Wrap file in non‑blocking writer.
     let (non_blocking, _guard) = non_blocking(log_file);
 
     // use RUST_LOG env var, default to info for codex crates.
     let env_filter = || {
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new("adam_agent=info,adam_tui=info,adam_rmcp_client=info")
-        })
+        EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("lha_agent=info,lha_tui=info,lha_rmcp_client=info"))
     };
 
     let file_layer = tracing_subscriber::fmt::layer()
@@ -290,12 +289,12 @@ pub async fn run_main(
         )
         .with_filter(env_filter());
 
-    let feedback = adam_feedback::CodexFeedback::new();
+    let feedback = lha_feedback::CodexFeedback::new();
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        adam_agent::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, true)
+        lha_agent::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, true)
     })) {
         Ok(Ok(otel)) => otel,
         Ok(Err(e)) => {
@@ -318,7 +317,7 @@ pub async fn run_main(
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let log_db_layer = adam_agent::state_db::get_state_db(&config, None)
+    let log_db_layer = lha_agent::state_db::get_state_db(&config, None)
         .await
         .map(|db| log_db::start(db).with_filter(env_filter()));
 
@@ -349,7 +348,7 @@ async fn run_ratatui_app(
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     cloud_requirements: CloudRequirementsLoader,
-    feedback: adam_feedback::CodexFeedback,
+    feedback: lha_feedback::CodexFeedback,
 ) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
 
@@ -381,7 +380,7 @@ async fn run_ratatui_app(
                 UpdatePromptOutcome::RunUpdate(action) => {
                     terminal_restore_guard.restore()?;
                     return Ok(AppExitInfo {
-                        token_usage: adam_agent::protocol::TokenUsage::default(),
+                        token_usage: lha_agent::protocol::TokenUsage::default(),
                         thread_id: None,
                         thread_name: None,
                         update_action: Some(action),
@@ -395,7 +394,7 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
 
-    let auth_manager = AuthManager::shared(initial_config.adam_home.clone(), false);
+    let auth_manager = AuthManager::shared(initial_config.lha_home.clone(), false);
     let config = initial_config;
     tui.set_mouse_capture_enabled(resolve_mouse_capture(&cli, &config))?;
 
@@ -405,12 +404,12 @@ async fn run_ratatui_app(
         session_log::log_session_end();
         let _ = tui.terminal.clear();
         Ok(AppExitInfo {
-            token_usage: adam_agent::protocol::TokenUsage::default(),
+            token_usage: lha_agent::protocol::TokenUsage::default(),
             thread_id: None,
             thread_name: None,
             update_action: None,
             exit_reason: ExitReason::Fatal(format!(
-                "No saved session found with ID {id_str}. Run `adam {action}` without an ID to choose from existing sessions."
+                "No saved session found with ID {id_str}. Run `lha {action}` without an ID to choose from existing sessions."
             )),
         })
     };
@@ -420,9 +419,9 @@ async fn run_ratatui_app(
         if let Some(id_str) = cli.fork_session_id.as_deref() {
             let is_uuid = Uuid::parse_str(id_str).is_ok();
             let path = if is_uuid {
-                find_thread_path_by_id_str(&config.adam_home, id_str).await?
+                find_thread_path_by_id_str(&config.lha_home, id_str).await?
             } else {
-                find_thread_path_by_name_str(&config.adam_home, id_str).await?
+                find_thread_path_by_name_str(&config.lha_home, id_str).await?
             };
             match path {
                 Some(path) => resume_picker::SessionSelection::Fork(path),
@@ -435,7 +434,7 @@ async fn run_ratatui_app(
                 Some(config.cwd.as_path())
             };
             match RolloutRecorder::find_latest_thread_path(
-                &config.adam_home,
+                &config.lha_home,
                 1,
                 None,
                 ThreadSortKey::UpdatedAt,
@@ -452,7 +451,7 @@ async fn run_ratatui_app(
         } else if cli.fork_picker {
             match resume_picker::run_fork_picker(
                 &mut tui,
-                &config.adam_home,
+                &config.lha_home,
                 &config.model_provider_id,
                 Some(config.cwd.as_path()),
                 cli.fork_show_all,
@@ -463,7 +462,7 @@ async fn run_ratatui_app(
                     terminal_restore_guard.restore_silently();
                     session_log::log_session_end();
                     return Ok(AppExitInfo {
-                        token_usage: adam_agent::protocol::TokenUsage::default(),
+                        token_usage: lha_agent::protocol::TokenUsage::default(),
                         thread_id: None,
                         thread_name: None,
                         update_action: None,
@@ -478,9 +477,9 @@ async fn run_ratatui_app(
     } else if let Some(id_str) = cli.resume_session_id.as_deref() {
         let is_uuid = Uuid::parse_str(id_str).is_ok();
         let path = if is_uuid {
-            find_thread_path_by_id_str(&config.adam_home, id_str).await?
+            find_thread_path_by_id_str(&config.lha_home, id_str).await?
         } else {
-            find_thread_path_by_name_str(&config.adam_home, id_str).await?
+            find_thread_path_by_name_str(&config.lha_home, id_str).await?
         };
         match path {
             Some(path) => resume_picker::SessionSelection::Resume(path),
@@ -493,7 +492,7 @@ async fn run_ratatui_app(
             Some(config.cwd.as_path())
         };
         match RolloutRecorder::find_latest_thread_path(
-            &config.adam_home,
+            &config.lha_home,
             1,
             None,
             ThreadSortKey::UpdatedAt,
@@ -510,7 +509,7 @@ async fn run_ratatui_app(
     } else if cli.resume_picker {
         match resume_picker::run_resume_picker(
             &mut tui,
-            &config.adam_home,
+            &config.lha_home,
             &config.model_provider_id,
             Some(config.cwd.as_path()),
             cli.resume_show_all,
@@ -521,7 +520,7 @@ async fn run_ratatui_app(
                 terminal_restore_guard.restore_silently();
                 session_log::log_session_end();
                 return Ok(AppExitInfo {
-                    token_usage: adam_agent::protocol::TokenUsage::default(),
+                    token_usage: lha_agent::protocol::TokenUsage::default(),
                     thread_id: None,
                     thread_name: None,
                     update_action: None,
@@ -746,19 +745,19 @@ fn should_show_trust_screen(config: &Config) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_agent::INTERACTIVE_SESSION_SOURCES;
-    use adam_agent::RolloutRecorder;
-    use adam_agent::ThreadSortKey;
-    use adam_agent::config::ConfigBuilder;
-    use adam_agent::config::ConfigOverrides;
-    use adam_agent::config::ProjectConfig;
-    use adam_agent::protocol::AskForApproval;
-    use adam_protocol::protocol::RolloutItem;
-    use adam_protocol::protocol::RolloutLine;
-    use adam_protocol::protocol::SessionMeta;
-    use adam_protocol::protocol::SessionMetaLine;
-    use adam_protocol::protocol::TurnContextItem;
     use chrono::Utc;
+    use lha_agent::INTERACTIVE_SESSION_SOURCES;
+    use lha_agent::RolloutRecorder;
+    use lha_agent::ThreadSortKey;
+    use lha_agent::config::ConfigBuilder;
+    use lha_agent::config::ConfigOverrides;
+    use lha_agent::config::ProjectConfig;
+    use lha_agent::protocol::AskForApproval;
+    use lha_protocol::protocol::RolloutItem;
+    use lha_protocol::protocol::RolloutLine;
+    use lha_protocol::protocol::SessionMeta;
+    use lha_protocol::protocol::SessionMetaLine;
+    use lha_protocol::protocol::TurnContextItem;
     use serial_test::serial;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -766,7 +765,7 @@ mod tests {
 
     async fn build_config(temp_dir: &TempDir) -> std::io::Result<Config> {
         ConfigBuilder::default()
-            .adam_home(temp_dir.path().to_path_buf())
+            .lha_home(temp_dir.path().to_path_buf())
             .build()
             .await
     }
@@ -865,7 +864,7 @@ mod tests {
 
     #[tokio::test]
     async fn untrusted_project_skips_trust_prompt() -> std::io::Result<()> {
-        use adam_protocol::config_types::TrustLevel;
+        use lha_protocol::config_types::TrustLevel;
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
@@ -903,13 +902,13 @@ mod tests {
     }
 
     fn write_rollout(
-        adam_home: &std::path::Path,
+        lha_home: &std::path::Path,
         file_ts: &str,
         cwd: &std::path::Path,
         provider: &str,
         preview: &str,
     ) -> std::io::Result<PathBuf> {
-        let sessions_root = adam_home.join("sessions");
+        let sessions_root = lha_home.join("sessions");
         let date = &file_ts[..10];
         let year = &date[..4];
         let month = &date[5..7];
@@ -928,13 +927,13 @@ mod tests {
             timestamp: now.clone(),
             item: RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
-                    id: adam_protocol::ThreadId::default(),
+                    id: lha_protocol::ThreadId::default(),
                     timestamp: now.clone(),
                     cwd: cwd.to_path_buf(),
                     originator: "test".to_string(),
                     cli_version: "0.0.0".to_string(),
-                    rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
-                    source: adam_protocol::protocol::SessionSource::Cli,
+                    rollout_schema_version: lha_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+                    source: lha_protocol::protocol::SessionSource::Cli,
                     model_provider: Some(provider.to_string()),
                     base_instructions: None,
                     dynamic_tools: None,
@@ -945,8 +944,8 @@ mod tests {
         };
         let user = RolloutLine {
             timestamp: now,
-            item: RolloutItem::EventMsg(adam_protocol::protocol::EventMsg::UserMessage(
-                adam_protocol::protocol::UserMessageEvent {
+            item: RolloutItem::EventMsg(lha_protocol::protocol::EventMsg::UserMessage(
+                lha_protocol::protocol::UserMessageEvent {
                     message: preview.to_string(),
                     images: None,
                     local_images: Vec::new(),
@@ -1074,7 +1073,7 @@ mod tests {
         )?;
 
         let latest = RolloutRecorder::find_latest_thread_path(
-            &config.adam_home,
+            &config.lha_home,
             1,
             None,
             ThreadSortKey::UpdatedAt,
@@ -1092,7 +1091,7 @@ mod tests {
     #[tokio::test]
     async fn config_rebuild_changes_trust_defaults_with_cwd() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
-        let adam_home = temp_dir.path().to_path_buf();
+        let lha_home = temp_dir.path().to_path_buf();
         let trusted = temp_dir.path().join("trusted");
         let untrusted = temp_dir.path().join("untrusted");
         std::fs::create_dir_all(&trusted)?;
@@ -1116,7 +1115,7 @@ trust_level = "untrusted"
             ..Default::default()
         };
         let trusted_config = ConfigBuilder::default()
-            .adam_home(adam_home.clone())
+            .lha_home(lha_home.clone())
             .harness_overrides(trusted_overrides.clone())
             .build()
             .await?;
@@ -1130,7 +1129,7 @@ trust_level = "untrusted"
             ..trusted_overrides
         };
         let untrusted_config = ConfigBuilder::default()
-            .adam_home(adam_home)
+            .lha_home(lha_home)
             .harness_overrides(untrusted_overrides)
             .build()
             .await?;

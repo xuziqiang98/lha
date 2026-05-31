@@ -1,22 +1,22 @@
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
-use adam_agent::config::ConfigService;
-use adam_agent::config::ConfigServiceError;
-use adam_agent::config_loader::CloudRequirementsLoader;
-use adam_agent::config_loader::ConfigRequirementsToml;
-use adam_agent::config_loader::LoaderOverrides;
-use adam_agent::config_loader::ResidencyRequirement as CoreResidencyRequirement;
-use adam_agent::config_loader::SandboxModeRequirement as CoreSandboxModeRequirement;
-use adam_app_server_protocol::ConfigBatchWriteParams;
-use adam_app_server_protocol::ConfigReadParams;
-use adam_app_server_protocol::ConfigReadResponse;
-use adam_app_server_protocol::ConfigRequirements;
-use adam_app_server_protocol::ConfigRequirementsReadResponse;
-use adam_app_server_protocol::ConfigValueWriteParams;
-use adam_app_server_protocol::ConfigWriteErrorCode;
-use adam_app_server_protocol::ConfigWriteResponse;
-use adam_app_server_protocol::JSONRPCErrorError;
-use adam_app_server_protocol::SandboxMode;
+use lha_agent::config::ConfigService;
+use lha_agent::config::ConfigServiceError;
+use lha_agent::config_loader::CloudRequirementsLoader;
+use lha_agent::config_loader::ConfigRequirementsToml;
+use lha_agent::config_loader::LoaderOverrides;
+use lha_agent::config_loader::ResidencyRequirement as CoreResidencyRequirement;
+use lha_agent::config_loader::SandboxModeRequirement as CoreSandboxModeRequirement;
+use lha_app_server_protocol::ConfigBatchWriteParams;
+use lha_app_server_protocol::ConfigReadParams;
+use lha_app_server_protocol::ConfigReadResponse;
+use lha_app_server_protocol::ConfigRequirements;
+use lha_app_server_protocol::ConfigRequirementsReadResponse;
+use lha_app_server_protocol::ConfigValueWriteParams;
+use lha_app_server_protocol::ConfigWriteErrorCode;
+use lha_app_server_protocol::ConfigWriteResponse;
+use lha_app_server_protocol::JSONRPCErrorError;
+use lha_app_server_protocol::SandboxMode;
 use serde_json::json;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
@@ -28,14 +28,14 @@ pub(crate) struct ConfigApi {
 
 impl ConfigApi {
     pub(crate) fn new(
-        adam_home: PathBuf,
+        lha_home: PathBuf,
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
         cloud_requirements: CloudRequirementsLoader,
     ) -> Self {
         Self {
             service: ConfigService::new(
-                adam_home,
+                lha_home,
                 cli_overrides,
                 loader_overrides,
                 cloud_requirements,
@@ -83,7 +83,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         allowed_approval_policies: requirements.allowed_approval_policies.map(|policies| {
             policies
                 .into_iter()
-                .map(adam_app_server_protocol::AskForApproval::from)
+                .map(lha_app_server_protocol::AskForApproval::from)
                 .collect()
         }),
         allowed_sandbox_modes: requirements.allowed_sandbox_modes.map(|modes| {
@@ -109,9 +109,9 @@ fn map_sandbox_mode_requirement_to_api(mode: CoreSandboxModeRequirement) -> Opti
 
 fn map_residency_requirement_to_api(
     residency: CoreResidencyRequirement,
-) -> adam_app_server_protocol::ResidencyRequirement {
+) -> lha_app_server_protocol::ResidencyRequirement {
     match residency {
-        CoreResidencyRequirement::Us => adam_app_server_protocol::ResidencyRequirement::Us,
+        CoreResidencyRequirement::Us => lha_app_server_protocol::ResidencyRequirement::Us,
     }
 }
 
@@ -140,7 +140,7 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_protocol::protocol::AskForApproval as CoreAskForApproval;
+    use lha_protocol::protocol::AskForApproval as CoreAskForApproval;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -164,8 +164,8 @@ mod tests {
         assert_eq!(
             mapped.allowed_approval_policies,
             Some(vec![
-                adam_app_server_protocol::AskForApproval::Never,
-                adam_app_server_protocol::AskForApproval::OnRequest,
+                lha_app_server_protocol::AskForApproval::Never,
+                lha_app_server_protocol::AskForApproval::OnRequest,
             ])
         );
         assert_eq!(
@@ -174,7 +174,7 @@ mod tests {
         );
         assert_eq!(
             mapped.enforce_residency,
-            Some(adam_app_server_protocol::ResidencyRequirement::Us),
+            Some(lha_app_server_protocol::ResidencyRequirement::Us),
         );
     }
 }

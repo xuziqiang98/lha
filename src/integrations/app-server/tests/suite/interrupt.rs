@@ -3,17 +3,17 @@
 
 use std::path::Path;
 
-use adam_agent::protocol::TurnAbortReason;
-use adam_app_server_protocol::AddConversationListenerParams;
-use adam_app_server_protocol::InterruptConversationParams;
-use adam_app_server_protocol::InterruptConversationResponse;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::NewConversationParams;
-use adam_app_server_protocol::NewConversationResponse;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::SendUserMessageParams;
-use adam_app_server_protocol::SendUserMessageResponse;
 use core_test_support::skip_if_no_network;
+use lha_agent::protocol::TurnAbortReason;
+use lha_app_server_protocol::AddConversationListenerParams;
+use lha_app_server_protocol::InterruptConversationParams;
+use lha_app_server_protocol::InterruptConversationResponse;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::NewConversationParams;
+use lha_app_server_protocol::NewConversationResponse;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::SendUserMessageParams;
+use lha_app_server_protocol::SendUserMessageResponse;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -49,9 +49,9 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
     let shell_command = vec!["sleep".to_string(), "10".to_string()];
 
     let tmp = TempDir::new()?;
-    // Temporary Adam home with config pointing at the mock server.
-    let adam_home = tmp.path().join("adam_home");
-    std::fs::create_dir(&adam_home)?;
+    // Temporary LHA home with config pointing at the mock server.
+    let lha_home = tmp.path().join("lha_home");
+    std::fs::create_dir(&lha_home)?;
     let working_directory = tmp.path().join("workdir");
     std::fs::create_dir(&working_directory)?;
 
@@ -63,10 +63,10 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
         "call_sleep",
     )?])
     .await;
-    create_config_toml(&adam_home, server.uri())?;
+    create_config_toml(&lha_home, server.uri())?;
 
     // Start MCP server and initialize.
-    let mut mcp = McpProcess::new(&adam_home).await?;
+    let mut mcp = McpProcess::new(&lha_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // 1) newConversation
@@ -100,7 +100,7 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
     let send_user_id = mcp
         .send_send_user_message_request(SendUserMessageParams {
             conversation_id,
-            items: vec![adam_app_server_protocol::InputItem::Text {
+            items: vec![lha_app_server_protocol::InputItem::Text {
                 text: "run first sleep command".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -136,9 +136,9 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn create_config_toml(adam_home: &Path, server_uri: String) -> std::io::Result<()> {
+fn create_config_toml(lha_home: &Path, server_uri: String) -> std::io::Result<()> {
     app_test_support::write_mock_responses_config_toml_with_options(
-        adam_home,
+        lha_home,
         &server_uri,
         &std::collections::BTreeMap::new(),
         20_000,

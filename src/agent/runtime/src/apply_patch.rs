@@ -4,8 +4,8 @@ use crate::protocol::FileChange;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_patch_safety;
 use crate::tools::sandboxing::ExecApprovalRequirement;
-use adam_apply_patch::ApplyPatchAction;
-use adam_apply_patch::ApplyPatchFileChange;
+use lha_apply_patch::ApplyPatchAction;
+use lha_apply_patch::ApplyPatchFileChange;
 use std::collections::HashMap;
 use std::path::PathBuf;
 

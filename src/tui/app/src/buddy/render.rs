@@ -153,12 +153,12 @@ fn centered_line(text: String, width: u16, style: Style) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
-    use adam_agent::config::types::BuddyEye;
-    use adam_agent::config::types::BuddyHat;
-    use adam_agent::config::types::BuddyRarity;
-    use adam_agent::config::types::BuddySpecies;
-    use adam_agent::config::types::TuiBuddy;
-    use adam_protocol::config_types::IdentityKind;
+    use lha_agent::config::types::BuddyEye;
+    use lha_agent::config::types::BuddyHat;
+    use lha_agent::config::types::BuddyRarity;
+    use lha_agent::config::types::BuddySpecies;
+    use lha_agent::config::types::TuiBuddy;
+    use lha_protocol::config_types::IdentityKind;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use unicode_width::UnicodeWidthStr;

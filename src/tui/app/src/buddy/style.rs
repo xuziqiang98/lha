@@ -1,4 +1,4 @@
-use adam_agent::config::types::BuddyRarity;
+use lha_agent::config::types::BuddyRarity;
 use ratatui::style::Color;
 
 pub(crate) fn rarity_color(rarity: BuddyRarity) -> Color {

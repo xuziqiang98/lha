@@ -99,7 +99,7 @@
       "type": "object"
     },
     "AskForApproval": {
-      "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Adam.",
+      "description": "Determines the conditions under which the user is consulted to approve running the command proposed by LHA.",
       "oneOf": [
         {
           "description": "Under this policy, only \"known safe\" commands—as determined by `is_safe_command()`—that **only read files** are auto‑approved. Everything else will ask the user to approve.",
@@ -387,7 +387,7 @@
       ]
     },
     "CodexErrorInfo2": {
-      "description": "Adam errors that we expose to clients.",
+      "description": "LHA errors that we expose to clients.",
       "oneOf": [
         {
           "enum": [
@@ -3335,7 +3335,7 @@
       "type": "object"
     },
     "IdentityKind": {
-      "description": "Built-in Adam identity kind.",
+      "description": "Built-in LHA identity kind.",
       "enum": [
         "nobody",
         "planner",
@@ -5014,7 +5014,7 @@
               "$ref": "#/definitions/SessionSource"
             }
           ],
-          "description": "Origin of the thread (CLI, VSCode, adam exec, adam app-server, etc.)."
+          "description": "Origin of the thread (CLI, VSCode, lha exec, lha app-server, etc.)."
         },
         "turns": {
           "description": "Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.",
@@ -7244,7 +7244,7 @@
       "type": "object"
     },
     {
-      "description": "This event is internal-only. Used by Adam Cloud.",
+      "description": "This event is internal-only. Used by LHA Cloud.",
       "properties": {
         "method": {
           "enum": [

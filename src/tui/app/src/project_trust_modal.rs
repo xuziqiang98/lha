@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 
-use adam_agent::git_info::get_git_repo_root;
-use adam_protocol::config_types::TrustLevel;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use lha_agent::git_info::get_git_repo_root;
+use lha_protocol::config_types::TrustLevel;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -142,9 +142,9 @@ impl ProjectTrustModal {
             TrustLevel::Trusted,
             "1. Trust this project",
             if self.is_git_repo {
-                "Allow Adam to work in this folder with the standard project permissions."
+                "Allow LHA to work in this folder with the standard project permissions."
             } else {
-                "Allow Adam to work here without the extra first-run restriction."
+                "Allow LHA to work here without the extra first-run restriction."
             },
         );
         lines.push("".into());

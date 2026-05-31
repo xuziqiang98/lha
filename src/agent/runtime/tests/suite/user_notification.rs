@@ -2,15 +2,15 @@
 
 use std::os::unix::fs::PermissionsExt;
 
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_protocol::user_input::UserInput;
 use core_test_support::fs_wait;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;

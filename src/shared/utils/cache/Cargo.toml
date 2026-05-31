@@ -1,5 +1,5 @@
 [package]
-name = "adam-utils-cache"
+name = "lha-utils-cache"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

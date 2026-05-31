@@ -1,6 +1,5 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, unused_imports)]
 
-use adam_agent::CODEX_APPLY_PATCH_ARG1;
 use anyhow::Context;
 use assert_cmd::prelude::*;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
@@ -9,12 +8,13 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use lha_agent::CODEX_APPLY_PATCH_ARG1;
 use std::fs;
 use std::process::Command;
 use tempfile::tempdir;
 
 /// While we may add an `apply-patch` subcommand to the `codex` CLI multitool
-/// at some point, we must ensure that the smaller `adam-exec` CLI can still
+/// at some point, we must ensure that the smaller `lha-exec` CLI can still
 /// emulate the `apply_patch` CLI.
 #[test]
 fn test_standalone_exec_cli_can_use_apply_patch() -> anyhow::Result<()> {
@@ -23,7 +23,7 @@ fn test_standalone_exec_cli_can_use_apply_patch() -> anyhow::Result<()> {
     let absolute_path = tmp.path().join(relative_path);
     fs::write(&absolute_path, "original content\n")?;
 
-    Command::new(adam_utils_cargo_bin::cargo_bin("adam-exec")?)
+    Command::new(lha_utils_cargo_bin::cargo_bin("lha-exec")?)
         .arg(CODEX_APPLY_PATCH_ARG1)
         .arg(
             r#"*** Begin Patch

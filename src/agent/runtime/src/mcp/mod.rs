@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 
-use adam_protocol::protocol::McpListToolsResponseEvent;
-use adam_protocol::protocol::SandboxPolicy;
 use async_channel::unbounded;
+use lha_protocol::protocol::McpListToolsResponseEvent;
+use lha_protocol::protocol::SandboxPolicy;
 use mcp_types::Tool as McpTool;
 use tokio_util::sync::CancellationToken;
 

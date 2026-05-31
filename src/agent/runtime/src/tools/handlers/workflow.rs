@@ -9,8 +9,8 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::spec::JsonSchema;
 use crate::workflow::ArtifactSubmission;
-use adam_llm::FunctionToolDescriptor;
-use adam_llm::ToolDescriptor;
+use lha_llm::FunctionToolDescriptor;
+use lha_llm::ToolDescriptor;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 

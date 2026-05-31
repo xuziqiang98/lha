@@ -1,12 +1,3 @@
-use adam_agent::features::Feature;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::IDENTITY_CLOSE_TAG;
-use adam_agent::protocol::IDENTITY_OPEN_TAG;
-use adam_agent::protocol::Op;
-use adam_protocol::config_types::Identity;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::Settings;
-use adam_protocol::protocol::ThreadPlanRunStatus;
 use anyhow::Result;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
@@ -19,6 +10,15 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use lha_agent::features::Feature;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::IDENTITY_CLOSE_TAG;
+use lha_agent::protocol::IDENTITY_OPEN_TAG;
+use lha_agent::protocol::Op;
+use lha_protocol::config_types::Identity;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::Settings;
+use lha_protocol::protocol::ThreadPlanRunStatus;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio::time::Duration;
@@ -144,7 +144,7 @@ async fn plan_completion_injects_programmer_identity_after_planner_switch() -> R
         .await?;
     test.codex
         .submit(Op::UserInput {
-            items: vec![adam_protocol::user_input::UserInput::Text {
+            items: vec![lha_protocol::user_input::UserInput::Text {
                 text: "draft a plan".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -262,7 +262,7 @@ async fn active_plan_run_continues_until_complete() -> Result<()> {
         .get_thread_plan_run(test.session_configured.session_id)
         .await?
         .expect("plan run should exist");
-    assert_eq!(adam_state::ThreadPlanRunStatus::Complete, plan_run.status);
+    assert_eq!(lha_state::ThreadPlanRunStatus::Complete, plan_run.status);
 
     let requests = mock.requests();
     let request = requests
@@ -298,7 +298,7 @@ async fn plan_run_start_rejects_unfinished_goal() -> Result<()> {
     db.replace_thread_goal(
         test.session_configured.session_id,
         "finish goal first",
-        adam_state::ThreadGoalStatus::Active,
+        lha_state::ThreadGoalStatus::Active,
         None,
     )
     .await?;
@@ -343,7 +343,7 @@ async fn plan_run_start_rejects_unfinished_plan_run() -> Result<()> {
         .replace_thread_plan_run(
             test.session_configured.session_id,
             "# original plan",
-            adam_state::ThreadPlanRunStatus::Active,
+            lha_state::ThreadPlanRunStatus::Active,
             None,
         )
         .await?;

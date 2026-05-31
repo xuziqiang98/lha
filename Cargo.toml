@@ -56,49 +56,49 @@ license = "Apache-2.0"
 [workspace.dependencies]
 # Internal
 app_test_support = { path = "src/integrations/app-server/tests/common" }
-adam-ansi-escape = { path = "src/shared/ansi-escape" }
-adam-api = { path = "src/llm/api/codex-api" }
-adam-app-server = { path = "src/integrations/app-server" }
-adam-app-server-protocol = { path = "src/integrations/app-server-protocol" }
-adam-apply-patch = { path = "src/resources/apply-patch" }
-adam-arg0 = { path = "src/shared/arg0" }
-adam-async-utils = { path = "src/shared/async-utils" }
-adam-cli = { path = "src/agent/cli" }
-adam-client = { path = "src/llm/api/codex-client" }
-adam-common = { path = "src/shared/common" }
-adam-agent = { path = "src/agent/runtime" }
-adam-agent-core = { path = "src/core/agent-core" }
-adam-agent-runtime = { path = "src/core/agent-runtime" }
-adam-exec = { path = "src/platform/exec" }
-adam-execpolicy = { path = "src/platform/sandbox/execpolicy" }
-adam-feedback = { path = "src/agent/feedback" }
-adam-identity = { path = "src/agent/identity" }
-adam-file-search = { path = "src/resources/file-search" }
-adam-git = { path = "src/shared/utils/git" }
-adam-keyring-store = { path = "src/resources/keyring-store" }
-adam-llm = { path = "src/llm/runtime" }
-adam-linux-sandbox = { path = "src/platform/sandbox/linux" }
-adam-llm-types = { path = "src/llm/types" }
-adam-mcp-server = { path = "src/integrations/mcp-server" }
-adam-otel = { path = "src/shared/otel" }
-adam-process-hardening = { path = "src/platform/sandbox/process-hardening" }
-adam-protocol = { path = "src/core/protocol" }
-adam-responses-api-proxy = { path = "src/integrations/responses-api-proxy" }
-adam-rmcp-client = { path = "src/integrations/rmcp-client" }
-adam-state = { path = "src/core/state" }
-adam-stdio-to-uds = { path = "src/platform/ipc/stdio-to-uds" }
-adam-tui = { path = "src/tui/app" }
-adam-utils-absolute-path = { path = "src/shared/utils/absolute-path" }
-adam-utils-cache = { path = "src/shared/utils/cache" }
-adam-utils-cargo-bin = { path = "src/shared/utils/cargo-bin" }
-adam-utils-image = { path = "src/shared/utils/image" }
-adam-utils-json-to-toml = { path = "src/shared/utils/json-to-toml" }
-adam-utils-home-dir = { path = "src/shared/utils/home-dir" }
-adam-utils-pty = { path = "src/shared/utils/pty" }
-adam-utils-readiness = { path = "src/shared/utils/readiness" }
-adam-utils-sleep-inhibitor = { path = "src/shared/utils/sleep-inhibitor" }
-adam-utils-string = { path = "src/shared/utils/string" }
-adam-windows-sandbox = { path = "src/platform/sandbox/windows" }
+lha-ansi-escape = { path = "src/shared/ansi-escape" }
+lha-api = { path = "src/llm/api/codex-api" }
+lha-app-server = { path = "src/integrations/app-server" }
+lha-app-server-protocol = { path = "src/integrations/app-server-protocol" }
+lha-apply-patch = { path = "src/resources/apply-patch" }
+lha-arg0 = { path = "src/shared/arg0" }
+lha-async-utils = { path = "src/shared/async-utils" }
+lha-cli = { path = "src/agent/cli" }
+lha-client = { path = "src/llm/api/codex-client" }
+lha-common = { path = "src/shared/common" }
+lha-agent = { path = "src/agent/runtime" }
+lha-agent-core = { path = "src/core/agent-core" }
+lha-agent-runtime = { path = "src/core/agent-runtime" }
+lha-exec = { path = "src/platform/exec" }
+lha-execpolicy = { path = "src/platform/sandbox/execpolicy" }
+lha-feedback = { path = "src/agent/feedback" }
+lha-identity = { path = "src/agent/identity" }
+lha-file-search = { path = "src/resources/file-search" }
+lha-git = { path = "src/shared/utils/git" }
+lha-keyring-store = { path = "src/resources/keyring-store" }
+lha-llm = { path = "src/llm/runtime" }
+lha-linux-sandbox = { path = "src/platform/sandbox/linux" }
+lha-llm-types = { path = "src/llm/types" }
+lha-mcp-server = { path = "src/integrations/mcp-server" }
+lha-otel = { path = "src/shared/otel" }
+lha-process-hardening = { path = "src/platform/sandbox/process-hardening" }
+lha-protocol = { path = "src/core/protocol" }
+lha-responses-api-proxy = { path = "src/integrations/responses-api-proxy" }
+lha-rmcp-client = { path = "src/integrations/rmcp-client" }
+lha-state = { path = "src/core/state" }
+lha-stdio-to-uds = { path = "src/platform/ipc/stdio-to-uds" }
+lha-tui = { path = "src/tui/app" }
+lha-utils-absolute-path = { path = "src/shared/utils/absolute-path" }
+lha-utils-cache = { path = "src/shared/utils/cache" }
+lha-utils-cargo-bin = { path = "src/shared/utils/cargo-bin" }
+lha-utils-image = { path = "src/shared/utils/image" }
+lha-utils-json-to-toml = { path = "src/shared/utils/json-to-toml" }
+lha-utils-home-dir = { path = "src/shared/utils/home-dir" }
+lha-utils-pty = { path = "src/shared/utils/pty" }
+lha-utils-readiness = { path = "src/shared/utils/readiness" }
+lha-utils-sleep-inhibitor = { path = "src/shared/utils/sleep-inhibitor" }
+lha-utils-string = { path = "src/shared/utils/string" }
+lha-windows-sandbox = { path = "src/platform/sandbox/windows" }
 core_test_support = { path = "src/agent/runtime/tests/common" }
 mcp-types = { path = "src/integrations/mcp-types" }
 mcp_test_support = { path = "src/integrations/mcp-server/tests/common" }
@@ -277,7 +277,7 @@ unnecessary_to_owned = "deny"
 unwrap_used = "deny"
 
 [workspace.metadata.cargo-shear]
-ignored = ["icu_provider", "openssl-sys", "adam-utils-readiness"]
+ignored = ["icu_provider", "openssl-sys", "lha-utils-readiness"]
 
 [profile.release]
 lto = "fat"

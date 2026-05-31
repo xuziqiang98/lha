@@ -1,6 +1,6 @@
 {"ts":"2025-08-10T03:12:26.500Z","dir":"meta","kind":"session_start","cwd":"/Users/easong/code/codex","model":"gpt-oss:20b","model_provider_id":"oss","model_provider_name":"gpt-oss"}
 {"ts":"2025-08-10T03:12:26.500Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
-{"ts":"2025-08-10T03:12:26.502Z","dir":"to_tui","kind":"log_line","line":"[INFO adam_agent::codex] resume_path: None"}
+{"ts":"2025-08-10T03:12:26.502Z","dir":"to_tui","kind":"log_line","line":"[INFO lha_agent::codex] resume_path: None"}
 {"ts":"2025-08-10T03:12:26.502Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
 {"ts":"2025-08-10T03:12:26.519Z","dir":"to_tui","kind":"codex_event","payload":{"id":"0","msg":{"type":"session_configured","session_id":"8f7c4ac2-6141-42da-b4d5-7032a8e8df3b","model":"gpt-oss:20b","history_log_id":2532619,"history_entry_count":355}}}
 {"ts":"2025-08-10T03:12:26.520Z","dir":"to_tui","kind":"insert_history","lines":9}
@@ -8034,8 +8034,8 @@
 {"ts":"2025-08-10T03:48:49.822Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Char('c'), modifiers: KeyModifiers(CONTROL), kind: Release, state: KeyEventState(0x0) }"}
 {"ts":"2025-08-10T03:48:49.925Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Char('c'), modifiers: KeyModifiers(CONTROL), kind: Press, state: KeyEventState(0x0) }"}
 {"ts":"2025-08-10T03:48:49.925Z","dir":"from_tui","kind":"op","payload":{"type":"shutdown"}}
-{"ts":"2025-08-10T03:48:49.926Z","dir":"to_tui","kind":"log_line","line":"[INFO adam_agent::codex] Shutting down Adam instance"}
-{"ts":"2025-08-10T03:48:49.927Z","dir":"to_tui","kind":"log_line","line":"[INFO adam_agent::codex] Aborting existing session"}
+{"ts":"2025-08-10T03:48:49.926Z","dir":"to_tui","kind":"log_line","line":"[INFO lha_agent::codex] Shutting down LHA instance"}
+{"ts":"2025-08-10T03:48:49.927Z","dir":"to_tui","kind":"log_line","line":"[INFO lha_agent::codex] Aborting existing session"}
 {"ts":"2025-08-10T03:48:49.927Z","dir":"to_tui","kind":"codex_event","payload":{"id":"7","msg":{"type":"shutdown_complete"}}}
 {"ts":"2025-08-10T03:48:49.927Z","dir":"to_tui","kind":"app_event","variant":"Exit"}
 {"ts":"2025-08-10T03:48:49.927Z","dir":"meta","kind":"session_end"}

@@ -1,6 +1,6 @@
 # Identities
 
-An identity is a preset that changes how Adam behaves for a session or turn.
+An identity is a preset that changes how LHA behaves for a session or turn.
 When identities are enabled, use `/identity` in the TUI to open the identity
 selector.
 
@@ -9,7 +9,7 @@ which mode the next turn will use.
 
 ## Built-in Identities
 
-Adam currently includes five built-in identities:
+LHA currently includes five built-in identities:
 
 - `nobody`
 - `planner`
@@ -33,7 +33,7 @@ a response that is not shaped by planner or code-mode behavior.
 coding starts.
 
 Use `planner` when a task is ambiguous, large, risky, cross-cutting, or depends
-on product/design tradeoffs. In planner mode, Adam should:
+on product/design tradeoffs. In planner mode, LHA should:
 
 - explore the repository first when local context can answer questions;
 - ask clarifying questions for important choices or tradeoffs;
@@ -44,7 +44,7 @@ Clients that support planner output may show a separate `plan` item for planner
 identity turns.
 
 When the experimental `plan_completion` feature is enabled, the TUI can start
-YOLO plan completion from a planner plan. Adam stores the plan separately from
+YOLO plan completion from a planner plan. LHA stores the plan separately from
 `/goal` and hands it to `programmer` until the plan is marked complete or
 blocked.
 
@@ -52,7 +52,7 @@ blocked.
 
 `programmer` is code/execution mode.
 
-Use `programmer` when you want Adam to implement changes, edit files, run
+Use `programmer` when you want LHA to implement changes, edit files, run
 formatters, run tests, or carry out an already-decided plan.
 
 `programmer` is also the only identity that can run `/goal` long-running goals
@@ -66,10 +66,10 @@ still apply in `programmer` mode.
 ## `explorer`
 
 `explorer` is a read-only codebase navigation identity. It is intended for
-isolated one-shot jobs launched by `spawn_agent` or `adam exec --identity
+isolated one-shot jobs launched by `spawn_agent` or `lha exec --identity
 explorer`.
 
-Use `explorer` when Adam needs a narrow repository fact or path-specific answer
+Use `explorer` when LHA needs a narrow repository fact or path-specific answer
 but the search process should not enter the main agent context. The runtime
 only exposes read-only navigation tools (`grep_files`, `read_file`, and
 `list_dir`) for this identity.
@@ -108,7 +108,7 @@ only when identities are enabled.
 Switching identities affects subsequent turns. It does not rewrite earlier
 turns in the conversation.
 
-When you resume or fork a saved thread, Adam restores the last identity recorded
+When you resume or fork a saved thread, LHA restores the last identity recorded
 for that thread. Model selection still follows the current resume/configuration
 overrides, so resuming with a different model does not change the restored
 identity.
@@ -134,7 +134,7 @@ identity.
 ## Related Documentation
 
 - [Slash commands](./slash-commands.md) documents `/identity`.
-- [Design Philosophy](./design-philosophy.md) explains Adam's single-agent
+- [Design Philosophy](./design-philosophy.md) explains LHA's single-agent
   product model and bounded delegation rules.
 - [Workflow identities](./workflow-identities.md) describes the planned
   structured workflow identity design.

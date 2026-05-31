@@ -21,21 +21,21 @@ use crate::tools::handlers::UPDATE_PLAN_SUCCESS_OUTPUT;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
-use adam_llm::RuntimeCapabilities;
-use adam_llm::ToolCallPayload;
-use adam_llm::ToolResultPayload;
-use adam_llm::TurnEvent;
-use adam_llm::TurnRequest;
-use adam_protocol::items::ContextCompactionItem;
-use adam_protocol::items::TurnItem;
-use adam_protocol::models::ContentItem;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::models::transcript_item_from_user_input;
-use adam_protocol::plan_tool::StepStatus;
-use adam_protocol::plan_tool::UpdatePlanArgs;
-use adam_protocol::protocol::RolloutItem;
-use adam_protocol::user_input::UserInput;
 use futures::prelude::*;
+use lha_llm::RuntimeCapabilities;
+use lha_llm::ToolCallPayload;
+use lha_llm::ToolResultPayload;
+use lha_llm::TurnEvent;
+use lha_llm::TurnRequest;
+use lha_protocol::items::ContextCompactionItem;
+use lha_protocol::items::TurnItem;
+use lha_protocol::models::ContentItem;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::models::transcript_item_from_user_input;
+use lha_protocol::plan_tool::StepStatus;
+use lha_protocol::plan_tool::UpdatePlanArgs;
+use lha_protocol::protocol::RolloutItem;
+use lha_protocol::user_input::UserInput;
 use tracing::error;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
@@ -670,8 +670,8 @@ mod tests {
     use super::*;
     use crate::instructions::SkillInstructions;
     use crate::session_prefix::TURN_ABORTED_OPEN_TAG;
-    use adam_llm::ToolCallPayload;
-    use adam_llm::ToolResultPayload;
+    use lha_llm::ToolCallPayload;
+    use lha_llm::ToolResultPayload;
     use pretty_assertions::assert_eq;
 
     fn user_message(text: &str) -> TranscriptItem {
@@ -968,11 +968,11 @@ mod tests {
         let older_args = UpdatePlanArgs {
             explanation: Some("Keep going".to_string()),
             plan: vec![
-                adam_protocol::plan_tool::PlanItemArg {
+                lha_protocol::plan_tool::PlanItemArg {
                     step: "Inspect workspace".to_string(),
                     status: StepStatus::Completed,
                 },
-                adam_protocol::plan_tool::PlanItemArg {
+                lha_protocol::plan_tool::PlanItemArg {
                     step: "Patch compact".to_string(),
                     status: StepStatus::InProgress,
                 },
@@ -980,7 +980,7 @@ mod tests {
         };
         let latest_completed_args = UpdatePlanArgs {
             explanation: None,
-            plan: vec![adam_protocol::plan_tool::PlanItemArg {
+            plan: vec![lha_protocol::plan_tool::PlanItemArg {
                 step: "Wrap up".to_string(),
                 status: StepStatus::Completed,
             }],
@@ -1012,14 +1012,14 @@ mod tests {
     fn last_backfillable_update_plan_from_history_extracts_latest_unfinished_success() {
         let older_args = UpdatePlanArgs {
             explanation: Some("Keep going".to_string()),
-            plan: vec![adam_protocol::plan_tool::PlanItemArg {
+            plan: vec![lha_protocol::plan_tool::PlanItemArg {
                 step: "Inspect workspace".to_string(),
                 status: StepStatus::Pending,
             }],
         };
         let latest_args = UpdatePlanArgs {
             explanation: Some("Patch compact".to_string()),
-            plan: vec![adam_protocol::plan_tool::PlanItemArg {
+            plan: vec![lha_protocol::plan_tool::PlanItemArg {
                 step: "Patch compact".to_string(),
                 status: StepStatus::InProgress,
             }],
@@ -1056,7 +1056,7 @@ mod tests {
     fn last_backfillable_update_plan_from_history_skips_failed_and_invalid_calls() {
         let valid_args = UpdatePlanArgs {
             explanation: Some("Recover".to_string()),
-            plan: vec![adam_protocol::plan_tool::PlanItemArg {
+            plan: vec![lha_protocol::plan_tool::PlanItemArg {
                 step: "Retry compact".to_string(),
                 status: StepStatus::Pending,
             }],
@@ -1112,7 +1112,7 @@ mod tests {
     fn last_backfillable_update_plan_from_history_accepts_deserialized_success_output() {
         let args = UpdatePlanArgs {
             explanation: Some("Continue".to_string()),
-            plan: vec![adam_protocol::plan_tool::PlanItemArg {
+            plan: vec![lha_protocol::plan_tool::PlanItemArg {
                 step: "Do work".to_string(),
                 status: StepStatus::InProgress,
             }],
@@ -1136,7 +1136,7 @@ mod tests {
     fn build_compacted_history_appends_backfilled_update_plan_pair() {
         let args = UpdatePlanArgs {
             explanation: Some("Continue".to_string()),
-            plan: vec![adam_protocol::plan_tool::PlanItemArg {
+            plan: vec![lha_protocol::plan_tool::PlanItemArg {
                 step: "Do work".to_string(),
                 status: StepStatus::InProgress,
             }],
@@ -1359,7 +1359,7 @@ mod tests {
     fn build_compacted_history_appends_backfilled_skills_after_plan_items() {
         let args = UpdatePlanArgs {
             explanation: Some("Continue".to_string()),
-            plan: vec![adam_protocol::plan_tool::PlanItemArg {
+            plan: vec![lha_protocol::plan_tool::PlanItemArg {
                 step: "Do work".to_string(),
                 status: StepStatus::InProgress,
             }],

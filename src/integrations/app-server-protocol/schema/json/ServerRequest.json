@@ -4,7 +4,7 @@
     "ApplyPatchApprovalParams": {
       "properties": {
         "callId": {
-          "description": "Use to correlate this with [adam_agent::protocol::PatchApplyBeginEvent] and [adam_agent::protocol::PatchApplyEndEvent].",
+          "description": "Use to correlate this with [lha_agent::protocol::PatchApplyBeginEvent] and [lha_agent::protocol::PatchApplyEndEvent].",
           "type": "string"
         },
         "conversationId": {
@@ -236,7 +236,7 @@
     "ExecCommandApprovalParams": {
       "properties": {
         "callId": {
-          "description": "Use to correlate this with [adam_agent::protocol::ExecCommandBeginEvent] and [adam_agent::protocol::ExecCommandEndEvent].",
+          "description": "Use to correlate this with [lha_agent::protocol::ExecCommandBeginEvent] and [lha_agent::protocol::ExecCommandEndEvent].",
           "type": "string"
         },
         "command": {

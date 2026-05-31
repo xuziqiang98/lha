@@ -1,4 +1,4 @@
-use adam_client::Request;
+use lha_client::Request;
 
 use crate::provider::WireApi;
 

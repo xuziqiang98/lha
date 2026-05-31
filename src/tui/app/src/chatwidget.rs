@@ -1,4 +1,4 @@
-//! The main Adam TUI chat surface.
+//! The main LHA TUI chat surface.
 //!
 //! `ChatWidget` consumes protocol events, builds and updates history cells, and drives rendering
 //! for both the main viewport and overlay UIs.
@@ -30,91 +30,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::version::CODEX_CLI_VERSION;
-use adam_agent::config::Config;
-use adam_agent::config::ConstraintResult;
-use adam_agent::config::types::Notifications;
-use adam_agent::config::types::TuiBuddy;
-use adam_agent::connectors;
-use adam_agent::features::Feature;
-use adam_agent::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
-use adam_agent::protocol::AgentMessageDeltaEvent;
-use adam_agent::protocol::AgentMessageEvent;
-use adam_agent::protocol::AgentReasoningDeltaEvent;
-use adam_agent::protocol::AgentReasoningEvent;
-use adam_agent::protocol::AgentReasoningRawContentDeltaEvent;
-use adam_agent::protocol::AgentReasoningRawContentEvent;
-use adam_agent::protocol::ApplyPatchApprovalRequestEvent;
-use adam_agent::protocol::BackgroundEventEvent;
-use adam_agent::protocol::BuddyTurnSnapshot;
-use adam_agent::protocol::CodexErrorInfo;
-use adam_agent::protocol::DeprecationNoticeEvent;
-use adam_agent::protocol::ErrorEvent;
-use adam_agent::protocol::Event;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::ExecApprovalRequestEvent;
-use adam_agent::protocol::ExecCommandBeginEvent;
-use adam_agent::protocol::ExecCommandEndEvent;
-use adam_agent::protocol::ExecCommandOutputDeltaEvent;
-use adam_agent::protocol::ExecCommandSource;
-use adam_agent::protocol::ExitedReviewModeEvent;
-use adam_agent::protocol::ListCustomPromptsResponseEvent;
-use adam_agent::protocol::ListSkillsResponseEvent;
-use adam_agent::protocol::McpListToolsResponseEvent;
-use adam_agent::protocol::McpStartupCompleteEvent;
-use adam_agent::protocol::McpStartupStatus;
-use adam_agent::protocol::McpStartupUpdateEvent;
-use adam_agent::protocol::McpToolCallBeginEvent;
-use adam_agent::protocol::McpToolCallEndEvent;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::PatchApplyBeginEvent;
-use adam_agent::protocol::ReviewRequest;
-use adam_agent::protocol::ReviewTarget;
-use adam_agent::protocol::SkillMetadata as ProtocolSkillMetadata;
-use adam_agent::protocol::StreamErrorEvent;
-use adam_agent::protocol::TerminalInteractionEvent;
-use adam_agent::protocol::ThreadGoal;
-use adam_agent::protocol::ThreadGoalClearedEvent;
-use adam_agent::protocol::ThreadGoalReplaceConfirmationRequiredEvent;
-use adam_agent::protocol::ThreadGoalSetMode;
-use adam_agent::protocol::ThreadGoalSnapshotEvent;
-use adam_agent::protocol::ThreadGoalStatus;
-use adam_agent::protocol::ThreadGoalUpdatedEvent;
-use adam_agent::protocol::ThreadPlanRun;
-use adam_agent::protocol::ThreadPlanRunClearedEvent;
-use adam_agent::protocol::ThreadPlanRunSnapshotEvent;
-use adam_agent::protocol::ThreadPlanRunStatus;
-use adam_agent::protocol::ThreadPlanRunUpdatedEvent;
-use adam_agent::protocol::TokenUsage;
-use adam_agent::protocol::TokenUsageInfo;
-use adam_agent::protocol::TurnAbortReason;
-use adam_agent::protocol::TurnCompleteEvent;
-use adam_agent::protocol::TurnDiffEvent;
-use adam_agent::protocol::UndoCompletedEvent;
-use adam_agent::protocol::UndoStartedEvent;
-use adam_agent::protocol::UserMessageEvent;
-use adam_agent::protocol::ViewImageToolCallEvent;
-use adam_agent::protocol::WarningEvent;
-use adam_agent::protocol::WebSearchBeginEvent;
-use adam_agent::protocol::WebSearchEndEvent;
-use adam_agent::skills::model::SkillMetadata;
-#[cfg(target_os = "windows")]
-use adam_agent::windows_sandbox::WindowsSandboxLevelExt;
-use adam_otel::OtelManager;
-use adam_protocol::ThreadId;
-use adam_protocol::approvals::ElicitationRequestEvent;
-use adam_protocol::config_types::Identity;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::IdentityMask;
-use adam_protocol::config_types::Personality;
-use adam_protocol::config_types::Settings;
-#[cfg(target_os = "windows")]
-use adam_protocol::config_types::WindowsSandboxLevel;
-use adam_protocol::models::local_image_label_text;
-use adam_protocol::parse_command::ParsedCommand;
-use adam_protocol::request_user_input::RequestUserInputEvent;
-use adam_protocol::user_input::TextElement;
-use adam_protocol::user_input::UserInput;
-use adam_utils_sleep_inhibitor::SleepInhibitor;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -122,6 +37,91 @@ use crossterm::event::KeyModifiers;
 use crossterm::event::MouseButton;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
+use lha_agent::config::Config;
+use lha_agent::config::ConstraintResult;
+use lha_agent::config::types::Notifications;
+use lha_agent::config::types::TuiBuddy;
+use lha_agent::connectors;
+use lha_agent::features::Feature;
+use lha_agent::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
+use lha_agent::protocol::AgentMessageDeltaEvent;
+use lha_agent::protocol::AgentMessageEvent;
+use lha_agent::protocol::AgentReasoningDeltaEvent;
+use lha_agent::protocol::AgentReasoningEvent;
+use lha_agent::protocol::AgentReasoningRawContentDeltaEvent;
+use lha_agent::protocol::AgentReasoningRawContentEvent;
+use lha_agent::protocol::ApplyPatchApprovalRequestEvent;
+use lha_agent::protocol::BackgroundEventEvent;
+use lha_agent::protocol::BuddyTurnSnapshot;
+use lha_agent::protocol::CodexErrorInfo;
+use lha_agent::protocol::DeprecationNoticeEvent;
+use lha_agent::protocol::ErrorEvent;
+use lha_agent::protocol::Event;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::ExecApprovalRequestEvent;
+use lha_agent::protocol::ExecCommandBeginEvent;
+use lha_agent::protocol::ExecCommandEndEvent;
+use lha_agent::protocol::ExecCommandOutputDeltaEvent;
+use lha_agent::protocol::ExecCommandSource;
+use lha_agent::protocol::ExitedReviewModeEvent;
+use lha_agent::protocol::ListCustomPromptsResponseEvent;
+use lha_agent::protocol::ListSkillsResponseEvent;
+use lha_agent::protocol::McpListToolsResponseEvent;
+use lha_agent::protocol::McpStartupCompleteEvent;
+use lha_agent::protocol::McpStartupStatus;
+use lha_agent::protocol::McpStartupUpdateEvent;
+use lha_agent::protocol::McpToolCallBeginEvent;
+use lha_agent::protocol::McpToolCallEndEvent;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::PatchApplyBeginEvent;
+use lha_agent::protocol::ReviewRequest;
+use lha_agent::protocol::ReviewTarget;
+use lha_agent::protocol::SkillMetadata as ProtocolSkillMetadata;
+use lha_agent::protocol::StreamErrorEvent;
+use lha_agent::protocol::TerminalInteractionEvent;
+use lha_agent::protocol::ThreadGoal;
+use lha_agent::protocol::ThreadGoalClearedEvent;
+use lha_agent::protocol::ThreadGoalReplaceConfirmationRequiredEvent;
+use lha_agent::protocol::ThreadGoalSetMode;
+use lha_agent::protocol::ThreadGoalSnapshotEvent;
+use lha_agent::protocol::ThreadGoalStatus;
+use lha_agent::protocol::ThreadGoalUpdatedEvent;
+use lha_agent::protocol::ThreadPlanRun;
+use lha_agent::protocol::ThreadPlanRunClearedEvent;
+use lha_agent::protocol::ThreadPlanRunSnapshotEvent;
+use lha_agent::protocol::ThreadPlanRunStatus;
+use lha_agent::protocol::ThreadPlanRunUpdatedEvent;
+use lha_agent::protocol::TokenUsage;
+use lha_agent::protocol::TokenUsageInfo;
+use lha_agent::protocol::TurnAbortReason;
+use lha_agent::protocol::TurnCompleteEvent;
+use lha_agent::protocol::TurnDiffEvent;
+use lha_agent::protocol::UndoCompletedEvent;
+use lha_agent::protocol::UndoStartedEvent;
+use lha_agent::protocol::UserMessageEvent;
+use lha_agent::protocol::ViewImageToolCallEvent;
+use lha_agent::protocol::WarningEvent;
+use lha_agent::protocol::WebSearchBeginEvent;
+use lha_agent::protocol::WebSearchEndEvent;
+use lha_agent::skills::model::SkillMetadata;
+#[cfg(target_os = "windows")]
+use lha_agent::windows_sandbox::WindowsSandboxLevelExt;
+use lha_otel::OtelManager;
+use lha_protocol::ThreadId;
+use lha_protocol::approvals::ElicitationRequestEvent;
+use lha_protocol::config_types::Identity;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::IdentityMask;
+use lha_protocol::config_types::Personality;
+use lha_protocol::config_types::Settings;
+#[cfg(target_os = "windows")]
+use lha_protocol::config_types::WindowsSandboxLevel;
+use lha_protocol::models::local_image_label_text;
+use lha_protocol::parse_command::ParsedCommand;
+use lha_protocol::request_user_input::RequestUserInputEvent;
+use lha_protocol::user_input::TextElement;
+use lha_protocol::user_input::UserInput;
+use lha_utils_sleep_inhibitor::SleepInhibitor;
 use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -231,19 +231,19 @@ use self::skills::find_skill_mentions_with_tool_mentions;
 use crate::streaming::controller::AgentMarkdownStreamController;
 use crate::streaming::controller::PlanStreamController;
 
-use adam_agent::AuthManager;
-use adam_agent::ThreadManager;
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::SandboxPolicy;
-use adam_common::approval_presets::ApprovalPreset;
-use adam_common::approval_presets::builtin_approval_presets;
-use adam_file_search::FileMatch;
-use adam_protocol::openai_models::ModelPreset;
-use adam_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use adam_protocol::plan_tool::UpdatePlanArgs;
-use adam_protocol::protocol::AgentJobDisplayStatus;
-use adam_protocol::protocol::AgentJobKind;
-use adam_protocol::protocol::AgentJobStatusEvent;
+use lha_agent::AuthManager;
+use lha_agent::ThreadManager;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::SandboxPolicy;
+use lha_common::approval_presets::ApprovalPreset;
+use lha_common::approval_presets::builtin_approval_presets;
+use lha_file_search::FileMatch;
+use lha_protocol::openai_models::ModelPreset;
+use lha_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use lha_protocol::plan_tool::UpdatePlanArgs;
+use lha_protocol::protocol::AgentJobDisplayStatus;
+use lha_protocol::protocol::AgentJobKind;
+use lha_protocol::protocol::AgentJobStatusEvent;
 use strum::IntoEnumIterator;
 
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
@@ -453,7 +453,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) initial_user_message: Option<UserMessage>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
-    pub(crate) feedback: adam_feedback::CodexFeedback,
+    pub(crate) feedback: lha_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
     pub(crate) startup: ChatWidgetStartup,
     pub(crate) otel_manager: OtelManager,
@@ -516,7 +516,7 @@ struct CliAgentJobEntry {
 /// intent (`Op` submissions and `AppEvent` requests).
 ///
 /// It is not responsible for running the agent itself; it reflects progress by updating UI state
-/// and by sending requests back to adam-agent.
+/// and by sending requests back to lha-agent.
 ///
 /// Quit/interrupt behavior intentionally spans layers: the bottom pane owns local input routing
 /// (which view gets Ctrl+C), while `ChatWidget` owns process-level decisions such as interrupting
@@ -582,7 +582,7 @@ pub(crate) struct ChatWidget {
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
     changed_files: VecDeque<String>,
     cli_agent_jobs: HashMap<String, CliAgentJobEntry>,
-    /// Tracks whether adam-agent currently considers an agent turn to be in progress.
+    /// Tracks whether lha-agent currently considers an agent turn to be in progress.
     ///
     /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
     /// can update the status header without accidentally clearing the spinner for an active turn.
@@ -675,7 +675,7 @@ pub(crate) struct ChatWidget {
     last_transcript_area: std::cell::Cell<Option<Rect>>,
     last_bottom_area: std::cell::Cell<Option<Rect>>,
     // Feedback sink for /feedback
-    feedback: adam_feedback::CodexFeedback,
+    feedback: lha_feedback::CodexFeedback,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
     current_goal: Option<ThreadGoal>,
@@ -1167,7 +1167,7 @@ impl ChatWidget {
     }
 
     // --- Small event handlers ---
-    fn on_session_configured(&mut self, event: adam_agent::protocol::SessionConfiguredEvent) {
+    fn on_session_configured(&mut self, event: lha_agent::protocol::SessionConfiguredEvent) {
         let request_redraw = !self.suppress_session_configured_redraw;
         let session_identity_kind = event.identity_kind;
         let had_pending_initial_identity_sync = self.pending_initial_identity_sync;
@@ -1237,7 +1237,7 @@ impl ChatWidget {
         } else if !had_pending_initial_identity_sync && self.identities_enabled() {
             self.set_restored_identity_kind_from_session(session_identity_kind, request_redraw);
         }
-        // Ask adam-agent to enumerate custom prompts for this session.
+        // Ask lha-agent to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
         self.request_skills_refresh(true);
         if self.connectors_enabled() {
@@ -1251,7 +1251,7 @@ impl ChatWidget {
         }
     }
 
-    fn on_thread_name_updated(&mut self, event: adam_agent::protocol::ThreadNameUpdatedEvent) {
+    fn on_thread_name_updated(&mut self, event: lha_agent::protocol::ThreadNameUpdatedEvent) {
         if self.thread_id == Some(event.thread_id) {
             self.thread_name = event.thread_name;
             self.request_redraw();
@@ -1388,7 +1388,7 @@ impl ChatWidget {
         };
         let view = crate::bottom_pane::FeedbackNoteView::new(
             category,
-            self.config.adam_home.clone(),
+            self.config.lha_home.clone(),
             snapshot,
             rollout,
             self.app_event_tx.clone(),
@@ -2159,7 +2159,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_patch_apply_end(&mut self, event: adam_agent::protocol::PatchApplyEndEvent) {
+    fn on_patch_apply_end(&mut self, event: lha_agent::protocol::PatchApplyEndEvent) {
         let ev2 = event.clone();
         self.defer_or_handle(
             |q| q.push_patch_end(event),
@@ -2364,9 +2364,9 @@ impl ChatWidget {
 
     fn on_get_history_entry_response(
         &mut self,
-        event: adam_agent::protocol::GetHistoryEntryResponseEvent,
+        event: lha_agent::protocol::GetHistoryEntryResponseEvent,
     ) {
-        let adam_agent::protocol::GetHistoryEntryResponseEvent {
+        let lha_agent::protocol::GetHistoryEntryResponseEvent {
             offset,
             log_id,
             entry,
@@ -2635,7 +2635,7 @@ impl ChatWidget {
 
     pub(crate) fn handle_patch_apply_end_now(
         &mut self,
-        event: adam_agent::protocol::PatchApplyEndEvent,
+        event: lha_agent::protocol::PatchApplyEndEvent,
     ) {
         // If the patch was successful, just let the "Edited" block stand.
         // Otherwise, add a failure block.
@@ -2987,7 +2987,7 @@ impl ChatWidget {
         widget.sync_buddy_config_from_config();
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
-            adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+            lha_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                 && matches!(
                     WindowsSandboxLevel::from_config(&widget.config),
                     WindowsSandboxLevel::RestrictedToken
@@ -3010,9 +3010,9 @@ impl ChatWidget {
     /// Create a ChatWidget attached to an existing conversation (e.g., a fork).
     pub(crate) fn new_from_existing(
         common: ChatWidgetInit,
-        conversation: std::sync::Arc<adam_agent::CodexThread>,
-        thread_id: adam_protocol::ThreadId,
-        session_configured: adam_agent::protocol::SessionConfiguredEvent,
+        conversation: std::sync::Arc<lha_agent::CodexThread>,
+        thread_id: lha_protocol::ThreadId,
+        session_configured: lha_agent::protocol::SessionConfiguredEvent,
     ) -> Self {
         let ChatWidgetInit {
             config,
@@ -3040,7 +3040,7 @@ impl ChatWidget {
             .unwrap_or_else(|| session_configured.model.clone());
         let session_identity_kind = session_configured.identity_kind;
         let active_identity_mask = None;
-        let pending_existing_thread_model_override = model.clone();
+        let pending_existing_thread_model_override = model;
         let initial_reasoning_effort = session_configured
             .reasoning_effort
             .or(config.model_reasoning_effort);
@@ -3165,7 +3165,7 @@ impl ChatWidget {
         widget.sync_buddy_config_from_config();
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
-            adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+            lha_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                 && matches!(
                     WindowsSandboxLevel::from_config(&widget.config),
                     WindowsSandboxLevel::RestrictedToken
@@ -3566,7 +3566,7 @@ impl ChatWidget {
                     let windows_degraded_sandbox_enabled =
                         matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
                     if !windows_degraded_sandbox_enabled
-                        || !adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                        || !lha_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                     {
                         // This command should not be visible/recognized outside degraded mode,
                         // but guard anyway in case something dispatches it directly.
@@ -3591,7 +3591,7 @@ impl ChatWidget {
                     }
 
                     self.otel_manager.counter(
-                        "adam.windows_sandbox.setup_elevated_sandbox_command",
+                        "lha.windows_sandbox.setup_elevated_sandbox_command",
                         1,
                         &[],
                     );
@@ -3665,7 +3665,7 @@ impl ChatWidget {
                     self.scroll_transcript_to_bottom();
                     self.add_info_message(
                         "No proposed plan found in this session.".to_string(),
-                        Some("Ask Adam to create a plan first.".to_string()),
+                        Some("Ask LHA to create a plan first.".to_string()),
                     );
                 }
             }
@@ -3703,11 +3703,11 @@ impl ChatWidget {
                 }
             }
             SlashCommand::TestApproval => {
-                use adam_agent::protocol::EventMsg;
+                use lha_agent::protocol::EventMsg;
                 use std::collections::HashMap;
 
-                use adam_agent::protocol::ApplyPatchApprovalRequestEvent;
-                use adam_agent::protocol::FileChange;
+                use lha_agent::protocol::ApplyPatchApprovalRequestEvent;
+                use lha_agent::protocol::FileChange;
 
                 self.app_event_tx.send(AppEvent::CodexEvent(Event {
                     id: "1".to_string(),
@@ -3759,7 +3759,7 @@ impl ChatWidget {
         match cmd {
             SlashCommand::Rename if !trimmed.is_empty() => {
                 self.prepare_slash_command_transcript_output();
-                let Some(name) = adam_agent::util::normalize_thread_name(trimmed) else {
+                let Some(name) = lha_agent::util::normalize_thread_name(trimmed) else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
                     return;
                 };
@@ -3909,8 +3909,7 @@ impl ChatWidget {
                 self.show_goal_edit_prompt(goal);
             }
             objective => {
-                if let Err(message) =
-                    adam_agent::protocol::validate_thread_goal_objective(objective)
+                if let Err(message) = lha_agent::protocol::validate_thread_goal_objective(objective)
                 {
                     self.add_error_message(message);
                     return;
@@ -3998,7 +3997,7 @@ impl ChatWidget {
             goal.objective,
             Box::new(move |objective: String| {
                 if let Err(message) =
-                    adam_agent::protocol::validate_thread_goal_objective(&objective)
+                    lha_agent::protocol::validate_thread_goal_objective(&objective)
                 {
                     tx.send_history_cell(Box::new(history_cell::new_error_event(message)));
                     return;
@@ -4156,7 +4155,7 @@ impl ChatWidget {
             "Type a name and press Enter".to_string(),
             None,
             Box::new(move |name: String| {
-                let Some(name) = adam_agent::util::normalize_thread_name(&name) else {
+                let Some(name) = lha_agent::util::normalize_thread_name(&name) else {
                     tx.send_history_cell(Box::new(history_cell::new_error_event(
                         "Thread name cannot be empty.".to_string(),
                     )));
@@ -4237,7 +4236,7 @@ impl ChatWidget {
         if self.config.provider_config_required {
             self.add_info_message(
                 "Configure a model provider before starting a session.".to_string(),
-                Some("Use the provider setup form to create ~/.adam/models.json.".to_string()),
+                Some("Use the provider setup form to create ~/.lha/models.json.".to_string()),
             );
             self.open_provider_popup();
             return;
@@ -4584,7 +4583,7 @@ impl ChatWidget {
             | EventMsg::DynamicToolCallRequest(_)
             | EventMsg::WorkflowUpdate(_) => {}
             EventMsg::ItemCompleted(event) => {
-                if let adam_protocol::items::TurnItem::ContextCompaction(_) = &event.item {
+                if let lha_protocol::items::TurnItem::ContextCompaction(_) = &event.item {
                     // Replay omits the outer event id, but legacy compact events still follow
                     // structured compaction events in order. Reserve a suppression slot even for
                     // parent-thread compactions so fork replay does not misattribute them.
@@ -4605,7 +4604,7 @@ impl ChatWidget {
                         }
                     }
                 }
-                if let adam_protocol::items::TurnItem::Plan(plan_item) = event.item {
+                if let lha_protocol::items::TurnItem::Plan(plan_item) = event.item {
                     self.on_plan_item_completed(plan_item.text);
                 }
             }
@@ -4669,7 +4668,7 @@ impl ChatWidget {
         self.is_review_mode = true;
         let hint = review
             .user_facing_hint
-            .unwrap_or_else(|| adam_agent::review_prompts::user_facing_hint(&review.target));
+            .unwrap_or_else(|| lha_agent::review_prompts::user_facing_hint(&review.target));
         let banner = format!(">> Code review started: {hint} <<");
         self.add_to_history(history_cell::new_review_status_line(banner));
         self.clear_review_start_transition();
@@ -4887,7 +4886,7 @@ impl ChatWidget {
         if self.config.provider_config_required {
             self.add_info_message(
                 "Configure a model provider before choosing a model.".to_string(),
-                Some("Add a provider to create ~/.adam/models.json.".to_string()),
+                Some("Add a provider to create ~/.lha/models.json.".to_string()),
             );
             self.open_provider_popup();
             return;
@@ -4925,9 +4924,9 @@ impl ChatWidget {
 
     pub(crate) fn attach_started_thread(
         &mut self,
-        thread: std::sync::Arc<adam_agent::CodexThread>,
-        thread_id: adam_protocol::ThreadId,
-        session_configured: adam_agent::protocol::SessionConfiguredEvent,
+        thread: std::sync::Arc<lha_agent::CodexThread>,
+        thread_id: lha_protocol::ThreadId,
+        session_configured: lha_agent::protocol::SessionConfiguredEvent,
     ) {
         self.agent_shutdown_complete = false;
         self.pending_initial_identity_sync = true;
@@ -5155,7 +5154,7 @@ impl ChatWidget {
 
         let header = self.model_menu_header(
             "Select Model and Effort",
-            "Access legacy models by running adam -m <model_name> or in your config.toml",
+            "Access legacy models by running lha -m <model_name> or in your config.toml",
         );
         self.bottom_pane.show_selection_view(SelectionViewParams {
             footer_hint: Some("Press enter to select reasoning effort, or esc to dismiss.".into()),
@@ -5435,7 +5434,7 @@ impl ChatWidget {
         #[cfg(not(target_os = "windows"))]
         let windows_degraded_sandbox_enabled = false;
 
-        let show_elevate_sandbox_hint = adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+        let show_elevate_sandbox_hint = lha_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
             && windows_degraded_sandbox_enabled
             && presets.iter().any(|preset| preset.id == "auto");
 
@@ -5476,9 +5475,9 @@ impl ChatWidget {
                         == WindowsSandboxLevel::Disabled
                     {
                         let preset_clone = preset.clone();
-                        if adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                            && adam_agent::windows_sandbox::sandbox_setup_is_complete(
-                                self.config.adam_home.as_path(),
+                        if lha_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                            && lha_agent::windows_sandbox::sandbox_setup_is_complete(
+                                self.config.lha_home.as_path(),
                             )
                         {
                             vec![Box::new(move |tx| {
@@ -5604,12 +5603,12 @@ impl ChatWidget {
         }
         let cwd = self.config.cwd.clone();
         let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
-        match adam_windows_sandbox::apply_world_writable_scan_and_denies(
-            self.config.adam_home.as_path(),
+        match lha_windows_sandbox::apply_world_writable_scan_and_denies(
+            self.config.lha_home.as_path(),
             cwd.as_path(),
             &env_map,
             self.config.sandbox_policy.get(),
-            Some(self.config.adam_home.as_path()),
+            Some(self.config.lha_home.as_path()),
         ) {
             Ok(_) => None,
             Err(_) => Some((Vec::new(), 0, true)),
@@ -5633,7 +5632,7 @@ impl ChatWidget {
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
         let title_line = Line::from("Enable full access?").bold();
         let info_line = Line::from(vec![
-            "When Adam runs with full access, it can edit any file on your computer and run commands with network, without your approval. "
+            "When LHA runs with full access, it can edit any file on your computer and run commands with network, without your approval. "
                 .into(),
             "Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior."
                 .fg(Color::Red),
@@ -5813,7 +5812,7 @@ impl ChatWidget {
     pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, preset: ApprovalPreset) {
         use ratatui_macros::line;
 
-        if !adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED {
+        if !lha_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED {
             // Legacy flow (pre-NUX): explain the experimental sandbox and let the user enable it
             // directly (no elevation prompts).
             let mut header = ColumnRenderable::new();
@@ -5870,7 +5869,7 @@ impl ChatWidget {
                 Self::preset_matches_current(current_approval, current_sandbox, preset)
             });
         self.otel_manager
-            .counter("adam.windows_sandbox.elevated_prompt_shown", 1, &[]);
+            .counter("lha.windows_sandbox.elevated_prompt_shown", 1, &[]);
 
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(
@@ -5904,7 +5903,7 @@ impl ChatWidget {
             Box::new({
                 let otel = self.otel_manager.clone();
                 move |_tx| {
-                    otel.counter("adam.windows_sandbox.elevated_prompt_decline", 1, &[]);
+                    otel.counter("lha.windows_sandbox.elevated_prompt_decline", 1, &[]);
                 }
             }),
         );
@@ -5915,7 +5914,7 @@ impl ChatWidget {
                 name: "Set up agent sandbox (requires elevation)".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    accept_otel.counter("adam.windows_sandbox.elevated_prompt_accept", 1, &[]);
+                    accept_otel.counter("lha.windows_sandbox.elevated_prompt_accept", 1, &[]);
                     tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
                         preset: preset.clone(),
                     });
@@ -6001,7 +6000,7 @@ impl ChatWidget {
             Box::new({
                 let otel = self.otel_manager.clone();
                 move |_tx| {
-                    otel.counter("adam.windows_sandbox.fallback_stay_current", 1, &[]);
+                    otel.counter("lha.windows_sandbox.fallback_stay_current", 1, &[]);
                 }
             }),
         );
@@ -6013,7 +6012,7 @@ impl ChatWidget {
                     let otel = self.otel_manager.clone();
                     let preset = elevated_preset;
                     move |tx| {
-                        otel.counter("adam.windows_sandbox.fallback_retry_elevated", 1, &[]);
+                        otel.counter("lha.windows_sandbox.fallback_retry_elevated", 1, &[]);
                         tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
                             preset: preset.clone(),
                         });
@@ -6029,7 +6028,7 @@ impl ChatWidget {
                     let otel = self.otel_manager.clone();
                     let preset = legacy_preset;
                     move |tx| {
-                        otel.counter("adam.windows_sandbox.fallback_use_legacy", 1, &[]);
+                        otel.counter("lha.windows_sandbox.fallback_use_legacy", 1, &[]);
                         tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
                             preset: preset.clone(),
                             mode: WindowsSandboxEnableMode::Legacy,
@@ -6179,7 +6178,7 @@ impl ChatWidget {
             Feature::WindowsSandbox | Feature::WindowsSandboxElevated
         ) {
             self.bottom_pane.set_windows_degraded_sandbox_active(
-                adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                lha_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                     && matches!(
                         WindowsSandboxLevel::from_config(&self.config),
                         WindowsSandboxLevel::RestrictedToken
@@ -6651,8 +6650,8 @@ impl ChatWidget {
     }
 
     fn rename_confirmation_cell(name: &str, thread_id: Option<ThreadId>) -> PlainHistoryCell {
-        let resume_cmd = adam_agent::util::resume_command(Some(name), thread_id)
-            .unwrap_or_else(|| format!("adam resume {name}"));
+        let resume_cmd = lha_agent::util::resume_command(Some(name), thread_id)
+            .unwrap_or_else(|| format!("lha resume {name}"));
         let name = name.to_string();
         let line = vec![
             "• ".into(),
@@ -6743,7 +6742,7 @@ impl ChatWidget {
                 (
                     "Press Enter to view the install link.",
                     "Install link unavailable.",
-                    "Install this app in your browser, then reload Adam.",
+                    "Install this app in your browser, then reload LHA.",
                 )
             };
             if let Some(install_url) = connector.install_url.clone() {
@@ -7418,7 +7417,7 @@ impl Notification {
             }
             Notification::EditApprovalRequested { cwd, changes } => {
                 format!(
-                    "Adam wants to edit {}",
+                    "LHA wants to edit {}",
                     if changes.len() == 1 {
                         #[allow(clippy::unwrap_used)]
                         display_path_for(changes.first().unwrap(), cwd)

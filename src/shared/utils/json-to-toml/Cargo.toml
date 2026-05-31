@@ -1,5 +1,5 @@
 [package]
-name = "adam-utils-json-to-toml"
+name = "lha-utils-json-to-toml"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

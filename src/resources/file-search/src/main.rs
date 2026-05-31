@@ -1,11 +1,11 @@
 use std::io::IsTerminal;
 use std::path::Path;
 
-use adam_file_search::Cli;
-use adam_file_search::FileMatch;
-use adam_file_search::Reporter;
-use adam_file_search::run_main;
 use clap::Parser;
+use lha_file_search::Cli;
+use lha_file_search::FileMatch;
+use lha_file_search::Reporter;
+use lha_file_search::run_main;
 use serde_json::json;
 
 #[tokio::main]

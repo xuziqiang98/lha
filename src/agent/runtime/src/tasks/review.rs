@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use adam_protocol::models::ContentItem;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::protocol::EventMsg;
-use adam_protocol::protocol::ExitedReviewModeEvent;
-use adam_protocol::protocol::ReviewOutputEvent;
 use async_trait::async_trait;
+use lha_protocol::models::ContentItem;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::protocol::EventMsg;
+use lha_protocol::protocol::ExitedReviewModeEvent;
+use lha_protocol::protocol::ReviewOutputEvent;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -18,7 +18,7 @@ use crate::codex::TurnContext;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::state::TaskKind;
-use adam_protocol::user_input::UserInput;
+use lha_protocol::user_input::UserInput;
 
 use super::SessionTask;
 use super::SessionTaskContext;

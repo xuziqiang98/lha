@@ -8,16 +8,16 @@
 
 use std::time::Duration;
 
-use adam_agent::models_manager::test_builtin_identity_presets;
-use adam_app_server_protocol::IdentityListParams;
-use adam_app_server_protocol::IdentityListResponse;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::RequestId;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::IdentityMask;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
+use lha_agent::models_manager::test_builtin_identity_presets;
+use lha_app_server_protocol::IdentityListParams;
+use lha_app_server_protocol::IdentityListResponse;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::RequestId;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::IdentityMask;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -27,8 +27,8 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Confirms the server returns the default identity presets in a stable order.
 #[tokio::test]
 async fn list_identities_returns_presets() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let lha_home = TempDir::new()?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 

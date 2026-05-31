@@ -10,12 +10,12 @@ use crate::rollout::list::find_thread_path_by_id_str;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::shell::get_shell;
-use adam_otel::OtelManager;
-use adam_protocol::ThreadId;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
+use lha_otel::OtelManager;
+use lha_protocol::ThreadId;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
 use tokio::process::Child;
@@ -26,7 +26,7 @@ use tracing::Instrument;
 use tracing::info_span;
 
 #[cfg(unix)]
-use adam_utils_pty::process_group::kill_child_process_group;
+use lha_utils_pty::process_group::kill_child_process_group;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShellSnapshot {
@@ -40,7 +40,7 @@ const EXCLUDED_EXPORT_VARS: &[&str] = &["PWD", "OLDPWD"];
 
 impl ShellSnapshot {
     pub fn start_snapshotting(
-        adam_home: PathBuf,
+        lha_home: PathBuf,
         session_id: ThreadId,
         shell: &mut Shell,
         otel_manager: OtelManager,
@@ -55,7 +55,7 @@ impl ShellSnapshot {
             async move {
                 let timer = otel_manager.start_timer("codex.shell_snapshot.duration_ms", &[]);
                 let snapshot =
-                    ShellSnapshot::try_new(&adam_home, snapshot_session_id, &snapshot_shell)
+                    ShellSnapshot::try_new(&lha_home, snapshot_session_id, &snapshot_shell)
                         .await
                         .map(Arc::new);
                 let success = if snapshot.is_some() { "true" } else { "false" };
@@ -67,21 +67,21 @@ impl ShellSnapshot {
         );
     }
 
-    async fn try_new(adam_home: &Path, session_id: ThreadId, shell: &Shell) -> Option<Self> {
+    async fn try_new(lha_home: &Path, session_id: ThreadId, shell: &Shell) -> Option<Self> {
         // File to store the snapshot
         let extension = match shell.shell_type {
             ShellType::PowerShell => "ps1",
             _ => "sh",
         };
-        let path = adam_home
+        let path = lha_home
             .join(SNAPSHOT_DIR)
             .join(format!("{session_id}.{extension}"));
 
         // Clean the (unlikely) leaked snapshot files.
-        let adam_home = adam_home.to_path_buf();
+        let lha_home = lha_home.to_path_buf();
         let cleanup_session_id = session_id;
         tokio::spawn(async move {
-            if let Err(err) = cleanup_stale_snapshots(&adam_home, cleanup_session_id).await {
+            if let Err(err) = cleanup_stale_snapshots(&lha_home, cleanup_session_id).await {
                 tracing::warn!("Failed to clean up shell snapshots: {err:?}");
             }
         });
@@ -197,7 +197,7 @@ async fn run_script_with_timeout(
     #[cfg(unix)]
     unsafe {
         handler.pre_exec(|| {
-            adam_utils_pty::process_group::detach_from_tty()?;
+            lha_utils_pty::process_group::detach_from_tty()?;
             Ok(())
         });
     }
@@ -467,8 +467,8 @@ $envVars | ForEach-Object {
 /// Removes shell snapshots that either lack a matching session rollout file or
 /// whose rollouts have not been updated within the retention window.
 /// The active session id is exempt from cleanup.
-pub async fn cleanup_stale_snapshots(adam_home: &Path, active_session_id: ThreadId) -> Result<()> {
-    let snapshot_dir = adam_home.join(SNAPSHOT_DIR);
+pub async fn cleanup_stale_snapshots(lha_home: &Path, active_session_id: ThreadId) -> Result<()> {
+    let snapshot_dir = lha_home.join(SNAPSHOT_DIR);
 
     let mut entries = match fs::read_dir(&snapshot_dir).await {
         Ok(entries) => entries,
@@ -499,7 +499,7 @@ pub async fn cleanup_stale_snapshots(adam_home: &Path, active_session_id: Thread
             continue;
         }
 
-        let rollout_path = find_thread_path_by_id_str(adam_home, session_id).await?;
+        let rollout_path = find_thread_path_by_id_str(lha_home, session_id).await?;
         let Some(rollout_path) = rollout_path else {
             remove_snapshot_file(&path).await;
             continue;
@@ -645,7 +645,7 @@ mod tests {
             .env("BASH_ENV", "/dev/null")
             .env("VALID_NAME", "ok")
             .env("PWD", "/tmp/stale")
-            .env("NEXTEST_BIN_EXE_adam-write-config-schema", "/path/to/bin")
+            .env("NEXTEST_BIN_EXE_lha-write-config-schema", "/path/to/bin")
             .env("BAD-NAME", "broken")
             .output()?;
 
@@ -654,7 +654,7 @@ mod tests {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("VALID_NAME"));
         assert!(!stdout.contains("PWD=/tmp/stale"));
-        assert!(!stdout.contains("NEXTEST_BIN_EXE_adam-write-config-schema"));
+        assert!(!stdout.contains("NEXTEST_BIN_EXE_lha-write-config-schema"));
         assert!(!stdout.contains("BAD-NAME"));
 
         Ok(())
@@ -802,12 +802,8 @@ mod tests {
         Ok(())
     }
 
-    async fn write_rollout_stub(adam_home: &Path, session_id: ThreadId) -> Result<PathBuf> {
-        let dir = adam_home
-            .join("sessions")
-            .join("2025")
-            .join("01")
-            .join("01");
+    async fn write_rollout_stub(lha_home: &Path, session_id: ThreadId) -> Result<PathBuf> {
+        let dir = lha_home.join("sessions").join("2025").join("01").join("01");
         fs::create_dir_all(&dir).await?;
         let path = dir.join(format!("rollout-2025-01-01T00-00-00-{session_id}.jsonl"));
         fs::write(&path, "").await?;
@@ -817,8 +813,8 @@ mod tests {
     #[tokio::test]
     async fn cleanup_stale_snapshots_removes_orphans_and_keeps_live() -> Result<()> {
         let dir = tempdir()?;
-        let adam_home = dir.path();
-        let snapshot_dir = adam_home.join(SNAPSHOT_DIR);
+        let lha_home = dir.path();
+        let snapshot_dir = lha_home.join(SNAPSHOT_DIR);
         fs::create_dir_all(&snapshot_dir).await?;
 
         let live_session = ThreadId::new();
@@ -827,12 +823,12 @@ mod tests {
         let orphan_snapshot = snapshot_dir.join(format!("{orphan_session}.sh"));
         let invalid_snapshot = snapshot_dir.join("not-a-snapshot.txt");
 
-        write_rollout_stub(adam_home, live_session).await?;
+        write_rollout_stub(lha_home, live_session).await?;
         fs::write(&live_snapshot, "live").await?;
         fs::write(&orphan_snapshot, "orphan").await?;
         fs::write(&invalid_snapshot, "invalid").await?;
 
-        cleanup_stale_snapshots(adam_home, ThreadId::new()).await?;
+        cleanup_stale_snapshots(lha_home, ThreadId::new()).await?;
 
         assert_eq!(live_snapshot.exists(), true);
         assert_eq!(orphan_snapshot.exists(), false);
@@ -844,18 +840,18 @@ mod tests {
     #[tokio::test]
     async fn cleanup_stale_snapshots_removes_stale_rollouts() -> Result<()> {
         let dir = tempdir()?;
-        let adam_home = dir.path();
-        let snapshot_dir = adam_home.join(SNAPSHOT_DIR);
+        let lha_home = dir.path();
+        let snapshot_dir = lha_home.join(SNAPSHOT_DIR);
         fs::create_dir_all(&snapshot_dir).await?;
 
         let stale_session = ThreadId::new();
         let stale_snapshot = snapshot_dir.join(format!("{stale_session}.sh"));
-        let rollout_path = write_rollout_stub(adam_home, stale_session).await?;
+        let rollout_path = write_rollout_stub(lha_home, stale_session).await?;
         fs::write(&stale_snapshot, "stale").await?;
 
         set_file_mtime(&rollout_path, SNAPSHOT_RETENTION + Duration::from_secs(60))?;
 
-        cleanup_stale_snapshots(adam_home, ThreadId::new()).await?;
+        cleanup_stale_snapshots(lha_home, ThreadId::new()).await?;
 
         assert_eq!(stale_snapshot.exists(), false);
         Ok(())
@@ -865,18 +861,18 @@ mod tests {
     #[tokio::test]
     async fn cleanup_stale_snapshots_skips_active_session() -> Result<()> {
         let dir = tempdir()?;
-        let adam_home = dir.path();
-        let snapshot_dir = adam_home.join(SNAPSHOT_DIR);
+        let lha_home = dir.path();
+        let snapshot_dir = lha_home.join(SNAPSHOT_DIR);
         fs::create_dir_all(&snapshot_dir).await?;
 
         let active_session = ThreadId::new();
         let active_snapshot = snapshot_dir.join(format!("{active_session}.sh"));
-        let rollout_path = write_rollout_stub(adam_home, active_session).await?;
+        let rollout_path = write_rollout_stub(lha_home, active_session).await?;
         fs::write(&active_snapshot, "active").await?;
 
         set_file_mtime(&rollout_path, SNAPSHOT_RETENTION + Duration::from_secs(60))?;
 
-        cleanup_stale_snapshots(adam_home, active_session).await?;
+        cleanup_stale_snapshots(lha_home, active_session).await?;
 
         assert_eq!(active_snapshot.exists(), true);
         Ok(())

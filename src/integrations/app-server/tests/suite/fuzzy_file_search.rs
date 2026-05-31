@@ -1,8 +1,8 @@
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::RequestId;
 use anyhow::Result;
 use anyhow::anyhow;
 use app_test_support::McpProcess;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::RequestId;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
@@ -12,8 +12,8 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
-    // Prepare a temporary Adam home and a separate root with test files.
-    let adam_home = TempDir::new()?;
+    // Prepare a temporary LHA home and a separate root with test files.
+    let lha_home = TempDir::new()?;
     let root = TempDir::new()?;
 
     // Create files designed to have deterministic ordering for query "abe".
@@ -31,7 +31,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
         .to_string();
 
     // Start MCP server and initialize.
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let root_path = root.path().to_string_lossy().to_string();
@@ -84,12 +84,12 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_fuzzy_file_search_accepts_cancellation_token() -> Result<()> {
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
     let root = TempDir::new()?;
 
     std::fs::write(root.path().join("alpha.txt"), "contents")?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let root_path = root.path().to_string_lossy().to_string();

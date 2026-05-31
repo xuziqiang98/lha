@@ -1,20 +1,20 @@
-use adam_app_server_protocol::JSONRPCError;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::SessionSource;
-use adam_app_server_protocol::ThreadItem;
-use adam_app_server_protocol::ThreadReadParams;
-use adam_app_server_protocol::ThreadReadResponse;
-use adam_app_server_protocol::TurnStatus;
-use adam_app_server_protocol::UserInput;
-use adam_protocol::user_input::ByteRange;
-use adam_protocol::user_input::TextElement;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout_with_schema_version;
 use app_test_support::create_fake_rollout_with_text_elements;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
+use lha_app_server_protocol::JSONRPCError;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::SessionSource;
+use lha_app_server_protocol::ThreadItem;
+use lha_app_server_protocol::ThreadReadParams;
+use lha_app_server_protocol::ThreadReadResponse;
+use lha_app_server_protocol::TurnStatus;
+use lha_app_server_protocol::UserInput;
+use lha_protocol::user_input::ByteRange;
+use lha_protocol::user_input::TextElement;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::path::PathBuf;
@@ -26,8 +26,8 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 #[tokio::test]
 async fn thread_read_returns_summary_without_turns() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
     let preview = "Saved user message";
     let text_elements = [TextElement::new(
@@ -35,7 +35,7 @@ async fn thread_read_returns_summary_without_turns() -> Result<()> {
         Some("<note>".into()),
     )];
     let conversation_id = create_fake_rollout_with_text_elements(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-05T12-00-00",
         "2025-01-05T12:00:00Z",
         preview,
@@ -47,7 +47,7 @@ async fn thread_read_returns_summary_without_turns() -> Result<()> {
         None,
     )?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let read_id = mcp
@@ -79,8 +79,8 @@ async fn thread_read_returns_summary_without_turns() -> Result<()> {
 #[tokio::test]
 async fn thread_read_can_include_turns() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
     let preview = "Saved user message";
     let text_elements = vec![TextElement::new(
@@ -88,7 +88,7 @@ async fn thread_read_can_include_turns() -> Result<()> {
         Some("<note>".into()),
     )];
     let conversation_id = create_fake_rollout_with_text_elements(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-05T12-00-00",
         "2025-01-05T12:00:00Z",
         preview,
@@ -100,7 +100,7 @@ async fn thread_read_can_include_turns() -> Result<()> {
         None,
     )?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let read_id = mcp
@@ -148,11 +148,11 @@ async fn thread_read_rejects_missing_schema_version_rollout() -> Result<()> {
 
 async fn thread_read_rejects_unsupported_rollout(schema_version: Option<u32>) -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
     let conversation_id = create_fake_rollout_with_schema_version(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-06T12-00-00",
         "2025-01-06T12:00:00Z",
         "legacy message",
@@ -160,7 +160,7 @@ async fn thread_read_rejects_unsupported_rollout(schema_version: Option<u32>) ->
         schema_version,
     )?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let read_id = mcp
@@ -185,9 +185,9 @@ async fn thread_read_rejects_unsupported_rollout(schema_version: Option<u32>) ->
 }
 
 // Helper to create a config.toml pointing at the mock model server.
-fn create_config_toml(adam_home: &Path, server_uri: &str) -> std::io::Result<()> {
+fn create_config_toml(lha_home: &Path, server_uri: &str) -> std::io::Result<()> {
     app_test_support::write_mock_responses_config_toml_with_options(
-        adam_home,
+        lha_home,
         server_uri,
         &std::collections::BTreeMap::new(),
         20_000,

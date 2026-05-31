@@ -7,10 +7,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
-use adam_agent::protocol::SandboxPolicy;
-use adam_agent::seatbelt::spawn_command_under_seatbelt;
-use adam_agent::spawn::ADAM_SANDBOX_ENV_VAR;
-use adam_agent::spawn::StdioPolicy;
+use lha_agent::protocol::SandboxPolicy;
+use lha_agent::seatbelt::spawn_command_under_seatbelt;
+use lha_agent::spawn::LHA_SANDBOX_ENV_VAR;
+use lha_agent::spawn::StdioPolicy;
 use tempfile::TempDir;
 
 struct TestScenario {
@@ -29,8 +29,8 @@ struct TestExpectations {
 
 impl TestScenario {
     async fn run_test(&self, policy: &SandboxPolicy, expectations: TestExpectations) {
-        if std::env::var(ADAM_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
-            eprintln!("{ADAM_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
+        if std::env::var(LHA_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
+            eprintln!("{LHA_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
             return;
         }
 
@@ -161,8 +161,8 @@ async fn read_only_forbids_all_writes() {
 
 #[tokio::test]
 async fn openpty_works_under_seatbelt() {
-    if std::env::var(ADAM_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
-        eprintln!("{ADAM_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
+    if std::env::var(LHA_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
+        eprintln!("{LHA_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
         return;
     }
 
@@ -204,8 +204,8 @@ assert os.read(master, 4) == b"ping""#
 
 #[tokio::test]
 async fn java_home_finds_runtime_under_seatbelt() {
-    if std::env::var(ADAM_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
-        eprintln!("{ADAM_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
+    if std::env::var(LHA_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
+        eprintln!("{LHA_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
         return;
     }
 
@@ -234,7 +234,7 @@ async fn java_home_finds_runtime_under_seatbelt() {
 
     let mut env: HashMap<String, String> = std::env::vars().collect();
     env.remove("JAVA_HOME");
-    env.remove(ADAM_SANDBOX_ENV_VAR);
+    env.remove(LHA_SANDBOX_ENV_VAR);
 
     let child = spawn_command_under_seatbelt(
         vec![java_home_path.to_string_lossy().to_string()],

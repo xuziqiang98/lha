@@ -1,11 +1,11 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
-use adam_agent::config::Config;
-use adam_agent::config::ConfigBuilder;
-use adam_agent::config_loader::CloudRequirementsLoader;
-use adam_agent::config_loader::ConfigLayerStackOrdering;
-use adam_agent::config_loader::LoaderOverrides;
-use adam_common::CliConfigOverrides;
+use lha_agent::config::Config;
+use lha_agent::config::ConfigBuilder;
+use lha_agent::config_loader::CloudRequirementsLoader;
+use lha_agent::config_loader::ConfigLayerStackOrdering;
+use lha_agent::config_loader::LoaderOverrides;
+use lha_common::CliConfigOverrides;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
@@ -14,16 +14,16 @@ use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
-use adam_agent::ExecPolicyError;
-use adam_agent::check_execpolicy_for_warnings;
-use adam_agent::config_loader::ConfigLoadError;
-use adam_agent::config_loader::TextRange as CoreTextRange;
-use adam_app_server_protocol::ConfigLayerSource;
-use adam_app_server_protocol::ConfigWarningNotification;
-use adam_app_server_protocol::JSONRPCMessage;
-use adam_app_server_protocol::TextPosition as AppTextPosition;
-use adam_app_server_protocol::TextRange as AppTextRange;
-use adam_feedback::CodexFeedback;
+use lha_agent::ExecPolicyError;
+use lha_agent::check_execpolicy_for_warnings;
+use lha_agent::config_loader::ConfigLoadError;
+use lha_agent::config_loader::TextRange as CoreTextRange;
+use lha_app_server_protocol::ConfigLayerSource;
+use lha_app_server_protocol::ConfigWarningNotification;
+use lha_app_server_protocol::JSONRPCMessage;
+use lha_app_server_protocol::TextPosition as AppTextPosition;
+use lha_app_server_protocol::TextRange as AppTextRange;
+use lha_feedback::CodexFeedback;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
@@ -130,9 +130,9 @@ fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> 
         {
             continue;
         }
-        if let ConfigLayerSource::Project { dot_adam_folder } = &layer.name {
+        if let ConfigLayerSource::Project { dot_lha_folder } = &layer.name {
             disabled_folders.push((
-                dot_adam_folder.as_path().display().to_string(),
+                dot_lha_folder.as_path().display().to_string(),
                 layer
                     .disabled_reason
                     .as_ref()
@@ -216,8 +216,8 @@ pub async fn run_main(
         let effective_toml = config.config_layer_stack.effective_config();
         match effective_toml.try_into() {
             Ok(config_toml) => {
-                if let Err(err) = adam_agent::personality_migration::maybe_migrate_personality(
-                    &config.adam_home,
+                if let Err(err) = lha_agent::personality_migration::maybe_migrate_personality(
+                    &config.lha_home,
                     &config_toml,
                 )
                 .await
@@ -271,10 +271,10 @@ pub async fn run_main(
 
     let feedback = CodexFeedback::new();
 
-    let otel = adam_agent::otel_init::build_provider(
+    let otel = lha_agent::otel_init::build_provider(
         &config,
         env!("CARGO_PKG_VERSION"),
-        Some("adam_app_server"),
+        Some("lha_app_server"),
         default_analytics_enabled,
     )
     .map_err(|e| {

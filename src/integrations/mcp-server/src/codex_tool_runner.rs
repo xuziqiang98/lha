@@ -1,4 +1,4 @@
-//! Asynchronous worker that executes an **Adam** tool-call inside a spawned
+//! Asynchronous worker that executes an **LHA** tool-call inside a spawned
 //! Tokio task. Separated from `message_processor.rs` to keep that file small
 //! and to make future feature-growth easier to manage.
 
@@ -9,20 +9,20 @@ use crate::exec_approval::handle_exec_approval_request;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotificationMeta;
 use crate::patch_approval::handle_patch_approval_request;
-use adam_agent::CodexThread;
-use adam_agent::NewThread;
-use adam_agent::ThreadManager;
-use adam_agent::config::Config as CodexConfig;
-use adam_agent::protocol::AgentMessageEvent;
-use adam_agent::protocol::ApplyPatchApprovalRequestEvent;
-use adam_agent::protocol::Event;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::ExecApprovalRequestEvent;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::Submission;
-use adam_agent::protocol::TurnCompleteEvent;
-use adam_protocol::ThreadId;
-use adam_protocol::user_input::UserInput;
+use lha_agent::CodexThread;
+use lha_agent::NewThread;
+use lha_agent::ThreadManager;
+use lha_agent::config::Config as CodexConfig;
+use lha_agent::protocol::AgentMessageEvent;
+use lha_agent::protocol::ApplyPatchApprovalRequestEvent;
+use lha_agent::protocol::Event;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::ExecApprovalRequestEvent;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::Submission;
+use lha_agent::protocol::TurnCompleteEvent;
+use lha_protocol::ThreadId;
+use lha_protocol::user_input::UserInput;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
 use mcp_types::RequestId;
@@ -32,7 +32,7 @@ use tokio::sync::Mutex;
 
 pub(crate) const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
 
-/// To adhere to MCP `tools/call` response format, include the Adam
+/// To adhere to MCP `tools/call` response format, include the LHA
 /// `threadId` in the `structured_content` field of the response.
 /// Some MCP clients ignore `content` when `structuredContent` is present, so
 /// mirror the text there as well.
@@ -58,7 +58,7 @@ pub(crate) fn create_call_tool_result_with_thread_id(
     }
 }
 
-/// Run a complete Adam session and stream events back to the client.
+/// Run a complete LHA session and stream events back to the client.
 ///
 /// On completion (success or error) the function sends the appropriate
 /// `tools/call` response so the LLM can continue the conversation.
@@ -80,7 +80,7 @@ pub async fn run_codex_tool_session(
             let result = CallToolResult {
                 content: vec![ContentBlock::TextContent(TextContent {
                     r#type: "text".to_string(),
-                    text: format!("Failed to start Adam session: {e}"),
+                    text: format!("Failed to start LHA session: {e}"),
                     annotations: None,
                 })],
                 is_error: Some(true),
@@ -106,7 +106,7 @@ pub async fn run_codex_tool_session(
         )
         .await;
 
-    // Use the original MCP request ID as the `sub_id` for the Adam submission so that
+    // Use the original MCP request ID as the `sub_id` for the LHA submission so that
     // any events emitted for this tool-call can be correlated with the
     // originating `tools/call` request.
     let sub_id = match &id {
@@ -394,7 +394,7 @@ async fn run_codex_tool_session_inner(
             Err(e) => {
                 let result = create_call_tool_result_with_thread_id(
                     thread_id,
-                    format!("Adam runtime error: {e}"),
+                    format!("LHA runtime error: {e}"),
                     Some(true),
                 );
                 outgoing.send_response(request_id.clone(), result).await;

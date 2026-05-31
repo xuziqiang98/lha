@@ -1,15 +1,3 @@
-use adam_agent::features::Feature;
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::SandboxPolicy;
-use adam_protocol::config_types::Identity;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::config_types::Settings;
-use adam_protocol::protocol::ThreadGoalSetMode;
-use adam_protocol::protocol::ThreadGoalStatus;
-use adam_protocol::user_input::UserInput;
 use anyhow::Result;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
@@ -26,6 +14,18 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use lha_agent::features::Feature;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::SandboxPolicy;
+use lha_protocol::config_types::Identity;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::config_types::Settings;
+use lha_protocol::protocol::ThreadGoalSetMode;
+use lha_protocol::protocol::ThreadGoalStatus;
+use lha_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio::time::Duration;
@@ -152,7 +152,7 @@ async fn confirm_if_exists_requires_confirmation_for_unfinished_goal() -> Result
         .replace_thread_goal(
             test.session_configured.session_id,
             "old goal",
-            adam_state::ThreadGoalStatus::Active,
+            lha_state::ThreadGoalStatus::Active,
             None,
         )
         .await?;
@@ -197,7 +197,7 @@ async fn stale_goal_confirmation_cannot_replace_new_goal() -> Result<()> {
         .replace_thread_goal(
             test.session_configured.session_id,
             "old goal",
-            adam_state::ThreadGoalStatus::Active,
+            lha_state::ThreadGoalStatus::Active,
             None,
         )
         .await?;
@@ -205,7 +205,7 @@ async fn stale_goal_confirmation_cannot_replace_new_goal() -> Result<()> {
         .replace_thread_goal(
             test.session_configured.session_id,
             "current goal",
-            adam_state::ThreadGoalStatus::Active,
+            lha_state::ThreadGoalStatus::Active,
             None,
         )
         .await?;
@@ -262,7 +262,7 @@ async fn confirmed_goal_replace_replaces_matching_goal() -> Result<()> {
         .replace_thread_goal(
             test.session_configured.session_id,
             "old goal",
-            adam_state::ThreadGoalStatus::Active,
+            lha_state::ThreadGoalStatus::Active,
             Some(100),
         )
         .await?;
@@ -288,7 +288,7 @@ async fn confirmed_goal_replace_replaces_matching_goal() -> Result<()> {
         .expect("goal should exist");
     assert_ne!(original.goal_id, goal.goal_id);
     assert_eq!(goal.objective, "replacement goal");
-    assert_eq!(goal.status, adam_state::ThreadGoalStatus::Active);
+    assert_eq!(goal.status, lha_state::ThreadGoalStatus::Active);
     assert_eq!(goal.token_budget, None);
     assert_eq!(goal.tokens_used, 0);
 
@@ -334,7 +334,7 @@ async fn active_goal_continues_after_incomplete_goal_turn() -> Result<()> {
         .get_thread_goal(test.session_configured.session_id)
         .await?
         .expect("goal should exist");
-    assert_eq!(goal.status, adam_state::ThreadGoalStatus::Complete);
+    assert_eq!(goal.status, lha_state::ThreadGoalStatus::Complete);
 
     let goal_context_requests = mock
         .requests()
@@ -374,7 +374,7 @@ async fn active_goal_continues_after_switching_back_to_programmer() -> Result<()
     db.replace_thread_goal(
         test.session_configured.session_id,
         "resume after identity switch",
-        adam_state::ThreadGoalStatus::Active,
+        lha_state::ThreadGoalStatus::Active,
         None,
     )
     .await?;
@@ -426,7 +426,7 @@ async fn active_goal_accounts_usage_before_continuing() -> Result<()> {
     db.replace_thread_goal(
         test.session_configured.session_id,
         "stay within budget",
-        adam_state::ThreadGoalStatus::Active,
+        lha_state::ThreadGoalStatus::Active,
         Some(10),
     )
     .await?;
@@ -447,7 +447,7 @@ async fn active_goal_accounts_usage_before_continuing() -> Result<()> {
         .await?
         .expect("goal should exist");
     assert_eq!(goal.objective, "stay within budget");
-    assert_eq!(goal.status, adam_state::ThreadGoalStatus::BudgetLimited);
+    assert_eq!(goal.status, lha_state::ThreadGoalStatus::BudgetLimited);
     assert_eq!(goal.tokens_used, 12);
     assert!(goal.time_used_seconds >= 1);
 
@@ -477,7 +477,7 @@ async fn active_goal_accounts_usage_for_user_turn() -> Result<()> {
     db.replace_thread_goal(
         test.session_configured.session_id,
         "manually continue active goal",
-        adam_state::ThreadGoalStatus::Active,
+        lha_state::ThreadGoalStatus::Active,
         None,
     )
     .await?;
@@ -493,7 +493,7 @@ async fn active_goal_accounts_usage_for_user_turn() -> Result<()> {
         .await?
         .expect("goal should exist");
     assert_eq!(goal.objective, "manually continue active goal");
-    assert_eq!(goal.status, adam_state::ThreadGoalStatus::Active);
+    assert_eq!(goal.status, lha_state::ThreadGoalStatus::Active);
     assert_eq!(goal.tokens_used, 18);
     assert!(goal.time_used_seconds >= 1);
 
@@ -533,7 +533,7 @@ async fn create_goal_accounts_usage_after_goal_creation_in_same_turn() -> Result
         .await?
         .expect("goal should exist");
     assert_eq!(goal.objective, "finish same turn");
-    assert_eq!(goal.status, adam_state::ThreadGoalStatus::Complete);
+    assert_eq!(goal.status, lha_state::ThreadGoalStatus::Complete);
     assert_eq!(goal.tokens_used, 25);
     assert!(goal.time_used_seconds >= 1);
 
@@ -560,7 +560,7 @@ async fn stopped_goal_does_not_account_usage_for_user_turn() -> Result<()> {
     db.replace_thread_goal(
         test.session_configured.session_id,
         "paused goal",
-        adam_state::ThreadGoalStatus::Paused,
+        lha_state::ThreadGoalStatus::Paused,
         None,
     )
     .await?;
@@ -576,7 +576,7 @@ async fn stopped_goal_does_not_account_usage_for_user_turn() -> Result<()> {
         .await?
         .expect("goal should exist");
     assert_eq!(goal.objective, "paused goal");
-    assert_eq!(goal.status, adam_state::ThreadGoalStatus::Paused);
+    assert_eq!(goal.status, lha_state::ThreadGoalStatus::Paused);
     assert_eq!(goal.tokens_used, 0);
     assert_eq!(goal.time_used_seconds, 0);
 
@@ -626,7 +626,7 @@ async fn resumed_goal_continuation_seeds_initial_context() -> Result<()> {
     db.replace_thread_goal(
         resumed.session_configured.session_id,
         "resume with context",
-        adam_state::ThreadGoalStatus::Active,
+        lha_state::ThreadGoalStatus::Active,
         Some(1),
     )
     .await?;
@@ -747,7 +747,7 @@ async fn stale_goal_turn_cannot_complete_replacement_goal() -> Result<()> {
         .await?
         .expect("goal should exist");
     assert_eq!(goal.objective, "replacement goal");
-    assert_eq!(goal.status, adam_state::ThreadGoalStatus::Paused);
+    assert_eq!(goal.status, lha_state::ThreadGoalStatus::Paused);
 
     Ok(())
 }
@@ -820,7 +820,7 @@ async fn stale_goal_turn_without_bound_goal_cannot_complete_new_goal() -> Result
         .await?
         .expect("goal should exist");
     assert_eq!(goal.objective, "new goal");
-    assert_eq!(goal.status, adam_state::ThreadGoalStatus::Paused);
+    assert_eq!(goal.status, lha_state::ThreadGoalStatus::Paused);
 
     Ok(())
 }
@@ -839,7 +839,7 @@ async fn stale_goal_edit_cannot_update_replacement_goal() -> Result<()> {
         .replace_thread_goal(
             test.session_configured.session_id,
             "old goal",
-            adam_state::ThreadGoalStatus::Active,
+            lha_state::ThreadGoalStatus::Active,
             None,
         )
         .await?;
@@ -847,7 +847,7 @@ async fn stale_goal_edit_cannot_update_replacement_goal() -> Result<()> {
         .replace_thread_goal(
             test.session_configured.session_id,
             "replacement goal",
-            adam_state::ThreadGoalStatus::Paused,
+            lha_state::ThreadGoalStatus::Paused,
             Some(10),
         )
         .await?;
@@ -897,7 +897,7 @@ async fn stale_goal_edit_cannot_recreate_cleared_goal() -> Result<()> {
         .replace_thread_goal(
             test.session_configured.session_id,
             "old goal",
-            adam_state::ThreadGoalStatus::Active,
+            lha_state::ThreadGoalStatus::Active,
             None,
         )
         .await?;

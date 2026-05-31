@@ -1,39 +1,39 @@
 #![allow(clippy::expect_used)]
-use adam_agent::CodexAuth;
-use adam_agent::compact::SUMMARIZATION_PROMPT;
-use adam_agent::compact::SUMMARY_PREFIX;
-use adam_agent::config::Config;
-use adam_agent::features::Feature;
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::ItemCompletedEvent;
-use adam_agent::protocol::ItemStartedEvent;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::RolloutItem;
-use adam_agent::protocol::RolloutLine;
-use adam_agent::protocol::SandboxPolicy;
-use adam_agent::protocol::WarningEvent;
-use adam_llm::RuntimeEndpoint;
-use adam_llm::ToolCallPayload;
-use adam_llm::ToolResultPayload;
-use adam_llm::built_in_runtime_endpoints;
-use adam_protocol::config_types::Identity;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::config_types::Settings;
-use adam_protocol::items::TurnItem;
-use adam_protocol::models::ContentItem;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::plan_tool::PlanItemArg;
-use adam_protocol::plan_tool::StepStatus;
-use adam_protocol::plan_tool::UpdatePlanArgs;
-use adam_protocol::user_input::UserInput;
 use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use lha_agent::CodexAuth;
+use lha_agent::compact::SUMMARIZATION_PROMPT;
+use lha_agent::compact::SUMMARY_PREFIX;
+use lha_agent::config::Config;
+use lha_agent::features::Feature;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::ItemCompletedEvent;
+use lha_agent::protocol::ItemStartedEvent;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::RolloutItem;
+use lha_agent::protocol::RolloutLine;
+use lha_agent::protocol::SandboxPolicy;
+use lha_agent::protocol::WarningEvent;
+use lha_llm::RuntimeEndpoint;
+use lha_llm::ToolCallPayload;
+use lha_llm::ToolResultPayload;
+use lha_llm::built_in_runtime_endpoints;
+use lha_protocol::config_types::Identity;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::config_types::Settings;
+use lha_protocol::items::TurnItem;
+use lha_protocol::models::ContentItem;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::plan_tool::PlanItemArg;
+use lha_protocol::plan_tool::StepStatus;
+use lha_protocol::plan_tool::UpdatePlanArgs;
+use lha_protocol::user_input::UserInput;
 use std::collections::VecDeque;
 
 use core_test_support::responses::ev_assistant_message;
@@ -350,7 +350,7 @@ async fn summarize_context_three_requests_and_instructions() {
     // inspect them without relying on specific prompt markers.
     let request_log = mount_sse_sequence(&server, vec![sse1, sse2, sse3]).await;
 
-    // Build config pointing to the mock server and spawn Adam.
+    // Build config pointing to the mock server and spawn LHA.
     let model_provider = non_openai_model_provider(&server);
     let mut builder = test_codex().with_config(move |config| {
         config.model_provider = model_provider;
@@ -487,7 +487,7 @@ async fn summarize_context_three_requests_and_instructions() {
         "third request should not include the summarize trigger"
     );
 
-    // Shut down Adam to flush rollout entries before inspecting the file.
+    // Shut down LHA to flush rollout entries before inspecting the file.
     codex.submit(Op::Shutdown).await.unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
@@ -995,7 +995,7 @@ async fn local_compact_backfills_recent_skills_into_follow_up_history() {
         .await
         .unwrap();
     let codex = test.codex.clone();
-    let skill_path = std::fs::canonicalize(test.adam_home_path().join("skills/demo/SKILL.md"))
+    let skill_path = std::fs::canonicalize(test.lha_home_path().join("skills/demo/SKILL.md"))
         .expect("canonicalize skill path");
 
     let request_log = mount_sse_sequence(
@@ -4055,7 +4055,7 @@ async fn unknown_chat_model_adjacent_probe_failure_persists_learned_window() {
         "post-preflight retry should include the compacted summary"
     );
 
-    let raw_models = tokio::fs::read_to_string(test.adam_home_path().join("models.json"))
+    let raw_models = tokio::fs::read_to_string(test.lha_home_path().join("models.json"))
         .await
         .expect("read models.json");
     assert!(

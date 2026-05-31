@@ -1,4 +1,4 @@
-//! Defines the protocol for a Adam session between a client and an agent.
+//! Defines the protocol for a LHA session between a client and an agent.
 //!
 //! Uses a SQ (Submission Queue) / EQ (Event Queue) pattern to asynchronously communicate
 //! between user and agent.
@@ -36,9 +36,9 @@ use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
 use crate::workflow::WorkflowRolloutItem;
 use crate::workflow::WorkflowUpdateEvent;
-use adam_git::GhostCommit;
-pub use adam_llm_types::TokenUsage;
-use adam_utils_absolute_path::AbsolutePathBuf;
+use lha_git::GhostCommit;
+pub use lha_llm_types::TokenUsage;
+use lha_utils_absolute_path::AbsolutePathBuf;
 use mcp_types::CallToolResult;
 use mcp_types::RequestId;
 use mcp_types::Resource as McpResource;
@@ -67,7 +67,7 @@ pub const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
 pub const ENVIRONMENT_CONTEXT_CLOSE_TAG: &str = "</environment_context>";
 pub const IDENTITY_OPEN_TAG: &str = "<identity>";
 pub const IDENTITY_CLOSE_TAG: &str = "</identity>";
-pub const USER_MESSAGE_BEGIN: &str = "## My request for Adam:";
+pub const USER_MESSAGE_BEGIN: &str = "## My request for LHA:";
 
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -294,14 +294,14 @@ pub enum Op {
     Compact,
 
     /// Set a user-facing thread name in the persisted rollout metadata.
-    /// This is a local-only operation handled by adam-agent; it does not
+    /// This is a local-only operation handled by lha-agent; it does not
     /// involve the model.
     SetThreadName { name: String },
 
-    /// Request Adam to undo a turn (turn are stacked so it is the same effect as CMD + Z).
+    /// Request LHA to undo a turn (turn are stacked so it is the same effect as CMD + Z).
     Undo,
 
-    /// Request Adam to drop the last N user turns from in-memory context.
+    /// Request LHA to drop the last N user turns from in-memory context.
     ///
     /// This does not attempt to revert local filesystem changes. Clients are
     /// responsible for undoing any edits on disk.
@@ -381,7 +381,7 @@ pub struct BuddyTurnSnapshot {
 }
 
 /// Determines the conditions under which the user is consulted to approve
-/// running the command proposed by Adam.
+/// running the command proposed by LHA.
 #[derive(
     Debug,
     Clone,
@@ -491,7 +491,7 @@ pub enum SandboxPolicy {
 /// A writable root path accompanied by a list of subpaths that should remain
 /// read‑only even when the root is writable. This is primarily used to ensure
 /// that folders containing files that could be modified to escalate the
-/// privileges of the agent (e.g. `.adam`, `.git`, notably `.git/hooks`) under
+/// privileges of the agent (e.g. `.lha`, `.git`, notably `.git/hooks`) under
 /// a writable root are not modified by the agent.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema)]
 pub struct WritableRoot {
@@ -662,11 +662,11 @@ impl SandboxPolicy {
                             subpaths.push(top_level_git);
                         }
                         #[allow(clippy::expect_used)]
-                        let top_level_adam = writable_root
-                            .join(".adam")
-                            .expect(".adam is a valid relative path");
-                        if top_level_adam.as_path().is_dir() {
-                            subpaths.push(top_level_adam);
+                        let top_level_lha = writable_root
+                            .join(".lha")
+                            .expect(".lha is a valid relative path");
+                        if top_level_lha.as_path().is_dir() {
+                            subpaths.push(top_level_lha);
                         }
                         WritableRoot {
                             root: writable_root,
@@ -946,7 +946,7 @@ pub enum EventMsg {
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
 }
 
-/// Adam errors that we expose to clients.
+/// LHA errors that we expose to clients.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -2487,7 +2487,7 @@ mod tests {
             "id": ThreadId::new(),
             "timestamp": "2025-01-01T00:00:00Z",
             "cwd": "/tmp",
-            "originator": "adam",
+            "originator": "lha",
             "cli_version": "0.0.0",
             "model_provider": null,
             "base_instructions": null

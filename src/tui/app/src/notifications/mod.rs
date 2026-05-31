@@ -4,8 +4,8 @@ mod osc9;
 use std::env;
 use std::io;
 
-use adam_agent::config::types::NotificationMethod;
 use bel::BelBackend;
+use lha_agent::config::types::NotificationMethod;
 use osc9::Osc9Backend;
 
 #[derive(Debug)]
@@ -74,7 +74,7 @@ fn supports_osc9() -> bool {
 #[cfg(test)]
 mod tests {
     use super::detect_backend;
-    use adam_agent::config::types::NotificationMethod;
+    use lha_agent::config::types::NotificationMethod;
     use serial_test::serial;
     use std::ffi::OsString;
 

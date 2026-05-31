@@ -1,12 +1,12 @@
 [package]
 edition.workspace = true
 license.workspace = true
-name = "adam-llm"
+name = "lha-llm"
 version.workspace = true
 
 [lib]
 doctest = false
-name = "adam_llm"
+name = "lha_llm"
 path = "src/lib.rs"
 
 [lints]
@@ -15,10 +15,10 @@ workspace = true
 [dependencies]
 async-trait = { workspace = true }
 chrono = { workspace = true }
-adam-api = { workspace = true }
-adam-client = { workspace = true }
-adam-llm-types = { workspace = true }
-adam-otel = { workspace = true }
+lha-api = { workspace = true }
+lha-client = { workspace = true }
+lha-llm-types = { workspace = true }
+lha-otel = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }

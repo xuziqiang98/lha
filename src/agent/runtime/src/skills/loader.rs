@@ -11,9 +11,9 @@ use crate::skills::model::SkillLoadOutcome;
 use crate::skills::model::SkillMetadata;
 use crate::skills::model::SkillToolDependency;
 use crate::skills::system::system_cache_root_dir;
-use adam_app_server_protocol::ConfigLayerSource;
-use adam_protocol::protocol::SkillScope;
 use dunce::canonicalize as canonicalize_path;
+use lha_app_server_protocol::ConfigLayerSource;
+use lha_protocol::protocol::SkillScope;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -182,13 +182,13 @@ fn skill_roots_from_layer_stack_inner(config_layer_stack: &ConfigLayerStack) -> 
                 });
             }
             ConfigLayerSource::User { .. } => {
-                // `$ADAM_HOME/skills` (user-installed skills).
+                // `$LHA_HOME/skills` (user-installed skills).
                 roots.push(SkillRoot {
                     path: config_folder.as_path().join(SKILLS_DIR_NAME),
                     scope: SkillScope::User,
                 });
 
-                // Embedded system skills are cached under `$ADAM_HOME/skills/.system` and are a
+                // Embedded system skills are cached under `$LHA_HOME/skills/.system` and are a
                 // special case (not a config layer).
                 roots.push(SkillRoot {
                     path: system_cache_root_dir(config_folder.as_path()),
@@ -196,8 +196,8 @@ fn skill_roots_from_layer_stack_inner(config_layer_stack: &ConfigLayerStack) -> 
                 });
             }
             ConfigLayerSource::System { .. } => {
-                // The system config layer lives under `/etc/adam/` on Unix, so treat
-                // `/etc/adam/skills` as admin-scoped skills.
+                // The system config layer lives under `/etc/lha/` on Unix, so treat
+                // `/etc/lha/skills` as admin-scoped skills.
                 roots.push(SkillRoot {
                     path: config_folder.as_path().join(SKILLS_DIR_NAME),
                     scope: SkillScope::Admin,
@@ -340,7 +340,7 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
         }
     }
 
-    // Follow symlinked directories for user, admin, and repo skills. System skills are written by Adam itself.
+    // Follow symlinked directories for user, admin, and repo skills. System skills are written by LHA itself.
     let follow_symlinks = matches!(
         scope,
         SkillScope::Repo | SkillScope::User | SkillScope::Admin
@@ -763,27 +763,27 @@ mod tests {
     use crate::config_loader::ConfigLayerStack;
     use crate::config_loader::ConfigRequirements;
     use crate::config_loader::ConfigRequirementsToml;
-    use adam_protocol::config_types::TrustLevel;
-    use adam_protocol::protocol::SkillScope;
-    use adam_utils_absolute_path::AbsolutePathBuf;
+    use lha_protocol::config_types::TrustLevel;
+    use lha_protocol::protocol::SkillScope;
+    use lha_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use std::path::Path;
     use tempfile::TempDir;
     use toml::Value as TomlValue;
 
-    const REPO_ROOT_CONFIG_DIR_NAME: &str = ".adam";
+    const REPO_ROOT_CONFIG_DIR_NAME: &str = ".lha";
 
-    async fn make_config(adam_home: &TempDir) -> Config {
-        make_config_for_cwd(adam_home, adam_home.path().to_path_buf()).await
+    async fn make_config(lha_home: &TempDir) -> Config {
+        make_config_for_cwd(lha_home, lha_home.path().to_path_buf()).await
     }
 
-    async fn make_config_for_cwd(adam_home: &TempDir, cwd: PathBuf) -> Config {
-        make_config_for_cwd_with_project_root_markers(adam_home, cwd, None).await
+    async fn make_config_for_cwd(lha_home: &TempDir, cwd: PathBuf) -> Config {
+        make_config_for_cwd_with_project_root_markers(lha_home, cwd, None).await
     }
 
     async fn make_config_for_cwd_with_project_root_markers(
-        adam_home: &TempDir,
+        lha_home: &TempDir,
         cwd: PathBuf,
         project_root_markers: Option<Vec<String>>,
     ) -> Config {
@@ -794,7 +794,7 @@ mod tests {
             .unwrap_or_else(|| cwd.clone());
 
         fs::write(
-            adam_home.path().join(CONFIG_TOML_FILE),
+            lha_home.path().join(CONFIG_TOML_FILE),
             toml::to_string(&ConfigToml {
                 projects: Some(HashMap::from([(
                     trust_root.to_string_lossy().to_string(),
@@ -815,7 +815,7 @@ mod tests {
         };
 
         ConfigBuilder::default()
-            .adam_home(adam_home.path().to_path_buf())
+            .lha_home(lha_home.path().to_path_buf())
             .harness_overrides(harness_overrides)
             .build()
             .await
@@ -837,8 +837,8 @@ mod tests {
     -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
 
-        let system_folder = tmp.path().join("etc/adam");
-        let user_folder = tmp.path().join("home/adam");
+        let system_folder = tmp.path().join("etc/lha");
+        let user_folder = tmp.path().join("home/lha");
         fs::create_dir_all(&system_folder)?;
         fs::create_dir_all(&user_folder)?;
 
@@ -886,15 +886,15 @@ mod tests {
     fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
 
-        let user_folder = tmp.path().join("home/adam");
+        let user_folder = tmp.path().join("home/lha");
         fs::create_dir_all(&user_folder)?;
 
         let project_root = tmp.path().join("repo");
-        let dot_adam = project_root.join(".adam");
-        fs::create_dir_all(&dot_adam)?;
+        let dot_lha = project_root.join(".lha");
+        fs::create_dir_all(&dot_lha)?;
 
         let user_file = AbsolutePathBuf::from_absolute_path(user_folder.join("config.toml"))?;
-        let project_dot_adam = AbsolutePathBuf::from_absolute_path(&dot_adam)?;
+        let project_dot_lha = AbsolutePathBuf::from_absolute_path(&dot_lha)?;
 
         let layers = vec![
             ConfigLayerEntry::new(
@@ -903,7 +903,7 @@ mod tests {
             ),
             ConfigLayerEntry::new_disabled(
                 ConfigLayerSource::Project {
-                    dot_adam_folder: project_dot_adam,
+                    dot_lha_folder: project_dot_lha,
                 },
                 TomlValue::Table(toml::map::Map::new()),
                 "marked untrusted",
@@ -923,7 +923,7 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                (SkillScope::Repo, dot_adam.join("skills")),
+                (SkillScope::Repo, dot_lha.join("skills")),
                 (SkillScope::User, user_folder.join("skills")),
                 (
                     SkillScope::System,
@@ -935,18 +935,13 @@ mod tests {
         Ok(())
     }
 
-    fn write_skill(adam_home: &TempDir, dir: &str, name: &str, description: &str) -> PathBuf {
-        write_skill_at(&adam_home.path().join("skills"), dir, name, description)
+    fn write_skill(lha_home: &TempDir, dir: &str, name: &str, description: &str) -> PathBuf {
+        write_skill_at(&lha_home.path().join("skills"), dir, name, description)
     }
 
-    fn write_system_skill(
-        adam_home: &TempDir,
-        dir: &str,
-        name: &str,
-        description: &str,
-    ) -> PathBuf {
+    fn write_system_skill(lha_home: &TempDir, dir: &str, name: &str, description: &str) -> PathBuf {
         write_skill_at(
-            &adam_home.path().join("skills/.system"),
+            &lha_home.path().join("skills/.system"),
             dir,
             name,
             description,
@@ -982,8 +977,8 @@ mod tests {
 
     #[tokio::test]
     async fn loads_skill_dependencies_metadata_from_yaml() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
-        let skill_path = write_skill(&adam_home, "demo", "dep-skill", "from json");
+        let lha_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&lha_home, "demo", "dep-skill", "from json");
         let skill_dir = skill_path.parent().expect("skill dir");
 
         write_skill_metadata_at(
@@ -1022,7 +1017,7 @@ mod tests {
 "#,
         );
 
-        let cfg = make_config(&adam_home).await;
+        let cfg = make_config(&lha_home).await;
         let outcome = load_skills(&cfg);
 
         assert!(
@@ -1081,8 +1076,8 @@ mod tests {
 
     #[tokio::test]
     async fn loads_skill_interface_metadata_from_yaml() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
-        let skill_path = write_skill(&adam_home, "demo", "ui-skill", "from json");
+        let lha_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&lha_home, "demo", "ui-skill", "from json");
         let skill_dir = skill_path.parent().expect("skill dir");
         let normalized_skill_dir = normalized(skill_dir);
 
@@ -1099,7 +1094,7 @@ interface:
 "##,
         );
 
-        let cfg = make_config(&adam_home).await;
+        let cfg = make_config(&lha_home).await;
         let outcome = load_skills(&cfg);
 
         assert!(
@@ -1135,8 +1130,8 @@ interface:
 
     #[tokio::test]
     async fn accepts_icon_paths_under_assets_dir() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
-        let skill_path = write_skill(&adam_home, "demo", "ui-skill", "from json");
+        let lha_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&lha_home, "demo", "ui-skill", "from json");
         let skill_dir = skill_path.parent().expect("skill dir");
         let normalized_skill_dir = normalized(skill_dir);
 
@@ -1153,7 +1148,7 @@ interface:
 "#,
         );
 
-        let cfg = make_config(&adam_home).await;
+        let cfg = make_config(&lha_home).await;
         let outcome = load_skills(&cfg);
 
         assert!(
@@ -1184,8 +1179,8 @@ interface:
 
     #[tokio::test]
     async fn ignores_invalid_brand_color() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
-        let skill_path = write_skill(&adam_home, "demo", "ui-skill", "from json");
+        let lha_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&lha_home, "demo", "ui-skill", "from json");
         let skill_dir = skill_path.parent().expect("skill dir");
 
         write_skill_interface_at(
@@ -1199,7 +1194,7 @@ interface:
 "#,
         );
 
-        let cfg = make_config(&adam_home).await;
+        let cfg = make_config(&lha_home).await;
         let outcome = load_skills(&cfg);
 
         assert!(
@@ -1223,8 +1218,8 @@ interface:
 
     #[tokio::test]
     async fn ignores_default_prompt_over_max_length() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
-        let skill_path = write_skill(&adam_home, "demo", "ui-skill", "from json");
+        let lha_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&lha_home, "demo", "ui-skill", "from json");
         let skill_dir = skill_path.parent().expect("skill dir");
         let normalized_skill_dir = normalized(skill_dir);
         let too_long = "x".repeat(MAX_DEFAULT_PROMPT_LEN + 1);
@@ -1244,7 +1239,7 @@ interface:
             ),
         );
 
-        let cfg = make_config(&adam_home).await;
+        let cfg = make_config(&lha_home).await;
         let outcome = load_skills(&cfg);
 
         assert!(
@@ -1275,8 +1270,8 @@ interface:
 
     #[tokio::test]
     async fn drops_interface_when_icons_are_invalid() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
-        let skill_path = write_skill(&adam_home, "demo", "ui-skill", "from json");
+        let lha_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&lha_home, "demo", "ui-skill", "from json");
         let skill_dir = skill_path.parent().expect("skill dir");
 
         write_skill_interface_at(
@@ -1291,7 +1286,7 @@ interface:
 "#,
         );
 
-        let cfg = make_config(&adam_home).await;
+        let cfg = make_config(&lha_home).await;
         let outcome = load_skills(&cfg);
 
         assert!(
@@ -1326,15 +1321,15 @@ interface:
     #[tokio::test]
     #[cfg(unix)]
     async fn loads_skills_via_symlinked_subdir_for_user_scope() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
+        let lha_home = tempfile::tempdir().expect("tempdir");
         let shared = tempfile::tempdir().expect("tempdir");
 
         let shared_skill_path = write_skill_at(shared.path(), "demo", "linked-skill", "from link");
 
-        fs::create_dir_all(adam_home.path().join("skills")).unwrap();
-        symlink_dir(shared.path(), &adam_home.path().join("skills/shared"));
+        fs::create_dir_all(lha_home.path().join("skills")).unwrap();
+        symlink_dir(shared.path(), &lha_home.path().join("skills/shared"));
 
-        let cfg = make_config(&adam_home).await;
+        let cfg = make_config(&lha_home).await;
         let outcome = load_skills(&cfg);
 
         assert!(
@@ -1359,17 +1354,17 @@ interface:
     #[tokio::test]
     #[cfg(unix)]
     async fn ignores_symlinked_skill_file_for_user_scope() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
+        let lha_home = tempfile::tempdir().expect("tempdir");
         let shared = tempfile::tempdir().expect("tempdir");
 
         let shared_skill_path =
             write_skill_at(shared.path(), "demo", "linked-file-skill", "from link");
 
-        let skill_dir = adam_home.path().join("skills/demo");
+        let skill_dir = lha_home.path().join("skills/demo");
         fs::create_dir_all(&skill_dir).unwrap();
         symlink_file(&shared_skill_path, &skill_dir.join(SKILLS_FILENAME));
 
-        let cfg = make_config(&adam_home).await;
+        let cfg = make_config(&lha_home).await;
         let outcome = load_skills(&cfg);
 
         assert!(
@@ -1383,17 +1378,17 @@ interface:
     #[tokio::test]
     #[cfg(unix)]
     async fn does_not_loop_on_symlink_cycle_for_user_scope() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
+        let lha_home = tempfile::tempdir().expect("tempdir");
 
         // Create a cycle:
-        //   $ADAM_HOME/skills/cycle/loop -> $ADAM_HOME/skills/cycle
-        let cycle_dir = adam_home.path().join("skills/cycle");
+        //   $LHA_HOME/skills/cycle/loop -> $LHA_HOME/skills/cycle
+        let cycle_dir = lha_home.path().join("skills/cycle");
         fs::create_dir_all(&cycle_dir).unwrap();
         symlink_dir(&cycle_dir, &cycle_dir.join("loop"));
 
         let skill_path = write_skill_at(&cycle_dir, "demo", "cycle-skill", "still loads");
 
-        let cfg = make_config(&adam_home).await;
+        let cfg = make_config(&lha_home).await;
         let outcome = load_skills(&cfg);
 
         assert!(
@@ -1453,7 +1448,7 @@ interface:
     #[tokio::test]
     #[cfg(unix)]
     async fn loads_skills_via_symlinked_subdir_for_repo_scope() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
+        let lha_home = tempfile::tempdir().expect("tempdir");
         let repo_dir = tempfile::tempdir().expect("tempdir");
         mark_as_git_repo(repo_dir.path());
         let shared = tempfile::tempdir().expect("tempdir");
@@ -1467,7 +1462,7 @@ interface:
         fs::create_dir_all(&repo_skills_root).unwrap();
         symlink_dir(shared.path(), &repo_skills_root.join("shared"));
 
-        let cfg = make_config_for_cwd(&adam_home, repo_dir.path().to_path_buf()).await;
+        let cfg = make_config_for_cwd(&lha_home, repo_dir.path().to_path_buf()).await;
         let outcome = load_skills(&cfg);
 
         assert!(
@@ -1492,16 +1487,16 @@ interface:
     #[tokio::test]
     #[cfg(unix)]
     async fn system_scope_ignores_symlinked_subdir() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
+        let lha_home = tempfile::tempdir().expect("tempdir");
         let shared = tempfile::tempdir().expect("tempdir");
 
         write_skill_at(shared.path(), "demo", "system-linked-skill", "from link");
 
-        let system_root = adam_home.path().join("skills/.system");
+        let system_root = lha_home.path().join("skills/.system");
         fs::create_dir_all(&system_root).unwrap();
         symlink_dir(shared.path(), &system_root.join("shared"));
 
-        let cfg = make_config(&adam_home).await;
+        let cfg = make_config(&lha_home).await;
         let outcome = load_skills(&cfg);
 
         assert!(
@@ -1514,22 +1509,22 @@ interface:
 
     #[tokio::test]
     async fn respects_max_scan_depth_for_user_scope() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
+        let lha_home = tempfile::tempdir().expect("tempdir");
 
         let within_depth_path = write_skill(
-            &adam_home,
+            &lha_home,
             "d0/d1/d2/d3/d4/d5",
             "within-depth-skill",
             "loads",
         );
         let _too_deep_path = write_skill(
-            &adam_home,
+            &lha_home,
             "d0/d1/d2/d3/d4/d5/d6",
             "too-deep-skill",
             "should not load",
         );
 
-        let cfg = make_config(&adam_home).await;
+        let cfg = make_config(&lha_home).await;
         let outcome = load_skills(&cfg);
 
         assert!(
@@ -1553,9 +1548,9 @@ interface:
 
     #[tokio::test]
     async fn loads_valid_skill() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
-        let skill_path = write_skill(&adam_home, "demo", "demo-skill", "does things\ncarefully");
-        let cfg = make_config(&adam_home).await;
+        let lha_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&lha_home, "demo", "demo-skill", "does things\ncarefully");
+        let cfg = make_config(&lha_home).await;
 
         let outcome = load_skills(&cfg);
         assert!(
@@ -1579,14 +1574,14 @@ interface:
 
     #[tokio::test]
     async fn loads_short_description_from_metadata() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
-        let skill_dir = adam_home.path().join("skills/demo");
+        let lha_home = tempfile::tempdir().expect("tempdir");
+        let skill_dir = lha_home.path().join("skills/demo");
         fs::create_dir_all(&skill_dir).unwrap();
         let contents = "---\nname: demo-skill\ndescription: long description\nmetadata:\n  short-description: short summary\n---\n\n# Body\n";
         let skill_path = skill_dir.join(SKILLS_FILENAME);
         fs::write(&skill_path, contents).unwrap();
 
-        let cfg = make_config(&adam_home).await;
+        let cfg = make_config(&lha_home).await;
         let outcome = load_skills(&cfg);
         assert!(
             outcome.errors.is_empty(),
@@ -1609,8 +1604,8 @@ interface:
 
     #[tokio::test]
     async fn enforces_short_description_length_limits() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
-        let skill_dir = adam_home.path().join("skills/demo");
+        let lha_home = tempfile::tempdir().expect("tempdir");
+        let skill_dir = lha_home.path().join("skills/demo");
         fs::create_dir_all(&skill_dir).unwrap();
         let too_long = "x".repeat(MAX_SHORT_DESCRIPTION_LEN + 1);
         let contents = format!(
@@ -1618,7 +1613,7 @@ interface:
         );
         fs::write(skill_dir.join(SKILLS_FILENAME), contents).unwrap();
 
-        let cfg = make_config(&adam_home).await;
+        let cfg = make_config(&lha_home).await;
         let outcome = load_skills(&cfg);
         assert_eq!(outcome.skills.len(), 0);
         assert_eq!(outcome.errors.len(), 1);
@@ -1633,8 +1628,8 @@ interface:
 
     #[tokio::test]
     async fn skips_hidden_and_invalid() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
-        let hidden_dir = adam_home.path().join("skills/.hidden");
+        let lha_home = tempfile::tempdir().expect("tempdir");
+        let hidden_dir = lha_home.path().join("skills/.hidden");
         fs::create_dir_all(&hidden_dir).unwrap();
         fs::write(
             hidden_dir.join(SKILLS_FILENAME),
@@ -1643,11 +1638,11 @@ interface:
         .unwrap();
 
         // Invalid because missing closing frontmatter.
-        let invalid_dir = adam_home.path().join("skills/invalid");
+        let invalid_dir = lha_home.path().join("skills/invalid");
         fs::create_dir_all(&invalid_dir).unwrap();
         fs::write(invalid_dir.join(SKILLS_FILENAME), "---\nname: bad").unwrap();
 
-        let cfg = make_config(&adam_home).await;
+        let cfg = make_config(&lha_home).await;
         let outcome = load_skills(&cfg);
         assert_eq!(outcome.skills.len(), 0);
         assert_eq!(outcome.errors.len(), 1);
@@ -1661,10 +1656,10 @@ interface:
 
     #[tokio::test]
     async fn enforces_length_limits() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
+        let lha_home = tempfile::tempdir().expect("tempdir");
         let max_desc = "\u{1F4A1}".repeat(MAX_DESCRIPTION_LEN);
-        write_skill(&adam_home, "max-len", "max-len", &max_desc);
-        let cfg = make_config(&adam_home).await;
+        write_skill(&lha_home, "max-len", "max-len", &max_desc);
+        let cfg = make_config(&lha_home).await;
 
         let outcome = load_skills(&cfg);
         assert!(
@@ -1675,7 +1670,7 @@ interface:
         assert_eq!(outcome.skills.len(), 1);
 
         let too_long_desc = "\u{1F4A1}".repeat(MAX_DESCRIPTION_LEN + 1);
-        write_skill(&adam_home, "too-long", "too-long", &too_long_desc);
+        write_skill(&lha_home, "too-long", "too-long", &too_long_desc);
         let outcome = load_skills(&cfg);
         assert_eq!(outcome.skills.len(), 1);
         assert_eq!(outcome.errors.len(), 1);
@@ -1687,7 +1682,7 @@ interface:
 
     #[tokio::test]
     async fn loads_skills_from_repo_root() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
+        let lha_home = tempfile::tempdir().expect("tempdir");
         let repo_dir = tempfile::tempdir().expect("tempdir");
         mark_as_git_repo(repo_dir.path());
 
@@ -1696,7 +1691,7 @@ interface:
             .join(REPO_ROOT_CONFIG_DIR_NAME)
             .join(SKILLS_DIR_NAME);
         let skill_path = write_skill_at(&skills_root, "repo", "repo-skill", "from repo");
-        let cfg = make_config_for_cwd(&adam_home, repo_dir.path().to_path_buf()).await;
+        let cfg = make_config_for_cwd(&lha_home, repo_dir.path().to_path_buf()).await;
 
         let outcome = load_skills(&cfg);
         assert!(
@@ -1720,7 +1715,7 @@ interface:
 
     #[tokio::test]
     async fn loads_skills_from_agents_dir_without_codex_dir() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
+        let lha_home = tempfile::tempdir().expect("tempdir");
         let repo_dir = tempfile::tempdir().expect("tempdir");
         mark_as_git_repo(repo_dir.path());
 
@@ -1730,7 +1725,7 @@ interface:
             "agents-skill",
             "from agents",
         );
-        let cfg = make_config_for_cwd(&adam_home, repo_dir.path().to_path_buf()).await;
+        let cfg = make_config_for_cwd(&lha_home, repo_dir.path().to_path_buf()).await;
 
         let outcome = load_skills(&cfg);
         assert!(
@@ -1754,7 +1749,7 @@ interface:
 
     #[tokio::test]
     async fn loads_skills_from_all_codex_dirs_under_project_root() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
+        let lha_home = tempfile::tempdir().expect("tempdir");
         let repo_dir = tempfile::tempdir().expect("tempdir");
         mark_as_git_repo(repo_dir.path());
 
@@ -1781,7 +1776,7 @@ interface:
             "from nested",
         );
 
-        let cfg = make_config_for_cwd(&adam_home, nested_dir).await;
+        let cfg = make_config_for_cwd(&lha_home, nested_dir).await;
 
         let outcome = load_skills(&cfg);
         assert!(
@@ -1816,7 +1811,7 @@ interface:
 
     #[tokio::test]
     async fn loads_skills_from_codex_dir_when_not_git_repo() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
+        let lha_home = tempfile::tempdir().expect("tempdir");
         let work_dir = tempfile::tempdir().expect("tempdir");
 
         let skill_path = write_skill_at(
@@ -1829,7 +1824,7 @@ interface:
             "from cwd",
         );
 
-        let cfg = make_config_for_cwd(&adam_home, work_dir.path().to_path_buf()).await;
+        let cfg = make_config_for_cwd(&lha_home, work_dir.path().to_path_buf()).await;
 
         let outcome = load_skills(&cfg);
         assert!(
@@ -1889,11 +1884,11 @@ interface:
 
     #[tokio::test]
     async fn keeps_duplicate_names_from_repo_and_user() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
+        let lha_home = tempfile::tempdir().expect("tempdir");
         let repo_dir = tempfile::tempdir().expect("tempdir");
         mark_as_git_repo(repo_dir.path());
 
-        let user_skill_path = write_skill(&adam_home, "user", "dupe-skill", "from user");
+        let user_skill_path = write_skill(&lha_home, "user", "dupe-skill", "from user");
         let repo_skill_path = write_skill_at(
             &repo_dir
                 .path()
@@ -1904,7 +1899,7 @@ interface:
             "from repo",
         );
 
-        let cfg = make_config_for_cwd(&adam_home, repo_dir.path().to_path_buf()).await;
+        let cfg = make_config_for_cwd(&lha_home, repo_dir.path().to_path_buf()).await;
 
         let outcome = load_skills(&cfg);
         assert!(
@@ -1939,7 +1934,7 @@ interface:
 
     #[tokio::test]
     async fn keeps_duplicate_names_from_nested_codex_dirs() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
+        let lha_home = tempfile::tempdir().expect("tempdir");
         let repo_dir = tempfile::tempdir().expect("tempdir");
         mark_as_git_repo(repo_dir.path());
 
@@ -1966,7 +1961,7 @@ interface:
             "from nested",
         );
 
-        let cfg = make_config_for_cwd(&adam_home, nested_dir).await;
+        let cfg = make_config_for_cwd(&lha_home, nested_dir).await;
         let outcome = load_skills(&cfg);
 
         assert!(
@@ -2011,7 +2006,7 @@ interface:
 
     #[tokio::test]
     async fn repo_skills_search_does_not_escape_repo_root() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
+        let lha_home = tempfile::tempdir().expect("tempdir");
         let outer_dir = tempfile::tempdir().expect("tempdir");
         let repo_dir = outer_dir.path().join("repo");
         fs::create_dir_all(&repo_dir).unwrap();
@@ -2027,7 +2022,7 @@ interface:
         );
         mark_as_git_repo(&repo_dir);
 
-        let cfg = make_config_for_cwd(&adam_home, repo_dir).await;
+        let cfg = make_config_for_cwd(&lha_home, repo_dir).await;
 
         let outcome = load_skills(&cfg);
         assert!(
@@ -2040,7 +2035,7 @@ interface:
 
     #[tokio::test]
     async fn loads_skills_when_cwd_is_file_in_repo() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
+        let lha_home = tempfile::tempdir().expect("tempdir");
         let repo_dir = tempfile::tempdir().expect("tempdir");
         mark_as_git_repo(repo_dir.path());
 
@@ -2056,7 +2051,7 @@ interface:
         let file_path = repo_dir.path().join("some-file.txt");
         fs::write(&file_path, "contents").unwrap();
 
-        let cfg = make_config_for_cwd(&adam_home, file_path).await;
+        let cfg = make_config_for_cwd(&lha_home, file_path).await;
 
         let outcome = load_skills(&cfg);
         assert!(
@@ -2080,7 +2075,7 @@ interface:
 
     #[tokio::test]
     async fn non_git_repo_skills_search_does_not_walk_parents() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
+        let lha_home = tempfile::tempdir().expect("tempdir");
         let outer_dir = tempfile::tempdir().expect("tempdir");
         let nested_dir = outer_dir.path().join("nested/inner");
         fs::create_dir_all(&nested_dir).unwrap();
@@ -2096,9 +2091,9 @@ interface:
         );
 
         let cfg = make_config_for_cwd_with_project_root_markers(
-            &adam_home,
+            &lha_home,
             nested_dir,
-            Some(vec![".adam-test-never".to_string()]),
+            Some(vec![".lha-test-never".to_string()]),
         )
         .await;
 
@@ -2113,12 +2108,12 @@ interface:
 
     #[tokio::test]
     async fn loads_skills_from_system_cache_when_present() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
+        let lha_home = tempfile::tempdir().expect("tempdir");
         let work_dir = tempfile::tempdir().expect("tempdir");
 
-        let skill_path = write_system_skill(&adam_home, "system", "system-skill", "from system");
+        let skill_path = write_system_skill(&lha_home, "system", "system-skill", "from system");
 
-        let cfg = make_config_for_cwd(&adam_home, work_dir.path().to_path_buf()).await;
+        let cfg = make_config_for_cwd(&lha_home, work_dir.path().to_path_buf()).await;
 
         let outcome = load_skills(&cfg);
         assert!(
@@ -2142,8 +2137,8 @@ interface:
 
     #[tokio::test]
     async fn skill_roots_include_admin_with_lowest_priority_on_unix() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
-        let cfg = make_config(&adam_home).await;
+        let lha_home = tempfile::tempdir().expect("tempdir");
+        let cfg = make_config(&lha_home).await;
 
         let scopes: Vec<SkillScope> = skill_roots(&cfg)
             .into_iter()

@@ -1,15 +1,15 @@
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used)]
-use adam_agent::config::types::ShellEnvironmentPolicy;
-use adam_agent::error::CodexErr;
-use adam_agent::error::SandboxErr;
-use adam_agent::exec::ExecParams;
-use adam_agent::exec::process_exec_tool_call;
-use adam_agent::exec_env::create_env;
-use adam_agent::protocol::SandboxPolicy;
-use adam_agent::protocol_config_types::WindowsSandboxLevel;
-use adam_agent::sandboxing::SandboxPermissions;
-use adam_utils_absolute_path::AbsolutePathBuf;
+use lha_agent::config::types::ShellEnvironmentPolicy;
+use lha_agent::error::CodexErr;
+use lha_agent::error::SandboxErr;
+use lha_agent::exec::ExecParams;
+use lha_agent::exec::process_exec_tool_call;
+use lha_agent::exec_env::create_env;
+use lha_agent::protocol::SandboxPolicy;
+use lha_agent::protocol_config_types::WindowsSandboxLevel;
+use lha_agent::sandboxing::SandboxPermissions;
+use lha_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -52,7 +52,7 @@ async fn run_cmd_output(
     cmd: &[&str],
     writable_roots: &[PathBuf],
     timeout_ms: u64,
-) -> adam_agent::exec::ExecToolCallOutput {
+) -> lha_agent::exec::ExecToolCallOutput {
     let cwd = std::env::current_dir().expect("cwd should exist");
     let sandbox_cwd = cwd.clone();
     let params = ExecParams {
@@ -78,7 +78,7 @@ async fn run_cmd_output(
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };
-    let sandbox_program = env!("CARGO_BIN_EXE_adam-linux-sandbox");
+    let sandbox_program = env!("CARGO_BIN_EXE_lha-linux-sandbox");
     let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
 
     process_exec_tool_call(
@@ -184,7 +184,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
     };
 
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
-    let sandbox_program = env!("CARGO_BIN_EXE_adam-linux-sandbox");
+    let sandbox_program = env!("CARGO_BIN_EXE_lha-linux-sandbox");
     let codex_linux_sandbox_exe: Option<PathBuf> = Some(PathBuf::from(sandbox_program));
     let result = process_exec_tool_call(
         params,

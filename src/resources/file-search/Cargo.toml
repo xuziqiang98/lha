@@ -1,15 +1,15 @@
 [package]
-name = "adam-file-search"
+name = "lha-file-search"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "adam-file-search"
+name = "lha-file-search"
 path = "src/main.rs"
 
 [lib]
-name = "adam_file_search"
+name = "lha_file_search"
 path = "src/lib.rs"
 
 [dependencies]

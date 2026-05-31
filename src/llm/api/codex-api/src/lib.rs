@@ -9,9 +9,9 @@ pub mod sse;
 pub mod telemetry;
 
 pub use crate::requests::headers::build_conversation_headers;
-pub use adam_client::RequestTelemetry;
-pub use adam_client::ReqwestTransport;
-pub use adam_client::TransportError;
+pub use lha_client::RequestTelemetry;
+pub use lha_client::ReqwestTransport;
+pub use lha_client::TransportError;
 
 pub use crate::auth::AuthProvider;
 pub use crate::common::CompactionInput;

@@ -1,4 +1,4 @@
-# adam-utils-cargo-bin
+# lha-utils-cargo-bin
 
 Helpers for Cargo-based test runs in this workspace.
 

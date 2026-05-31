@@ -1,8 +1,8 @@
 use crate::shell::Shell;
-use adam_protocol::models::ContentItem;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
-use adam_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
+use lha_protocol::models::ContentItem;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
+use lha_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;

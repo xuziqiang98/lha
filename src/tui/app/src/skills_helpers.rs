@@ -1,5 +1,5 @@
-use adam_agent::skills::model::SkillMetadata;
-use adam_common::fuzzy_match::fuzzy_match;
+use lha_agent::skills::model::SkillMetadata;
+use lha_common::fuzzy_match::fuzzy_match;
 
 pub(crate) fn skill_display_name(skill: &SkillMetadata) -> &str {
     skill

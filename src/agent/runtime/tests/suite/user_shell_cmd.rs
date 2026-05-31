@@ -1,11 +1,3 @@
-use adam_agent::features::Feature;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::ExecCommandEndEvent;
-use adam_agent::protocol::ExecCommandSource;
-use adam_agent::protocol::ExecOutputStream;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::SandboxPolicy;
-use adam_agent::protocol::TurnAbortReason;
 use anyhow::Context;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
@@ -20,6 +12,14 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use lha_agent::features::Feature;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::ExecCommandEndEvent;
+use lha_agent::protocol::ExecCommandSource;
+use lha_agent::protocol::ExecOutputStream;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::SandboxPolicy;
+use lha_agent::protocol::TurnAbortReason;
 use regex_lite::escape;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -135,9 +135,9 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     let test = builder.build(&server).await?;
 
     #[cfg(windows)]
-    let command = r#"$val = $env:ADAM_SANDBOX; if ([string]::IsNullOrEmpty($val)) { $val = 'not-set' } ; [System.Console]::Write($val)"#.to_string();
+    let command = r#"$val = $env:LHA_SANDBOX; if ([string]::IsNullOrEmpty($val)) { $val = 'not-set' } ; [System.Console]::Write($val)"#.to_string();
     #[cfg(not(windows))]
-    let command = r#"sh -c "printf '%s' \"${ADAM_SANDBOX:-not-set}\"""#.to_string();
+    let command = r#"sh -c "printf '%s' \"${LHA_SANDBOX:-not-set}\"""#.to_string();
 
     test.codex
         .submit(Op::RunUserShellCommand {

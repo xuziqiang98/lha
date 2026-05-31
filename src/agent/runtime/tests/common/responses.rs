@@ -3,11 +3,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use adam_protocol::openai_models::ModelsResponse;
 use anyhow::Result;
 use base64::Engine;
 use futures::SinkExt;
 use futures::StreamExt;
+use lha_protocol::openai_models::ModelsResponse;
 use serde_json::Value;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;

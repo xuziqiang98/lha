@@ -2,9 +2,6 @@ use assert_matches::assert_matches;
 use std::sync::Arc;
 use std::time::Duration;
 
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
@@ -14,12 +11,15 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_with_timeout;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_protocol::user_input::UserInput;
 use regex_lite::Regex;
 use serde_json::json;
 
 const ABORT_TASK_EVENT_TIMEOUT: Duration = Duration::from_secs(15);
 
-async fn wait_for_abort_task_event<F>(codex: &adam_agent::CodexThread, predicate: F) -> EventMsg
+async fn wait_for_abort_task_event<F>(codex: &lha_agent::CodexThread, predicate: F) -> EventMsg
 where
     F: FnMut(&EventMsg) -> bool,
 {

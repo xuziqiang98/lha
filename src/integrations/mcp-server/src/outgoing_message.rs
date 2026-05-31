@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
-use adam_agent::protocol::Event;
-use adam_protocol::ThreadId;
+use lha_agent::protocol::Event;
+use lha_protocol::ThreadId;
 use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCError;
 use mcp_types::JSONRPCErrorError;
@@ -119,7 +119,7 @@ impl OutgoingMessageSender {
         };
 
         self.send_notification(OutgoingNotification {
-            method: "adam/event".to_string(),
+            method: "lha/event".to_string(),
             params: Some(params.clone()),
         })
         .await;
@@ -203,7 +203,7 @@ pub(crate) struct OutgoingNotificationParams {
     pub event: serde_json::Value,
 }
 
-// Additional mcp-specific data to be added to a [`adam_agent::protocol::Event`] as notification.params._meta
+// Additional mcp-specific data to be added to a [`lha_agent::protocol::Event`] as notification.params._meta
 // MCP Spec: https://modelcontextprotocol.io/specification/2025-06-18/basic#meta
 // Typescript Schema: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/0695a497eb50a804fc0e88c18a93a21a675d6b3e/schema/2025-06-18/schema.ts
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -233,14 +233,14 @@ pub(crate) struct OutgoingError {
 mod tests {
     use std::path::PathBuf;
 
-    use adam_agent::protocol::AskForApproval;
-    use adam_agent::protocol::EventMsg;
-    use adam_agent::protocol::SandboxPolicy;
-    use adam_agent::protocol::SessionConfiguredEvent;
-    use adam_protocol::ThreadId;
-    use adam_protocol::config_types::IdentityKind;
-    use adam_protocol::openai_models::ReasoningEffort;
     use anyhow::Result;
+    use lha_agent::protocol::AskForApproval;
+    use lha_agent::protocol::EventMsg;
+    use lha_agent::protocol::SandboxPolicy;
+    use lha_agent::protocol::SessionConfiguredEvent;
+    use lha_protocol::ThreadId;
+    use lha_protocol::config_types::IdentityKind;
+    use lha_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::NamedTempFile;
@@ -282,7 +282,7 @@ mod tests {
         let OutgoingMessage::Notification(OutgoingNotification { method, params }) = result else {
             panic!("expected Notification for first message");
         };
-        assert_eq!(method, "adam/event");
+        assert_eq!(method, "lha/event");
 
         let Ok(expected_params) = serde_json::to_value(&event) else {
             panic!("Event must serialize");
@@ -331,7 +331,7 @@ mod tests {
         let OutgoingMessage::Notification(OutgoingNotification { method, params }) = result else {
             panic!("expected Notification for first message");
         };
-        assert_eq!(method, "adam/event");
+        assert_eq!(method, "lha/event");
         let expected_params = json!({
             "_meta": {
                 "requestId": "123",
@@ -398,7 +398,7 @@ mod tests {
         let OutgoingMessage::Notification(OutgoingNotification { method, params }) = result else {
             panic!("expected Notification for first message");
         };
-        assert_eq!(method, "adam/event");
+        assert_eq!(method, "lha/event");
         let expected_params = json!({
             "_meta": {
                 "requestId": "123",

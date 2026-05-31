@@ -2,14 +2,14 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::path::PathBuf;
 
-use adam_agent::git_info::current_branch_name;
-use adam_agent::git_info::local_git_branches;
-use adam_agent::protocol::ReviewRequest;
-use adam_agent::protocol::ReviewTarget;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use lha_agent::git_info::current_branch_name;
+use lha_agent::git_info::local_git_branches;
+use lha_agent::protocol::ReviewRequest;
+use lha_agent::protocol::ReviewTarget;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -104,7 +104,7 @@ impl ReviewModal {
     }
 
     pub(crate) async fn show_commit_picker(&mut self, cwd: &Path) {
-        let commits = adam_agent::git_info::recent_commits(cwd, 100).await;
+        let commits = lha_agent::git_info::recent_commits(cwd, 100).await;
         self.push_commit_picker_with_entries(commits);
     }
 
@@ -195,7 +195,7 @@ impl ReviewModal {
 
     fn push_commit_picker_with_entries(
         &mut self,
-        entries: Vec<adam_agent::git_info::CommitLogEntry>,
+        entries: Vec<lha_agent::git_info::CommitLogEntry>,
     ) {
         self.view_stack
             .push(ReviewModalScreen::List(ReviewListScreen::commits(entries)));
@@ -352,7 +352,7 @@ impl ReviewListScreen {
         }
     }
 
-    fn commits(entries: Vec<adam_agent::git_info::CommitLogEntry>) -> Self {
+    fn commits(entries: Vec<lha_agent::git_info::CommitLogEntry>) -> Self {
         let items = entries
             .into_iter()
             .map(|entry| {
@@ -1059,12 +1059,12 @@ mod tests {
     fn commit_picker_shows_subjects_without_timestamps() {
         let (mut modal, _rx) = make_modal();
         modal.push_commit_picker_with_entries(vec![
-            adam_agent::git_info::CommitLogEntry {
+            lha_agent::git_info::CommitLogEntry {
                 sha: "1111111deadbeef".to_string(),
                 timestamp: 0,
                 subject: "Add new feature X".to_string(),
             },
-            adam_agent::git_info::CommitLogEntry {
+            lha_agent::git_info::CommitLogEntry {
                 sha: "2222222cafebabe".to_string(),
                 timestamp: 0,
                 subject: "Fix bug Y".to_string(),
@@ -1094,12 +1094,12 @@ mod tests {
     fn commit_picker_typing_filters_results() {
         let (mut modal, _rx) = make_modal();
         modal.push_commit_picker_with_entries(vec![
-            adam_agent::git_info::CommitLogEntry {
+            lha_agent::git_info::CommitLogEntry {
                 sha: "1111111deadbeef".to_string(),
                 timestamp: 0,
                 subject: "Add new feature X".to_string(),
             },
-            adam_agent::git_info::CommitLogEntry {
+            lha_agent::git_info::CommitLogEntry {
                 sha: "2222222cafebabe".to_string(),
                 timestamp: 0,
                 subject: "Fix bug Y".to_string(),
@@ -1340,7 +1340,7 @@ mod tests {
 
     #[test]
     fn commit_picker_wraps_long_commit_subjects() {
-        let screen = ReviewListScreen::commits(vec![adam_agent::git_info::CommitLogEntry {
+        let screen = ReviewListScreen::commits(vec![lha_agent::git_info::CommitLogEntry {
             sha: "1111111deadbeef".to_string(),
             timestamp: 0,
             subject: "Implement really long review modal commit subject with distinct suffix"

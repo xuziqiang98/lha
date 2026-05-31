@@ -4,20 +4,20 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
-use adam_agent::ContentItem;
-use adam_agent::models_manager::manager::ModelsManager;
-use adam_llm::RuntimeEndpoint;
-use adam_llm::ToolCallPayload;
-use adam_llm::TurnRequest;
-use adam_otel::OtelManager;
-use adam_protocol::ThreadId;
-use adam_protocol::models::ReasoningItemContent;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::protocol::SessionSource;
 use core_test_support::load_default_config_for_test;
 use core_test_support::runtime_client::TestRuntimeClient;
 use core_test_support::skip_if_no_network;
 use futures::StreamExt;
+use lha_agent::ContentItem;
+use lha_agent::models_manager::manager::ModelsManager;
+use lha_llm::RuntimeEndpoint;
+use lha_llm::ToolCallPayload;
+use lha_llm::TurnRequest;
+use lha_otel::OtelManager;
+use lha_protocol::ThreadId;
+use lha_protocol::models::ReasoningItemContent;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::protocol::SessionSource;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -65,11 +65,11 @@ async fn run_request(input: Vec<TranscriptItem>) -> Value {
         .with_stream_max_retries(Some(0))
         .with_stream_idle_timeout_ms(Some(5_000));
 
-    let adam_home = match TempDir::new() {
+    let lha_home = match TempDir::new() {
         Ok(dir) => dir,
         Err(e) => panic!("failed to create TempDir: {e}"),
     };
-    let mut config = load_default_config_for_test(&adam_home).await;
+    let mut config = load_default_config_for_test(&lha_home).await;
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();
     config.show_raw_agent_reasoning = true;
@@ -135,11 +135,11 @@ async fn run_request(input: Vec<TranscriptItem>) -> Value {
 }
 
 async fn build_client(provider: RuntimeEndpoint) -> TestRuntimeClient {
-    let adam_home = match TempDir::new() {
+    let lha_home = match TempDir::new() {
         Ok(dir) => dir,
         Err(e) => panic!("failed to create TempDir: {e}"),
     };
-    let mut config = load_default_config_for_test(&adam_home).await;
+    let mut config = load_default_config_for_test(&lha_home).await;
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();
     config.show_raw_agent_reasoning = true;

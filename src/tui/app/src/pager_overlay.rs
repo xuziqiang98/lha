@@ -815,9 +815,9 @@ fn render_offset_content(
 mod tests {
     use super::*;
     use crate::transcript_view::TranscriptLiveTailSource;
-    use adam_agent::protocol::ExecCommandSource;
-    use adam_agent::protocol::ReviewDecision;
     use insta::assert_snapshot;
+    use lha_agent::protocol::ExecCommandSource;
+    use lha_agent::protocol::ReviewDecision;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -828,8 +828,8 @@ mod tests {
     use crate::history_cell;
     use crate::history_cell::HistoryCell;
     use crate::history_cell::new_patch_event;
-    use adam_agent::protocol::FileChange;
-    use adam_protocol::parse_command::ParsedCommand;
+    use lha_agent::protocol::FileChange;
+    use lha_protocol::parse_command::ParsedCommand;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::text::Text;

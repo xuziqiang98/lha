@@ -1,1 +1,1 @@
-pub use adam_llm_types::PlanType;
+pub use lha_llm_types::PlanType;

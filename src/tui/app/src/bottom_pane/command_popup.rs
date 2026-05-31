@@ -10,8 +10,8 @@ use super::slash_commands;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
-use adam_protocol::custom_prompts::CustomPrompt;
-use adam_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
+use lha_protocol::custom_prompts::CustomPrompt;
+use lha_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use std::collections::HashSet;
 
 // Hide alias commands in the default popup list so each unique action appears once.

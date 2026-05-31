@@ -8,5 +8,5 @@ fn main() -> anyhow::Result<()> {
 
 #[cfg(not(target_os = "windows"))]
 fn main() {
-    panic!("adam-windows-sandbox-setup is Windows-only");
+    panic!("lha-windows-sandbox-setup is Windows-only");
 }

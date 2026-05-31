@@ -1,4 +1,4 @@
-use adam_utils_absolute_path::AbsolutePathBuf;
+use lha_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashSet;
 use std::io;
 use std::path::Path;

@@ -1,13 +1,13 @@
-use adam_async_utils::CancelErr;
-use adam_async_utils::OrCancelExt;
-use adam_llm::ItemHandle;
-use adam_llm::ToolResultItem;
-use adam_llm::TurnEvent;
-use adam_llm::TurnEventStream;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::future::BoxFuture;
 use futures::stream::FuturesOrdered;
+use lha_async_utils::CancelErr;
+use lha_async_utils::OrCancelExt;
+use lha_llm::ItemHandle;
+use lha_llm::ToolResultItem;
+use lha_llm::TurnEvent;
+use lha_llm::TurnEventStream;
 use tokio_util::sync::CancellationToken;
 
 pub type ToolFuture<E> = BoxFuture<'static, Result<ToolResultItem, E>>;
@@ -77,7 +77,7 @@ pub trait TurnEventProcessor: Send {
 
     fn cancelled_error(&self) -> Self::Error;
 
-    fn llm_error(&self, err: adam_llm::Error) -> Self::Error;
+    fn llm_error(&self, err: lha_llm::Error) -> Self::Error;
 
     fn stream_closed_error(&self) -> Self::Error;
 }
@@ -135,14 +135,14 @@ impl AgentKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_llm::SemanticOutputItem;
-    use adam_llm::ToolCallPayload;
-    use adam_llm::ToolCallRequest;
-    use adam_llm::ToolResultItem;
-    use adam_llm::ToolResultPayload;
-    use adam_llm::TranscriptItem;
-    use adam_llm_types::ContentItem;
-    use adam_llm_types::TokenUsage;
+    use lha_llm::SemanticOutputItem;
+    use lha_llm::ToolCallPayload;
+    use lha_llm::ToolCallRequest;
+    use lha_llm::ToolResultItem;
+    use lha_llm::ToolResultPayload;
+    use lha_llm::TranscriptItem;
+    use lha_llm_types::ContentItem;
+    use lha_llm_types::TokenUsage;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc;
 
@@ -234,7 +234,7 @@ mod tests {
             TestError::Cancelled
         }
 
-        fn llm_error(&self, err: adam_llm::Error) -> Self::Error {
+        fn llm_error(&self, err: lha_llm::Error) -> Self::Error {
             TestError::Llm(err.to_string())
         }
 

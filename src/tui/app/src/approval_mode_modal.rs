@@ -1,10 +1,10 @@
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::SandboxPolicy;
-use adam_common::approval_presets::ApprovalPreset;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::SandboxPolicy;
+use lha_common::approval_presets::ApprovalPreset;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -519,7 +519,7 @@ mod tests {
     fn item(name: &str, is_current: bool) -> ApprovalModeItem {
         ApprovalModeItem {
             name: name.to_string(),
-            description: Some("Adam can read and edit files in the current workspace.".to_string()),
+            description: Some("LHA can read and edit files in the current workspace.".to_string()),
             is_current,
             disabled_reason: None,
             action: ApprovalModeAction::ApplyPreset {
@@ -635,7 +635,7 @@ mod tests {
             vec![
                 "Enable full access?".bold().into(),
                 vec![
-                    "When Adam runs with full access, it can edit any file on your computer and run commands with network, without your approval. ".into(),
+                    "When LHA runs with full access, it can edit any file on your computer and run commands with network, without your approval. ".into(),
                     "Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior.".red(),
                 ]
                 .into(),
@@ -654,7 +654,7 @@ mod tests {
 
         assert!(lines.header.len() > modal.header.len());
         assert!(lines.header.iter().all(|line| line.width() <= 32));
-        assert!(header_text.contains("When Adam runs with full access"));
+        assert!(header_text.contains("When LHA runs with full access"));
         assert!(header_text.contains("Exercise caution"));
         assert!(header_text.contains("unexpected behavior"));
     }
@@ -665,7 +665,7 @@ mod tests {
             vec![
                 "Enable full access?".bold().into(),
                 vec![
-                    "When Adam runs with full access, it can edit any file on your computer and run commands with network, without your approval. ".into(),
+                    "When LHA runs with full access, it can edit any file on your computer and run commands with network, without your approval. ".into(),
                     "Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior.".red(),
                 ]
                 .into(),
@@ -736,7 +736,7 @@ mod tests {
         let modal = ApprovalModeModal::new(
             vec![
                 "Update Model Permissions".bold().into(),
-                "Choose what Adam can do without approval.".dim().into(),
+                "Choose what LHA can do without approval.".dim().into(),
                 "".into(),
             ],
             vec![item("Read Only", true), item("Default", false)],

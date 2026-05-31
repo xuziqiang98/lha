@@ -1,17 +1,17 @@
-use adam_app_server_protocol::AddConversationListenerParams;
-use adam_app_server_protocol::AddConversationSubscriptionResponse;
-use adam_app_server_protocol::InputItem;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::NewConversationParams;
-use adam_app_server_protocol::NewConversationResponse;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::SendUserMessageParams;
-use adam_app_server_protocol::SendUserMessageResponse;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::to_response;
 use core_test_support::responses;
+use lha_app_server_protocol::AddConversationListenerParams;
+use lha_app_server_protocol::AddConversationSubscriptionResponse;
+use lha_app_server_protocol::InputItem;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::NewConversationParams;
+use lha_app_server_protocol::NewConversationResponse;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::SendUserMessageParams;
+use lha_app_server_protocol::SendUserMessageResponse;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::Path;
@@ -27,12 +27,12 @@ async fn test_conversation_create_and_send_message_ok() -> Result<()> {
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(&server, vec![response_body]).await;
 
-    // Temporary Adam home with config pointing at the mock server.
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    // Temporary LHA home with config pointing at the mock server.
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
     // Start MCP server process and initialize.
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Create a conversation via the new JSON-RPC API.
@@ -115,9 +115,9 @@ async fn test_conversation_create_and_send_message_ok() -> Result<()> {
 }
 
 // Helper to create a config.toml pointing at the mock model server.
-fn create_config_toml(adam_home: &Path, server_uri: &str) -> std::io::Result<()> {
+fn create_config_toml(lha_home: &Path, server_uri: &str) -> std::io::Result<()> {
     app_test_support::write_mock_responses_config_toml_with_options(
-        adam_home,
+        lha_home,
         server_uri,
         &std::collections::BTreeMap::new(),
         20_000,

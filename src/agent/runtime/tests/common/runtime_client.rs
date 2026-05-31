@@ -1,23 +1,23 @@
 use std::sync::Arc;
 
-use adam_agent::AuthManager;
-use adam_agent::config::Config;
-use adam_agent::default_client::build_reqwest_client;
-use adam_agent::models_manager::manager::ModelsManager;
-use adam_agent::protocol::SessionSource;
-use adam_llm::DefaultRuntimeClientFactory;
-use adam_llm::RuntimeBuildSpec;
-use adam_llm::RuntimeClient;
-use adam_llm::RuntimeClientFactory;
-use adam_llm::RuntimeEndpoint;
-use adam_llm::RuntimeSession;
-use adam_llm::TurnEventStream;
-use adam_llm::TurnRequest;
-use adam_otel::OtelManager;
-use adam_protocol::ThreadId;
-use adam_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use adam_protocol::openai_models::ModelInfo;
-use adam_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use lha_agent::AuthManager;
+use lha_agent::config::Config;
+use lha_agent::default_client::build_reqwest_client;
+use lha_agent::models_manager::manager::ModelsManager;
+use lha_agent::protocol::SessionSource;
+use lha_llm::DefaultRuntimeClientFactory;
+use lha_llm::RuntimeBuildSpec;
+use lha_llm::RuntimeClient;
+use lha_llm::RuntimeClientFactory;
+use lha_llm::RuntimeEndpoint;
+use lha_llm::RuntimeSession;
+use lha_llm::TurnEventStream;
+use lha_llm::TurnRequest;
+use lha_otel::OtelManager;
+use lha_protocol::ThreadId;
+use lha_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use lha_protocol::openai_models::ModelInfo;
+use lha_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 
 pub struct TestRuntimeClient {
     inner: Arc<dyn RuntimeClient>,
@@ -44,7 +44,7 @@ impl TestRuntimeClient {
         let mut endpoint = endpoint;
         if !config
             .features
-            .enabled(adam_agent::features::Feature::ResponsesWebsockets)
+            .enabled(lha_agent::features::Feature::ResponsesWebsockets)
         {
             endpoint.set_realtime_turn_streaming_enabled(false);
         }
@@ -61,7 +61,7 @@ impl TestRuntimeClient {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             model_verbosity: config.model_verbosity,
             web_search_mode: config.web_search_mode,
-            experimental_beta_feature_keys: adam_agent::features::FEATURES
+            experimental_beta_feature_keys: lha_agent::features::FEATURES
                 .iter()
                 .filter_map(|spec| {
                     if spec.stage.experimental_menu_description().is_some()
@@ -109,7 +109,7 @@ impl TestRuntimeClient {
 }
 
 impl TestRuntimeSession {
-    pub async fn run_turn(&mut self, turn: &TurnRequest) -> adam_llm::Result<TurnEventStream> {
+    pub async fn run_turn(&mut self, turn: &TurnRequest) -> lha_llm::Result<TurnEventStream> {
         self.inner.run_turn(turn).await
     }
 }

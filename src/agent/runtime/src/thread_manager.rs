@@ -15,17 +15,17 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::skills::SkillsManager;
-use adam_llm::CatalogRefreshStrategy;
-use adam_llm::RuntimeEndpoint;
-use adam_protocol::ThreadId;
-use adam_protocol::config_types::IdentityMask;
-use adam_protocol::openai_models::ModelInfo;
-use adam_protocol::openai_models::ModelPreset;
-use adam_protocol::protocol::InitialHistory;
-use adam_protocol::protocol::McpServerRefreshConfig;
-use adam_protocol::protocol::Op;
-use adam_protocol::protocol::RolloutItem;
-use adam_protocol::protocol::SessionSource;
+use lha_llm::CatalogRefreshStrategy;
+use lha_llm::RuntimeEndpoint;
+use lha_protocol::ThreadId;
+use lha_protocol::config_types::IdentityMask;
+use lha_protocol::openai_models::ModelInfo;
+use lha_protocol::openai_models::ModelPreset;
+use lha_protocol::protocol::InitialHistory;
+use lha_protocol::protocol::McpServerRefreshConfig;
+use lha_protocol::protocol::Op;
+use lha_protocol::protocol::RolloutItem;
+use lha_protocol::protocol::SessionSource;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -38,7 +38,7 @@ use tracing::warn;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
 
-/// Represents a newly created Adam thread (formerly called a conversation), including the first event
+/// Represents a newly created LHA thread (formerly called a conversation), including the first event
 /// (which is [`EventMsg::SessionConfigured`]).
 pub struct NewThread {
     pub thread_id: ThreadId,
@@ -51,7 +51,7 @@ pub struct NewThread {
 pub struct ThreadManager {
     state: Arc<ThreadManagerState>,
     #[cfg(any(test, feature = "test-support"))]
-    _test_adam_home_guard: Option<TempDir>,
+    _test_lha_home_guard: Option<TempDir>,
 }
 
 /// Shared, `Arc`-owned state for [`ThreadManager`].
@@ -70,7 +70,7 @@ pub(crate) struct ThreadManagerState {
 
 impl ThreadManager {
     pub fn new(
-        adam_home: PathBuf,
+        lha_home: PathBuf,
         auth_manager: Arc<AuthManager>,
         model_provider_id: &str,
         provider: RuntimeEndpoint,
@@ -82,19 +82,19 @@ impl ThreadManager {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::new(
-                    adam_home.clone(),
+                    lha_home.clone(),
                     auth_manager.clone(),
                     model_provider_id,
                     provider,
                 )),
-                skills_manager: Arc::new(SkillsManager::new(adam_home)),
+                skills_manager: Arc::new(SkillsManager::new(lha_home)),
                 auth_manager,
                 session_source,
                 #[cfg(any(test, feature = "test-support"))]
                 ops_log: Arc::new(std::sync::Mutex::new(Vec::new())),
             }),
             #[cfg(any(test, feature = "test-support"))]
-            _test_adam_home_guard: None,
+            _test_lha_home_guard: None,
         }
     }
 
@@ -103,10 +103,10 @@ impl ThreadManager {
     /// Used for integration tests: should not be used by ordinary business logic.
     pub fn with_models_provider(auth: CodexAuth, provider: RuntimeEndpoint) -> Self {
         let temp_dir = tempfile::tempdir().unwrap_or_else(|err| panic!("temp codex home: {err}"));
-        let adam_home = temp_dir.path().to_path_buf();
+        let lha_home = temp_dir.path().to_path_buf();
         let mut manager =
-            Self::with_models_provider_and_home(auth, "test-provider", provider, adam_home);
-        manager._test_adam_home_guard = Some(temp_dir);
+            Self::with_models_provider_and_home(auth, "test-provider", provider, lha_home);
+        manager._test_lha_home_guard = Some(temp_dir);
         manager
     }
 
@@ -117,7 +117,7 @@ impl ThreadManager {
         auth: CodexAuth,
         model_provider_id: &str,
         provider: RuntimeEndpoint,
-        adam_home: PathBuf,
+        lha_home: PathBuf,
     ) -> Self {
         let auth_manager = AuthManager::from_auth_for_testing(auth);
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
@@ -126,18 +126,18 @@ impl ThreadManager {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::with_provider(
-                    adam_home.clone(),
+                    lha_home.clone(),
                     auth_manager.clone(),
                     model_provider_id,
                     provider,
                 )),
-                skills_manager: Arc::new(SkillsManager::new(adam_home)),
+                skills_manager: Arc::new(SkillsManager::new(lha_home)),
                 auth_manager,
                 session_source: SessionSource::Exec,
                 #[cfg(any(test, feature = "test-support"))]
                 ops_log: Arc::new(std::sync::Mutex::new(Vec::new())),
             }),
-            _test_adam_home_guard: None,
+            _test_lha_home_guard: None,
         }
     }
 
@@ -287,7 +287,7 @@ impl ThreadManager {
     pub async fn start_thread_with_tools(
         &self,
         config: Config,
-        dynamic_tools: Vec<adam_protocol::dynamic_tools::DynamicToolSpec>,
+        dynamic_tools: Vec<lha_protocol::dynamic_tools::DynamicToolSpec>,
     ) -> CodexResult<NewThread> {
         self.state
             .spawn_thread(
@@ -412,7 +412,7 @@ impl ThreadManagerState {
         config: Config,
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
-        dynamic_tools: Vec<adam_protocol::dynamic_tools::DynamicToolSpec>,
+        dynamic_tools: Vec<lha_protocol::dynamic_tools::DynamicToolSpec>,
     ) -> CodexResult<NewThread> {
         self.spawn_thread_with_source(
             config,
@@ -430,7 +430,7 @@ impl ThreadManagerState {
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
-        dynamic_tools: Vec<adam_protocol::dynamic_tools::DynamicToolSpec>,
+        dynamic_tools: Vec<lha_protocol::dynamic_tools::DynamicToolSpec>,
     ) -> CodexResult<NewThread> {
         let CodexSpawnOk {
             codex, thread_id, ..
@@ -495,10 +495,10 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
 mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
-    use adam_protocol::models::ContentItem;
-    use adam_protocol::models::ReasoningItemReasoningSummary;
-    use adam_protocol::models::TranscriptItem;
     use assert_matches::assert_matches;
+    use lha_protocol::models::ContentItem;
+    use lha_protocol::models::ReasoningItemReasoningSummary;
+    use lha_protocol::models::TranscriptItem;
     use pretty_assertions::assert_eq;
 
     fn user_msg(text: &str) -> TranscriptItem {
@@ -542,7 +542,7 @@ mod tests {
                 id: None,
                 call_id: "c1".to_string(),
                 tool_name: "tool".to_string(),
-                payload: adam_llm::ToolCallPayload::JsonArguments {
+                payload: lha_llm::ToolCallPayload::JsonArguments {
                     arguments: "{}".to_string(),
                 },
             },

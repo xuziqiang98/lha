@@ -1,20 +1,20 @@
-use adam_agent::protocol::EventMsg;
-use adam_app_server_protocol::JSONRPCNotification;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::ListConversationsParams;
-use adam_app_server_protocol::ListConversationsResponse;
-use adam_app_server_protocol::NewConversationParams;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::ResumeConversationParams;
-use adam_app_server_protocol::ResumeConversationResponse;
-use adam_app_server_protocol::ServerNotification;
-use adam_app_server_protocol::SessionConfiguredNotification;
-use adam_protocol::models::ContentItem;
-use adam_protocol::models::TranscriptItem;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
 use app_test_support::to_response;
+use lha_agent::protocol::EventMsg;
+use lha_app_server_protocol::JSONRPCNotification;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::ListConversationsParams;
+use lha_app_server_protocol::ListConversationsResponse;
+use lha_app_server_protocol::NewConversationParams;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::ResumeConversationParams;
+use lha_app_server_protocol::ResumeConversationResponse;
+use lha_app_server_protocol::ServerNotification;
+use lha_app_server_protocol::SessionConfiguredNotification;
+use lha_protocol::models::ContentItem;
+use lha_protocol::models::TranscriptItem;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -23,10 +23,10 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_list_and_resume_conversations() -> Result<()> {
-    // Prepare a temporary ADAM_HOME with a few fake rollout files.
-    let adam_home = TempDir::new()?;
+    // Prepare a temporary LHA_HOME with a few fake rollout files.
+    let lha_home = TempDir::new()?;
     create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-02T12-00-00",
         "2025-01-02T12:00:00Z",
         "Hello A",
@@ -34,7 +34,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
         None,
     )?;
     create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-01T13-00-00",
         "2025-01-01T13:00:00Z",
         "Hello B",
@@ -42,7 +42,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
         None,
     )?;
     create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-01T12-00-00",
         "2025-01-01T12:00:00Z",
         "Hello C",
@@ -50,7 +50,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
         None,
     )?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Request first page with size 2
@@ -103,7 +103,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
 
     // Add a conversation with an explicit non-OpenAI provider for filter tests.
     create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-01T11-30-00",
         "2025-01-01T11:30:00Z",
         "Hello TP",
@@ -362,7 +362,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn list_conversations_fetches_through_filtered_pages() -> Result<()> {
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
 
     // Only the last 3 conversations match the provider filter; request 3 and
     // ensure pagination keeps fetching past non-matching pages.
@@ -396,7 +396,7 @@ async fn list_conversations_fetches_through_filtered_pages() -> Result<()> {
 
     for (ts_file, ts_rfc, provider) in cases {
         create_fake_rollout(
-            adam_home.path(),
+            lha_home.path(),
             ts_file,
             ts_rfc,
             "Hello",
@@ -405,7 +405,7 @@ async fn list_conversations_fetches_through_filtered_pages() -> Result<()> {
         )?;
     }
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp

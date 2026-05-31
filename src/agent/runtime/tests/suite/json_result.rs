@@ -1,16 +1,16 @@
 #![cfg(not(target_os = "windows"))]
 
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::SandboxPolicy;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::SandboxPolicy;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 use responses::ev_assistant_message;
 use responses::ev_completed;

@@ -1,5 +1,5 @@
-use adam_llm::TranscriptItem;
-use adam_llm_types::ContentItem;
+use lha_llm::TranscriptItem;
+use lha_llm_types::ContentItem;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputQueue {

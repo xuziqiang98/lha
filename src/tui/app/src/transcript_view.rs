@@ -27,15 +27,15 @@ use crate::style::user_message_style;
 use crate::terminal_palette;
 use crate::transcript_selection::TranscriptSelection;
 use crate::transcript_selection::TranscriptSelectionPoint;
-#[cfg(test)]
-use adam_protocol::plan_tool::PlanItemArg;
-#[cfg(test)]
-use adam_protocol::plan_tool::StepStatus;
-#[cfg(test)]
-use adam_protocol::plan_tool::UpdatePlanArgs;
 use crossterm::event::MouseButton;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
+#[cfg(test)]
+use lha_protocol::plan_tool::PlanItemArg;
+#[cfg(test)]
+use lha_protocol::plan_tool::StepStatus;
+#[cfg(test)]
+use lha_protocol::plan_tool::UpdatePlanArgs;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
 use ratatui::layout::Rect;

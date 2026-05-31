@@ -1,10 +1,10 @@
 use crate::workflow::validation;
-use adam_protocol::protocol::RolloutItem;
-use adam_protocol::workflow::WorkflowDefinition;
-use adam_protocol::workflow::WorkflowEvent;
-use adam_protocol::workflow::WorkflowRolloutItem;
-use adam_protocol::workflow::WorkflowStatus;
-use adam_protocol::workflow::WorkflowValidationError;
+use lha_protocol::protocol::RolloutItem;
+use lha_protocol::workflow::WorkflowDefinition;
+use lha_protocol::workflow::WorkflowEvent;
+use lha_protocol::workflow::WorkflowRolloutItem;
+use lha_protocol::workflow::WorkflowStatus;
+use lha_protocol::workflow::WorkflowValidationError;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -412,8 +412,8 @@ fn error(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_protocol::workflow::WorkflowMode;
-    use adam_protocol::workflow::WorkflowStepDefinition;
+    use lha_protocol::workflow::WorkflowMode;
+    use lha_protocol::workflow::WorkflowStepDefinition;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 

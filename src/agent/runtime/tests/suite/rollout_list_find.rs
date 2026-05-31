@@ -3,23 +3,23 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 
-use adam_agent::RolloutRecorder;
-use adam_agent::RolloutRecorderParams;
-use adam_agent::config::ConfigBuilder;
-use adam_agent::find_archived_thread_path_by_id_str;
-use adam_agent::find_thread_path_by_id_str;
-use adam_agent::find_thread_path_by_name_str;
-use adam_agent::protocol::SessionSource;
-use adam_protocol::ThreadId;
-use adam_protocol::models::BaseInstructions;
+use lha_agent::RolloutRecorder;
+use lha_agent::RolloutRecorderParams;
+use lha_agent::config::ConfigBuilder;
+use lha_agent::find_archived_thread_path_by_id_str;
+use lha_agent::find_thread_path_by_id_str;
+use lha_agent::find_thread_path_by_name_str;
+use lha_agent::protocol::SessionSource;
+use lha_protocol::ThreadId;
+use lha_protocol::models::BaseInstructions;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use uuid::Uuid;
 
 /// Create <subdir>/YYYY/MM/DD and write a minimal rollout file containing the
 /// provided conversation id in the SessionMeta line. Returns the absolute path.
-fn write_minimal_rollout_with_id_in_subdir(adam_home: &Path, subdir: &str, id: Uuid) -> PathBuf {
-    let sessions = adam_home.join(subdir).join("2024/01/01");
+fn write_minimal_rollout_with_id_in_subdir(lha_home: &Path, subdir: &str, id: Uuid) -> PathBuf {
+    let sessions = lha_home.join(subdir).join("2024/01/01");
     std::fs::create_dir_all(&sessions).unwrap();
 
     let file = sessions.join(format!("rollout-2024-01-01T00-00-00-{id}.jsonl"));
@@ -48,8 +48,8 @@ fn write_minimal_rollout_with_id_in_subdir(adam_home: &Path, subdir: &str, id: U
 
 /// Create sessions/YYYY/MM/DD and write a minimal rollout file containing the
 /// provided conversation id in the SessionMeta line. Returns the absolute path.
-fn write_minimal_rollout_with_id(adam_home: &Path, id: Uuid) -> PathBuf {
-    write_minimal_rollout_with_id_in_subdir(adam_home, "sessions", id)
+fn write_minimal_rollout_with_id(lha_home: &Path, id: Uuid) -> PathBuf {
+    write_minimal_rollout_with_id_in_subdir(lha_home, "sessions", id)
 }
 
 #[tokio::test]
@@ -66,15 +66,15 @@ async fn find_locates_rollout_file_by_id() {
 }
 
 #[tokio::test]
-async fn find_handles_gitignore_covering_adam_home_directory() {
+async fn find_handles_gitignore_covering_lha_home_directory() {
     let repo = TempDir::new().unwrap();
-    let adam_home = repo.path().join(".adam");
-    std::fs::create_dir_all(&adam_home).unwrap();
-    std::fs::write(repo.path().join(".gitignore"), ".adam/**\n").unwrap();
+    let lha_home = repo.path().join(".lha");
+    std::fs::create_dir_all(&lha_home).unwrap();
+    std::fs::write(repo.path().join(".gitignore"), ".lha/**\n").unwrap();
     let id = Uuid::new_v4();
-    let expected = write_minimal_rollout_with_id(&adam_home, id);
+    let expected = write_minimal_rollout_with_id(&lha_home, id);
 
-    let found = find_thread_path_by_id_str(&adam_home, &id.to_string())
+    let found = find_thread_path_by_id_str(&lha_home, &id.to_string())
         .await
         .unwrap();
 
@@ -100,7 +100,7 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
     // Ensures the name-based finder locates a rollout produced by the real recorder.
     let home = TempDir::new().unwrap();
     let config = ConfigBuilder::default()
-        .adam_home(home.path().to_path_buf())
+        .lha_home(home.path().to_path_buf())
         .build()
         .await?;
     let thread_id = ThreadId::new();

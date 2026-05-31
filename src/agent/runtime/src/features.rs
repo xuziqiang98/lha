@@ -12,7 +12,7 @@ use crate::config::profile::ConfigProfile;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::WarningEvent;
-use adam_otel::OtelManager;
+use lha_otel::OtelManager;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -133,7 +133,7 @@ pub enum Feature {
     Identities,
     /// Enable personality selection in the TUI.
     Personality,
-    /// Prevent the computer from sleeping while Adam is running a turn.
+    /// Prevent the computer from sleeping while LHA is running a turn.
     PreventIdleSleep,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
@@ -467,7 +467,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Experimental {
             name: "Shell snapshot",
             menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
-            announcement: "NEW! Try shell snapshotting to make your Adam faster. Enable in /experimental!",
+            announcement: "NEW! Try shell snapshotting to make your LHA faster. Enable in /experimental!",
         },
         default_enabled: false,
     },
@@ -621,7 +621,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         )) {
             Stage::Experimental {
                 name: "Prevent sleep while running",
-                menu_description: "Keep your computer awake while Adam is running a thread.",
+                menu_description: "Keep your computer awake while LHA is running a thread.",
                 announcement: "NEW: Prevent sleep while running is now available in /experimental.",
             }
         } else {
@@ -674,11 +674,7 @@ pub fn maybe_push_unstable_features_warning(
     }
 
     let under_development_feature_keys = under_development_feature_keys.join(", ");
-    let config_path = config
-        .adam_home
-        .join(CONFIG_TOML_FILE)
-        .display()
-        .to_string();
+    let config_path = config.lha_home.join(CONFIG_TOML_FILE).display().to_string();
     let message = format!(
         "Under-development features enabled: {under_development_feature_keys}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {config_path}."
     );
@@ -785,7 +781,7 @@ mod tests {
                 stage.experimental_menu_name()
             );
             assert_eq!(
-                Some("Keep your computer awake while Adam is running a thread."),
+                Some("Keep your computer awake while LHA is running a thread."),
                 stage.experimental_menu_description()
             );
             assert_eq!(

@@ -1,5 +1,5 @@
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::SandboxPolicy;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::SandboxPolicy;
 
 /// A simple preset pairing an approval policy with a sandbox policy.
 #[derive(Debug, Clone)]
@@ -24,21 +24,21 @@ pub fn builtin_approval_presets() -> Vec<ApprovalPreset> {
         ApprovalPreset {
             id: "read-only",
             label: "Read Only",
-            description: "Adam can read files in the current workspace. Approval is required to edit files or access the internet.",
+            description: "LHA can read files in the current workspace. Approval is required to edit files or access the internet.",
             approval: AskForApproval::OnRequest,
             sandbox: SandboxPolicy::ReadOnly,
         },
         ApprovalPreset {
             id: "auto",
             label: "Default",
-            description: "Adam can read and edit files in the current workspace, and run commands. Approval is required to access the internet or edit other files. (Identical to Agent mode)",
+            description: "LHA can read and edit files in the current workspace, and run commands. Approval is required to access the internet or edit other files. (Identical to Agent mode)",
             approval: AskForApproval::OnRequest,
             sandbox: SandboxPolicy::new_workspace_write_policy(),
         },
         ApprovalPreset {
             id: "full-access",
             label: "Full Access",
-            description: "Adam can edit files outside this workspace and access the internet without asking for approval. Exercise caution when using.",
+            description: "LHA can edit files outside this workspace and access the internet without asking for approval. Exercise caution when using.",
             approval: AskForApproval::Never,
             sandbox: SandboxPolicy::DangerFullAccess,
         },

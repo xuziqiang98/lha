@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use adam_agent::protocol::Op;
-use adam_protocol::user_input::TextElement;
+use lha_agent::protocol::Op;
+use lha_protocol::user_input::TextElement;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct HistoryEntry {
@@ -227,7 +227,7 @@ impl ChatComposerHistory {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use adam_agent::protocol::Op;
+    use lha_agent::protocol::Op;
     use tokio::sync::mpsc::unbounded_channel;
 
     #[test]

@@ -1,4 +1,4 @@
-//! Transcript/history cells for the Adam TUI.
+//! Transcript/history cells for the LHA TUI.
 //!
 //! A `HistoryCell` is the unit of display in the conversation UI, representing both committed
 //! transcript entries and, transiently, an in-flight active cell that can mutate in place while
@@ -45,26 +45,26 @@ use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
-use adam_agent::config::Config;
-use adam_agent::config::types::BuddyRarity;
-use adam_agent::config::types::McpServerTransportConfig;
-use adam_agent::config::types::TuiBuddy;
-use adam_agent::protocol::FileChange;
-use adam_agent::protocol::McpAuthStatus;
-use adam_agent::protocol::McpInvocation;
-use adam_agent::protocol::SessionConfiguredEvent;
-use adam_agent::web_search::web_search_detail;
-use adam_common::format_env_display::format_env_display;
-use adam_otel::RuntimeMetricsSummary;
-use adam_protocol::models::WebSearchAction;
-use adam_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use adam_protocol::plan_tool::PlanItemArg;
-use adam_protocol::plan_tool::StepStatus;
-use adam_protocol::plan_tool::UpdatePlanArgs;
-use adam_protocol::user_input::TextElement;
 use base64::Engine;
 use image::DynamicImage;
 use image::ImageReader;
+use lha_agent::config::Config;
+use lha_agent::config::types::BuddyRarity;
+use lha_agent::config::types::McpServerTransportConfig;
+use lha_agent::config::types::TuiBuddy;
+use lha_agent::protocol::FileChange;
+use lha_agent::protocol::McpAuthStatus;
+use lha_agent::protocol::McpInvocation;
+use lha_agent::protocol::SessionConfiguredEvent;
+use lha_agent::web_search::web_search_detail;
+use lha_common::format_env_display::format_env_display;
+use lha_otel::RuntimeMetricsSummary;
+use lha_protocol::models::WebSearchAction;
+use lha_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use lha_protocol::plan_tool::PlanItemArg;
+use lha_protocol::plan_tool::StepStatus;
+use lha_protocol::plan_tool::UpdatePlanArgs;
+use lha_protocol::user_input::TextElement;
 use mcp_types::EmbeddedResourceResource;
 use mcp_types::Resource;
 use mcp_types::ResourceLink;
@@ -1014,9 +1014,9 @@ fn exec_snippet(command: &[String]) -> String {
 
 pub fn new_approval_decision_cell(
     command: Vec<String>,
-    decision: adam_agent::protocol::ReviewDecision,
+    decision: lha_agent::protocol::ReviewDecision,
 ) -> Box<dyn HistoryCell> {
-    use adam_agent::protocol::ReviewDecision::*;
+    use lha_agent::protocol::ReviewDecision::*;
 
     let (symbol, summary): (Span<'static>, Vec<Span<'static>>) = match decision {
         Approved => {
@@ -1298,7 +1298,7 @@ pub(crate) fn new_session_info(
             Line::from(vec![
                 "  ".into(),
                 "/init".into(),
-                " - create an AGENTS.md file with instructions for Adam".dim(),
+                " - create an AGENTS.md file with instructions for LHA".dim(),
             ]),
             Line::from(vec![
                 "  ".into(),
@@ -1308,7 +1308,7 @@ pub(crate) fn new_session_info(
             Line::from(vec![
                 "  ".into(),
                 "/permissions".into(),
-                " - choose what Adam is allowed to do".dim(),
+                " - choose what LHA is allowed to do".dim(),
             ]),
             Line::from(vec![
                 "  ".into(),
@@ -1442,10 +1442,10 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
 
-        // Title line rendered inside the box: ">_ Adam (vX)"
+        // Title line rendered inside the box: ">_ LHA (vX)"
         let title_spans: Vec<Span<'static>> = vec![
             Span::from(">_ ").dim(),
-            Span::from("Adam").bold(),
+            Span::from("LHA").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{})", self.version)).dim(),
         ];
@@ -1807,7 +1807,7 @@ pub(crate) fn new_web_search_call(
 ///
 /// Manual testing tip:
 /// - Run the rmcp stdio test server (`src/resources/rmcp-client/src/bin/test_stdio_server.rs`) and
-///   register it as an MCP server via `adam mcp add`.
+///   register it as an MCP server via `lha mcp add`.
 /// - Use its `image_scenario` tool with cases like `text_then_image`,
 ///   `invalid_base64_then_image`, or `invalid_image_bytes_then_image` to ensure this path triggers
 ///   even when the first block is not a valid image.
@@ -2269,13 +2269,13 @@ fn stat_line(name: &'static str, value: u8, width: u16) -> Line<'static> {
     }
 }
 
-fn identity_label(identity_kind: adam_protocol::config_types::IdentityKind) -> &'static str {
+fn identity_label(identity_kind: lha_protocol::config_types::IdentityKind) -> &'static str {
     match identity_kind {
-        adam_protocol::config_types::IdentityKind::Nobody => "nobody",
-        adam_protocol::config_types::IdentityKind::Planner => "planner",
-        adam_protocol::config_types::IdentityKind::Programmer => "programmer",
-        adam_protocol::config_types::IdentityKind::Explorer => "explorer",
-        adam_protocol::config_types::IdentityKind::Reviewer => "reviewer",
+        lha_protocol::config_types::IdentityKind::Nobody => "nobody",
+        lha_protocol::config_types::IdentityKind::Planner => "planner",
+        lha_protocol::config_types::IdentityKind::Programmer => "programmer",
+        lha_protocol::config_types::IdentityKind::Explorer => "explorer",
+        lha_protocol::config_types::IdentityKind::Reviewer => "reviewer",
     }
 }
 
@@ -2940,21 +2940,21 @@ mod tests {
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
-    use adam_agent::config::Config;
-    use adam_agent::config::ConfigBuilder;
-    use adam_agent::config::types::McpServerConfig;
-    use adam_agent::config::types::McpServerTransportConfig;
-    use adam_agent::protocol::McpAuthStatus;
-    use adam_otel::RuntimeMetricTotals;
-    use adam_otel::RuntimeMetricsSummary;
-    use adam_protocol::models::WebSearchAction;
-    use adam_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
+    use lha_agent::config::Config;
+    use lha_agent::config::ConfigBuilder;
+    use lha_agent::config::types::McpServerConfig;
+    use lha_agent::config::types::McpServerTransportConfig;
+    use lha_agent::protocol::McpAuthStatus;
+    use lha_otel::RuntimeMetricTotals;
+    use lha_otel::RuntimeMetricsSummary;
+    use lha_protocol::models::WebSearchAction;
+    use lha_protocol::parse_command::ParsedCommand;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::collections::HashMap;
 
-    use adam_agent::protocol::ExecCommandSource;
+    use lha_agent::protocol::ExecCommandSource;
     use mcp_types::CallToolResult;
     use mcp_types::ContentBlock;
     use mcp_types::ImageContent;
@@ -2964,9 +2964,9 @@ mod tests {
 
     const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
     async fn test_config() -> Config {
-        let adam_home = std::env::temp_dir();
+        let lha_home = std::env::temp_dir();
         ConfigBuilder::default()
-            .adam_home(adam_home.clone())
+            .lha_home(lha_home.clone())
             .build()
             .await
             .expect("config")
@@ -4587,9 +4587,9 @@ mod tests {
     fn buddy_details_cell_contains_generated_details() {
         let buddy = Buddy {
             name: "Patch".to_string(),
-            species: adam_agent::config::types::BuddySpecies::Duck,
-            eye: adam_agent::config::types::BuddyEye::Dot,
-            hat: adam_agent::config::types::BuddyHat::None,
+            species: lha_agent::config::types::BuddySpecies::Duck,
+            eye: lha_agent::config::types::BuddyEye::Dot,
+            hat: lha_agent::config::types::BuddyHat::None,
             rarity: BuddyRarity::Rare,
             shiny: false,
             personality: "quiet optimizer".to_string(),
@@ -4600,7 +4600,7 @@ mod tests {
                 wisdom: 66,
                 snark: 14,
             },
-            identity_kind: adam_protocol::config_types::IdentityKind::Planner,
+            identity_kind: lha_protocol::config_types::IdentityKind::Planner,
         };
 
         let lines = new_buddy_details(buddy, visible_buddy_config()).display_lines(80);
@@ -4623,9 +4623,9 @@ mod tests {
     fn buddy_details_cell_uses_compact_width_on_wide_terminal() {
         let buddy = Buddy {
             name: "Patch".to_string(),
-            species: adam_agent::config::types::BuddySpecies::Duck,
-            eye: adam_agent::config::types::BuddyEye::Dot,
-            hat: adam_agent::config::types::BuddyHat::None,
+            species: lha_agent::config::types::BuddySpecies::Duck,
+            eye: lha_agent::config::types::BuddyEye::Dot,
+            hat: lha_agent::config::types::BuddyHat::None,
             rarity: BuddyRarity::Rare,
             shiny: false,
             personality: "quiet optimizer".to_string(),
@@ -4636,7 +4636,7 @@ mod tests {
                 wisdom: 66,
                 snark: 14,
             },
-            identity_kind: adam_protocol::config_types::IdentityKind::Planner,
+            identity_kind: lha_protocol::config_types::IdentityKind::Planner,
         };
 
         let lines = new_buddy_details(buddy, visible_buddy_config()).display_lines(120);
@@ -4658,9 +4658,9 @@ mod tests {
     fn buddy_details_cell_centers_owl_sprite_in_detail_column() {
         let buddy = Buddy {
             name: "Kilo".to_string(),
-            species: adam_agent::config::types::BuddySpecies::Owl,
-            eye: adam_agent::config::types::BuddyEye::Degree,
-            hat: adam_agent::config::types::BuddyHat::None,
+            species: lha_agent::config::types::BuddySpecies::Owl,
+            eye: lha_agent::config::types::BuddyEye::Degree,
+            hat: lha_agent::config::types::BuddyHat::None,
             rarity: BuddyRarity::Rare,
             shiny: false,
             personality: "careful watcher".to_string(),
@@ -4671,7 +4671,7 @@ mod tests {
                 wisdom: 66,
                 snark: 14,
             },
-            identity_kind: adam_protocol::config_types::IdentityKind::Programmer,
+            identity_kind: lha_protocol::config_types::IdentityKind::Programmer,
         };
 
         let rendered =
@@ -4693,7 +4693,7 @@ mod tests {
         TuiBuddy {
             enabled: true,
             muted: false,
-            observer: adam_agent::config::types::BuddyObserverConfig {
+            observer: lha_agent::config::types::BuddyObserverConfig {
                 enabled: true,
                 ..Default::default()
             },

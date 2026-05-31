@@ -1,18 +1,18 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use adam_agent::AuthManager;
-use adam_agent::CodexAuth;
-use adam_agent::NewThread;
-use adam_agent::ThreadManager;
-use adam_agent::config::CONFIG_TOML_FILE;
-use adam_agent::features::Feature;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::InitialHistory;
-use adam_agent::protocol::WarningEvent;
-use adam_utils_absolute_path::AbsolutePathBuf;
 use core::time::Duration;
 use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;
+use lha_agent::AuthManager;
+use lha_agent::CodexAuth;
+use lha_agent::NewThread;
+use lha_agent::ThreadManager;
+use lha_agent::config::CONFIG_TOML_FILE;
+use lha_agent::features::Feature;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::InitialHistory;
+use lha_agent::protocol::WarningEvent;
+use lha_utils_absolute_path::AbsolutePathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
 use toml::toml;
@@ -23,7 +23,7 @@ async fn emits_warning_when_unstable_features_enabled_via_config() {
     let mut config = load_default_config_for_test(&home).await;
     config.features.enable(Feature::ChildAgentsMd);
     let user_config_path =
-        AbsolutePathBuf::from_absolute_path(config.adam_home.join(CONFIG_TOML_FILE))
+        AbsolutePathBuf::from_absolute_path(config.lha_home.join(CONFIG_TOML_FILE))
             .expect("absolute user config path");
     config.config_layer_stack = config.config_layer_stack.with_user_config(
         &user_config_path,
@@ -60,7 +60,7 @@ async fn suppresses_warning_when_configured() {
     config.features.enable(Feature::ChildAgentsMd);
     config.suppress_unstable_features_warning = true;
     let user_config_path =
-        AbsolutePathBuf::from_absolute_path(config.adam_home.join(CONFIG_TOML_FILE))
+        AbsolutePathBuf::from_absolute_path(config.lha_home.join(CONFIG_TOML_FILE))
             .expect("absolute user config path");
     config.config_layer_stack = config.config_layer_stack.with_user_config(
         &user_config_path,

@@ -5,7 +5,7 @@ use std::process;
 fn main() -> anyhow::Result<()> {
     let mut args = env::args_os().skip(1);
     let Some(socket_path) = args.next() else {
-        eprintln!("Usage: adam-stdio-to-uds <socket-path>");
+        eprintln!("Usage: lha-stdio-to-uds <socket-path>");
         process::exit(1);
     };
 
@@ -15,5 +15,5 @@ fn main() -> anyhow::Result<()> {
     }
 
     let socket_path = PathBuf::from(socket_path);
-    adam_stdio_to_uds::run(&socket_path)
+    lha_stdio_to_uds::run(&socket_path)
 }

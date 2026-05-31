@@ -1,23 +1,5 @@
 #![allow(clippy::unwrap_used)]
 
-use adam_agent::features::Feature;
-use adam_agent::models_manager::model_info::BASE_INSTRUCTIONS;
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::SandboxPolicy;
-use adam_agent::protocol_config_types::ReasoningSummary;
-use adam_agent::shell::Shell;
-use adam_agent::shell::default_user_shell;
-use adam_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
-use adam_protocol::config_types::Identity;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::Settings;
-use adam_protocol::config_types::WebSearchMode;
-use adam_protocol::openai_models::ReasoningEffort;
-use adam_protocol::user_input::UserInput;
-use adam_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::start_mock_server;
@@ -25,6 +7,24 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use lha_agent::features::Feature;
+use lha_agent::models_manager::model_info::BASE_INSTRUCTIONS;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::SandboxPolicy;
+use lha_agent::protocol_config_types::ReasoningSummary;
+use lha_agent::shell::Shell;
+use lha_agent::shell::default_user_shell;
+use lha_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
+use lha_protocol::config_types::Identity;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::Settings;
+use lha_protocol::config_types::WebSearchMode;
+use lha_protocol::openai_models::ReasoningEffort;
+use lha_protocol::user_input::UserInput;
+use lha_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 

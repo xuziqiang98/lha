@@ -1,21 +1,3 @@
-use adam_agent::features::Feature;
-use adam_app_server_protocol::ItemCompletedNotification;
-use adam_app_server_protocol::ItemStartedNotification;
-use adam_app_server_protocol::JSONRPCMessage;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::PlanDeltaNotification;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::ThreadItem;
-use adam_app_server_protocol::ThreadStartParams;
-use adam_app_server_protocol::ThreadStartResponse;
-use adam_app_server_protocol::TurnCompletedNotification;
-use adam_app_server_protocol::TurnStartParams;
-use adam_app_server_protocol::TurnStartResponse;
-use adam_app_server_protocol::TurnStatus;
-use adam_app_server_protocol::UserInput as V2UserInput;
-use adam_protocol::config_types::Identity;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::Settings;
 use anyhow::Result;
 use anyhow::anyhow;
 use app_test_support::McpProcess;
@@ -23,6 +5,24 @@ use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::to_response;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
+use lha_agent::features::Feature;
+use lha_app_server_protocol::ItemCompletedNotification;
+use lha_app_server_protocol::ItemStartedNotification;
+use lha_app_server_protocol::JSONRPCMessage;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::PlanDeltaNotification;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::ThreadItem;
+use lha_app_server_protocol::ThreadStartParams;
+use lha_app_server_protocol::ThreadStartResponse;
+use lha_app_server_protocol::TurnCompletedNotification;
+use lha_app_server_protocol::TurnStartParams;
+use lha_app_server_protocol::TurnStartResponse;
+use lha_app_server_protocol::TurnStatus;
+use lha_app_server_protocol::UserInput as V2UserInput;
+use lha_protocol::config_types::Identity;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::Settings;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -46,10 +46,10 @@ async fn plan_mode_uses_proposed_plan_block_for_plan_item() -> Result<()> {
     ])];
     let server = create_mock_responses_server_sequence(responses).await;
 
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let turn = start_plan_mode_turn(&mut mcp).await?;
@@ -103,10 +103,10 @@ async fn plan_mode_without_proposed_plan_does_not_emit_plan_item() -> Result<()>
     ])];
     let server = create_mock_responses_server_sequence(responses).await;
 
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let _turn = start_plan_mode_turn(&mut mcp).await?;
@@ -121,7 +121,7 @@ async fn plan_mode_without_proposed_plan_does_not_emit_plan_item() -> Result<()>
     Ok(())
 }
 
-async fn start_plan_mode_turn(mcp: &mut McpProcess) -> Result<adam_app_server_protocol::Turn> {
+async fn start_plan_mode_turn(mcp: &mut McpProcess) -> Result<lha_app_server_protocol::Turn> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
@@ -213,10 +213,10 @@ async fn collect_turn_notifications(
     }
 }
 
-fn create_config_toml(adam_home: &Path, server_uri: &str) -> std::io::Result<()> {
+fn create_config_toml(lha_home: &Path, server_uri: &str) -> std::io::Result<()> {
     let features = BTreeMap::from([(Feature::RemoteModels, false), (Feature::Identities, true)]);
     app_test_support::write_mock_responses_config_toml_with_options(
-        adam_home,
+        lha_home,
         server_uri,
         &features,
         20_000,

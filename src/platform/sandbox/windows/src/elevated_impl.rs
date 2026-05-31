@@ -80,8 +80,8 @@ mod windows_impl {
         }
     }
 
-    /// Creates the sandbox user's Adam home directory if it does not already exist.
-    fn ensure_adam_home_exists(p: &Path) -> Result<()> {
+    /// Creates the sandbox user's LHA home directory if it does not already exist.
+    fn ensure_lha_home_exists(p: &Path) -> Result<()> {
         std::fs::create_dir_all(p)?;
         Ok(())
     }
@@ -110,17 +110,17 @@ mod windows_impl {
         }
     }
 
-    /// Locates `adam-command-runner.exe` next to the current binary.
+    /// Locates `lha-command-runner.exe` next to the current binary.
     fn find_runner_exe() -> PathBuf {
         if let Ok(exe) = std::env::current_exe() {
             if let Some(dir) = exe.parent() {
-                let candidate = dir.join("adam-command-runner.exe");
+                let candidate = dir.join("lha-command-runner.exe");
                 if candidate.exists() {
                     return candidate;
                 }
             }
         }
-        PathBuf::from("adam-command-runner.exe")
+        PathBuf::from("lha-command-runner.exe")
     }
 
     /// Generates a unique named-pipe path used to communicate with the runner process.
@@ -192,10 +192,10 @@ mod windows_impl {
     struct RunnerPayload {
         policy_json_or_preset: String,
         sandbox_policy_cwd: PathBuf,
-        // Writable log dir for sandbox user (.adam in sandbox profile).
-        adam_home: PathBuf,
-        // Real user's ADAM_HOME for shared data (caps, config).
-        real_adam_home: PathBuf,
+        // Writable log dir for sandbox user (.lha in sandbox profile).
+        lha_home: PathBuf,
+        // Real user's LHA_HOME for shared data (caps, config).
+        real_lha_home: PathBuf,
         cap_sid: String,
         request_file: Option<PathBuf>,
         command: Vec<String>,
@@ -211,7 +211,7 @@ mod windows_impl {
     pub fn run_windows_sandbox_capture(
         policy_json_or_preset: &str,
         sandbox_policy_cwd: &Path,
-        adam_home: &Path,
+        lha_home: &Path,
         command: Vec<String>,
         cwd: &Path,
         mut env_map: HashMap<String, String>,
@@ -224,13 +224,13 @@ mod windows_impl {
         inject_git_safe_directory(&mut env_map, cwd, None);
         let current_dir = cwd.to_path_buf();
         // Use a temp-based log dir that the sandbox user can write.
-        let sandbox_base = adam_home.join(".sandbox");
-        ensure_adam_home_exists(&sandbox_base)?;
+        let sandbox_base = lha_home.join(".sandbox");
+        ensure_lha_home_exists(&sandbox_base)?;
 
         let logs_base_dir: Option<&Path> = Some(sandbox_base.as_path());
         log_start(&command, logs_base_dir);
         let sandbox_creds =
-            require_logon_sandbox_creds(&policy, sandbox_policy_cwd, cwd, &env_map, adam_home)?;
+            require_logon_sandbox_creds(&policy, sandbox_policy_cwd, cwd, &env_map, lha_home)?;
         // Build capability SID for ACL grants.
         if matches!(
             &policy,
@@ -238,7 +238,7 @@ mod windows_impl {
         ) {
             anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
         }
-        let caps = load_or_create_cap_sids(adam_home)?;
+        let caps = load_or_create_cap_sids(lha_home)?;
         let (psid_to_use, cap_sid_str) = match &policy {
             SandboxPolicy::ReadOnly => (
                 unsafe { convert_string_sid_to_sid(&caps.readonly).unwrap() },
@@ -282,7 +282,7 @@ mod windows_impl {
         let runner_cmdline = runner_exe
             .to_str()
             .map(|s| s.to_string())
-            .unwrap_or_else(|| "adam-command-runner.exe".to_string());
+            .unwrap_or_else(|| "lha-command-runner.exe".to_string());
         // Write request to a file under the sandbox base dir for the runner to read.
         // TODO(iceweasel) - use a different mechanism for invoking the runner.
         let base_tmp = sandbox_base.join("requests");
@@ -292,8 +292,8 @@ mod windows_impl {
         let payload = RunnerPayload {
             policy_json_or_preset: policy_json_or_preset.to_string(),
             sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
-            adam_home: sandbox_base.clone(),
-            real_adam_home: adam_home.to_path_buf(),
+            lha_home: sandbox_base.clone(),
+            real_lha_home: lha_home.to_path_buf(),
             cap_sid: cap_sid_str.clone(),
             request_file: Some(req_file.clone()),
             command: command.clone(),
@@ -494,9 +494,9 @@ pub use windows_impl::run_windows_sandbox_capture;
 
 #[cfg(not(target_os = "windows"))]
 mod stub {
-    use adam_protocol::protocol::SandboxPolicy;
     use anyhow::bail;
     use anyhow::Result;
+    use lha_protocol::protocol::SandboxPolicy;
     use std::collections::HashMap;
     use std::path::Path;
 
@@ -512,7 +512,7 @@ mod stub {
     pub fn run_windows_sandbox_capture(
         _policy_json_or_preset: &str,
         _sandbox_policy_cwd: &Path,
-        _adam_home: &Path,
+        _lha_home: &Path,
         _command: Vec<String>,
         _cwd: &Path,
         _env_map: HashMap<String, String>,

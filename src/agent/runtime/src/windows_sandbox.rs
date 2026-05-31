@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::protocol::SandboxPolicy;
-use adam_protocol::config_types::WindowsSandboxLevel;
+use lha_protocol::config_types::WindowsSandboxLevel;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -43,20 +43,20 @@ pub fn windows_sandbox_level_from_features(features: &Features) -> WindowsSandbo
 }
 
 #[cfg(target_os = "windows")]
-pub fn sandbox_setup_is_complete(adam_home: &Path) -> bool {
-    adam_windows_sandbox::sandbox_setup_is_complete(adam_home)
+pub fn sandbox_setup_is_complete(lha_home: &Path) -> bool {
+    lha_windows_sandbox::sandbox_setup_is_complete(lha_home)
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn sandbox_setup_is_complete(_adam_home: &Path) -> bool {
+pub fn sandbox_setup_is_complete(_lha_home: &Path) -> bool {
     false
 }
 
 #[cfg(target_os = "windows")]
 pub fn elevated_setup_failure_details(err: &anyhow::Error) -> Option<(String, String)> {
-    let failure = adam_windows_sandbox::extract_setup_failure(err)?;
+    let failure = lha_windows_sandbox::extract_setup_failure(err)?;
     let code = failure.code.as_str().to_string();
-    let message = adam_windows_sandbox::sanitize_setup_metric_tag_value(&failure.message);
+    let message = lha_windows_sandbox::sanitize_setup_metric_tag_value(&failure.message);
     Some((code, message))
 }
 
@@ -71,14 +71,14 @@ pub fn run_elevated_setup(
     policy_cwd: &Path,
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
-    adam_home: &Path,
+    lha_home: &Path,
 ) -> anyhow::Result<()> {
-    adam_windows_sandbox::run_elevated_setup(
+    lha_windows_sandbox::run_elevated_setup(
         policy,
         policy_cwd,
         command_cwd,
         env_map,
-        adam_home,
+        lha_home,
         None,
         None,
     )
@@ -90,7 +90,7 @@ pub fn run_elevated_setup(
     _policy_cwd: &Path,
     _command_cwd: &Path,
     _env_map: &HashMap<String, String>,
-    _adam_home: &Path,
+    _lha_home: &Path,
 ) -> anyhow::Result<()> {
     anyhow::bail!("elevated Windows sandbox setup is only supported on Windows")
 }

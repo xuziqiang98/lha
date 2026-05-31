@@ -1,22 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use adam_agent::CodexAuth;
-use adam_agent::config::model_provider_cache_key;
-use adam_agent::features::Feature;
-use adam_agent::models_manager::manager::RefreshStrategy;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::SandboxPolicy;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::openai_models::ConfigShellToolType;
-use adam_protocol::openai_models::ModelInfo;
-use adam_protocol::openai_models::ModelVisibility;
-use adam_protocol::openai_models::ModelsResponse;
-use adam_protocol::openai_models::ReasoningEffort;
-use adam_protocol::openai_models::ReasoningEffortPreset;
-use adam_protocol::openai_models::TruncationPolicyConfig;
-use adam_protocol::user_input::UserInput;
 use anyhow::Result;
 use chrono::DateTime;
 use chrono::TimeZone;
@@ -29,6 +13,22 @@ use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use lha_agent::CodexAuth;
+use lha_agent::config::model_provider_cache_key;
+use lha_agent::features::Feature;
+use lha_agent::models_manager::manager::RefreshStrategy;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::SandboxPolicy;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::openai_models::ConfigShellToolType;
+use lha_protocol::openai_models::ModelInfo;
+use lha_protocol::openai_models::ModelVisibility;
+use lha_protocol::openai_models::ModelsResponse;
+use lha_protocol::openai_models::ReasoningEffort;
+use lha_protocol::openai_models::ReasoningEffortPreset;
+use lha_protocol::openai_models::TruncationPolicyConfig;
+use lha_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use serde::Serialize;
@@ -72,7 +72,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
         .list_models(&config, RefreshStrategy::OnlineIfUncached)
         .await;
 
-    let cache_path = cache_path_for_provider(&config.adam_home, &config.model_provider_id);
+    let cache_path = cache_path_for_provider(&config.lha_home, &config.model_provider_id);
     let stale_time = Utc.timestamp_opt(0, 0).single().expect("valid epoch");
     rewrite_cache_timestamp(&cache_path, stale_time).await?;
 
@@ -96,7 +96,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
             }],
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
-            approval_policy: adam_agent::protocol::AskForApproval::Never,
+            approval_policy: lha_agent::protocol::AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: test.session_configured.model.clone(),
             effort: None,
@@ -157,8 +157,8 @@ struct ModelsCache {
     models: Vec<ModelInfo>,
 }
 
-fn cache_path_for_provider(adam_home: &Path, model_provider_id: &str) -> std::path::PathBuf {
-    adam_home
+fn cache_path_for_provider(lha_home: &Path, model_provider_id: &str) -> std::path::PathBuf {
+    lha_home
         .join("remote_models")
         .join(model_provider_cache_key(model_provider_id))
         .join(CACHE_FILE)

@@ -6,7 +6,7 @@ use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
 use super::epoch_millis_to_datetime;
-use adam_protocol::ThreadId;
+use lha_protocol::ThreadId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadGoalStatus {

@@ -1,36 +1,36 @@
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::ServerRequest;
-use adam_app_server_protocol::ThreadStartParams;
-use adam_app_server_protocol::ThreadStartResponse;
-use adam_app_server_protocol::TurnStartParams;
-use adam_app_server_protocol::TurnStartResponse;
-use adam_app_server_protocol::UserInput as V2UserInput;
-use adam_protocol::config_types::Identity;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::Settings;
-use adam_protocol::openai_models::ReasoningEffort;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_request_user_input_sse_response;
 use app_test_support::to_response;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::ServerRequest;
+use lha_app_server_protocol::ThreadStartParams;
+use lha_app_server_protocol::ThreadStartResponse;
+use lha_app_server_protocol::TurnStartParams;
+use lha_app_server_protocol::TurnStartResponse;
+use lha_app_server_protocol::UserInput as V2UserInput;
+use lha_protocol::config_types::Identity;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::Settings;
+use lha_protocol::openai_models::ReasoningEffort;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn request_user_input_round_trip() -> Result<()> {
-    let adam_home = tempfile::TempDir::new()?;
+    let lha_home = tempfile::TempDir::new()?;
     let responses = vec![
         create_request_user_input_sse_response("call1")?,
         create_final_assistant_message_sse_response("done")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_id = mcp
@@ -99,7 +99,7 @@ async fn request_user_input_round_trip() -> Result<()> {
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/task_complete"),
+        mcp.read_stream_until_notification_message("lha/event/task_complete"),
     )
     .await??;
     timeout(
@@ -111,11 +111,11 @@ async fn request_user_input_round_trip() -> Result<()> {
     Ok(())
 }
 
-fn create_config_toml(adam_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
+fn create_config_toml(lha_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
     let features =
-        std::collections::BTreeMap::from([(adam_agent::features::Feature::Identities, true)]);
+        std::collections::BTreeMap::from([(lha_agent::features::Feature::Identities, true)]);
     app_test_support::write_mock_responses_config_toml_with_options(
-        adam_home,
+        lha_home,
         server_uri,
         &features,
         20_000,

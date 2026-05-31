@@ -1,10 +1,10 @@
 use crate::error::ApiError;
-use adam_llm_types::ReasoningEffort as ReasoningEffortConfig;
-use adam_llm_types::ReasoningSummary as ReasoningSummaryConfig;
-use adam_llm_types::TokenUsage;
-use adam_llm_types::TranscriptItem;
-use adam_llm_types::Verbosity as VerbosityConfig;
 use futures::Stream;
+use lha_llm_types::ReasoningEffort as ReasoningEffortConfig;
+use lha_llm_types::ReasoningSummary as ReasoningSummaryConfig;
+use lha_llm_types::TokenUsage;
+use lha_llm_types::TranscriptItem;
+use lha_llm_types::Verbosity as VerbosityConfig;
 use serde::Serialize;
 use serde_json::Value;
 use std::pin::Pin;

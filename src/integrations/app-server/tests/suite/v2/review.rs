@@ -1,21 +1,21 @@
-use adam_app_server_protocol::ItemCompletedNotification;
-use adam_app_server_protocol::ItemStartedNotification;
-use adam_app_server_protocol::JSONRPCError;
-use adam_app_server_protocol::JSONRPCNotification;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::ReviewDelivery;
-use adam_app_server_protocol::ReviewStartParams;
-use adam_app_server_protocol::ReviewStartResponse;
-use adam_app_server_protocol::ReviewTarget;
-use adam_app_server_protocol::ThreadItem;
-use adam_app_server_protocol::ThreadStartParams;
-use adam_app_server_protocol::ThreadStartResponse;
-use adam_app_server_protocol::TurnStatus;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
+use lha_app_server_protocol::ItemCompletedNotification;
+use lha_app_server_protocol::ItemStartedNotification;
+use lha_app_server_protocol::JSONRPCError;
+use lha_app_server_protocol::JSONRPCNotification;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::ReviewDelivery;
+use lha_app_server_protocol::ReviewStartParams;
+use lha_app_server_protocol::ReviewStartResponse;
+use lha_app_server_protocol::ReviewTarget;
+use lha_app_server_protocol::ThreadItem;
+use lha_app_server_protocol::ThreadStartParams;
+use lha_app_server_protocol::ThreadStartResponse;
+use lha_app_server_protocol::TurnStatus;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -45,10 +45,10 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
     .to_string();
     let server = create_mock_responses_server_repeating_assistant(&review_payload).await;
 
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_default_thread(&mut mcp).await?;
@@ -132,10 +132,10 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
 #[tokio::test]
 async fn review_start_rejects_empty_base_branch() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let thread_id = start_default_thread(&mut mcp).await?;
 
@@ -166,10 +166,10 @@ async fn review_start_rejects_empty_base_branch() -> Result<()> {
 #[tokio::test]
 async fn review_start_rejects_empty_commit_sha() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let thread_id = start_default_thread(&mut mcp).await?;
 
@@ -201,10 +201,10 @@ async fn review_start_rejects_empty_commit_sha() -> Result<()> {
 #[tokio::test]
 async fn review_start_rejects_empty_custom_instructions() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let thread_id = start_default_thread(&mut mcp).await?;
 
@@ -251,9 +251,9 @@ async fn start_default_thread(mcp: &mut McpProcess) -> Result<String> {
     Ok(thread.id)
 }
 
-fn create_config_toml(adam_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
+fn create_config_toml(lha_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
     app_test_support::write_mock_responses_config_toml_with_options(
-        adam_home,
+        lha_home,
         server_uri,
         &std::collections::BTreeMap::new(),
         20_000,

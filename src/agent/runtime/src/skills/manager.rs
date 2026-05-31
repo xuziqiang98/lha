@@ -4,7 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::RwLock;
 
-use adam_utils_absolute_path::AbsolutePathBuf;
+use lha_utils_absolute_path::AbsolutePathBuf;
 use toml::Value as TomlValue;
 use tracing::warn;
 
@@ -19,18 +19,18 @@ use crate::skills::loader::skill_roots_from_layer_stack_with_agents;
 use crate::skills::system::install_system_skills;
 
 pub struct SkillsManager {
-    adam_home: PathBuf,
+    lha_home: PathBuf,
     cache_by_cwd: RwLock<HashMap<PathBuf, SkillLoadOutcome>>,
 }
 
 impl SkillsManager {
-    pub fn new(adam_home: PathBuf) -> Self {
-        if let Err(err) = install_system_skills(&adam_home) {
+    pub fn new(lha_home: PathBuf) -> Self {
+        if let Err(err) = install_system_skills(&lha_home) {
             tracing::error!("failed to install system skills: {err}");
         }
 
         Self {
-            adam_home,
+            lha_home,
             cache_by_cwd: RwLock::new(HashMap::new()),
         }
     }
@@ -86,7 +86,7 @@ impl SkillsManager {
 
         let cli_overrides: Vec<(String, TomlValue)> = Vec::new();
         let config_layer_stack = match load_config_layers_state(
-            &self.adam_home,
+            &self.lha_home,
             Some(cwd_abs),
             &cli_overrides,
             LoaderOverrides::default(),
@@ -175,8 +175,8 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn write_user_skill(adam_home: &TempDir, dir: &str, name: &str, description: &str) {
-        let skill_dir = adam_home.path().join("skills").join(dir);
+    fn write_user_skill(lha_home: &TempDir, dir: &str, name: &str, description: &str) {
+        let skill_dir = lha_home.path().join("skills").join(dir);
         fs::create_dir_all(&skill_dir).unwrap();
         let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
         fs::write(skill_dir.join("SKILL.md"), content).unwrap();
@@ -184,11 +184,11 @@ mod tests {
 
     #[tokio::test]
     async fn skills_for_config_seeds_cache_by_cwd() {
-        let adam_home = tempfile::tempdir().expect("tempdir");
+        let lha_home = tempfile::tempdir().expect("tempdir");
         let cwd = tempfile::tempdir().expect("tempdir");
 
         let cfg = ConfigBuilder::default()
-            .adam_home(adam_home.path().to_path_buf())
+            .lha_home(lha_home.path().to_path_buf())
             .harness_overrides(ConfigOverrides {
                 cwd: Some(cwd.path().to_path_buf()),
                 ..Default::default()
@@ -197,9 +197,9 @@ mod tests {
             .await
             .expect("defaults for test should always succeed");
 
-        let skills_manager = SkillsManager::new(adam_home.path().to_path_buf());
+        let skills_manager = SkillsManager::new(lha_home.path().to_path_buf());
 
-        write_user_skill(&adam_home, "a", "skill-a", "from a");
+        write_user_skill(&lha_home, "a", "skill-a", "from a");
         let outcome1 = skills_manager.skills_for_config(&cfg);
         assert!(
             outcome1.skills.iter().any(|s| s.name == "skill-a"),
@@ -208,7 +208,7 @@ mod tests {
 
         // Write a new skill after the first call; the second call should hit the cache and not
         // reflect the new file.
-        write_user_skill(&adam_home, "b", "skill-b", "from b");
+        write_user_skill(&lha_home, "b", "skill-b", "from b");
         let outcome2 = skills_manager.skills_for_config(&cfg);
         assert_eq!(outcome2.errors, outcome1.errors);
         assert_eq!(outcome2.skills, outcome1.skills);

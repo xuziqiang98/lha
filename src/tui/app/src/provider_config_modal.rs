@@ -34,12 +34,12 @@ pub(crate) enum ProviderConfigModalAction {
 
 impl ProviderConfigModal {
     pub(crate) fn new(
-        adam_home: PathBuf,
+        lha_home: PathBuf,
         app_event_tx: AppEventSender,
         request_frame: FrameRequester,
     ) -> Self {
         Self {
-            view: ProviderConfigView::new(adam_home, app_event_tx, request_frame),
+            view: ProviderConfigView::new(lha_home, app_event_tx, request_frame),
         }
     }
 
@@ -138,10 +138,10 @@ mod tests {
 
     #[test]
     fn renders_centered_provider_config_modal() {
-        let adam_home = TempDir::new().expect("temp home");
+        let lha_home = TempDir::new().expect("temp home");
         let (tx, _rx) = unbounded_channel();
         let modal = ProviderConfigModal::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             AppEventSender::new(tx),
             FrameRequester::test_dummy(),
         );
@@ -154,15 +154,15 @@ mod tests {
         let rendered = terminal.backend().to_string();
         assert!(rendered.contains("Configure a custom API provider"));
         assert!(rendered.contains("Step 1/6: Provider ID"));
-        assert!(rendered.contains("~/.adam/models.json"));
+        assert!(rendered.contains("~/.lha/models.json"));
     }
 
     #[test]
     fn ctrl_c_exits_modal() {
-        let adam_home = TempDir::new().expect("temp home");
+        let lha_home = TempDir::new().expect("temp home");
         let (tx, _rx) = unbounded_channel();
         let mut modal = ProviderConfigModal::new(
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
             AppEventSender::new(tx),
             FrameRequester::test_dummy(),
         );

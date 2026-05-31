@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 
-use adam_agent::config::Config;
-use adam_agent::config::types::McpServerConfig;
-use adam_agent::config::types::McpServerTransportConfig;
-use adam_agent::protocol::McpAuthStatus;
-use adam_agent::protocol::McpListToolsResponseEvent;
-use adam_common::format_env_display::format_env_display;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use lha_agent::config::Config;
+use lha_agent::config::types::McpServerConfig;
+use lha_agent::config::types::McpServerTransportConfig;
+use lha_agent::protocol::McpAuthStatus;
+use lha_agent::protocol::McpListToolsResponseEvent;
+use lha_common::format_env_display::format_env_display;
 use mcp_types::Resource;
 use mcp_types::ResourceTemplate;
 use mcp_types::Tool;
@@ -32,7 +32,7 @@ use textwrap::wrap;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 
-const MCP_DOCS_URL: &str = "https://github.com/xuziqiang98/adam/blob/main/docs/mcp.md";
+const MCP_DOCS_URL: &str = "https://github.com/xuziqiang98/lha/blob/main/docs/mcp.md";
 
 pub(crate) struct McpToolsModal {
     servers: Vec<(String, McpServerConfig)>,
@@ -731,8 +731,8 @@ fn push_wrapped(
 mod tests {
     use super::*;
 
-    use adam_agent::config::ConfigBuilder;
-    use adam_agent::config::types::McpServerConfig;
+    use lha_agent::config::ConfigBuilder;
+    use lha_agent::config::types::McpServerConfig;
     use mcp_types::Resource;
     use mcp_types::ResourceTemplate;
     use mcp_types::ToolInputSchema;
@@ -743,7 +743,7 @@ mod tests {
 
     async fn test_config() -> Config {
         ConfigBuilder::default()
-            .adam_home(std::env::temp_dir())
+            .lha_home(std::env::temp_dir())
             .build()
             .await
             .expect("config")

@@ -1,3 +1,3 @@
 pub fn main() -> ! {
-    adam_apply_patch::main()
+    lha_apply_patch::main()
 }

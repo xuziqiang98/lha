@@ -1,8 +1,8 @@
-use adam_protocol::config_types::Personality;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use lha_protocol::config_types::Personality;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -234,7 +234,7 @@ impl PersonalitySelectionModal {
         ModalRenderLines {
             header: vec![
                 "Select Personality".bold().into(),
-                "Choose a communication style for Adam. Disable in /experimental."
+                "Choose a communication style for LHA. Disable in /experimental."
                     .dim()
                     .into(),
                 "".into(),

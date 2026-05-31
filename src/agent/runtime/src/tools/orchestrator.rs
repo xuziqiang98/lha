@@ -17,9 +17,9 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
-use adam_otel::ToolDecisionSource;
-use adam_protocol::protocol::AskForApproval;
-use adam_protocol::protocol::ReviewDecision;
+use lha_otel::ToolDecisionSource;
+use lha_protocol::protocol::AskForApproval;
+use lha_protocol::protocol::ReviewDecision;
 
 pub(crate) struct ToolOrchestrator {
     sandbox: SandboxManager,
@@ -111,16 +111,16 @@ impl ToolOrchestrator {
                 // We have a successful initial result
                 Ok(out)
             }
-            Err(ToolError::Adam(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
+            Err(ToolError::LHA(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
                 if !tool.escalate_on_failure() {
-                    return Err(ToolError::Adam(CodexErr::Sandbox(SandboxErr::Denied {
+                    return Err(ToolError::LHA(CodexErr::Sandbox(SandboxErr::Denied {
                         output,
                     })));
                 }
                 // Under `Never` or `OnRequest`, do not retry without sandbox; surface a concise
                 // sandbox denial that preserves the original output.
                 if !tool.wants_no_sandbox_approval(approval_policy) {
-                    return Err(ToolError::Adam(CodexErr::Sandbox(SandboxErr::Denied {
+                    return Err(ToolError::LHA(CodexErr::Sandbox(SandboxErr::Denied {
                         output,
                     })));
                 }

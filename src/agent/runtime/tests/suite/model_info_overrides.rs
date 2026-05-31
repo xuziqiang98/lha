@@ -1,18 +1,18 @@
-use adam_agent::auth::CodexAuth;
-use adam_agent::features::Feature;
-use adam_agent::models_manager::manager::ModelsManager;
-use adam_llm::built_in_runtime_endpoints;
-use adam_protocol::openai_models::ApplyPatchToolType;
-use adam_protocol::openai_models::ConfigShellToolType;
-use adam_protocol::openai_models::TruncationPolicyConfig;
 use core_test_support::load_default_config_for_test;
+use lha_agent::auth::CodexAuth;
+use lha_agent::features::Feature;
+use lha_agent::models_manager::manager::ModelsManager;
+use lha_llm::built_in_runtime_endpoints;
+use lha_protocol::openai_models::ApplyPatchToolType;
+use lha_protocol::openai_models::ConfigShellToolType;
+use lha_protocol::openai_models::TruncationPolicyConfig;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn offline_model_info_without_tool_output_override() {
-    let adam_home = TempDir::new().expect("create temp dir");
-    let config = load_default_config_for_test(&adam_home).await;
+    let lha_home = TempDir::new().expect("create temp dir");
+    let config = load_default_config_for_test(&lha_home).await;
 
     let model_info = ModelsManager::construct_model_info_offline("gpt-5.1", &config);
 
@@ -25,8 +25,8 @@ async fn offline_model_info_without_tool_output_override() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn offline_model_info_with_tool_output_override() {
-    let adam_home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&adam_home).await;
+    let lha_home = TempDir::new().expect("create temp dir");
+    let mut config = load_default_config_for_test(&lha_home).await;
     config.tool_output_token_limit = Some(123);
 
     let model_info = ModelsManager::construct_model_info_offline("gpt-5.1-codex", &config);
@@ -39,8 +39,8 @@ async fn offline_model_info_with_tool_output_override() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn offline_gpt_5_3_codex_uses_codex_fallback_metadata() {
-    let adam_home = TempDir::new().expect("create temp dir");
-    let config = load_default_config_for_test(&adam_home).await;
+    let lha_home = TempDir::new().expect("create temp dir");
+    let config = load_default_config_for_test(&lha_home).await;
 
     let model_info = ModelsManager::construct_model_info_offline("gpt-5.3-codex", &config);
 
@@ -56,15 +56,15 @@ async fn offline_gpt_5_3_codex_uses_codex_fallback_metadata() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn bundled_model_info_takes_precedence_over_builtin_fallback() {
-    let adam_home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&adam_home).await;
+    let lha_home = TempDir::new().expect("create temp dir");
+    let mut config = load_default_config_for_test(&lha_home).await;
     config.features.enable(Feature::RemoteModels);
 
-    let auth_manager = adam_agent::auth::AuthManager::from_auth_for_testing(
+    let auth_manager = lha_agent::auth::AuthManager::from_auth_for_testing(
         CodexAuth::from_api_key("Test API Key"),
     );
     let models_manager = ModelsManager::with_provider(
-        adam_home.path().to_path_buf(),
+        lha_home.path().to_path_buf(),
         auth_manager,
         "openai",
         built_in_runtime_endpoints()["openai"].clone(),

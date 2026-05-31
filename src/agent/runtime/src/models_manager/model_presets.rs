@@ -1,8 +1,8 @@
-use adam_protocol::openai_models::ModelPreset;
-use adam_protocol::openai_models::ModelUpgrade;
-use adam_protocol::openai_models::ReasoningEffort;
-use adam_protocol::openai_models::ReasoningEffortPreset;
 use indoc::indoc;
+use lha_protocol::openai_models::ModelPreset;
+use lha_protocol::openai_models::ModelUpgrade;
+use lha_protocol::openai_models::ReasoningEffort;
+use lha_protocol::openai_models::ReasoningEffortPreset;
 use once_cell::sync::Lazy;
 
 pub const HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG: &str = "hide_gpt5_1_migration_prompt";
@@ -78,7 +78,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             model: "gpt-5.1-codex-max".to_string(),
             model_provider_id: None,
             display_name: "gpt-5.1-codex-max".to_string(),
-            description: "Adam-optimized flagship for deep and fast reasoning.".to_string(),
+            description: "LHA-optimized flagship for deep and fast reasoning.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
             supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
@@ -109,7 +109,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             model: "gpt-5.1-codex-mini".to_string(),
             model_provider_id: None,
             display_name: "gpt-5.1-codex-mini".to_string(),
-            description: "Optimized for adam. Cheaper, faster, but less capable.".to_string(),
+            description: "Optimized for lha. Cheaper, faster, but less capable.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
             supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
@@ -227,7 +227,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             model: "gpt-5-codex".to_string(),
             model_provider_id: None,
             display_name: "gpt-5-codex".to_string(),
-            description: "Optimized for adam.".to_string(),
+            description: "Optimized for lha.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
             supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
@@ -254,7 +254,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             model: "gpt-5-codex-mini".to_string(),
             model_provider_id: None,
             display_name: "gpt-5-codex-mini".to_string(),
-            description: "Optimized for adam. Cheaper, faster, but less capable.".to_string(),
+            description: "Optimized for lha. Cheaper, faster, but less capable.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
             supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
@@ -277,7 +277,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             model: "gpt-5.1-codex".to_string(),
             model_provider_id: None,
             display_name: "gpt-5.1-codex".to_string(),
-            description: "Optimized for adam.".to_string(),
+            description: "Optimized for lha.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
             supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
@@ -368,14 +368,14 @@ fn gpt_52_codex_upgrade() -> ModelUpgrade {
         migration_config_key: "gpt-5.2-codex".to_string(),
         model_link: Some("https://openai.com/index/introducing-gpt-5-2-codex".to_string()),
         upgrade_copy: Some(
-            "Adam is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work."
+            "LHA is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work."
                 .to_string(),
         ),
         migration_markdown: Some(
             indoc! {r#"
-                **Adam just got an upgrade. Introducing {model_to}.**
+                **LHA just got an upgrade. Introducing {model_to}.**
 
-                Adam is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work. Learn more about {model_to} at https://openai.com/index/introducing-gpt-5-2-codex
+                LHA is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work. Learn more about {model_to} at https://openai.com/index/introducing-gpt-5-2-codex
 
                 You can continue using {model_from} if you prefer.
             "#}

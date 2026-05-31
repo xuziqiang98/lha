@@ -47,7 +47,7 @@ fn pipes_stdin_and_stdout_through_socket() -> anyhow::Result<()> {
         Ok(())
     });
 
-    Command::new(adam_utils_cargo_bin::cargo_bin("adam-stdio-to-uds")?)
+    Command::new(lha_utils_cargo_bin::cargo_bin("lha-stdio-to-uds")?)
         .arg(&socket_path)
         .write_stdin("request")
         .assert()

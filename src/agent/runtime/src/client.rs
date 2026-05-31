@@ -1,20 +1,20 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use adam_llm::RuntimeBuildSpec;
-use adam_llm::RuntimeCapabilities;
-use adam_llm::RuntimeClient;
-use adam_llm::RuntimeClientFactory;
-use adam_llm::RuntimeSession;
-use adam_llm::TurnRequest;
-pub use adam_llm::WEB_SEARCH_ELIGIBLE_HEADER;
-use adam_otel::OtelManager;
-use adam_protocol::ThreadId;
-use adam_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::openai_models::ModelInfo;
-use adam_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use adam_protocol::protocol::SessionSource;
+use lha_llm::RuntimeBuildSpec;
+use lha_llm::RuntimeCapabilities;
+use lha_llm::RuntimeClient;
+use lha_llm::RuntimeClientFactory;
+use lha_llm::RuntimeSession;
+use lha_llm::TurnRequest;
+pub use lha_llm::WEB_SEARCH_ELIGIBLE_HEADER;
+use lha_otel::OtelManager;
+use lha_protocol::ThreadId;
+use lha_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::openai_models::ModelInfo;
+use lha_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use lha_protocol::protocol::SessionSource;
 
 use crate::AuthManager;
 use crate::config::Config;
@@ -26,7 +26,7 @@ use crate::dynamic_context_window::DynamicContextWindowSuccess;
 use crate::error::Result;
 use crate::features::Feature;
 use crate::models_manager::manager::ModelsManager;
-use adam_llm::RuntimeEndpoint;
+use lha_llm::RuntimeEndpoint;
 
 struct TurnRuntimeState {
     config: Arc<Config>,

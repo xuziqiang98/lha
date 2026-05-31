@@ -9,9 +9,9 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
-use adam_llm::TranscriptItem;
-use adam_protocol::dynamic_tools::DynamicToolResponse;
-use adam_protocol::request_user_input::RequestUserInputResponse;
+use lha_llm::TranscriptItem;
+use lha_protocol::dynamic_tools::DynamicToolResponse;
+use lha_protocol::request_user_input::RequestUserInputResponse;
 use tokio::sync::oneshot;
 
 use crate::codex::TurnContext;
@@ -54,7 +54,7 @@ pub(crate) struct RunningTask {
     pub(crate) handle: Arc<AbortOnDropHandle<()>>,
     pub(crate) turn_context: Arc<TurnContext>,
     // Timer recorded when the task drops to capture the full turn duration.
-    pub(crate) _timer: Option<adam_otel::Timer>,
+    pub(crate) _timer: Option<lha_otel::Timer>,
 }
 
 impl ActiveTurn {

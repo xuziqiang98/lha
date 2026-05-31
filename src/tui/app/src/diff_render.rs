@@ -21,10 +21,10 @@ use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
 use crate::terminal_palette::default_bg;
-use adam_agent::git_info::get_git_repo_root;
-use adam_agent::protocol::FileChange;
-use adam_agent::terminal::TerminalName;
-use adam_agent::terminal::terminal_info;
+use lha_agent::git_info::get_git_repo_root;
+use lha_agent::protocol::FileChange;
+use lha_agent::terminal::TerminalName;
+use lha_agent::terminal::terminal_info;
 
 // Diff background palette. Dark-theme tints are intentionally muted so they
 // don't overpower syntax colors or the terminal's default foreground.

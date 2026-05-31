@@ -1,11 +1,11 @@
-use adam_protocol::models::WebSearchAction;
+use lha_protocol::models::WebSearchAction;
 use mcp_types::ContentBlock as McpContentBlock;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use ts_rs::TS;
 
-/// Top-level JSONL events emitted by adam exec
+/// Top-level JSONL events emitted by lha exec
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(tag = "type")]
 pub enum ThreadEvent {

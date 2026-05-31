@@ -1,19 +1,4 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
-use adam_agent::AuthManager;
-use adam_agent::CodexAuth;
-use adam_agent::ContentItem;
-use adam_agent::features::Feature;
-use adam_agent::models_manager::manager::ModelsManager;
-use adam_agent::protocol::SessionSource;
-use adam_llm::RuntimeEndpoint;
-use adam_llm::TurnEvent;
-use adam_llm::TurnRequest;
-use adam_otel::OtelManager;
-use adam_otel::metrics::MetricsClient;
-use adam_otel::metrics::MetricsConfig;
-use adam_protocol::ThreadId;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::models::TranscriptItem;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::WebSocketTestServer;
@@ -25,6 +10,21 @@ use core_test_support::runtime_client::TestRuntimeClient;
 use core_test_support::runtime_client::TestRuntimeSession;
 use core_test_support::skip_if_no_network;
 use futures::StreamExt;
+use lha_agent::AuthManager;
+use lha_agent::CodexAuth;
+use lha_agent::ContentItem;
+use lha_agent::features::Feature;
+use lha_agent::models_manager::manager::ModelsManager;
+use lha_agent::protocol::SessionSource;
+use lha_llm::RuntimeEndpoint;
+use lha_llm::TurnEvent;
+use lha_llm::TurnRequest;
+use lha_otel::OtelManager;
+use lha_otel::metrics::MetricsClient;
+use lha_otel::metrics::MetricsConfig;
+use lha_protocol::ThreadId;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::models::TranscriptItem;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
@@ -35,7 +35,7 @@ use tracing_test::traced_test;
 const MODEL: &str = "gpt-5.2-codex";
 
 struct WebsocketTestHarness {
-    _adam_home: TempDir,
+    _lha_home: TempDir,
     client: TestRuntimeClient,
     otel_manager: OtelManager,
 }
@@ -230,8 +230,8 @@ fn websocket_provider(server: &WebSocketTestServer) -> RuntimeEndpoint {
 
 async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness {
     let provider = websocket_provider(server);
-    let adam_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&adam_home).await;
+    let lha_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&lha_home).await;
     config.model = Some(MODEL.to_string());
     config.features.enable(Feature::ResponsesWebsockets);
     let config = Arc::new(config);
@@ -240,7 +240,7 @@ async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let exporter = InMemoryMetricExporter::default();
     let metrics = MetricsClient::new(
-        MetricsConfig::in_memory("test", "adam-agent", env!("CARGO_PKG_VERSION"), exporter)
+        MetricsConfig::in_memory("test", "lha-agent", env!("CARGO_PKG_VERSION"), exporter)
             .with_runtime_reader(),
     )
     .expect("in-memory metrics client");
@@ -269,7 +269,7 @@ async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness
     );
 
     WebsocketTestHarness {
-        _adam_home: adam_home,
+        _lha_home: lha_home,
         client,
         otel_manager,
     }

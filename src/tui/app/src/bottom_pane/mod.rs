@@ -26,16 +26,16 @@ use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
-use adam_agent::config::types::TuiBuddy;
-use adam_agent::features::Features;
-use adam_agent::skills::model::SkillMetadata;
-use adam_file_search::FileMatch;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::request_user_input::RequestUserInputEvent;
-use adam_protocol::user_input::TextElement;
 pub(crate) use bottom_pane_view::BottomPaneView;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use lha_agent::config::types::TuiBuddy;
+use lha_agent::features::Features;
+use lha_agent::skills::model::SkillMetadata;
+use lha_file_search::FileMatch;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::request_user_input::RequestUserInputEvent;
+use lha_protocol::user_input::TextElement;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use std::time::Duration;
@@ -109,10 +109,10 @@ pub(crate) enum CancellationEvent {
     NotHandled,
 }
 
-use adam_protocol::custom_prompts::CustomPrompt;
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::ChatComposerConfig;
 pub(crate) use chat_composer::InputResult;
+use lha_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::status_indicator_widget::StatusIndicatorWidget;
@@ -974,10 +974,10 @@ impl Renderable for BottomPane {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use adam_agent::protocol::Op;
-    use adam_protocol::protocol::SkillScope;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
+    use lha_agent::protocol::Op;
+    use lha_protocol::protocol::SkillScope;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use std::cell::Cell;
@@ -1022,7 +1022,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Adam to do anything".to_string(),
+            placeholder_text: "Ask LHA to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1045,7 +1045,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Adam to do anything".to_string(),
+            placeholder_text: "Ask LHA to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1079,7 +1079,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Adam to do anything".to_string(),
+            placeholder_text: "Ask LHA to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1126,7 +1126,7 @@ mod tests {
             for x in 0..area.width {
                 row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
             }
-            if row.contains("Ask Adam") {
+            if row.contains("Ask LHA") {
                 found_composer = true;
                 break;
             }
@@ -1146,7 +1146,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Adam to do anything".to_string(),
+            placeholder_text: "Ask LHA to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1173,7 +1173,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Adam to do anything".to_string(),
+            placeholder_text: "Ask LHA to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1204,7 +1204,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Adam to do anything".to_string(),
+            placeholder_text: "Ask LHA to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1227,7 +1227,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Adam to do anything".to_string(),
+            placeholder_text: "Ask LHA to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1258,7 +1258,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Adam to do anything".to_string(),
+            placeholder_text: "Ask LHA to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1284,7 +1284,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Adam to do anything".to_string(),
+            placeholder_text: "Ask LHA to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1317,7 +1317,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Adam to do anything".to_string(),
+            placeholder_text: "Ask LHA to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1345,7 +1345,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Adam to do anything".to_string(),
+            placeholder_text: "Ask LHA to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1372,7 +1372,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Adam to do anything".to_string(),
+            placeholder_text: "Ask LHA to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(vec![SkillMetadata {
@@ -1418,7 +1418,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Adam to do anything".to_string(),
+            placeholder_text: "Ask LHA to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1453,7 +1453,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Adam to do anything".to_string(),
+            placeholder_text: "Ask LHA to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),
@@ -1509,7 +1509,7 @@ mod tests {
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
-            placeholder_text: "Ask Adam to do anything".to_string(),
+            placeholder_text: "Ask LHA to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
             skills: Some(Vec::new()),

@@ -1,33 +1,3 @@
-use adam_agent::AuthManager;
-use adam_agent::CodexAuth;
-use adam_agent::ContentItem;
-use adam_agent::default_client::originator;
-use adam_agent::error::CodexErr;
-use adam_agent::models_manager::manager::ModelsManager;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::ItemCompletedEvent;
-use adam_agent::protocol::ItemStartedEvent;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::SessionSource;
-use adam_llm::RuntimeEndpoint;
-use adam_llm::ToolCallPayload;
-use adam_llm::TurnEvent;
-use adam_llm::TurnRequest;
-use adam_otel::OtelManager;
-use adam_protocol::ThreadId;
-use adam_protocol::config_types::Identity;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::config_types::Settings;
-use adam_protocol::config_types::Verbosity;
-use adam_protocol::items::TurnItem;
-use adam_protocol::models::ReasoningItemContent;
-use adam_protocol::models::ReasoningItemReasoningSummary;
-use adam_protocol::models::ToolResultPayload;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::models::WebSearchAction;
-use adam_protocol::openai_models::ReasoningEffort;
-use adam_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses::mount_sse_once;
@@ -42,6 +12,36 @@ use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use dunce::canonicalize as normalize_path;
 use futures::StreamExt;
+use lha_agent::AuthManager;
+use lha_agent::CodexAuth;
+use lha_agent::ContentItem;
+use lha_agent::default_client::originator;
+use lha_agent::error::CodexErr;
+use lha_agent::models_manager::manager::ModelsManager;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::ItemCompletedEvent;
+use lha_agent::protocol::ItemStartedEvent;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::SessionSource;
+use lha_llm::RuntimeEndpoint;
+use lha_llm::ToolCallPayload;
+use lha_llm::TurnEvent;
+use lha_llm::TurnRequest;
+use lha_otel::OtelManager;
+use lha_protocol::ThreadId;
+use lha_protocol::config_types::Identity;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::config_types::Settings;
+use lha_protocol::config_types::Verbosity;
+use lha_protocol::items::TurnItem;
+use lha_protocol::models::ReasoningItemContent;
+use lha_protocol::models::ReasoningItemReasoningSummary;
+use lha_protocol::models::ToolResultPayload;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::models::WebSearchAction;
+use lha_protocol::openai_models::ReasoningEffort;
+use lha_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::io::Write;
@@ -207,7 +207,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let prior_user = TranscriptItem::Message {
         id: None,
         role: "user".to_string(),
-        content: vec![adam_protocol::models::ContentItem::InputText {
+        content: vec![lha_protocol::models::ContentItem::InputText {
             text: "resumed user message".to_string(),
         }],
         end_turn: None,
@@ -228,7 +228,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let prior_system = TranscriptItem::Message {
         id: None,
         role: "system".to_string(),
-        content: vec![adam_protocol::models::ContentItem::OutputText {
+        content: vec![lha_protocol::models::ContentItem::OutputText {
             text: "resumed system instruction".to_string(),
         }],
         end_turn: None,
@@ -249,7 +249,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let prior_item = TranscriptItem::Message {
         id: None,
         role: "assistant".to_string(),
-        content: vec![adam_protocol::models::ContentItem::OutputText {
+        content: vec![lha_protocol::models::ContentItem::OutputText {
             text: "resumed assistant message".to_string(),
         }],
         end_turn: None,
@@ -271,16 +271,16 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let server = MockServer::start().await;
     let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
-    // Configure Adam to resume from our file
-    let adam_home = Arc::new(TempDir::new().unwrap());
+    // Configure LHA to resume from our file
+    let lha_home = Arc::new(TempDir::new().unwrap());
     let mut builder = test_codex()
-        .with_home(adam_home.clone())
+        .with_home(lha_home.clone())
         .with_config(|config| {
             // Ensure user instructions are NOT delivered on resume.
             config.user_instructions = Some("be nice".to_string());
         });
     let test = builder
-        .resume(&server, adam_home, session_path.clone())
+        .resume(&server, lha_home, session_path.clone())
         .await
         .expect("resume conversation");
     let codex = test.codex.clone();
@@ -515,8 +515,8 @@ async fn skills_append_to_instructions() {
 
     let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
-    let adam_home = Arc::new(TempDir::new().unwrap());
-    let skill_dir = adam_home.path().join("skills/demo");
+    let lha_home = Arc::new(TempDir::new().unwrap());
+    let skill_dir = lha_home.path().join("skills/demo");
     std::fs::create_dir_all(&skill_dir).expect("create skill dir");
     std::fs::write(
         skill_dir.join("SKILL.md"),
@@ -524,12 +524,12 @@ async fn skills_append_to_instructions() {
     )
     .expect("write skill");
 
-    let adam_home_path = adam_home.path().to_path_buf();
+    let lha_home_path = lha_home.path().to_path_buf();
     let mut builder = test_codex()
-        .with_home(adam_home.clone())
+        .with_home(lha_home.clone())
         .with_auth(CodexAuth::from_api_key("Test API Key"))
         .with_config(move |config| {
-            config.cwd = adam_home_path;
+            config.cwd = lha_home_path;
         });
     let codex = builder
         .build(&server)
@@ -573,7 +573,7 @@ async fn skills_append_to_instructions() {
         instructions_text.contains(&expected_path_str),
         "expected path {expected_path_str} in instructions"
     );
-    let _adam_home_guard = adam_home;
+    let _lha_home_guard = lha_home;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1226,7 +1226,7 @@ async fn messages_api_filters_unsupported_freeform_tools() {
         .with_model("gpt-5.1-codex")
         .with_config(move |config| {
             config.model_provider = model_provider;
-            config.web_search_mode = Some(adam_protocol::config_types::WebSearchMode::Disabled);
+            config.web_search_mode = Some(lha_protocol::config_types::WebSearchMode::Disabled);
         })
         .build(&server)
         .await
@@ -1305,8 +1305,8 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             .with_stream_max_retries(Some(0))
             .with_stream_idle_timeout_ms(Some(5_000));
 
-    let adam_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&adam_home).await;
+    let lha_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&lha_home).await;
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();
     let effort = config.model_reasoning_effort;
@@ -1741,7 +1741,7 @@ fn create_dummy_codex_auth() -> CodexAuth {
 /// We assert that the `input` sent on each turn contains the expected conversation history
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn history_dedupes_streamed_and_final_messages_across_turns() {
-    // Skip under Adam sandbox network restrictions (mirrors other tests).
+    // Skip under LHA sandbox network restrictions (mirrors other tests).
     skip_if_no_network!();
 
     // Mock server that will receive three sequential requests and return the same SSE stream

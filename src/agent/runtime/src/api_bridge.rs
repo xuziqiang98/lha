@@ -1,4 +1,4 @@
-use adam_llm::Error as LlmError;
+use lha_llm::Error as LlmError;
 
 use crate::error::CodexErr;
 use crate::error::ModelCapError;

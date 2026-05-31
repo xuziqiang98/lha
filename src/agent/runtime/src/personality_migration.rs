@@ -10,8 +10,8 @@ use crate::rollout::list::ThreadListLayout;
 use crate::rollout::list::ThreadSortKey;
 use crate::rollout::list::get_threads_in_root;
 use crate::state_db;
-use adam_protocol::config_types::Personality;
-use adam_protocol::protocol::SessionSource;
+use lha_protocol::config_types::Personality;
+use lha_protocol::protocol::SessionSource;
 use std::io;
 use std::path::Path;
 use tokio::fs::OpenOptions;
@@ -28,10 +28,10 @@ pub enum PersonalityMigrationStatus {
 }
 
 pub async fn maybe_migrate_personality(
-    adam_home: &Path,
+    lha_home: &Path,
     config_toml: &ConfigToml,
 ) -> io::Result<PersonalityMigrationStatus> {
-    let marker_path = adam_home.join(PERSONALITY_MIGRATION_FILENAME);
+    let marker_path = lha_home.join(PERSONALITY_MIGRATION_FILENAME);
     if tokio::fs::try_exists(&marker_path).await? {
         return Ok(PersonalityMigrationStatus::SkippedMarker);
     }
@@ -44,7 +44,7 @@ pub async fn maybe_migrate_personality(
         return Ok(PersonalityMigrationStatus::SkippedExplicitPersonality);
     }
 
-    let model_provider_id = load_state(adam_home)
+    let model_provider_id = load_state(lha_home)
         .ok()
         .and_then(|state| {
             state
@@ -54,12 +54,12 @@ pub async fn maybe_migrate_personality(
         .map(|model_ref| model_provider_id_from_ref(&model_ref))
         .unwrap_or_else(|| "openai".to_string());
 
-    if !has_recorded_sessions(adam_home, model_provider_id.as_str()).await? {
+    if !has_recorded_sessions(lha_home, model_provider_id.as_str()).await? {
         create_marker(&marker_path).await?;
         return Ok(PersonalityMigrationStatus::SkippedNoSessions);
     }
 
-    ConfigEditsBuilder::new(adam_home)
+    ConfigEditsBuilder::new(lha_home)
         .set_personality(Some(Personality::Pragmatic))
         .apply()
         .await
@@ -71,13 +71,13 @@ pub async fn maybe_migrate_personality(
     Ok(PersonalityMigrationStatus::Applied)
 }
 
-async fn has_recorded_sessions(adam_home: &Path, default_provider: &str) -> io::Result<bool> {
+async fn has_recorded_sessions(lha_home: &Path, default_provider: &str) -> io::Result<bool> {
     let allowed_sources: &[SessionSource] = &[];
 
-    if let Some(state_db_ctx) = state_db::open_if_present(adam_home, default_provider).await
+    if let Some(state_db_ctx) = state_db::open_if_present(lha_home, default_provider).await
         && let Some(ids) = state_db::list_thread_ids_db(
             Some(state_db_ctx.as_ref()),
-            adam_home,
+            lha_home,
             1,
             None,
             ThreadSortKey::CreatedAt,
@@ -94,7 +94,7 @@ async fn has_recorded_sessions(adam_home: &Path, default_provider: &str) -> io::
     }
 
     let sessions = get_threads_in_root(
-        adam_home.join(SESSIONS_SUBDIR),
+        lha_home.join(SESSIONS_SUBDIR),
         1,
         None,
         ThreadSortKey::CreatedAt,
@@ -112,7 +112,7 @@ async fn has_recorded_sessions(adam_home: &Path, default_provider: &str) -> io::
     }
 
     let archived_sessions = get_threads_in_root(
-        adam_home.join(ARCHIVED_SESSIONS_SUBDIR),
+        lha_home.join(ARCHIVED_SESSIONS_SUBDIR),
         1,
         None,
         ThreadSortKey::CreatedAt,
@@ -144,28 +144,28 @@ async fn create_marker(marker_path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_protocol::ThreadId;
-    use adam_protocol::protocol::EventMsg;
-    use adam_protocol::protocol::RolloutItem;
-    use adam_protocol::protocol::RolloutLine;
-    use adam_protocol::protocol::SessionMeta;
-    use adam_protocol::protocol::SessionMetaLine;
-    use adam_protocol::protocol::SessionSource;
-    use adam_protocol::protocol::UserMessageEvent;
+    use lha_protocol::ThreadId;
+    use lha_protocol::protocol::EventMsg;
+    use lha_protocol::protocol::RolloutItem;
+    use lha_protocol::protocol::RolloutLine;
+    use lha_protocol::protocol::SessionMeta;
+    use lha_protocol::protocol::SessionMetaLine;
+    use lha_protocol::protocol::SessionSource;
+    use lha_protocol::protocol::UserMessageEvent;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
     use tokio::io::AsyncWriteExt;
 
     const TEST_TIMESTAMP: &str = "2025-01-01T00-00-00";
 
-    async fn read_config_toml(adam_home: &Path) -> io::Result<ConfigToml> {
-        let contents = tokio::fs::read_to_string(adam_home.join("config.toml")).await?;
+    async fn read_config_toml(lha_home: &Path) -> io::Result<ConfigToml> {
+        let contents = tokio::fs::read_to_string(lha_home.join("config.toml")).await?;
         toml::from_str(&contents).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
     }
 
-    async fn write_session_with_user_event(adam_home: &Path) -> io::Result<()> {
+    async fn write_session_with_user_event(lha_home: &Path) -> io::Result<()> {
         let thread_id = ThreadId::new();
-        let dir = adam_home
+        let dir = lha_home
             .join(SESSIONS_SUBDIR)
             .join("2025")
             .join("01")
@@ -182,7 +182,7 @@ mod tests {
                 cwd: std::path::PathBuf::from("."),
                 originator: "test_originator".to_string(),
                 cli_version: "test_version".to_string(),
-                rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+                rollout_schema_version: lha_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
                 source: SessionSource::Cli,
                 model_provider: None,
                 base_instructions: None,

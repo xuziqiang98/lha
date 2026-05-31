@@ -1,13 +1,13 @@
-use adam_app_server_protocol::AuthMode;
-use adam_otel::OtelManager;
-use adam_otel::RuntimeMetricTotals;
-use adam_otel::RuntimeMetricsSummary;
-use adam_otel::metrics::MetricsClient;
-use adam_otel::metrics::MetricsConfig;
-use adam_otel::metrics::Result;
-use adam_protocol::ThreadId;
-use adam_protocol::protocol::SessionSource;
 use eventsource_stream::Event as StreamEvent;
+use lha_app_server_protocol::AuthMode;
+use lha_otel::OtelManager;
+use lha_otel::RuntimeMetricTotals;
+use lha_otel::RuntimeMetricsSummary;
+use lha_otel::metrics::MetricsClient;
+use lha_otel::metrics::MetricsConfig;
+use lha_otel::metrics::Result;
+use lha_protocol::ThreadId;
+use lha_protocol::protocol::SessionSource;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
@@ -17,7 +17,7 @@ use tokio_tungstenite::tungstenite::Message;
 fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<()> {
     let exporter = InMemoryMetricExporter::default();
     let metrics = MetricsClient::new(
-        MetricsConfig::in_memory("test", "adam-cli", env!("CARGO_PKG_VERSION"), exporter)
+        MetricsConfig::in_memory("test", "lha-cli", env!("CARGO_PKG_VERSION"), exporter)
             .with_runtime_reader(),
     )?;
     let manager = OtelManager::new(
@@ -57,7 +57,7 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
     manager.log_sse_event(&sse_response, Duration::from_millis(120));
     let ws_response: std::result::Result<
         Option<std::result::Result<Message, tokio_tungstenite::tungstenite::Error>>,
-        adam_api::ApiError,
+        lha_api::ApiError,
     > = Ok(Some(Ok(Message::Text(
         r#"{"type":"response.created"}"#.into(),
     ))));

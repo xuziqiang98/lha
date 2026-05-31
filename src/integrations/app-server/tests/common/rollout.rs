@@ -1,16 +1,16 @@
-use adam_protocol::ThreadId;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::protocol::AskForApproval;
-use adam_protocol::protocol::GitInfo;
-use adam_protocol::protocol::RolloutItem;
-use adam_protocol::protocol::RolloutLine;
-use adam_protocol::protocol::SandboxPolicy;
-use adam_protocol::protocol::SessionMeta;
-use adam_protocol::protocol::SessionMetaLine;
-use adam_protocol::protocol::SessionSource;
-use adam_protocol::protocol::TurnContextItem;
-use adam_protocol::protocol::current_rollout_schema_version;
 use anyhow::Result;
+use lha_protocol::ThreadId;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::protocol::AskForApproval;
+use lha_protocol::protocol::GitInfo;
+use lha_protocol::protocol::RolloutItem;
+use lha_protocol::protocol::RolloutLine;
+use lha_protocol::protocol::SandboxPolicy;
+use lha_protocol::protocol::SessionMeta;
+use lha_protocol::protocol::SessionMetaLine;
+use lha_protocol::protocol::SessionSource;
+use lha_protocol::protocol::TurnContextItem;
+use lha_protocol::protocol::current_rollout_schema_version;
 use serde_json::json;
 use std::fs;
 use std::fs::FileTimes;
@@ -18,11 +18,11 @@ use std::path::Path;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-pub fn rollout_path(adam_home: &Path, filename_ts: &str, thread_id: &str) -> PathBuf {
+pub fn rollout_path(lha_home: &Path, filename_ts: &str, thread_id: &str) -> PathBuf {
     let year = &filename_ts[0..4];
     let month = &filename_ts[5..7];
     let day = &filename_ts[8..10];
-    adam_home
+    lha_home
         .join("sessions")
         .join(year)
         .join(month)
@@ -30,7 +30,7 @@ pub fn rollout_path(adam_home: &Path, filename_ts: &str, thread_id: &str) -> Pat
         .join(format!("rollout-{filename_ts}-{thread_id}.jsonl"))
 }
 
-/// Create a minimal rollout file under `ADAM_HOME/sessions/YYYY/MM/DD/`.
+/// Create a minimal rollout file under `LHA_HOME/sessions/YYYY/MM/DD/`.
 ///
 /// - `filename_ts` is the filename timestamp component in `YYYY-MM-DDThh-mm-ss` format.
 /// - `meta_rfc3339` is the envelope timestamp used in JSON lines.
@@ -39,7 +39,7 @@ pub fn rollout_path(adam_home: &Path, filename_ts: &str, thread_id: &str) -> Pat
 ///
 /// Returns the generated conversation/session UUID as a string.
 pub fn create_fake_rollout(
-    adam_home: &Path,
+    lha_home: &Path,
     filename_ts: &str,
     meta_rfc3339: &str,
     preview: &str,
@@ -47,7 +47,7 @@ pub fn create_fake_rollout(
     git_info: Option<GitInfo>,
 ) -> Result<String> {
     create_fake_rollout_with_source(
-        adam_home,
+        lha_home,
         filename_ts,
         meta_rfc3339,
         preview,
@@ -59,7 +59,7 @@ pub fn create_fake_rollout(
 
 #[allow(clippy::too_many_arguments)]
 pub fn create_fake_rollout_with_cwds(
-    adam_home: &Path,
+    lha_home: &Path,
     filename_ts: &str,
     meta_rfc3339: &str,
     preview: &str,
@@ -72,7 +72,7 @@ pub fn create_fake_rollout_with_cwds(
     let uuid_str = uuid.to_string();
     let conversation_id = ThreadId::from_string(&uuid_str)?;
 
-    let file_path = rollout_path(adam_home, filename_ts, &uuid_str);
+    let file_path = rollout_path(lha_home, filename_ts, &uuid_str);
     let dir = file_path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("missing rollout parent directory"))?;
@@ -157,7 +157,7 @@ pub fn create_fake_rollout_with_cwds(
 
 /// Create a minimal rollout file with an explicit session source.
 pub fn create_fake_rollout_with_source(
-    adam_home: &Path,
+    lha_home: &Path,
     filename_ts: &str,
     meta_rfc3339: &str,
     preview: &str,
@@ -169,7 +169,7 @@ pub fn create_fake_rollout_with_source(
     let uuid_str = uuid.to_string();
     let conversation_id = ThreadId::from_string(&uuid_str)?;
 
-    let file_path = rollout_path(adam_home, filename_ts, &uuid_str);
+    let file_path = rollout_path(lha_home, filename_ts, &uuid_str);
     let dir = file_path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("missing rollout parent directory"))?;
@@ -234,7 +234,7 @@ pub fn create_fake_rollout_with_source(
 }
 
 pub fn create_fake_rollout_with_schema_version(
-    adam_home: &Path,
+    lha_home: &Path,
     filename_ts: &str,
     meta_rfc3339: &str,
     preview: &str,
@@ -245,7 +245,7 @@ pub fn create_fake_rollout_with_schema_version(
     let uuid_str = uuid.to_string();
     let conversation_id = ThreadId::from_string(&uuid_str)?;
 
-    let file_path = rollout_path(adam_home, filename_ts, &uuid_str);
+    let file_path = rollout_path(lha_home, filename_ts, &uuid_str);
     let dir = file_path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("missing rollout parent directory"))?;
@@ -311,7 +311,7 @@ pub fn create_fake_rollout_with_schema_version(
 }
 
 pub fn create_fake_rollout_with_text_elements(
-    adam_home: &Path,
+    lha_home: &Path,
     filename_ts: &str,
     meta_rfc3339: &str,
     preview: &str,
@@ -327,7 +327,7 @@ pub fn create_fake_rollout_with_text_elements(
     let year = &filename_ts[0..4];
     let month = &filename_ts[5..7];
     let day = &filename_ts[8..10];
-    let dir = adam_home.join("sessions").join(year).join(month).join(day);
+    let dir = lha_home.join("sessions").join(year).join(month).join(day);
     fs::create_dir_all(&dir)?;
 
     let file_path = dir.join(format!("rollout-{filename_ts}-{uuid}.jsonl"));

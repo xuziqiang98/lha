@@ -3,23 +3,23 @@
 use std::collections::HashMap;
 use std::string::ToString;
 
-use adam_agent::exec::ExecParams;
-use adam_agent::exec::ExecToolCallOutput;
-use adam_agent::exec::SandboxType;
-use adam_agent::exec::process_exec_tool_call;
-use adam_agent::protocol::SandboxPolicy;
-use adam_agent::sandboxing::SandboxPermissions;
-use adam_agent::spawn::ADAM_SANDBOX_ENV_VAR;
-use adam_protocol::config_types::WindowsSandboxLevel;
+use lha_agent::exec::ExecParams;
+use lha_agent::exec::ExecToolCallOutput;
+use lha_agent::exec::SandboxType;
+use lha_agent::exec::process_exec_tool_call;
+use lha_agent::protocol::SandboxPolicy;
+use lha_agent::sandboxing::SandboxPermissions;
+use lha_agent::spawn::LHA_SANDBOX_ENV_VAR;
+use lha_protocol::config_types::WindowsSandboxLevel;
 use tempfile::TempDir;
 
-use adam_agent::error::Result;
+use lha_agent::error::Result;
 
-use adam_agent::get_platform_sandbox;
+use lha_agent::get_platform_sandbox;
 
 fn skip_test() -> bool {
-    if std::env::var(ADAM_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
-        eprintln!("{ADAM_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
+    if std::env::var(LHA_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
+        eprintln!("{LHA_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
         return true;
     }
 

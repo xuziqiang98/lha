@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use adam_agent::CodexThread;
-use adam_agent::NewThread;
-use adam_agent::ThreadManager;
-use adam_agent::config::Config;
-use adam_agent::protocol::Event;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::SessionConfiguredEvent;
-use adam_protocol::ThreadId;
+use lha_agent::CodexThread;
+use lha_agent::NewThread;
+use lha_agent::ThreadManager;
+use lha_agent::config::Config;
+use lha_agent::protocol::Event;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::SessionConfiguredEvent;
+use lha_protocol::ThreadId;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
@@ -67,7 +67,7 @@ pub(crate) fn spawn_agent(
 pub(crate) fn attach_existing_thread(
     thread: std::sync::Arc<CodexThread>,
     thread_id: ThreadId,
-    session_configured: adam_agent::protocol::SessionConfiguredEvent,
+    session_configured: lha_agent::protocol::SessionConfiguredEvent,
     app_event_tx: AppEventSender,
 ) -> UnboundedSender<Op> {
     let (codex_op_tx, codex_op_rx) = unbounded_channel::<Op>();
@@ -95,10 +95,10 @@ async fn run_thread_bridge(
     mut codex_op_rx: UnboundedReceiver<Op>,
 ) {
     // Forward the captured `SessionConfigured` event so it can be rendered in the UI.
-    let ev = adam_agent::protocol::Event {
+    let ev = lha_agent::protocol::Event {
         // The `id` does not matter for rendering, so we can use a fake value.
         id: "".to_string(),
-        msg: adam_agent::protocol::EventMsg::SessionConfigured(session_configured),
+        msg: lha_agent::protocol::EventMsg::SessionConfigured(session_configured),
     };
     app_event_tx.send(AppEvent::CodexEvent(ev));
 

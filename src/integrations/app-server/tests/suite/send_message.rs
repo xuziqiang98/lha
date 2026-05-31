@@ -1,18 +1,18 @@
-use adam_app_server_protocol::AddConversationListenerParams;
-use adam_app_server_protocol::AddConversationSubscriptionResponse;
-use adam_app_server_protocol::InputItem;
-use adam_app_server_protocol::JSONRPCNotification;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::NewConversationParams;
-use adam_app_server_protocol::NewConversationResponse;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::SendUserMessageParams;
-use adam_app_server_protocol::SendUserMessageResponse;
-use adam_protocol::ThreadId;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use core_test_support::responses;
+use lha_app_server_protocol::AddConversationListenerParams;
+use lha_app_server_protocol::AddConversationSubscriptionResponse;
+use lha_app_server_protocol::InputItem;
+use lha_app_server_protocol::JSONRPCNotification;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::NewConversationParams;
+use lha_app_server_protocol::NewConversationResponse;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::SendUserMessageParams;
+use lha_app_server_protocol::SendUserMessageResponse;
+use lha_protocol::ThreadId;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -22,8 +22,8 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test]
 async fn test_send_message_success() -> Result<()> {
-    // Spin up a mock responses server that immediately ends the Adam turn.
-    // Two Adam turns hit the mock model (session start + send-user-message). Provide two SSE responses.
+    // Spin up a mock responses server that immediately ends the LHA turn.
+    // Two LHA turns hit the mock model (session start + send-user-message). Provide two SSE responses.
     let server = responses::start_mock_server().await;
     let body1 = responses::sse(vec![
         responses::ev_response_created("resp-1"),
@@ -38,12 +38,12 @@ async fn test_send_message_success() -> Result<()> {
     let _response_mock1 = responses::mount_sse_once(&server, body1).await;
     let _response_mock2 = responses::mount_sse_once(&server, body2).await;
 
-    // Create a temporary Adam home with config pointing at the mock server.
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    // Create a temporary LHA home with config pointing at the mock server.
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
     // Start MCP server process and initialize.
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Start a conversation using the new wire API.
@@ -108,7 +108,7 @@ async fn send_message(
     // Note this also ensures that the final request to the server was made.
     let task_finished_notification: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/task_complete"),
+        mcp.read_stream_until_notification_message("lha/event/task_complete"),
     )
     .await??;
     let serde_json::Value::Object(map) = task_finished_notification
@@ -125,7 +125,7 @@ async fn send_message(
 
     let raw_attempt = tokio::time::timeout(
         std::time::Duration::from_millis(200),
-        mcp.read_stream_until_notification_message("adam/event/raw_transcript_item"),
+        mcp.read_stream_until_notification_message("lha/event/raw_transcript_item"),
     )
     .await;
     assert!(
@@ -137,9 +137,9 @@ async fn send_message(
 
 #[tokio::test]
 async fn test_send_message_session_not_found() -> Result<()> {
-    // Start MCP without creating a Adam session
-    let adam_home = TempDir::new()?;
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    // Start MCP without creating a LHA session
+    let lha_home = TempDir::new()?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let unknown = ThreadId::new();
@@ -167,9 +167,9 @@ async fn test_send_message_session_not_found() -> Result<()> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn create_config_toml(adam_home: &Path, server_uri: &str) -> std::io::Result<()> {
+fn create_config_toml(lha_home: &Path, server_uri: &str) -> std::io::Result<()> {
     app_test_support::write_mock_responses_config_toml_with_options(
-        adam_home,
+        lha_home,
         server_uri,
         &std::collections::BTreeMap::new(),
         20_000,

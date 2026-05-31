@@ -1,11 +1,5 @@
 #![cfg(not(target_os = "windows"))]
 
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::SandboxPolicy;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::user_input::UserInput;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use core_test_support::responses;
@@ -24,6 +18,12 @@ use image::GenericImageView;
 use image::ImageBuffer;
 use image::Rgba;
 use image::load_from_memory;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::SandboxPolicy;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::user_input::UserInput;
 use serde_json::Value;
 use tokio::time::Duration;
 
@@ -424,7 +424,7 @@ async fn view_image_tool_placeholder_for_non_image_files() -> anyhow::Result<()>
             content.iter().find_map(|span| {
                 if span.get("type").and_then(Value::as_str) == Some("input_text") {
                     let text = span.get("text").and_then(Value::as_str)?;
-                    if text.contains("Adam could not read the local image at")
+                    if text.contains("LHA could not read the local image at")
                         && text.contains("unsupported MIME type `application/json`")
                     {
                         return Some(text.to_string());

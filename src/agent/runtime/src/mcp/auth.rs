@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use adam_protocol::protocol::McpAuthStatus;
-use adam_rmcp_client::OAuthCredentialsStoreMode;
-use adam_rmcp_client::determine_streamable_http_auth_status;
-use adam_rmcp_client::supports_oauth_login;
 use anyhow::Result;
 use futures::future::join_all;
+use lha_protocol::protocol::McpAuthStatus;
+use lha_rmcp_client::OAuthCredentialsStoreMode;
+use lha_rmcp_client::determine_streamable_http_auth_status;
+use lha_rmcp_client::supports_oauth_login;
 use tracing::warn;
 
 use crate::config::types::McpServerConfig;

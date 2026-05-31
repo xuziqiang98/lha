@@ -141,15 +141,15 @@ use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
 use crate::tui::FrameRequester;
-use adam_agent::config::types::TuiBuddy;
-use adam_agent::terminal::Multiplexer;
-use adam_common::fuzzy_match::fuzzy_match;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::custom_prompts::CustomPrompt;
-use adam_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
-use adam_protocol::models::local_image_label_text;
-use adam_protocol::user_input::ByteRange;
-use adam_protocol::user_input::TextElement;
+use lha_agent::config::types::TuiBuddy;
+use lha_agent::terminal::Multiplexer;
+use lha_common::fuzzy_match::fuzzy_match;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::custom_prompts::CustomPrompt;
+use lha_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
+use lha_protocol::models::local_image_label_text;
+use lha_protocol::user_input::ByteRange;
+use lha_protocol::user_input::TextElement;
 
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
@@ -161,10 +161,10 @@ use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
 use crate::ui_consts::LIVE_PREFIX_COLS;
-use adam_agent::connectors;
-use adam_agent::connectors::AppInfo;
-use adam_agent::skills::model::SkillMetadata;
-use adam_file_search::FileMatch;
+use lha_agent::connectors;
+use lha_agent::connectors::AppInfo;
+use lha_agent::skills::model::SkillMetadata;
+use lha_file_search::FileMatch;
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -416,7 +416,7 @@ impl ChatComposer {
             personality_command_enabled: false,
             windows_degraded_sandbox_active: false,
             is_zellij: matches!(
-                adam_agent::terminal::terminal_info().multiplexer,
+                lha_agent::terminal::terminal_info().multiplexer,
                 Some(Multiplexer::Zellij { .. })
             ),
             buddy_state: BuddyState::default(),
@@ -2911,7 +2911,7 @@ impl ChatComposer {
                 }
                 let display_name = connectors::connector_display_label(connector);
                 let description = Some(Self::connector_brief_description(connector));
-                let slug = adam_agent::connectors::connector_mention_slug(connector);
+                let slug = lha_agent::connectors::connector_mention_slug(connector);
                 let search_terms = vec![display_name.clone(), connector.id.clone(), slug.clone()];
                 let connector_id = connector.id.as_str();
                 mentions.push(MentionItem {
@@ -3353,7 +3353,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -3407,7 +3407,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.textarea.insert_str(&"s".repeat(220));
@@ -3430,7 +3430,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -3450,7 +3450,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -3473,7 +3473,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -3493,17 +3493,17 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer
             .buddy_state
             .set_buddy_for_test(crate::buddy::model::Buddy {
                 name: "Pixel".to_string(),
-                species: adam_agent::config::types::BuddySpecies::Dragon,
-                eye: adam_agent::config::types::BuddyEye::Cross,
-                hat: adam_agent::config::types::BuddyHat::Propeller,
-                rarity: adam_agent::config::types::BuddyRarity::Epic,
+                species: lha_agent::config::types::BuddySpecies::Dragon,
+                eye: lha_agent::config::types::BuddyEye::Cross,
+                hat: lha_agent::config::types::BuddyHat::Propeller,
+                rarity: lha_agent::config::types::BuddyRarity::Epic,
                 shiny: false,
                 personality: "terminal philosopher".to_string(),
                 stats: crate::buddy::model::BuddyStats {
@@ -3513,7 +3513,7 @@ mod tests {
                     wisdom: 49,
                     snark: 33,
                 },
-                identity_kind: adam_protocol::config_types::IdentityKind::Nobody,
+                identity_kind: lha_protocol::config_types::IdentityKind::Nobody,
             });
 
         let area = Rect::new(0, 0, 160, 8);
@@ -3542,7 +3542,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -3576,7 +3576,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_footer_hint_override(Some(vec![("K".to_string(), "label".to_string())]));
@@ -3614,7 +3614,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_footer_hint_override(Some(vec![("K".to_string(), "label".to_string())]));
@@ -3663,7 +3663,7 @@ mod tests {
             true,
             sender,
             enhanced_keys_supported,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         setup(&mut composer);
@@ -3698,7 +3698,7 @@ mod tests {
             true,
             sender,
             true,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.is_zellij = true;
@@ -3784,7 +3784,7 @@ mod tests {
             composer.set_footer_info(
                 "gpt-5.4".to_string(),
                 Some("high".to_string()),
-                "~/Workspace/adam".to_string(),
+                "~/Workspace/lha".to_string(),
             );
         }
 
@@ -3983,7 +3983,7 @@ mod tests {
             true,
             sender,
             true,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -4010,7 +4010,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -4033,7 +4033,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -4066,7 +4066,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -4115,7 +4115,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -4152,7 +4152,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -4333,7 +4333,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -4368,7 +4368,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -4396,7 +4396,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -4429,7 +4429,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -4477,7 +4477,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -4522,7 +4522,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -4579,7 +4579,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -4606,7 +4606,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -4636,7 +4636,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -4661,7 +4661,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -4688,7 +4688,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -4723,7 +4723,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -4756,7 +4756,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -4788,7 +4788,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -4820,7 +4820,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -4858,7 +4858,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -4900,7 +4900,7 @@ mod tests {
                 true,
                 sender.clone(),
                 false,
-                "Ask Adam to do anything".to_string(),
+                "Ask LHA to do anything".to_string(),
                 false,
             );
 
@@ -4955,7 +4955,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -4984,7 +4984,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -5014,7 +5014,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -5046,7 +5046,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -5072,7 +5072,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         type_chars_humanlike(&mut composer, &['/', 'r', 'e', 's']);
@@ -5120,7 +5120,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -5163,7 +5163,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -5209,7 +5209,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -5290,7 +5290,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -5311,7 +5311,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -5353,7 +5353,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -5392,7 +5392,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -5435,7 +5435,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -5515,7 +5515,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -5589,7 +5589,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -5628,7 +5628,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -5668,7 +5668,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -5716,7 +5716,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -5755,7 +5755,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -5786,7 +5786,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -5808,7 +5808,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -5852,7 +5852,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -5896,7 +5896,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -5940,7 +5940,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -5987,7 +5987,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -6027,7 +6027,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         let path = PathBuf::from("/tmp/image_dup.png");
@@ -6050,7 +6050,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         let path = PathBuf::from("/tmp/image3.png");
@@ -6090,7 +6090,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -6116,7 +6116,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -6176,7 +6176,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -6239,7 +6239,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -6277,7 +6277,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -6299,7 +6299,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -6339,7 +6339,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -6375,7 +6375,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -6415,7 +6415,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -6471,7 +6471,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -6528,7 +6528,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -6577,7 +6577,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -6642,7 +6642,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -6701,7 +6701,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -6738,7 +6738,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -6771,7 +6771,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -6821,7 +6821,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -6876,7 +6876,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -6915,7 +6915,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -6954,7 +6954,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -6998,7 +6998,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -7039,7 +7039,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(false);
@@ -7112,7 +7112,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -7149,7 +7149,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -7185,7 +7185,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -7224,7 +7224,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         composer.set_steer_enabled(true);
@@ -7268,7 +7268,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -7297,7 +7297,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -7344,7 +7344,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -7381,7 +7381,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         let pasted = (0..=10)
@@ -7408,7 +7408,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         let pasted = (0..10)
@@ -7430,7 +7430,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
         let pasted = format!(
@@ -7460,7 +7460,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -7504,7 +7504,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -7531,7 +7531,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -7556,7 +7556,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -7586,7 +7586,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -7629,7 +7629,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -7663,7 +7663,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -7688,7 +7688,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -7713,7 +7713,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 
@@ -7745,7 +7745,7 @@ mod tests {
             true,
             sender,
             false,
-            "Ask Adam to do anything".to_string(),
+            "Ask LHA to do anything".to_string(),
             false,
         );
 

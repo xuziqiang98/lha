@@ -1,6 +1,6 @@
 # Config JSON Schema
 
-We generate a JSON Schema for `~/.adam/config.toml` from the `ConfigToml` type
+We generate a JSON Schema for `~/.lha/config.toml` from the `ConfigToml` type
 and commit it at `src/agent/runtime/config.schema.json` for editor integration.
 
 When you change any fields included in `ConfigToml` (or nested config types),

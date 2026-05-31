@@ -1,12 +1,12 @@
 use crate::Error;
 use crate::Result;
-use adam_api::Provider as ApiProvider;
-use adam_api::WireApi as ApiWireApi;
-use adam_api::is_azure_responses_wire_base_url;
-use adam_api::provider::RetryConfig as ApiRetryConfig;
 use http::HeaderMap;
 use http::header::HeaderName;
 use http::header::HeaderValue;
+use lha_api::Provider as ApiProvider;
+use lha_api::WireApi as ApiWireApi;
+use lha_api::is_azure_responses_wire_base_url;
+use lha_api::provider::RetryConfig as ApiRetryConfig;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;

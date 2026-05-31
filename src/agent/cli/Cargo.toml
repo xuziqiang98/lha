@@ -1,15 +1,15 @@
 [package]
-name = "adam-cli"
+name = "lha-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "adam"
+name = "lha"
 path = "src/main.rs"
 
 [lib]
-name = "adam_cli"
+name = "lha_cli"
 path = "src/lib.rs"
 
 [lints]
@@ -19,19 +19,19 @@ workspace = true
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 clap_complete = { workspace = true }
-adam-app-server = { workspace = true }
-adam-app-server-protocol = { workspace = true }
-adam-arg0 = { workspace = true }
-adam-common = { workspace = true, features = ["cli"] }
-adam-agent = { workspace = true }
-adam-exec = { workspace = true }
-adam-execpolicy = { workspace = true }
-adam-mcp-server = { workspace = true }
-adam-protocol = { workspace = true }
-adam-responses-api-proxy = { workspace = true }
-adam-rmcp-client = { workspace = true }
-adam-stdio-to-uds = { workspace = true }
-adam-tui = { workspace = true }
+lha-app-server = { workspace = true }
+lha-app-server-protocol = { workspace = true }
+lha-arg0 = { workspace = true }
+lha-common = { workspace = true, features = ["cli"] }
+lha-agent = { workspace = true }
+lha-exec = { workspace = true }
+lha-execpolicy = { workspace = true }
+lha-mcp-server = { workspace = true }
+lha-protocol = { workspace = true }
+lha-responses-api-proxy = { workspace = true }
+lha-rmcp-client = { workspace = true }
+lha-stdio-to-uds = { workspace = true }
+lha-tui = { workspace = true }
 libc = { workspace = true }
 owo-colors = { workspace = true }
 regex-lite = { workspace = true }
@@ -48,12 +48,12 @@ toml = { workspace = true }
 tracing = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-adam_windows_sandbox = { package = "adam-windows-sandbox", path = "../../platform/sandbox/windows" }
+lha_windows_sandbox = { package = "lha-windows-sandbox", path = "../../platform/sandbox/windows" }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
-adam-utils-cargo-bin = { workspace = true }
+lha-utils-cargo-bin = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

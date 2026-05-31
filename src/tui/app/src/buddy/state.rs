@@ -1,8 +1,8 @@
 use std::time::Duration;
 use std::time::Instant;
 
-use adam_agent::config::types::TuiBuddy;
-use adam_protocol::config_types::IdentityKind;
+use lha_agent::config::types::TuiBuddy;
+use lha_protocol::config_types::IdentityKind;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
@@ -227,8 +227,8 @@ impl BuddyState {
 
 #[cfg(test)]
 mod tests {
-    use adam_agent::config::types::TuiBuddy;
-    use adam_protocol::config_types::IdentityKind;
+    use lha_agent::config::types::TuiBuddy;
+    use lha_protocol::config_types::IdentityKind;
 
     use super::*;
 

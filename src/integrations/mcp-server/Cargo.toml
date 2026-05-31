@@ -1,15 +1,15 @@
 [package]
-name = "adam-mcp-server"
+name = "lha-mcp-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "adam-mcp-server"
+name = "lha-mcp-server"
 path = "src/main.rs"
 
 [lib]
-name = "adam_mcp_server"
+name = "lha_mcp_server"
 path = "src/lib.rs"
 
 [lints]
@@ -17,11 +17,11 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-adam-arg0 = { workspace = true }
-adam-common = { workspace = true, features = ["cli"] }
-adam-agent = { workspace = true }
-adam-protocol = { workspace = true }
-adam-utils-json-to-toml = { workspace = true }
+lha-arg0 = { workspace = true }
+lha-common = { workspace = true, features = ["cli"] }
+lha-agent = { workspace = true }
+lha-protocol = { workspace = true }
+lha-utils-json-to-toml = { workspace = true }
 mcp-types = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

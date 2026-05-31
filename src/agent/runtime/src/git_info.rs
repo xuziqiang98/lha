@@ -3,9 +3,9 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use crate::util::resolve_path;
-use adam_app_server_protocol::GitSha;
-use adam_protocol::protocol::GitInfo;
 use futures::future::join_all;
+use lha_app_server_protocol::GitSha;
+use lha_protocol::protocol::GitInfo;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::process::Command;
@@ -22,7 +22,7 @@ use tokio::time::timeout;
 ///
 /// Note that this does **not** detect *work‑trees* created with
 /// `git worktree add` where the checkout lives outside the main repository
-/// directory. If you need Adam to work from such a checkout simply pass the
+/// directory. If you need LHA to work from such a checkout simply pass the
 /// `--allow-no-git-exec` CLI flag that disables the repo requirement.
 pub fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
     let mut dir = base_dir.to_path_buf();

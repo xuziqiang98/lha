@@ -1,6 +1,6 @@
-use adam_git::merge_base_with_head;
-use adam_protocol::protocol::ReviewRequest;
-use adam_protocol::protocol::ReviewTarget;
+use lha_git::merge_base_with_head;
+use lha_protocol::protocol::ReviewRequest;
+use lha_protocol::protocol::ReviewTarget;
 use std::path::Path;
 
 #[derive(Clone, Debug, PartialEq)]

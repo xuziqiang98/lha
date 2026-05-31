@@ -5,15 +5,15 @@ mod seatbelt;
 
 use std::path::PathBuf;
 
-use adam_agent::config::Config;
-use adam_agent::config::ConfigOverrides;
-use adam_agent::exec_env::create_env;
-use adam_agent::landlock::spawn_command_under_linux_sandbox;
+use lha_agent::config::Config;
+use lha_agent::config::ConfigOverrides;
+use lha_agent::exec_env::create_env;
+use lha_agent::landlock::spawn_command_under_linux_sandbox;
 #[cfg(target_os = "macos")]
-use adam_agent::seatbelt::spawn_command_under_seatbelt;
-use adam_agent::spawn::StdioPolicy;
-use adam_common::CliConfigOverrides;
-use adam_protocol::config_types::SandboxMode;
+use lha_agent::seatbelt::spawn_command_under_seatbelt;
+use lha_agent::spawn::StdioPolicy;
+use lha_common::CliConfigOverrides;
+use lha_protocol::config_types::SandboxMode;
 
 use crate::LandlockCommand;
 use crate::SeatbeltCommand;
@@ -136,10 +136,10 @@ async fn run_command_under_sandbox(
     if let SandboxType::Windows = sandbox_type {
         #[cfg(target_os = "windows")]
         {
-            use adam_agent::windows_sandbox::WindowsSandboxLevelExt;
-            use adam_protocol::config_types::WindowsSandboxLevel;
-            use adam_windows_sandbox::run_windows_sandbox_capture;
-            use adam_windows_sandbox::run_windows_sandbox_capture_elevated;
+            use lha_agent::windows_sandbox::WindowsSandboxLevelExt;
+            use lha_protocol::config_types::WindowsSandboxLevel;
+            use lha_windows_sandbox::run_windows_sandbox_capture;
+            use lha_windows_sandbox::run_windows_sandbox_capture_elevated;
 
             let policy_str = serde_json::to_string(config.sandbox_policy.get())?;
 
@@ -147,7 +147,7 @@ async fn run_command_under_sandbox(
             let cwd_clone = cwd.clone();
             let env_map = env.clone();
             let command_vec = command.clone();
-            let base_dir = config.adam_home.clone();
+            let base_dir = config.lha_home.clone();
             let use_elevated = matches!(
                 WindowsSandboxLevel::from_config(&config),
                 WindowsSandboxLevel::Elevated
@@ -230,7 +230,7 @@ async fn run_command_under_sandbox(
             #[expect(clippy::expect_used)]
             let codex_linux_sandbox_exe = config
                 .codex_linux_sandbox_exe
-                .expect("adam-linux-sandbox executable not found");
+                .expect("lha-linux-sandbox executable not found");
             spawn_command_under_linux_sandbox(
                 codex_linux_sandbox_exe,
                 command,

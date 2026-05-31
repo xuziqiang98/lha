@@ -2,11 +2,11 @@ use crate::harness::attributes_to_map;
 use crate::harness::build_metrics_with_defaults;
 use crate::harness::find_metric;
 use crate::harness::latest_metrics;
-use adam_app_server_protocol::AuthMode;
-use adam_otel::OtelManager;
-use adam_otel::metrics::Result;
-use adam_protocol::ThreadId;
-use adam_protocol::protocol::SessionSource;
+use lha_app_server_protocol::AuthMode;
+use lha_otel::OtelManager;
+use lha_otel::metrics::Result;
+use lha_protocol::ThreadId;
+use lha_protocol::protocol::SessionSource;
 use opentelemetry_sdk::metrics::data::AggregatedMetrics;
 use opentelemetry_sdk::metrics::data::MetricData;
 use pretty_assertions::assert_eq;
@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 // Ensures OtelManager attaches metadata tags when forwarding metrics.
 #[test]
 fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
-    let (metrics, exporter) = build_metrics_with_defaults(&[("service", "adam-cli")])?;
+    let (metrics, exporter) = build_metrics_with_defaults(&[("service", "lha-cli")])?;
     let manager = OtelManager::new(
         ThreadId::new(),
         "gpt-5.1",
@@ -54,7 +54,7 @@ fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
         ),
         ("auth_mode".to_string(), AuthMode::ApiKey.to_string()),
         ("model".to_string(), "gpt-5.1".to_string()),
-        ("service".to_string(), "adam-cli".to_string()),
+        ("service".to_string(), "lha-cli".to_string()),
         ("session_source".to_string(), "cli".to_string()),
         ("source".to_string(), "tui".to_string()),
     ]);

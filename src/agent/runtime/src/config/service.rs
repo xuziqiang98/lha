@@ -14,19 +14,19 @@ use crate::path_utils;
 use crate::path_utils::SymlinkWritePaths;
 use crate::path_utils::resolve_symlink_write_paths;
 use crate::path_utils::write_atomically;
-use adam_app_server_protocol::Config as ApiConfig;
-use adam_app_server_protocol::ConfigBatchWriteParams;
-use adam_app_server_protocol::ConfigLayerMetadata;
-use adam_app_server_protocol::ConfigLayerSource;
-use adam_app_server_protocol::ConfigReadParams;
-use adam_app_server_protocol::ConfigReadResponse;
-use adam_app_server_protocol::ConfigValueWriteParams;
-use adam_app_server_protocol::ConfigWriteErrorCode;
-use adam_app_server_protocol::ConfigWriteResponse;
-use adam_app_server_protocol::MergeStrategy;
-use adam_app_server_protocol::OverriddenMetadata;
-use adam_app_server_protocol::WriteStatus;
-use adam_utils_absolute_path::AbsolutePathBuf;
+use lha_app_server_protocol::Config as ApiConfig;
+use lha_app_server_protocol::ConfigBatchWriteParams;
+use lha_app_server_protocol::ConfigLayerMetadata;
+use lha_app_server_protocol::ConfigLayerSource;
+use lha_app_server_protocol::ConfigReadParams;
+use lha_app_server_protocol::ConfigReadResponse;
+use lha_app_server_protocol::ConfigValueWriteParams;
+use lha_app_server_protocol::ConfigWriteErrorCode;
+use lha_app_server_protocol::ConfigWriteResponse;
+use lha_app_server_protocol::MergeStrategy;
+use lha_app_server_protocol::OverriddenMetadata;
+use lha_app_server_protocol::WriteStatus;
+use lha_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 use std::borrow::Cow;
 use std::path::Path;
@@ -107,7 +107,7 @@ impl ConfigServiceError {
 
 #[derive(Clone)]
 pub struct ConfigService {
-    adam_home: PathBuf,
+    lha_home: PathBuf,
     cli_overrides: Vec<(String, TomlValue)>,
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
@@ -115,22 +115,22 @@ pub struct ConfigService {
 
 impl ConfigService {
     pub fn new(
-        adam_home: PathBuf,
+        lha_home: PathBuf,
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
         cloud_requirements: CloudRequirementsLoader,
     ) -> Self {
         Self {
-            adam_home,
+            lha_home,
             cli_overrides,
             loader_overrides,
             cloud_requirements,
         }
     }
 
-    pub fn new_with_defaults(adam_home: PathBuf) -> Self {
+    pub fn new_with_defaults(lha_home: PathBuf) -> Self {
         Self {
-            adam_home,
+            lha_home,
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
@@ -147,7 +147,7 @@ impl ConfigService {
                     ConfigServiceError::io("failed to resolve config cwd to an absolute path", err)
                 })?;
                 crate::config::ConfigBuilder::default()
-                    .adam_home(self.adam_home.clone())
+                    .lha_home(self.lha_home.clone())
                     .cli_overrides(self.cli_overrides.clone())
                     .loader_overrides(self.loader_overrides.clone())
                     .fallback_cwd(Some(cwd.to_path_buf()))
@@ -227,7 +227,7 @@ impl ConfigService {
 
     pub async fn load_user_saved_config(
         &self,
-    ) -> Result<adam_app_server_protocol::UserSavedConfig, ConfigServiceError> {
+    ) -> Result<lha_app_server_protocol::UserSavedConfig, ConfigServiceError> {
         let layers = self
             .load_thread_agnostic_config()
             .await
@@ -247,7 +247,7 @@ impl ConfigService {
         edits: Vec<(String, JsonValue, MergeStrategy)>,
     ) -> Result<ConfigWriteResponse, ConfigServiceError> {
         let allowed_path =
-            AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, &self.adam_home)
+            AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, &self.lha_home)
                 .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err))?;
         let provided_path = match file_path {
             Some(path) => AbsolutePathBuf::from_absolute_path(PathBuf::from(path))
@@ -342,7 +342,7 @@ impl ConfigService {
         })?;
 
         if !config_edits.is_empty() {
-            ConfigEditsBuilder::new(&self.adam_home)
+            ConfigEditsBuilder::new(&self.lha_home)
                 .with_edits(config_edits)
                 .apply()
                 .await
@@ -373,12 +373,12 @@ impl ConfigService {
     }
 
     /// Loads a "thread-agnostic" config, which means the config layers do not
-    /// include any in-repo .adam/ folders because there is no cwd/project root
+    /// include any in-repo .lha/ folders because there is no cwd/project root
     /// associated with this query.
     async fn load_thread_agnostic_config(&self) -> std::io::Result<ConfigLayerStack> {
         let cwd: Option<AbsolutePathBuf> = None;
         load_config_layers_state(
-            &self.adam_home,
+            &self.lha_home,
             cwd,
             &self.cli_overrides,
             self.loader_overrides.clone(),
@@ -619,9 +619,9 @@ fn override_message(layer: &ConfigLayerSource) -> String {
         ConfigLayerSource::System { file } => {
             format!("Overridden by managed config (system): {}", file.display())
         }
-        ConfigLayerSource::Project { dot_adam_folder } => format!(
+        ConfigLayerSource::Project { dot_lha_folder } => format!(
             "Overridden by project config: {}/{CONFIG_TOML_FILE}",
-            dot_adam_folder.display(),
+            dot_lha_folder.display(),
         ),
         ConfigLayerSource::SessionFlags => "Overridden by session flags".to_string(),
         ConfigLayerSource::User { file } => {
@@ -699,9 +699,9 @@ fn find_effective_layer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_app_server_protocol::AskForApproval;
-    use adam_utils_absolute_path::AbsolutePathBuf;
     use anyhow::Result;
+    use lha_app_server_protocol::AskForApproval;
+    use lha_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
@@ -757,7 +757,7 @@ X-Doc = "42"
     #[tokio::test]
     async fn write_value_preserves_comments_and_order() -> Result<()> {
         let tmp = tempdir().expect("tempdir");
-        let original = r#"# Adam user configuration
+        let original = r#"# LHA user configuration
 approval_policy = "on-request"
 
 [notice]
@@ -783,7 +783,7 @@ unified_exec = true
 
         let updated =
             std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
-        let expected = r#"# Adam user configuration
+        let expected = r#"# LHA user configuration
 approval_policy = "on-request"
 
 [notice]

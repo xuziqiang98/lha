@@ -1,14 +1,14 @@
 use crate::exec::ExecToolCallOutput;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
-use adam_async_utils::CancelErr;
-use adam_protocol::ThreadId;
-use adam_protocol::protocol::CodexErrorInfo;
-use adam_protocol::protocol::ErrorEvent;
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::Local;
 use chrono::Utc;
+use lha_async_utils::CancelErr;
+use lha_protocol::ThreadId;
+use lha_protocol::protocol::CodexErrorInfo;
+use lha_protocol::protocol::ErrorEvent;
 use reqwest::StatusCode;
 use serde_json;
 use std::io;
@@ -68,7 +68,7 @@ pub enum CodexErr {
     Stream(String, Option<Duration>),
 
     #[error(
-        "Adam ran out of room in the model's context window. Start a new thread or clear earlier history before retrying."
+        "LHA ran out of room in the model's context window. Start a new thread or clear earlier history before retrying."
     )]
     ContextWindowExceeded,
 
@@ -143,7 +143,7 @@ pub enum CodexErr {
     #[error("sandbox error: {0}")]
     Sandbox(#[from] SandboxErr),
 
-    #[error("adam-linux-sandbox was required but not provided")]
+    #[error("lha-linux-sandbox was required but not provided")]
     LandlockSandboxExecutableNotProvided,
 
     #[error("unsupported operation: {0}")]

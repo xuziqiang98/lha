@@ -19,7 +19,7 @@ impl CodexAuth {
     }
 
     pub fn from_auth_storage(
-        _adam_home: &std::path::Path,
+        _lha_home: &std::path::Path,
         _auth_credentials_store_mode: AuthCredentialsStoreMode,
     ) -> std::io::Result<Option<Self>> {
         Ok(Some(Self::from_api_key("test")))
@@ -42,7 +42,7 @@ pub struct AuthManager {
 
 impl AuthManager {
     pub fn new(
-        _adam_home: PathBuf,
+        _lha_home: PathBuf,
         _prefer_api_key: bool,
         _auth_credentials_store_mode: AuthCredentialsStoreMode,
     ) -> Self {
@@ -51,9 +51,9 @@ impl AuthManager {
         }
     }
 
-    pub fn shared(adam_home: PathBuf, prefer_api_key: bool) -> Arc<Self> {
+    pub fn shared(lha_home: PathBuf, prefer_api_key: bool) -> Arc<Self> {
         Arc::new(Self::new(
-            adam_home,
+            lha_home,
             prefer_api_key,
             AuthCredentialsStoreMode::File,
         ))
@@ -67,7 +67,7 @@ impl AuthManager {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn from_auth_for_testing_with_home(auth: CodexAuth, _adam_home: PathBuf) -> Arc<Self> {
+    pub fn from_auth_for_testing_with_home(auth: CodexAuth, _lha_home: PathBuf) -> Arc<Self> {
         Self::from_auth_for_testing(auth)
     }
 
@@ -85,12 +85,12 @@ impl AuthManager {
 }
 
 pub async fn load_auth(
-    _adam_home: &std::path::Path,
+    _lha_home: &std::path::Path,
     _prefer_api_key: bool,
 ) -> std::io::Result<Option<CodexAuth>> {
     Ok(None)
 }
 
-pub fn logout(_adam_home: &std::path::Path) -> std::io::Result<bool> {
+pub fn logout(_lha_home: &std::path::Path) -> std::io::Result<bool> {
     Ok(false)
 }

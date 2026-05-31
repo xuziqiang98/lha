@@ -1,14 +1,14 @@
-use adam_app_server_protocol::JSONRPCNotification;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::ThreadStartParams;
-use adam_app_server_protocol::ThreadStartResponse;
-use adam_app_server_protocol::ThreadStartedNotification;
-use adam_protocol::openai_models::ReasoningEffort;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
+use lha_app_server_protocol::JSONRPCNotification;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::ThreadStartParams;
+use lha_app_server_protocol::ThreadStartResponse;
+use lha_app_server_protocol::ThreadStartedNotification;
+use lha_protocol::openai_models::ReasoningEffort;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -20,11 +20,11 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     // Provide a mock server and config so model wiring is valid.
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
     // Start server and initialize.
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Start a v2 thread with an explicit model override.
@@ -74,10 +74,10 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
 async fn thread_start_respects_request_reasoning_effort() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -91,10 +91,10 @@ async fn thread_start_respects_request_reasoning_effort() -> Result<()> {
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
 
     let req_id = mcp
-        .send_turn_start_request(adam_app_server_protocol::TurnStartParams {
+        .send_turn_start_request(lha_app_server_protocol::TurnStartParams {
             thread_id: thread.id,
             effort: Some(ReasoningEffort::High),
-            input: vec![adam_app_server_protocol::UserInput::Text {
+            input: vec![lha_app_server_protocol::UserInput::Text {
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -107,7 +107,7 @@ async fn thread_start_respects_request_reasoning_effort() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
     )
     .await??;
-    let _: adam_app_server_protocol::TurnStartResponse = to_response(resp)?;
+    let _: lha_app_server_protocol::TurnStartResponse = to_response(resp)?;
 
     timeout(
         DEFAULT_READ_TIMEOUT,
@@ -118,9 +118,9 @@ async fn thread_start_respects_request_reasoning_effort() -> Result<()> {
 }
 
 // Helper to create a config.toml pointing at the mock model server.
-fn create_config_toml(adam_home: &Path, server_uri: &str) -> std::io::Result<()> {
+fn create_config_toml(lha_home: &Path, server_uri: &str) -> std::io::Result<()> {
     app_test_support::write_mock_responses_config_toml_with_options(
-        adam_home,
+        lha_home,
         server_uri,
         &std::collections::BTreeMap::new(),
         20_000,

@@ -1,10 +1,10 @@
 // Aggregates all former standalone integration tests as modules.
-use adam_arg0::arg0_dispatch;
 use ctor::ctor;
+use lha_arg0::arg0_dispatch;
 use tempfile::TempDir;
 
 // This code runs before any other tests are run.
-// It allows the test binary to behave like codex and dispatch to apply_patch and adam-linux-sandbox
+// It allows the test binary to behave like codex and dispatch to apply_patch and lha-linux-sandbox
 // based on the arg0.
 // NOTE: this doesn't work on ARM
 #[ctor]

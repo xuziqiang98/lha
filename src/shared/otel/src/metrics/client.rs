@@ -178,7 +178,7 @@ impl MetricsClientInner {
     }
 }
 
-/// OpenTelemetry metrics client used by Adam.
+/// OpenTelemetry metrics client used by LHA.
 #[derive(Clone, Debug)]
 pub struct MetricsClient(std::sync::Arc<MetricsClientInner>);
 

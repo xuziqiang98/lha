@@ -9,8 +9,8 @@ use tokio::process::Child;
 use tokio::process::ChildStdin;
 use tokio::process::ChildStdout;
 
-use adam_mcp_server::CodexToolCallParam;
 use anyhow::Context;
+use lha_mcp_server::CodexToolCallParam;
 
 use mcp_types::CallToolRequestParams;
 use mcp_types::ClientCapabilities;
@@ -40,8 +40,8 @@ pub struct McpProcess {
 }
 
 impl McpProcess {
-    pub async fn new(adam_home: &Path) -> anyhow::Result<Self> {
-        Self::new_with_env(adam_home, &[]).await
+    pub async fn new(lha_home: &Path) -> anyhow::Result<Self> {
+        Self::new_with_env(lha_home, &[]).await
     }
 
     /// Creates a new MCP process, allowing tests to override or remove
@@ -50,17 +50,17 @@ impl McpProcess {
     /// Pass a tuple of (key, Some(value)) to set/override, or (key, None) to
     /// remove a variable from the child's environment.
     pub async fn new_with_env(
-        adam_home: &Path,
+        lha_home: &Path,
         env_overrides: &[(&str, Option<&str>)],
     ) -> anyhow::Result<Self> {
-        let program = adam_utils_cargo_bin::cargo_bin("adam-mcp-server")
-            .context("should find binary for adam-mcp-server")?;
+        let program = lha_utils_cargo_bin::cargo_bin("lha-mcp-server")
+            .context("should find binary for lha-mcp-server")?;
         let mut cmd = Command::new(program);
 
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
-        cmd.env("ADAM_HOME", adam_home);
+        cmd.env("LHA_HOME", lha_home);
         cmd.env("RUST_LOG", "debug");
 
         for (k, v) in env_overrides {
@@ -77,7 +77,7 @@ impl McpProcess {
         let mut process = cmd
             .kill_on_drop(true)
             .spawn()
-            .context("adam-mcp-server proc should start")?;
+            .context("lha-mcp-server proc should start")?;
         let stdin = process
             .stdin
             .take()
@@ -138,13 +138,13 @@ impl McpProcess {
         let initialized = self.read_jsonrpc_message().await?;
         let os_info = os_info::get();
         let build_version = env!("CARGO_PKG_VERSION");
-        let originator = adam_agent::default_client::originator().value;
+        let originator = lha_agent::default_client::originator().value;
         let user_agent = format!(
             "{originator}/{build_version} ({} {}; {}) {} (elicitation test; 0.0.0)",
             os_info.os_type(),
             os_info.version(),
             os_info.architecture().unwrap_or("unknown"),
-            adam_agent::terminal::user_agent()
+            lha_agent::terminal::user_agent()
         );
         assert_eq!(
             JSONRPCMessage::Response(JSONRPCResponse {
@@ -157,8 +157,8 @@ impl McpProcess {
                         },
                     },
                     "serverInfo": {
-                        "name": "adam-mcp-server",
-                        "title": "Adam",
+                        "name": "lha-mcp-server",
+                        "title": "LHA",
                         "version": build_version,
                         "user_agent": user_agent
                     },
@@ -181,9 +181,9 @@ impl McpProcess {
 
     /// Returns the id used to make the request so it can be used when
     /// correlating notifications.
-    pub async fn send_adam_tool_call(&mut self, params: CodexToolCallParam) -> anyhow::Result<i64> {
+    pub async fn send_lha_tool_call(&mut self, params: CodexToolCallParam) -> anyhow::Result<i64> {
         let codex_tool_call_params = CallToolRequestParams {
-            name: "adam".to_string(),
+            name: "lha".to_string(),
             arguments: Some(serde_json::to_value(params)?),
         };
         self.send_request(
@@ -291,7 +291,7 @@ impl McpProcess {
     }
 
     /// Reads notifications until a legacy TurnComplete event is observed:
-    /// Method "adam/event" with params.msg.type == "task_complete".
+    /// Method "lha/event" with params.msg.type == "task_complete".
     pub async fn read_stream_until_legacy_task_complete_notification(
         &mut self,
     ) -> anyhow::Result<JSONRPCNotification> {
@@ -301,7 +301,7 @@ impl McpProcess {
             let message = self.read_jsonrpc_message().await?;
             match message {
                 JSONRPCMessage::Notification(notification) => {
-                    let is_match = if notification.method == "adam/event" {
+                    let is_match = if notification.method == "lha/event" {
                         if let Some(params) = &notification.params {
                             params
                                 .get("msg")

@@ -4,10 +4,10 @@
 // definitions that do not contain business logic.
 
 use crate::config_loader::RequirementSource;
-pub use adam_protocol::config_types::IdentityKind;
-pub use adam_protocol::config_types::Personality;
-pub use adam_protocol::config_types::WebSearchMode;
-use adam_utils_absolute_path::AbsolutePathBuf;
+pub use lha_protocol::config_types::IdentityKind;
+pub use lha_protocol::config_types::Personality;
+pub use lha_protocol::config_types::WebSearchMode;
+use lha_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
@@ -45,7 +45,7 @@ pub struct McpServerConfig {
     #[serde(flatten)]
     pub transport: McpServerTransportConfig,
 
-    /// When `false`, Adam skips initializing this MCP server.
+    /// When `false`, LHA skips initializing this MCP server.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 
@@ -292,7 +292,7 @@ impl UriBasedFileOpener {
     }
 }
 
-/// Settings that govern if and what will be written to `~/.adam/history.jsonl`.
+/// Settings that govern if and what will be written to `~/.lha/history.jsonl`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct History {
@@ -320,14 +320,14 @@ pub enum HistoryPersistence {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct AnalyticsConfigToml {
-    /// When `false`, disables analytics across Adam product surfaces in this profile.
+    /// When `false`, disables analytics across LHA product surfaces in this profile.
     pub enabled: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct FeedbackConfigToml {
-    /// When `false`, disables the feedback flow across Adam product surfaces.
+    /// When `false`, disables the feedback flow across LHA product surfaces.
     pub enabled: Option<bool>,
 }
 
@@ -450,7 +450,7 @@ impl fmt::Display for NotificationMethod {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Osc52TmuxMode {
-    /// Let Adam choose the tmux OSC52 strategy.
+    /// Let LHA choose the tmux OSC52 strategy.
     #[default]
     Auto,
     /// Send a bare OSC52 sequence and let tmux forward it via `set-clipboard`.
@@ -820,7 +820,7 @@ impl Default for BuddyObserverConfig {
 }
 
 /// Settings for notices we display to users via the tui and app-server clients
-/// (primarily the Adam IDE extension). NOTE: these are different from
+/// (primarily the LHA IDE extension). NOTE: these are different from
 /// notifications - notices are warnings, NUX screens, acknowledgements, etc.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 pub struct Notice {
@@ -870,7 +870,7 @@ pub struct SandboxWorkspaceWrite {
     pub exclude_slash_tmp: bool,
 }
 
-impl From<SandboxWorkspaceWrite> for adam_app_server_protocol::SandboxSettings {
+impl From<SandboxWorkspaceWrite> for lha_app_server_protocol::SandboxSettings {
     fn from(sandbox_workspace_write: SandboxWorkspaceWrite) -> Self {
         Self {
             writable_roots: sandbox_workspace_write.writable_roots,

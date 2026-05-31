@@ -3,11 +3,13 @@
   "additionalProperties": false,
   "definitions": {
     "IdentityKind": {
-      "description": "Built-in Adam identity kind.",
+      "description": "Built-in LHA identity kind.",
       "enum": [
         "nobody",
         "planner",
-        "programmer"
+        "programmer",
+        "explorer",
+        "reviewer"
       ],
       "type": "string"
     },
@@ -60,6 +62,6 @@
       "$ref": "#/definitions/LastSelectedModel"
     }
   },
-  "title": "AdamStateJson",
+  "title": "LHAStateJson",
   "type": "object"
 }

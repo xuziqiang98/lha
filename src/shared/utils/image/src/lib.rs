@@ -3,8 +3,6 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use crate::error::ImageProcessingError;
-use adam_utils_cache::BlockingLruCache;
-use adam_utils_cache::sha1_digest;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use image::ColorType;
@@ -15,6 +13,8 @@ use image::ImageFormat;
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use image::imageops::FilterType;
+use lha_utils_cache::BlockingLruCache;
+use lha_utils_cache::sha1_digest;
 /// Maximum width used when resizing images before uploading.
 pub const MAX_WIDTH: u32 = 2048;
 /// Maximum height used when resizing images before uploading.

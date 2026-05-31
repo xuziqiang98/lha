@@ -2,15 +2,6 @@
 
 use std::sync::Arc;
 
-use adam_agent::CodexAuth;
-use adam_agent::features::Feature;
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::SandboxPolicy;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::openai_models::ModelsResponse;
-use adam_protocol::user_input::UserInput;
 use anyhow::Result;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -22,6 +13,15 @@ use core_test_support::responses::sse_response;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use lha_agent::CodexAuth;
+use lha_agent::features::Feature;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::SandboxPolicy;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::openai_models::ModelsResponse;
+use lha_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 use wiremock::MockServer;
 
@@ -35,7 +35,7 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
 
     let server = MockServer::start().await;
 
-    // 1) On spawn, Adam fetches /models and stores the ETag.
+    // 1) On spawn, LHA fetches /models and stores the ETag.
     let spawn_models_mock = responses::mount_models_once_with_etag(
         &server,
         ModelsResponse { models: Vec::new() },
@@ -62,7 +62,7 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
     assert_eq!(spawn_models_mock.requests().len(), 1);
     assert_eq!(spawn_models_mock.single_request_path(), "/v1/models");
 
-    // 2) If the server sends a different X-Models-Etag on /responses, Adam refreshes /models.
+    // 2) If the server sends a different X-Models-Etag on /responses, LHA refreshes /models.
     let refresh_models_mock = responses::mount_models_once_with_etag(
         &server,
         ModelsResponse { models: Vec::new() },
@@ -83,7 +83,7 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
     )
     .await;
 
-    // Second /responses request (tool output) includes the same X-Models-Etag; Adam should not
+    // Second /responses request (tool output) includes the same X-Models-Etag; LHA should not
     // refetch /models again after it has already refreshed the catalog.
     let completion_response_body = sse(vec![
         ev_response_created("resp-2"),
@@ -125,7 +125,7 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
         .into_iter()
         .next()
         .expect("one request");
-    // Ensure Adam includes client_version on refresh. (This is a stable signal that we're using the /models client.)
+    // Ensure LHA includes client_version on refresh. (This is a stable signal that we're using the /models client.)
     assert!(
         refresh_req
             .url

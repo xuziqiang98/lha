@@ -67,12 +67,12 @@ pub(crate) fn full_required_height(state: &BuddyState) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use adam_agent::config::types::BuddyEye;
-    use adam_agent::config::types::BuddyHat;
-    use adam_agent::config::types::BuddyRarity;
-    use adam_agent::config::types::BuddySpecies;
-    use adam_agent::config::types::TuiBuddy;
-    use adam_protocol::config_types::IdentityKind;
+    use lha_agent::config::types::BuddyEye;
+    use lha_agent::config::types::BuddyHat;
+    use lha_agent::config::types::BuddyRarity;
+    use lha_agent::config::types::BuddySpecies;
+    use lha_agent::config::types::TuiBuddy;
+    use lha_protocol::config_types::IdentityKind;
 
     use super::*;
     use crate::buddy::model::BuddyStats;

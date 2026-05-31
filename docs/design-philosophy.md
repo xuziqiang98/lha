@@ -1,19 +1,19 @@
 # Design Philosophy
 
-Adam's product model is a single main agent. The user works with one Adam, and
+LHA's product model is a single main agent. The user works with one LHA, and
 that main agent owns the task narrative, user interaction, planning, execution,
 approval flow, and final answer.
 
 ## Single-Agent Product Model
 
-Adam should not present model-visible multi-agent collaboration as the core
+LHA should not present model-visible multi-agent collaboration as the core
 experience. The main agent is the only long-lived controller. It decides what
 work is needed, asks the user for input when required, and integrates final
 results into the active thread.
 
 This applies to both UI and runtime design:
 
-- User-facing concepts should describe one Adam working in one thread.
+- User-facing concepts should describe one LHA working in one thread.
 - Runtime APIs should avoid long-lived child-agent sessions.
 - Prompt and tool names should avoid implying a team of persistent agents.
 - Final user-visible results should be folded back through the main agent.
@@ -22,13 +22,13 @@ This applies to both UI and runtime design:
 
 Some tasks benefit from isolated context. Exploration and review can involve
 noisy search paths, large intermediate outputs, or narrow checks that should not
-fill the main thread. Adam supports those cases with bounded one-shot delegated
+fill the main thread. LHA supports those cases with bounded one-shot delegated
 jobs.
 
 Delegated jobs are not conversational agents:
 
 - `explorer` and `reviewer` are identities/job types.
-- A delegated job runs in a separate `adam exec --identity ...` process.
+- A delegated job runs in a separate `lha exec --identity ...` process.
 - The job receives one task, produces one final result, and exits.
 - The main agent consumes only the final artifact or result.
 
@@ -38,7 +38,7 @@ sub-agents, chat sessions, or independent controllers.
 
 ## Context Is An Implementation Detail
 
-Finite context should not define the product model. Adam's target experience is
+Finite context should not define the product model. LHA's target experience is
 bounded context that feels like effectively unbounded working memory. Users
 should not need to manage a swarm of agents to work around context limits.
 
@@ -61,7 +61,7 @@ one result, and one lifetime.
 
 ## Non-Goals
 
-Adam does not support these as part of the delegated job model:
+LHA does not support these as part of the delegated job model:
 
 - Long-lived child agent sessions.
 - Multi-turn chat with child agents.
@@ -69,7 +69,7 @@ Adam does not support these as part of the delegated job model:
 - `resume_agent` for delegated jobs.
 - `fork_context` for delegated jobs.
 - Batch worker-agent contracts.
-- A required `adam exec --json` control protocol for delegated job results.
+- A required `lha exec --json` control protocol for delegated job results.
 
 ## Naming Rules
 

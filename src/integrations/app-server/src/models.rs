@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use adam_agent::ThreadManager;
-use adam_agent::config::Config;
-use adam_app_server_protocol::Model;
-use adam_app_server_protocol::ReasoningEffortOption;
-use adam_llm::CatalogRefreshStrategy;
-use adam_protocol::openai_models::ModelPreset;
-use adam_protocol::openai_models::ReasoningEffortPreset;
+use lha_agent::ThreadManager;
+use lha_agent::config::Config;
+use lha_app_server_protocol::Model;
+use lha_app_server_protocol::ReasoningEffortOption;
+use lha_llm::CatalogRefreshStrategy;
+use lha_protocol::openai_models::ModelPreset;
+use lha_protocol::openai_models::ReasoningEffortPreset;
 
 pub async fn supported_models(thread_manager: Arc<ThreadManager>, config: &Config) -> Vec<Model> {
     thread_manager

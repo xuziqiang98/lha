@@ -1,12 +1,3 @@
-use adam_agent::features::Feature;
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::ExecCommandBeginEvent;
-use adam_agent::protocol::ExecCommandEndEvent;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::SandboxPolicy;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::user_input::UserInput;
 use anyhow::Result;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -18,6 +9,15 @@ use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use lha_agent::features::Feature;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::ExecCommandBeginEvent;
+use lha_agent::protocol::ExecCommandEndEvent;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::SandboxPolicy;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::Path;
@@ -33,11 +33,11 @@ struct SnapshotRun {
     end: ExecCommandEndEvent,
     snapshot_path: PathBuf,
     snapshot_content: String,
-    adam_home: PathBuf,
+    lha_home: PathBuf,
 }
 
-async fn wait_for_snapshot(adam_home: &Path) -> Result<PathBuf> {
-    let snapshot_dir = adam_home.join("shell_snapshots");
+async fn wait_for_snapshot(lha_home: &Path) -> Result<PathBuf> {
+    let snapshot_dir = lha_home.join("shell_snapshots");
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if let Ok(mut entries) = fs::read_dir(&snapshot_dir).await
@@ -83,7 +83,7 @@ async fn run_snapshot_command(command: &str) -> Result<SnapshotRun> {
 
     let test = harness.test();
     let codex = test.codex.clone();
-    let adam_home = test.home.path().to_path_buf();
+    let lha_home = test.home.path().to_path_buf();
     let session_model = test.session_configured.model.clone();
     let cwd = test.cwd_path().to_path_buf();
 
@@ -111,7 +111,7 @@ async fn run_snapshot_command(command: &str) -> Result<SnapshotRun> {
         _ => None,
     })
     .await;
-    let snapshot_path = wait_for_snapshot(&adam_home).await?;
+    let snapshot_path = wait_for_snapshot(&lha_home).await?;
     let snapshot_content = fs::read_to_string(&snapshot_path).await?;
 
     let end = wait_for_event_match(&codex, |ev| match ev {
@@ -127,7 +127,7 @@ async fn run_snapshot_command(command: &str) -> Result<SnapshotRun> {
         end,
         snapshot_path,
         snapshot_content,
-        adam_home,
+        lha_home,
     })
 }
 
@@ -158,7 +158,7 @@ async fn run_shell_command_snapshot(command: &str) -> Result<SnapshotRun> {
 
     let test = harness.test();
     let codex = test.codex.clone();
-    let adam_home = test.home.path().to_path_buf();
+    let lha_home = test.home.path().to_path_buf();
     let session_model = test.session_configured.model.clone();
     let cwd = test.cwd_path().to_path_buf();
 
@@ -186,7 +186,7 @@ async fn run_shell_command_snapshot(command: &str) -> Result<SnapshotRun> {
         _ => None,
     })
     .await;
-    let snapshot_path = wait_for_snapshot(&adam_home).await?;
+    let snapshot_path = wait_for_snapshot(&lha_home).await?;
     let snapshot_content = fs::read_to_string(&snapshot_path).await?;
 
     let end = wait_for_event_match(&codex, |ev| match ev {
@@ -202,7 +202,7 @@ async fn run_shell_command_snapshot(command: &str) -> Result<SnapshotRun> {
         end,
         snapshot_path,
         snapshot_content,
-        adam_home,
+        lha_home,
     })
 }
 
@@ -231,7 +231,7 @@ async fn linux_unified_exec_uses_shell_snapshot() -> Result<()> {
     assert_eq!(run.begin.command.get(1).map(String::as_str), Some("-lc"));
     assert_eq!(run.begin.command.get(2).map(String::as_str), Some(command));
     assert_eq!(run.begin.command.len(), 3);
-    assert!(run.snapshot_path.starts_with(&run.adam_home));
+    assert!(run.snapshot_path.starts_with(&run.lha_home));
     assert_posix_snapshot_sections(&run.snapshot_content);
     assert_eq!(run.end.exit_code, 0);
     assert!(
@@ -253,7 +253,7 @@ async fn linux_shell_command_uses_shell_snapshot() -> Result<()> {
     assert_eq!(run.begin.command.get(1).map(String::as_str), Some("-lc"));
     assert_eq!(run.begin.command.get(2).map(String::as_str), Some(command));
     assert_eq!(run.begin.command.len(), 3);
-    assert!(run.snapshot_path.starts_with(&run.adam_home));
+    assert!(run.snapshot_path.starts_with(&run.lha_home));
     assert_posix_snapshot_sections(&run.snapshot_content);
     assert_eq!(
         normalize_newlines(&run.end.stdout).trim(),
@@ -278,7 +278,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
     let test = harness.test();
     let codex = test.codex.clone();
     let cwd = test.cwd_path().to_path_buf();
-    let adam_home = test.home.path().to_path_buf();
+    let lha_home = test.home.path().to_path_buf();
     let target = cwd.join("snapshot-apply.txt");
 
     let script = "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: snapshot-apply.txt\n+hello from snapshot\n*** End Patch\nEOF\n";
@@ -321,7 +321,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
         })
         .await?;
 
-    let snapshot_path = wait_for_snapshot(&adam_home).await?;
+    let snapshot_path = wait_for_snapshot(&lha_home).await?;
     let snapshot_content = fs::read_to_string(&snapshot_path).await?;
     assert_posix_snapshot_sections(&snapshot_content);
 
@@ -342,10 +342,10 @@ async fn shell_snapshot_deleted_after_shutdown_with_skills() -> Result<()> {
     });
     let harness = TestCodexHarness::with_builder(builder).await?;
     let home = harness.test().home.clone();
-    let adam_home = home.path().to_path_buf();
+    let lha_home = home.path().to_path_buf();
     let codex = harness.test().codex.clone();
 
-    let snapshot_path = wait_for_snapshot(&adam_home).await?;
+    let snapshot_path = wait_for_snapshot(&lha_home).await?;
     assert!(snapshot_path.exists());
 
     codex.submit(Op::Shutdown {}).await?;
@@ -389,7 +389,7 @@ async fn macos_unified_exec_uses_shell_snapshot() -> Result<()> {
     assert_eq!(run.begin.command.get(5).map(String::as_str), Some("-c"));
     assert_eq!(run.begin.command.last(), Some(&command.to_string()));
 
-    assert!(run.snapshot_path.starts_with(&run.adam_home));
+    assert!(run.snapshot_path.starts_with(&run.lha_home));
     assert_posix_snapshot_sections(&run.snapshot_content);
     assert_eq!(normalize_newlines(&run.end.stdout).trim(), "snapshot-macos");
     assert_eq!(run.end.exit_code, 0);
@@ -420,7 +420,7 @@ async fn windows_unified_exec_uses_shell_snapshot() -> Result<()> {
     assert!(snapshot_index > 0);
     assert_eq!(run.begin.command.last(), Some(&command.to_string()));
 
-    assert!(run.snapshot_path.starts_with(&run.adam_home));
+    assert!(run.snapshot_path.starts_with(&run.lha_home));
     assert!(run.snapshot_content.contains("# Snapshot file"));
     assert!(run.snapshot_content.contains("# aliases "));
     assert!(run.snapshot_content.contains("# exports "));

@@ -1,30 +1,30 @@
-use adam_agent::CodexThread;
-use adam_agent::ContentItem;
-use adam_agent::REVIEW_PROMPT;
-use adam_agent::config::Config;
-use adam_agent::config::Constrained;
-use adam_agent::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::ExitedReviewModeEvent;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::ReviewCodeLocation;
-use adam_agent::protocol::ReviewFinding;
-use adam_agent::protocol::ReviewLineRange;
-use adam_agent::protocol::ReviewOutputEvent;
-use adam_agent::protocol::ReviewRequest;
-use adam_agent::protocol::ReviewTarget;
-use adam_agent::protocol::RolloutItem;
-use adam_agent::protocol::RolloutLine;
-use adam_agent::protocol::SandboxPolicy;
-use adam_agent::review_format::render_review_output_text;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::user_input::UserInput;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use lha_agent::CodexThread;
+use lha_agent::ContentItem;
+use lha_agent::REVIEW_PROMPT;
+use lha_agent::config::Config;
+use lha_agent::config::Constrained;
+use lha_agent::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::ExitedReviewModeEvent;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::ReviewCodeLocation;
+use lha_agent::protocol::ReviewFinding;
+use lha_agent::protocol::ReviewLineRange;
+use lha_agent::protocol::ReviewOutputEvent;
+use lha_agent::protocol::ReviewRequest;
+use lha_agent::protocol::ReviewTarget;
+use lha_agent::protocol::RolloutItem;
+use lha_agent::protocol::RolloutLine;
+use lha_agent::protocol::SandboxPolicy;
+use lha_agent::review_format::render_review_output_text;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 #[cfg(unix)]
 use std::ffi::OsString;
@@ -68,7 +68,7 @@ impl Drop for EnvVarGuard {
 fn write_fake_reviewer_exec(dir: &TempDir, review_output: &ReviewOutputEvent) -> PathBuf {
     use std::os::unix::fs::PermissionsExt as _;
 
-    let script = dir.path().join("adam-exec-fake");
+    let script = dir.path().join("lha-exec-fake");
     let args_log = dir.path().join("args.log");
     let env_log = dir.path().join("env.log");
     let review_json = serde_json::to_string(review_output)
@@ -79,8 +79,8 @@ out=""
 raw_events=0
 : > "{args_log}"
 {{
-  printf "SANDBOX_POLICY=%s\n" "$ADAM_AGENT_JOB_SANDBOX_POLICY"
-  printf "WINDOWS_SANDBOX_LEVEL=%s\n" "$ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL"
+  printf "SANDBOX_POLICY=%s\n" "$LHA_AGENT_JOB_SANDBOX_POLICY"
+  printf "WINDOWS_SANDBOX_LEVEL=%s\n" "$LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL"
 }} > "{env_log}"
 while [ "$#" -gt 0 ]; do
   printf "%s\n" "$1" >> "{args_log}"
@@ -119,7 +119,7 @@ printf '%s' '{review_json}' > "$out"
 /// in that order when the model returns a structured review JSON payload.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn review_op_emits_lifecycle_and_review_output() {
-    // Skip under Adam sandbox network restrictions.
+    // Skip under LHA sandbox network restrictions.
     skip_if_no_network!();
 
     // Start mock Responses API server. Return a single assistant message whose
@@ -152,8 +152,8 @@ async fn review_op_emits_lifecycle_and_review_output() {
     let review_json_escaped = serde_json::to_string(&review_json).unwrap();
     let sse_raw = sse_template.replace("__REVIEW__", &review_json_escaped);
     let (server, _request_log) = start_responses_server_with_sse(&sse_raw, 1).await;
-    let adam_home = Arc::new(TempDir::new().unwrap());
-    let codex = new_conversation_for_server(&server, adam_home.clone(), |_| {}).await;
+    let lha_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, lha_home.clone(), |_| {}).await;
 
     // Submit review request.
     codex
@@ -255,7 +255,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
         "assistant review output contains user_action markup"
     );
 
-    let _adam_home_guard = adam_home;
+    let _lha_home_guard = lha_home;
     server.verify().await;
 }
 
@@ -280,11 +280,11 @@ async fn review_op_uses_cli_backed_reviewer_job() {
     };
     let fake_exec_dir = TempDir::new().expect("fake exec tempdir");
     let fake_exec = write_fake_reviewer_exec(&fake_exec_dir, &expected);
-    let _exec_guard = EnvVarGuard::set("ADAM_AGENT_EXEC_BIN", fake_exec.as_os_str());
+    let _exec_guard = EnvVarGuard::set("LHA_AGENT_EXEC_BIN", fake_exec.as_os_str());
 
     let server = MockServer::start().await;
-    let adam_home = Arc::new(TempDir::new().unwrap());
-    let codex = new_conversation_for_server(&server, adam_home.clone(), |config| {
+    let lha_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, lha_home.clone(), |config| {
         config.sandbox_policy = Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
             network_access: false,
@@ -367,7 +367,7 @@ async fn review_op_uses_cli_backed_reviewer_job() {
     );
 
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-    let _adam_home_guard = adam_home;
+    let _lha_home_guard = lha_home;
 }
 
 /// When the model returns plain text that is not JSON, ensure the child
@@ -387,8 +387,8 @@ async fn review_op_with_plain_text_emits_review_fallback() {
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
     let (server, _request_log) = start_responses_server_with_sse(sse_raw, 1).await;
-    let adam_home = Arc::new(TempDir::new().unwrap());
-    let codex = new_conversation_for_server(&server, adam_home.clone(), |_| {}).await;
+    let lha_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, lha_home.clone(), |_| {}).await;
 
     codex
         .submit(Op::Review {
@@ -419,7 +419,7 @@ async fn review_op_with_plain_text_emits_review_fallback() {
     assert_eq!(expected, review);
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let _adam_home_guard = adam_home;
+    let _lha_home_guard = lha_home;
     server.verify().await;
 }
 
@@ -448,8 +448,8 @@ async fn review_filters_agent_message_related_events() {
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
     let (server, _request_log) = start_responses_server_with_sse(sse_raw, 1).await;
-    let adam_home = Arc::new(TempDir::new().unwrap());
-    let codex = new_conversation_for_server(&server, adam_home.clone(), |_| {}).await;
+    let lha_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, lha_home.clone(), |_| {}).await;
 
     codex
         .submit(Op::Review {
@@ -489,7 +489,7 @@ async fn review_filters_agent_message_related_events() {
     .await;
     assert!(saw_entered && saw_exited, "missing review lifecycle events");
 
-    let _adam_home_guard = adam_home;
+    let _lha_home_guard = lha_home;
     server.verify().await;
 }
 
@@ -530,8 +530,8 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
     let review_json_escaped = serde_json::to_string(&review_json).unwrap();
     let sse_raw = sse_template.replace("__REVIEW__", &review_json_escaped);
     let (server, _request_log) = start_responses_server_with_sse(&sse_raw, 1).await;
-    let adam_home = Arc::new(TempDir::new().unwrap());
-    let codex = new_conversation_for_server(&server, adam_home.clone(), |_| {}).await;
+    let lha_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, lha_home.clone(), |_| {}).await;
 
     codex
         .submit(Op::Review {
@@ -570,7 +570,7 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
     assert_eq!(1, agent_messages, "expected exactly one AgentMessage event");
     assert!(saw_entered && saw_exited, "missing review lifecycle events");
 
-    let _adam_home_guard = adam_home;
+    let _lha_home_guard = lha_home;
     server.verify().await;
 }
 
@@ -585,9 +585,9 @@ async fn review_uses_custom_review_model_from_config() {
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
     let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
-    let adam_home = Arc::new(TempDir::new().unwrap());
+    let lha_home = Arc::new(TempDir::new().unwrap());
     // Choose a review model different from the main model; ensure it is used.
-    let codex = new_conversation_for_server(&server, adam_home.clone(), |cfg| {
+    let codex = new_conversation_for_server(&server, lha_home.clone(), |cfg| {
         cfg.model = Some("gpt-4.1".to_string());
         cfg.review_model = Some("gpt-5.1".to_string());
     })
@@ -624,7 +624,7 @@ async fn review_uses_custom_review_model_from_config() {
     let body = request.body_json();
     assert_eq!(body["model"].as_str().unwrap(), "gpt-5.1");
 
-    let _adam_home_guard = adam_home;
+    let _lha_home_guard = lha_home;
     server.verify().await;
 }
 
@@ -639,8 +639,8 @@ async fn review_uses_session_model_when_review_model_unset() {
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
     let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
-    let adam_home = Arc::new(TempDir::new().unwrap());
-    let codex = new_conversation_for_server(&server, adam_home.clone(), |cfg| {
+    let lha_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, lha_home.clone(), |cfg| {
         cfg.model = Some("gpt-4.1".to_string());
         cfg.review_model = None;
     })
@@ -675,7 +675,7 @@ async fn review_uses_session_model_when_review_model_unset() {
     let body = request.body_json();
     assert_eq!(body["model"].as_str().unwrap(), "gpt-4.1");
 
-    let _adam_home_guard = adam_home;
+    let _lha_home_guard = lha_home;
     server.verify().await;
 }
 
@@ -695,9 +695,9 @@ async fn review_input_isolated_from_parent_history() {
     let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
 
     // Seed a parent session history via resume file with both user + assistant items.
-    let adam_home = Arc::new(TempDir::new().unwrap());
+    let lha_home = Arc::new(TempDir::new().unwrap());
 
-    let session_file = adam_home.path().join("resume.jsonl");
+    let session_file = lha_home.path().join("resume.jsonl");
     {
         let mut f = tokio::fs::File::create(&session_file).await.unwrap();
         let convo_id = Uuid::new_v4();
@@ -722,7 +722,7 @@ async fn review_input_isolated_from_parent_history() {
         let user = TranscriptItem::Message {
             id: None,
             role: "user".to_string(),
-            content: vec![adam_protocol::models::ContentItem::InputText {
+            content: vec![lha_protocol::models::ContentItem::InputText {
                 text: "parent: earlier user message".to_string(),
             }],
             end_turn: None,
@@ -741,7 +741,7 @@ async fn review_input_isolated_from_parent_history() {
         let assistant = TranscriptItem::Message {
             id: None,
             role: "assistant".to_string(),
-            content: vec![adam_protocol::models::ContentItem::OutputText {
+            content: vec![lha_protocol::models::ContentItem::OutputText {
                 text: "parent: assistant reply".to_string(),
             }],
             end_turn: None,
@@ -757,7 +757,7 @@ async fn review_input_isolated_from_parent_history() {
             .unwrap();
     }
     let codex =
-        resume_conversation_for_server(&server, adam_home.clone(), session_file.clone(), |_| {})
+        resume_conversation_for_server(&server, lha_home.clone(), session_file.clone(), |_| {})
             .await;
 
     // Submit review request; it must start fresh (no parent history in `input`).
@@ -852,7 +852,7 @@ async fn review_input_isolated_from_parent_history() {
         "expected user interruption message in rollout"
     );
 
-    let _adam_home_guard = adam_home;
+    let _lha_home_guard = lha_home;
     server.verify().await;
 }
 
@@ -871,8 +871,8 @@ async fn review_history_surfaces_in_parent_session() {
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
     let (server, request_log) = start_responses_server_with_sse(sse_raw, 2).await;
-    let adam_home = Arc::new(TempDir::new().unwrap());
-    let codex = new_conversation_for_server(&server, adam_home.clone(), |_| {}).await;
+    let lha_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, lha_home.clone(), |_| {}).await;
 
     // 1) Run a review turn that produces an assistant message (isolated in child).
     codex
@@ -951,7 +951,7 @@ async fn review_history_surfaces_in_parent_session() {
         "review assistant output missing from parent turn input"
     );
 
-    let _adam_home_guard = adam_home;
+    let _lha_home_guard = lha_home;
     server.verify().await;
 }
 
@@ -1004,9 +1004,9 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
         .trim()
         .to_string();
 
-    let adam_home = Arc::new(TempDir::new().unwrap());
+    let lha_home = Arc::new(TempDir::new().unwrap());
     let initial_cwd_path = initial_cwd.path().to_path_buf();
-    let codex = new_conversation_for_server(&server, adam_home.clone(), move |config| {
+    let codex = new_conversation_for_server(&server, lha_home.clone(), move |config| {
         config.cwd = initial_cwd_path;
     })
     .await;
@@ -1058,7 +1058,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
         "expected review prompt to include merge-base sha {head_sha}"
     );
 
-    let _adam_home_guard = adam_home;
+    let _lha_home_guard = lha_home;
     server.verify().await;
 }
 
@@ -1078,19 +1078,17 @@ async fn start_responses_server_with_sse(
 #[expect(clippy::expect_used)]
 async fn new_conversation_for_server<F>(
     server: &MockServer,
-    adam_home: Arc<TempDir>,
+    lha_home: Arc<TempDir>,
     mutator: F,
 ) -> Arc<CodexThread>
 where
     F: FnOnce(&mut Config) + Send + 'static,
 {
     let base_url = format!("{}/v1", server.uri());
-    let mut builder = test_codex()
-        .with_home(adam_home)
-        .with_config(move |config| {
-            config.model_provider.base_url = Some(base_url.clone());
-            mutator(config);
-        });
+    let mut builder = test_codex().with_home(lha_home).with_config(move |config| {
+        config.model_provider.base_url = Some(base_url.clone());
+        mutator(config);
+    });
     builder
         .build(server)
         .await
@@ -1102,7 +1100,7 @@ where
 #[expect(clippy::expect_used)]
 async fn resume_conversation_for_server<F>(
     server: &MockServer,
-    adam_home: Arc<TempDir>,
+    lha_home: Arc<TempDir>,
     resume_path: std::path::PathBuf,
     mutator: F,
 ) -> Arc<CodexThread>
@@ -1111,13 +1109,13 @@ where
 {
     let base_url = format!("{}/v1", server.uri());
     let mut builder = test_codex()
-        .with_home(adam_home.clone())
+        .with_home(lha_home.clone())
         .with_config(move |config| {
             config.model_provider.base_url = Some(base_url.clone());
             mutator(config);
         });
     builder
-        .resume(server, adam_home, resume_path)
+        .resume(server, lha_home, resume_path)
         .await
         .expect("resume conversation")
         .codex

@@ -33,16 +33,16 @@ use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
-use adam_agent::protocol::CodexErrorInfo;
-use adam_agent::protocol::ErrorEvent;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_protocol::ThreadId;
-use adam_protocol::user_input::TextElement;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use lha_agent::protocol::CodexErrorInfo;
+use lha_agent::protocol::ErrorEvent;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_protocol::ThreadId;
+use lha_protocol::user_input::TextElement;
 
 /// Aggregates all backtrack-related state used by the App.
 #[derive(Default)]

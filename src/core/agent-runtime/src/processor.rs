@@ -5,15 +5,15 @@ use crate::events::TurnSummary;
 use crate::session::AgentSessionInner;
 use crate::session::SubmissionId;
 use crate::tools::ToolExecutor;
-use adam_agent_core::kernel::TurnEventProcessor;
-use adam_agent_core::kernel::TurnEventUpdate;
-use adam_agent_core::kernel::TurnStreamOutcome;
-use adam_agent_core::kernel::TurnStreamState;
-use adam_llm::ToolResultItem;
-use adam_llm::TranscriptItem;
-use adam_llm::TurnEvent;
-use adam_llm_types::ContentItem;
 use async_trait::async_trait;
+use lha_agent_core::kernel::TurnEventProcessor;
+use lha_agent_core::kernel::TurnEventUpdate;
+use lha_agent_core::kernel::TurnStreamOutcome;
+use lha_agent_core::kernel::TurnStreamState;
+use lha_llm::ToolResultItem;
+use lha_llm::TranscriptItem;
+use lha_llm::TurnEvent;
+use lha_llm_types::ContentItem;
 use serde_json::to_string;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -250,7 +250,7 @@ impl TurnEventProcessor for SessionTurnProcessor {
         Error::Aborted
     }
 
-    fn llm_error(&self, err: adam_llm::Error) -> Self::Error {
+    fn llm_error(&self, err: lha_llm::Error) -> Self::Error {
         Error::Runtime(err)
     }
 

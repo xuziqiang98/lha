@@ -1,5 +1,5 @@
 # sandbox_smoketests.py
-# Run a suite of smoke tests against the Windows sandbox via the Adam CLI
+# Run a suite of smoke tests against the Windows sandbox via the LHA CLI
 # Requires: Python 3.8+ on Windows. No pip requirements.
 
 import os
@@ -10,10 +10,10 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 def _resolve_codex_cmd() -> List[str]:
-    """Resolve the Adam CLI to invoke `codex sandbox windows`.
+    """Resolve the LHA CLI to invoke `codex sandbox windows`.
 
     Prefer local builds (debug first), then fall back to PATH.
-    Returns the argv prefix to run Adam.
+    Returns the argv prefix to run LHA.
     """
     root = Path(__file__).parent
     ws_root = root.parent
@@ -38,10 +38,10 @@ def _resolve_codex_cmd() -> List[str]:
         return ["codex"]
 
     raise FileNotFoundError(
-        "Adam CLI not found. Build it first, e.g.\n"
-        "  cargo build -p adam-cli --release\n"
+        "LHA CLI not found. Build it first, e.g.\n"
+        "  cargo build -p lha-cli --release\n"
         "or for debug:\n"
-        "  cargo build -p adam-cli\n"
+        "  cargo build -p lha-cli\n"
     )
 
 CODEX_CMD = _resolve_codex_cmd()
@@ -381,17 +381,17 @@ def main() -> int:
     rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo hack > .GiT\\config"], WS_ROOT)
     add("WS: protected path case-variation denied", rc != 0 and assert_not_exists(git_variation), f"rc={rc}")
 
-    # 34. WS: policy tamper (.adam artifacts) denied
-    adam_home = Path(os.environ["USERPROFILE"]) / ".adam"
-    cap_sid_target = adam_home / "cap_sid"
+    # 34. WS: policy tamper (.lha artifacts) denied
+    lha_home = Path(os.environ["USERPROFILE"]) / ".lha"
+    cap_sid_target = lha_home / "cap_sid"
     rc, out, err = run_sbx(
         "workspace-write",
         ["cmd", "/c", f"echo tamper > \"{cap_sid_target}\""],
         WS_ROOT,
     )
-    rc2, out2, err2 = run_sbx("workspace-write", ["cmd", "/c", "echo tamper > .adam\\policy.json"], WS_ROOT)
-    add("WS: .adam cap_sid tamper denied", rc != 0, f"rc={rc}, err={err}")
-    add("WS: .adam policy tamper denied", rc2 != 0, f"rc2={rc2}, err={err2}")
+    rc2, out2, err2 = run_sbx("workspace-write", ["cmd", "/c", "echo tamper > .lha\\policy.json"], WS_ROOT)
+    add("WS: .lha cap_sid tamper denied", rc != 0, f"rc={rc}, err={err}")
+    add("WS: .lha policy tamper denied", rc2 != 0, f"rc2={rc2}, err={err2}")
 
     # 35. WS: PATH stub bypass denied (ssh before stubs)
     tools_dir = WS_ROOT / "tools"

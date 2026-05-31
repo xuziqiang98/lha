@@ -4,11 +4,11 @@ use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-use adam_agent::error::CodexErr;
-use adam_agent::error::Result;
-use adam_agent::protocol::SandboxPolicy;
-use adam_agent::protocol::WritableRoot;
-use adam_utils_absolute_path::AbsolutePathBuf;
+use lha_agent::error::CodexErr;
+use lha_agent::error::Result;
+use lha_agent::protocol::SandboxPolicy;
+use lha_agent::protocol::WritableRoot;
+use lha_utils_absolute_path::AbsolutePathBuf;
 
 /// Apply read-only bind mounts for protected subpaths before Landlock.
 ///
@@ -59,7 +59,7 @@ fn collect_read_only_mount_targets(
             // rather than silently skipping protections.
             if !ro_subpath.as_path().exists() {
                 return Err(CodexErr::UnsupportedOperation(format!(
-                    "Sandbox expected to protect {path}, but it does not exist. Ensure the repository contains this path or create it before running Adam.",
+                    "Sandbox expected to protect {path}, but it does not exist. Ensure the repository contains this path or create it before running LHA.",
                     path = ro_subpath.as_path().display()
                 )));
             }
@@ -281,7 +281,7 @@ mod tests {
         assert_eq!(
             message,
             format!(
-                "Sandbox expected to protect {path}, but it does not exist. Ensure the repository contains this path or create it before running Adam.",
+                "Sandbox expected to protect {path}, but it does not exist. Ensure the repository contains this path or create it before running LHA.",
                 path = tempdir.path().join("missing").display()
             )
         );

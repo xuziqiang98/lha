@@ -1,23 +1,23 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use adam_state::LogQuery;
-use adam_state::LogRow;
-use adam_state::STATE_DB_FILENAME;
-use adam_state::StateRuntime;
 use anyhow::Context;
 use chrono::DateTime;
 use clap::Parser;
 use dirs::home_dir;
+use lha_state::LogQuery;
+use lha_state::LogRow;
+use lha_state::STATE_DB_FILENAME;
+use lha_state::StateRuntime;
 use owo_colors::OwoColorize;
 
 #[derive(Debug, Parser)]
 #[command(name = "codex-state-logs")]
-#[command(about = "Tail Adam logs from state.sqlite with simple filters")]
+#[command(about = "Tail LHA logs from state.sqlite with simple filters")]
 struct Args {
-    /// Path to ADAM_HOME. Defaults to $ADAM_HOME or ~/.adam.
-    #[arg(long, env = "ADAM_HOME")]
-    adam_home: Option<PathBuf>,
+    /// Path to LHA_HOME. Defaults to $LHA_HOME or ~/.lha.
+    #[arg(long, env = "LHA_HOME")]
+    lha_home: Option<PathBuf>,
 
     /// Direct path to the SQLite database. Overrides --codex-home.
     #[arg(long)]
@@ -76,11 +76,11 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let db_path = resolve_db_path(&args)?;
     let filter = build_filter(&args)?;
-    let adam_home = db_path
+    let lha_home = db_path
         .parent()
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| PathBuf::from("."));
-    let runtime = StateRuntime::init(adam_home, "logs-client".to_string(), None).await?;
+    let runtime = StateRuntime::init(lha_home, "logs-client".to_string(), None).await?;
 
     let mut last_id = print_backfill(runtime.as_ref(), &filter, args.backfill).await?;
     if last_id == 0 {
@@ -103,15 +103,15 @@ fn resolve_db_path(args: &Args) -> anyhow::Result<PathBuf> {
         return Ok(db.clone());
     }
 
-    let adam_home = args.adam_home.clone().unwrap_or_else(default_adam_home);
-    Ok(adam_home.join(STATE_DB_FILENAME))
+    let lha_home = args.lha_home.clone().unwrap_or_else(default_lha_home);
+    Ok(lha_home.join(STATE_DB_FILENAME))
 }
 
-fn default_adam_home() -> PathBuf {
+fn default_lha_home() -> PathBuf {
     if let Some(home) = home_dir() {
-        return home.join(".adam");
+        return home.join(".lha");
     }
-    PathBuf::from(".adam")
+    PathBuf::from(".lha")
 }
 
 fn build_filter(args: &Args) -> anyhow::Result<LogFilter> {

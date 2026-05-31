@@ -1,12 +1,12 @@
 use crate::input::InputQueue;
 use crate::session::SessionId;
 use crate::session::SubmissionId;
-use adam_llm::ItemHandle;
-use adam_llm::RuntimeNotice;
-use adam_llm::SemanticOutputItem;
-use adam_llm::ToolCallRequest;
-use adam_llm::ToolResultItem;
-use adam_llm::TranscriptItem;
+use lha_llm::ItemHandle;
+use lha_llm::RuntimeNotice;
+use lha_llm::SemanticOutputItem;
+use lha_llm::ToolCallRequest;
+use lha_llm::ToolResultItem;
+use lha_llm::TranscriptItem;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnItemDelta {

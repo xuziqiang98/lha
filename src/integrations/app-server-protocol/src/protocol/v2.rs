@@ -1,37 +1,37 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use adam_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
-use adam_protocol::config_types::Identity;
-use adam_protocol::config_types::IdentityMask;
-use adam_protocol::config_types::Personality;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::config_types::SandboxMode as CoreSandboxMode;
-use adam_protocol::config_types::Verbosity;
-use adam_protocol::config_types::WebSearchMode;
-use adam_protocol::items::AgentMessageContent as CoreAgentMessageContent;
-use adam_protocol::items::TurnItem as CoreTurnItem;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::openai_models::ReasoningEffort;
-use adam_protocol::parse_command::ParsedCommand as CoreParsedCommand;
-use adam_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
-use adam_protocol::plan_tool::StepStatus as CorePlanStepStatus;
-use adam_protocol::protocol::AskForApproval as CoreAskForApproval;
-use adam_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
-use adam_protocol::protocol::NetworkAccess as CoreNetworkAccess;
-use adam_protocol::protocol::SessionSource as CoreSessionSource;
-use adam_protocol::protocol::SkillDependencies as CoreSkillDependencies;
-use adam_protocol::protocol::SkillErrorInfo as CoreSkillErrorInfo;
-use adam_protocol::protocol::SkillInterface as CoreSkillInterface;
-use adam_protocol::protocol::SkillMetadata as CoreSkillMetadata;
-use adam_protocol::protocol::SkillScope as CoreSkillScope;
-use adam_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
-use adam_protocol::protocol::TokenUsage as CoreTokenUsage;
-use adam_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
-use adam_protocol::user_input::ByteRange as CoreByteRange;
-use adam_protocol::user_input::TextElement as CoreTextElement;
-use adam_protocol::user_input::UserInput as CoreUserInput;
-use adam_utils_absolute_path::AbsolutePathBuf;
+use lha_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
+use lha_protocol::config_types::Identity;
+use lha_protocol::config_types::IdentityMask;
+use lha_protocol::config_types::Personality;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::config_types::SandboxMode as CoreSandboxMode;
+use lha_protocol::config_types::Verbosity;
+use lha_protocol::config_types::WebSearchMode;
+use lha_protocol::items::AgentMessageContent as CoreAgentMessageContent;
+use lha_protocol::items::TurnItem as CoreTurnItem;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::openai_models::ReasoningEffort;
+use lha_protocol::parse_command::ParsedCommand as CoreParsedCommand;
+use lha_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
+use lha_protocol::plan_tool::StepStatus as CorePlanStepStatus;
+use lha_protocol::protocol::AskForApproval as CoreAskForApproval;
+use lha_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
+use lha_protocol::protocol::NetworkAccess as CoreNetworkAccess;
+use lha_protocol::protocol::SessionSource as CoreSessionSource;
+use lha_protocol::protocol::SkillDependencies as CoreSkillDependencies;
+use lha_protocol::protocol::SkillErrorInfo as CoreSkillErrorInfo;
+use lha_protocol::protocol::SkillInterface as CoreSkillInterface;
+use lha_protocol::protocol::SkillMetadata as CoreSkillMetadata;
+use lha_protocol::protocol::SkillScope as CoreSkillScope;
+use lha_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
+use lha_protocol::protocol::TokenUsage as CoreTokenUsage;
+use lha_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
+use lha_protocol::user_input::ByteRange as CoreByteRange;
+use lha_protocol::user_input::TextElement as CoreTextElement;
+use lha_protocol::user_input::UserInput as CoreUserInput;
+use lha_utils_absolute_path::AbsolutePathBuf;
 use mcp_types::ContentBlock as McpContentBlock;
 use mcp_types::Resource as McpResource;
 use mcp_types::ResourceTemplate as McpResourceTemplate;
@@ -211,13 +211,13 @@ impl From<CoreSandboxMode> for SandboxMode {
 }
 
 v2_enum_from_core!(
-    pub enum ReviewDelivery from adam_protocol::protocol::ReviewDelivery {
+    pub enum ReviewDelivery from lha_protocol::protocol::ReviewDelivery {
         Inline
     }
 );
 
 v2_enum_from_core!(
-    pub enum McpAuthStatus from adam_protocol::protocol::McpAuthStatus {
+    pub enum McpAuthStatus from lha_protocol::protocol::McpAuthStatus {
         Unsupported,
         NotLoggedIn,
         BearerToken,
@@ -247,7 +247,7 @@ pub enum ConfigLayerSource {
         file: AbsolutePathBuf,
     },
 
-    /// User config layer from $ADAM_HOME/config.toml. This layer is special
+    /// User config layer from $LHA_HOME/config.toml. This layer is special
     /// in that it is expected to be:
     /// - writable by the user
     /// - generally outside the workspace directory
@@ -259,12 +259,14 @@ pub enum ConfigLayerSource {
         file: AbsolutePathBuf,
     },
 
-    /// Path to a .adam/ folder within a project. There could be multiple of
+    /// Path to a .lha/ folder within a project. There could be multiple of
     /// these between `cwd` and the project/repo root.
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Project {
-        dot_adam_folder: AbsolutePathBuf,
+        #[serde(rename = "dotLHAFolder")]
+        #[ts(rename = "dotLHAFolder")]
+        dot_lha_folder: AbsolutePathBuf,
     },
 
     /// Session-layer overrides supplied via `-c`/`--config`.
@@ -599,14 +601,14 @@ pub enum SandboxPolicy {
 }
 
 impl SandboxPolicy {
-    pub fn to_core(&self) -> adam_protocol::protocol::SandboxPolicy {
+    pub fn to_core(&self) -> lha_protocol::protocol::SandboxPolicy {
         match self {
             SandboxPolicy::DangerFullAccess => {
-                adam_protocol::protocol::SandboxPolicy::DangerFullAccess
+                lha_protocol::protocol::SandboxPolicy::DangerFullAccess
             }
-            SandboxPolicy::ReadOnly => adam_protocol::protocol::SandboxPolicy::ReadOnly,
+            SandboxPolicy::ReadOnly => lha_protocol::protocol::SandboxPolicy::ReadOnly,
             SandboxPolicy::ExternalSandbox { network_access } => {
-                adam_protocol::protocol::SandboxPolicy::ExternalSandbox {
+                lha_protocol::protocol::SandboxPolicy::ExternalSandbox {
                     network_access: match network_access {
                         NetworkAccess::Restricted => CoreNetworkAccess::Restricted,
                         NetworkAccess::Enabled => CoreNetworkAccess::Enabled,
@@ -618,7 +620,7 @@ impl SandboxPolicy {
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
-            } => adam_protocol::protocol::SandboxPolicy::WorkspaceWrite {
+            } => lha_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: writable_roots.clone(),
                 network_access: *network_access,
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
@@ -628,14 +630,14 @@ impl SandboxPolicy {
     }
 }
 
-impl From<adam_protocol::protocol::SandboxPolicy> for SandboxPolicy {
-    fn from(value: adam_protocol::protocol::SandboxPolicy) -> Self {
+impl From<lha_protocol::protocol::SandboxPolicy> for SandboxPolicy {
+    fn from(value: lha_protocol::protocol::SandboxPolicy) -> Self {
         match value {
-            adam_protocol::protocol::SandboxPolicy::DangerFullAccess => {
+            lha_protocol::protocol::SandboxPolicy::DangerFullAccess => {
                 SandboxPolicy::DangerFullAccess
             }
-            adam_protocol::protocol::SandboxPolicy::ReadOnly => SandboxPolicy::ReadOnly,
-            adam_protocol::protocol::SandboxPolicy::ExternalSandbox { network_access } => {
+            lha_protocol::protocol::SandboxPolicy::ReadOnly => SandboxPolicy::ReadOnly,
+            lha_protocol::protocol::SandboxPolicy::ExternalSandbox { network_access } => {
                 SandboxPolicy::ExternalSandbox {
                     network_access: match network_access {
                         CoreNetworkAccess::Restricted => NetworkAccess::Restricted,
@@ -643,7 +645,7 @@ impl From<adam_protocol::protocol::SandboxPolicy> for SandboxPolicy {
                     },
                 }
             }
-            adam_protocol::protocol::SandboxPolicy::WorkspaceWrite {
+            lha_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 network_access,
                 exclude_tmpdir_env_var,
@@ -1005,7 +1007,7 @@ pub struct ThreadStartParams {
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
     /// If true, opt into emitting raw response items on the event stream.
     ///
-    /// This is for internal use only (e.g. Adam Cloud).
+    /// This is for internal use only (e.g. LHA Cloud).
     /// (TODO): Figure out a better way to categorize internal / experimental events & protocols.
     #[serde(default)]
     pub experimental_raw_events: bool,
@@ -1504,7 +1506,7 @@ pub struct Thread {
     pub cwd: PathBuf,
     /// Version of the CLI that created the thread.
     pub cli_version: String,
-    /// Origin of the thread (CLI, VSCode, adam exec, adam app-server, etc.).
+    /// Origin of the thread (CLI, VSCode, lha exec, lha app-server, etc.).
     pub source: SessionSource,
     /// Optional Git metadata captured when the thread was created.
     pub git_info: Option<GitInfo>,
@@ -1961,19 +1963,19 @@ pub enum WebSearchAction {
     Other,
 }
 
-impl From<adam_protocol::models::WebSearchAction> for WebSearchAction {
-    fn from(value: adam_protocol::models::WebSearchAction) -> Self {
+impl From<lha_protocol::models::WebSearchAction> for WebSearchAction {
+    fn from(value: lha_protocol::models::WebSearchAction) -> Self {
         match value {
-            adam_protocol::models::WebSearchAction::Search { query, queries } => {
+            lha_protocol::models::WebSearchAction::Search { query, queries } => {
                 WebSearchAction::Search { query, queries }
             }
-            adam_protocol::models::WebSearchAction::OpenPage { url } => {
+            lha_protocol::models::WebSearchAction::OpenPage { url } => {
                 WebSearchAction::OpenPage { url }
             }
-            adam_protocol::models::WebSearchAction::FindInPage { url, pattern } => {
+            lha_protocol::models::WebSearchAction::FindInPage { url, pattern } => {
                 WebSearchAction::FindInPage { url, pattern }
             }
-            adam_protocol::models::WebSearchAction::Other => WebSearchAction::Other,
+            lha_protocol::models::WebSearchAction::Other => WebSearchAction::Other,
         }
     }
 }
@@ -2506,15 +2508,15 @@ pub struct ConfigWarningNotification {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_protocol::items::AgentMessageContent;
-    use adam_protocol::items::AgentMessageItem;
-    use adam_protocol::items::ReasoningItem;
-    use adam_protocol::items::TurnItem;
-    use adam_protocol::items::UserMessageItem;
-    use adam_protocol::items::WebSearchItem;
-    use adam_protocol::models::WebSearchAction as CoreWebSearchAction;
-    use adam_protocol::protocol::NetworkAccess as CoreNetworkAccess;
-    use adam_protocol::user_input::UserInput as CoreUserInput;
+    use lha_protocol::items::AgentMessageContent;
+    use lha_protocol::items::AgentMessageItem;
+    use lha_protocol::items::ReasoningItem;
+    use lha_protocol::items::TurnItem;
+    use lha_protocol::items::UserMessageItem;
+    use lha_protocol::items::WebSearchItem;
+    use lha_protocol::models::WebSearchAction as CoreWebSearchAction;
+    use lha_protocol::protocol::NetworkAccess as CoreNetworkAccess;
+    use lha_protocol::user_input::UserInput as CoreUserInput;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
@@ -2528,7 +2530,7 @@ mod tests {
         let core_policy = v2_policy.to_core();
         assert_eq!(
             core_policy,
-            adam_protocol::protocol::SandboxPolicy::ExternalSandbox {
+            lha_protocol::protocol::SandboxPolicy::ExternalSandbox {
                 network_access: CoreNetworkAccess::Enabled,
             }
         );
@@ -2570,7 +2572,7 @@ mod tests {
                 },
                 CoreUserInput::Skill {
                     name: "skill-creator".to_string(),
-                    path: PathBuf::from("/repo/.adam/skills/skill-creator/SKILL.md"),
+                    path: PathBuf::from("/repo/.lha/skills/skill-creator/SKILL.md"),
                 },
                 CoreUserInput::Mention {
                     name: "Demo App".to_string(),
@@ -2596,7 +2598,7 @@ mod tests {
                     },
                     UserInput::Skill {
                         name: "skill-creator".to_string(),
-                        path: PathBuf::from("/repo/.adam/skills/skill-creator/SKILL.md"),
+                        path: PathBuf::from("/repo/.lha/skills/skill-creator/SKILL.md"),
                     },
                     UserInput::Mention {
                         name: "Demo App".to_string(),

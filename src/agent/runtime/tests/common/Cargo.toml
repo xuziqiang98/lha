@@ -12,12 +12,12 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 assert_cmd = { workspace = true }
 base64 = { workspace = true }
-adam-agent = { workspace = true, features = ["test-support"] }
-adam-llm = { workspace = true }
-adam-otel = { workspace = true }
-adam-protocol = { workspace = true }
-adam-utils-absolute-path = { workspace = true }
-adam-utils-cargo-bin = { workspace = true }
+lha-agent = { workspace = true, features = ["test-support"] }
+lha-llm = { workspace = true }
+lha-otel = { workspace = true }
+lha-protocol = { workspace = true }
+lha-utils-absolute-path = { workspace = true }
+lha-utils-cargo-bin = { workspace = true }
 futures = { workspace = true }
 notify = { workspace = true }
 regex-lite = { workspace = true }

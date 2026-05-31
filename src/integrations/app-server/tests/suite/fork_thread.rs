@@ -1,16 +1,16 @@
-use adam_agent::protocol::EventMsg;
-use adam_app_server_protocol::ForkConversationParams;
-use adam_app_server_protocol::ForkConversationResponse;
-use adam_app_server_protocol::JSONRPCNotification;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::NewConversationParams; // reused for overrides shape
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::ServerNotification;
-use adam_app_server_protocol::SessionConfiguredNotification;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
 use app_test_support::to_response;
+use lha_agent::protocol::EventMsg;
+use lha_app_server_protocol::ForkConversationParams;
+use lha_app_server_protocol::ForkConversationResponse;
+use lha_app_server_protocol::JSONRPCNotification;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::NewConversationParams; // reused for overrides shape
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::ServerNotification;
+use lha_app_server_protocol::SessionConfiguredNotification;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -20,12 +20,12 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_conversation_creates_new_rollout() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path())?;
 
     let preview = "Hello A";
     let conversation_id = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-02T12-00-00",
         "2025-01-02T12:00:00Z",
         preview,
@@ -33,7 +33,7 @@ async fn fork_conversation_creates_new_rollout() -> Result<()> {
         None,
     )?;
 
-    let original_path = adam_home
+    let original_path = lha_home
         .path()
         .join("sessions")
         .join("2025")
@@ -49,7 +49,7 @@ async fn fork_conversation_creates_new_rollout() -> Result<()> {
     );
     let original_contents = std::fs::read_to_string(&original_path)?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let fork_req_id = mcp
@@ -141,8 +141,8 @@ async fn fork_conversation_creates_new_rollout() -> Result<()> {
     Ok(())
 }
 
-fn create_config_toml(adam_home: &Path) -> std::io::Result<()> {
-    let config_toml = adam_home.join("config.toml");
+fn create_config_toml(lha_home: &Path) -> std::io::Result<()> {
+    let config_toml = lha_home.join("config.toml");
     std::fs::write(config_toml, config_contents())
 }
 

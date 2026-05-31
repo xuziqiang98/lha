@@ -27,8 +27,8 @@ use crate::tools::sandboxing::with_cached_approval;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
-use adam_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
+use lha_protocol::protocol::ReviewDecision;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -192,13 +192,13 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
         let exec_env = attempt
             .env_for(spec)
-            .map_err(|err| ToolError::Adam(err.into()))?;
+            .map_err(|err| ToolError::LHA(err.into()))?;
         self.manager
             .open_session_with_exec_env(&exec_env, req.tty)
             .await
             .map_err(|err| match err {
                 UnifiedExecError::SandboxDenied { output, .. } => {
-                    ToolError::Adam(CodexErr::Sandbox(SandboxErr::Denied {
+                    ToolError::LHA(CodexErr::Sandbox(SandboxErr::Denied {
                         output: Box::new(output),
                     }))
                 }

@@ -4,25 +4,12 @@
 //!
 //! Each test sets up a mocked SSE conversation and drives the conversation through
 //! a specific sequence of operations. After every operation we capture the
-//! request payload that Adam would send to the model and assert that the
+//! request payload that LHA would send to the model and assert that the
 //! model-visible history matches the expected sequence of messages.
 
 use super::compact::COMPACT_WARNING_MESSAGE;
 use super::compact::FIRST_REPLY;
 use super::compact::SUMMARY_TEXT;
-use adam_agent::CodexThread;
-use adam_agent::ThreadManager;
-use adam_agent::compact::SUMMARIZATION_PROMPT;
-use adam_agent::config::Config;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::WarningEvent;
-use adam_agent::spawn::ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use adam_protocol::config_types::Identity;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::config_types::Settings;
-use adam_protocol::user_input::UserInput;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -31,6 +18,19 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use lha_agent::CodexThread;
+use lha_agent::ThreadManager;
+use lha_agent::compact::SUMMARIZATION_PROMPT;
+use lha_agent::config::Config;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::WarningEvent;
+use lha_agent::spawn::LHA_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use lha_protocol::config_types::Identity;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::config_types::Settings;
+use lha_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -41,7 +41,7 @@ use wiremock::MockServer;
 const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
 
 fn network_disabled() -> bool {
-    std::env::var(ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
+    std::env::var(LHA_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
 }
 
 fn body_contains_text(body: &str, text: &str) -> bool {
@@ -911,8 +911,8 @@ async fn compact_resume_and_fork_preserve_persisted_backfilled_plan_context() {
         }],
         final_output_json_schema: None,
         cwd: std::env::current_dir().expect("cwd"),
-        approval_policy: adam_agent::protocol::AskForApproval::Never,
-        sandbox_policy: adam_agent::protocol::SandboxPolicy::DangerFullAccess,
+        approval_policy: lha_agent::protocol::AskForApproval::Never,
+        sandbox_policy: lha_agent::protocol::SandboxPolicy::DangerFullAccess,
         model: "gpt-5.1-codex".to_string(),
         effort: None,
         summary: ReasoningSummary::Auto,
@@ -1240,9 +1240,8 @@ async fn resume_conversation(
     config: &Config,
     path: std::path::PathBuf,
 ) -> Arc<CodexThread> {
-    let auth_manager = adam_agent::AuthManager::from_auth_for_testing(
-        adam_agent::CodexAuth::from_api_key("dummy"),
-    );
+    let auth_manager =
+        lha_agent::AuthManager::from_auth_for_testing(lha_agent::CodexAuth::from_api_key("dummy"));
     manager
         .resume_thread_from_rollout(config.clone(), path, auth_manager)
         .await

@@ -2,22 +2,6 @@
 
 use std::fs;
 
-use adam_agent::CodexAuth;
-use adam_agent::features::Feature;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::ItemCompletedEvent;
-use adam_agent::protocol::ItemStartedEvent;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::RolloutItem;
-use adam_agent::protocol::RolloutLine;
-use adam_protocol::config_types::Identity;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::config_types::Settings;
-use adam_protocol::items::TurnItem;
-use adam_protocol::models::ContentItem;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::user_input::UserInput;
 use anyhow::Result;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once;
@@ -27,6 +11,22 @@ use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use lha_agent::CodexAuth;
+use lha_agent::features::Feature;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::ItemCompletedEvent;
+use lha_agent::protocol::ItemStartedEvent;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::RolloutItem;
+use lha_agent::protocol::RolloutLine;
+use lha_protocol::config_types::Identity;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::config_types::Settings;
+use lha_protocol::items::TurnItem;
+use lha_protocol::models::ContentItem;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 
@@ -467,8 +467,8 @@ async fn remote_compact_backfills_latest_plan_into_replacement_history() -> Resu
             }],
             final_output_json_schema: None,
             cwd: std::env::current_dir()?,
-            approval_policy: adam_agent::protocol::AskForApproval::Never,
-            sandbox_policy: adam_agent::protocol::SandboxPolicy::DangerFullAccess,
+            approval_policy: lha_agent::protocol::AskForApproval::Never,
+            sandbox_policy: lha_agent::protocol::SandboxPolicy::DangerFullAccess,
             model: harness.test().session_configured.model.clone(),
             effort: None,
             summary: ReasoningSummary::Auto,
@@ -538,7 +538,7 @@ async fn remote_compact_backfills_recent_skills_into_replacement_history() -> Re
     .await?;
     let codex = harness.test().codex.clone();
     let skill_path =
-        std::fs::canonicalize(harness.test().adam_home_path().join("skills/demo/SKILL.md"))?;
+        std::fs::canonicalize(harness.test().lha_home_path().join("skills/demo/SKILL.md"))?;
 
     let responses_mock = responses::mount_sse_sequence(
         harness.server(),
@@ -588,8 +588,8 @@ async fn remote_compact_backfills_recent_skills_into_replacement_history() -> Re
             ],
             final_output_json_schema: None,
             cwd: harness.test().cwd_path().to_path_buf(),
-            approval_policy: adam_agent::protocol::AskForApproval::Never,
-            sandbox_policy: adam_agent::protocol::SandboxPolicy::DangerFullAccess,
+            approval_policy: lha_agent::protocol::AskForApproval::Never,
+            sandbox_policy: lha_agent::protocol::SandboxPolicy::DangerFullAccess,
             model: harness.test().session_configured.model.clone(),
             effort: None,
             summary: ReasoningSummary::Auto,

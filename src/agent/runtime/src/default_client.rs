@@ -1,7 +1,7 @@
 use crate::config_loader::ResidencyRequirement;
-use crate::spawn::ADAM_SANDBOX_ENV_VAR;
-use adam_client::CodexHttpClient;
-pub use adam_client::CodexRequestBuilder;
+use crate::spawn::LHA_SANDBOX_ENV_VAR;
+use lha_client::CodexHttpClient;
+pub use lha_client::CodexRequestBuilder;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderValue;
 use std::sync::LazyLock;
@@ -22,11 +22,11 @@ use std::sync::RwLock;
 ///
 /// A space is automatically added between the suffix and the rest of the User-Agent string.
 /// The full user agent string is returned from the mcp initialize response.
-/// Parenthesis will be added by Adam. This should only specify what goes inside of the parenthesis.
+/// Parenthesis will be added by LHA. This should only specify what goes inside of the parenthesis.
 pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
-pub const DEFAULT_ORIGINATOR: &str = "adam_cli_rs";
-pub const ADAM_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "ADAM_INTERNAL_ORIGINATOR_OVERRIDE";
-pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-adam-residency";
+pub const DEFAULT_ORIGINATOR: &str = "lha_cli_rs";
+pub const LHA_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "LHA_INTERNAL_ORIGINATOR_OVERRIDE";
+pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-lha-residency";
 
 #[derive(Debug, Clone)]
 pub struct Originator {
@@ -44,7 +44,7 @@ pub enum SetOriginatorError {
 }
 
 fn get_originator_value(provided: Option<String>) -> Originator {
-    let value = std::env::var(ADAM_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR)
+    let value = std::env::var(LHA_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR)
         .ok()
         .or(provided)
         .unwrap_or(DEFAULT_ORIGINATOR.to_string());
@@ -94,7 +94,7 @@ pub fn originator() -> Originator {
         return originator.clone();
     }
 
-    if std::env::var(ADAM_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR).is_ok() {
+    if std::env::var(LHA_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR).is_ok() {
         let originator = get_originator_value(None);
         if let Ok(mut guard) = ORIGINATOR.write() {
             match guard.as_ref() {
@@ -110,11 +110,11 @@ pub fn originator() -> Originator {
 
 pub fn is_first_party_originator(originator_value: &str) -> bool {
     originator_value == DEFAULT_ORIGINATOR
-        || originator_value == "adam_vscode"
-        || originator_value.starts_with("Adam ")
+        || originator_value == "lha_vscode"
+        || originator_value.starts_with("LHA ")
 }
 
-pub fn get_adam_user_agent() -> String {
+pub fn get_lha_user_agent() -> String {
     let build_version = env!("CARGO_PKG_VERSION");
     let os_info = os_info::get();
     let originator = originator();
@@ -156,17 +156,17 @@ fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
         .collect();
     if !sanitized.is_empty() && HeaderValue::from_str(sanitized.as_str()).is_ok() {
         tracing::warn!(
-            "Sanitized Adam user agent because provided suffix contained invalid header characters"
+            "Sanitized LHA user agent because provided suffix contained invalid header characters"
         );
         sanitized
     } else if HeaderValue::from_str(fallback).is_ok() {
         tracing::warn!(
-            "Falling back to base Adam user agent because provided suffix could not be sanitized"
+            "Falling back to base LHA user agent because provided suffix could not be sanitized"
         );
         fallback.to_string()
     } else {
         tracing::warn!(
-            "Falling back to default Adam originator because base user agent string is invalid"
+            "Falling back to default LHA originator because base user agent string is invalid"
         );
         originator().value
     }
@@ -199,7 +199,7 @@ pub fn build_reqwest_client_with_options(options: ReqwestClientOptions) -> reqwe
         };
         headers.insert(RESIDENCY_HEADER_NAME, value);
     }
-    let ua = get_adam_user_agent();
+    let ua = get_lha_user_agent();
 
     let mut builder = reqwest::Client::builder()
         // Set UA via dedicated helper to avoid header validation pitfalls
@@ -216,7 +216,7 @@ pub fn build_reqwest_client_with_options(options: ReqwestClientOptions) -> reqwe
 }
 
 fn is_sandboxed() -> bool {
-    std::env::var(ADAM_SANDBOX_ENV_VAR).as_deref() == Ok("seatbelt")
+    std::env::var(LHA_SANDBOX_ENV_VAR).as_deref() == Ok("seatbelt")
 }
 
 #[cfg(test)]
@@ -226,8 +226,8 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn test_get_adam_user_agent() {
-        let user_agent = get_adam_user_agent();
+    fn test_get_lha_user_agent() {
+        let user_agent = get_lha_user_agent();
         let originator = originator().value;
         let prefix = format!("{originator}/");
         assert!(user_agent.starts_with(&prefix));
@@ -236,9 +236,9 @@ mod tests {
     #[test]
     fn is_first_party_originator_matches_known_values() {
         assert_eq!(is_first_party_originator(DEFAULT_ORIGINATOR), true);
-        assert_eq!(is_first_party_originator("adam_vscode"), true);
-        assert_eq!(is_first_party_originator("Adam Something Else"), true);
-        assert_eq!(is_first_party_originator("adam_cli"), false);
+        assert_eq!(is_first_party_originator("lha_vscode"), true);
+        assert_eq!(is_first_party_originator("LHA Something Else"), true);
+        assert_eq!(is_first_party_originator("lha_cli"), false);
         assert_eq!(is_first_party_originator("Other"), false);
     }
 
@@ -284,8 +284,8 @@ mod tests {
             .expect("originator header missing");
         assert_eq!(originator_header.to_str().unwrap(), originator().value);
 
-        // User-Agent matches the computed Adam UA for that originator
-        let expected_ua = get_adam_user_agent();
+        // User-Agent matches the computed LHA UA for that originator
+        let expected_ua = get_lha_user_agent();
         let ua_header = headers
             .get("user-agent")
             .expect("user-agent header missing");
@@ -314,30 +314,30 @@ mod tests {
 
     #[test]
     fn test_invalid_suffix_is_sanitized() {
-        let prefix = "adam_cli_rs/0.0.0";
+        let prefix = "lha_cli_rs/0.0.0";
         let suffix = "bad\rsuffix";
 
         assert_eq!(
             sanitize_user_agent(format!("{prefix} ({suffix})"), prefix),
-            "adam_cli_rs/0.0.0 (bad_suffix)"
+            "lha_cli_rs/0.0.0 (bad_suffix)"
         );
     }
 
     #[test]
     fn test_invalid_suffix_is_sanitized2() {
-        let prefix = "adam_cli_rs/0.0.0";
+        let prefix = "lha_cli_rs/0.0.0";
         let suffix = "bad\0suffix";
 
         assert_eq!(
             sanitize_user_agent(format!("{prefix} ({suffix})"), prefix),
-            "adam_cli_rs/0.0.0 (bad_suffix)"
+            "lha_cli_rs/0.0.0 (bad_suffix)"
         );
     }
 
     #[test]
     #[cfg(target_os = "macos")]
     fn test_macos() {
-        let user_agent = get_adam_user_agent();
+        let user_agent = get_lha_user_agent();
         let originator = originator().value;
         let prefix = format!("{originator}/");
         assert!(user_agent.starts_with(&prefix));

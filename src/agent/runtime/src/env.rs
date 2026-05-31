@@ -1,22 +1,21 @@
 //! Functions for environment detection that need to be shared across crates.
 
-/// Serialized provider context passed from a parent Adam session to a delegated
-/// `adam exec` job.
-pub const ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR: &str = "ADAM_AGENT_JOB_PROVIDER_CONTEXT";
+/// Serialized provider context passed from a parent LHA session to a delegated
+/// `lha exec` job.
+pub const LHA_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR: &str = "LHA_AGENT_JOB_PROVIDER_CONTEXT";
 
-/// Ephemeral auth token passed from a parent Adam session to a delegated
-/// `adam exec` job. The child consumes and removes this during startup.
-pub const ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR: &str = "ADAM_AGENT_JOB_AUTH_TOKEN";
+/// Ephemeral auth token passed from a parent LHA session to a delegated
+/// `lha exec` job. The child consumes and removes this during startup.
+pub const LHA_AGENT_JOB_AUTH_TOKEN_ENV_VAR: &str = "LHA_AGENT_JOB_AUTH_TOKEN";
 
-/// Serialized sandbox policy passed from a parent Adam session to a delegated
-/// `adam exec` job. The child consumes and removes this during startup.
-pub const ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR: &str = "ADAM_AGENT_JOB_SANDBOX_POLICY";
+/// Serialized sandbox policy passed from a parent LHA session to a delegated
+/// `lha exec` job. The child consumes and removes this during startup.
+pub const LHA_AGENT_JOB_SANDBOX_POLICY_ENV_VAR: &str = "LHA_AGENT_JOB_SANDBOX_POLICY";
 
-/// Serialized Windows sandbox level passed from a parent Adam session to a
-/// delegated `adam exec` job. The child consumes and removes this during
+/// Serialized Windows sandbox level passed from a parent LHA session to a
+/// delegated `lha exec` job. The child consumes and removes this during
 /// startup.
-pub const ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR: &str =
-    "ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL";
+pub const LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR: &str = "LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL";
 
 fn env_var_set(key: &str) -> bool {
     std::env::var(key).is_ok_and(|v| !v.trim().is_empty())
@@ -40,7 +39,7 @@ pub fn is_wsl() -> bool {
     }
 }
 
-/// Returns true when Adam is likely running in an environment without a usable GUI.
+/// Returns true when LHA is likely running in an environment without a usable GUI.
 ///
 /// This is intentionally conservative and is used by frontends to avoid flows that would try to
 /// open a browser (e.g. device-code auth fallback).

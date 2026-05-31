@@ -27,22 +27,22 @@ use crate::rollout::list::get_threads;
 use crate::rollout::list::read_effective_thread_cwd;
 use crate::rollout::list::read_head_for_summary;
 use crate::rollout::rollout_date_parts;
-use adam_protocol::ThreadId;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::models::ContentItem;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::protocol::AskForApproval;
-use adam_protocol::protocol::EventMsg;
-use adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3;
-use adam_protocol::protocol::RolloutItem;
-use adam_protocol::protocol::RolloutLine;
-use adam_protocol::protocol::SandboxPolicy;
-use adam_protocol::protocol::SessionMeta;
-use adam_protocol::protocol::SessionMetaLine;
-use adam_protocol::protocol::SessionSource;
-use adam_protocol::protocol::TurnContextItem;
-use adam_protocol::protocol::UserMessageEvent;
 use anyhow::Result;
+use lha_protocol::ThreadId;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::models::ContentItem;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::protocol::AskForApproval;
+use lha_protocol::protocol::EventMsg;
+use lha_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3;
+use lha_protocol::protocol::RolloutItem;
+use lha_protocol::protocol::RolloutLine;
+use lha_protocol::protocol::SandboxPolicy;
+use lha_protocol::protocol::SessionMeta;
+use lha_protocol::protocol::SessionMetaLine;
+use lha_protocol::protocol::SessionSource;
+use lha_protocol::protocol::TurnContextItem;
+use lha_protocol::protocol::UserMessageEvent;
 
 const NO_SOURCE_FILTER: &[SessionSource] = &[];
 const TEST_PROVIDER: &str = "test-provider";
@@ -391,7 +391,7 @@ async fn load_rollout_items_accepts_v3_schema_version() {
 
     assert!(matches!(
         history,
-        adam_protocol::protocol::InitialHistory::Resumed(_)
+        lha_protocol::protocol::InitialHistory::Resumed(_)
     ));
 }
 
@@ -1196,7 +1196,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 cwd: ".".into(),
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
-                rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+                rollout_schema_version: lha_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
                 source: SessionSource::VSCode,
                 model_provider: Some("test-provider".into()),
                 base_instructions: None,

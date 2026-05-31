@@ -1,5 +1,5 @@
-use adam_agent::protocol::NetworkAccess;
-use adam_agent::protocol::SandboxPolicy;
+use lha_agent::protocol::NetworkAccess;
+use lha_agent::protocol::SandboxPolicy;
 
 pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
     match sandbox_policy {
@@ -46,7 +46,7 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_utils_absolute_path::AbsolutePathBuf;
+    use lha_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
     #[test]

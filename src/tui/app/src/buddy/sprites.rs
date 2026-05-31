@@ -1,6 +1,6 @@
-use adam_agent::config::types::BuddyEye;
-use adam_agent::config::types::BuddyHat;
-use adam_agent::config::types::BuddySpecies;
+use lha_agent::config::types::BuddyEye;
+use lha_agent::config::types::BuddyHat;
+use lha_agent::config::types::BuddySpecies;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 

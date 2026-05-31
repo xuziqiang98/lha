@@ -1,13 +1,3 @@
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::RolloutItem;
-use adam_agent::protocol::RolloutLine;
-use adam_agent::protocol::SandboxPolicy;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::models::ContentItem;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::user_input::UserInput;
 use anyhow::Context;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -21,6 +11,16 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use image::ImageBuffer;
 use image::Rgba;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::RolloutItem;
+use lha_agent::protocol::RolloutLine;
+use lha_agent::protocol::SandboxPolicy;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::models::ContentItem;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::time::Duration;
@@ -149,11 +149,11 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
         role: "user".to_string(),
         content: vec![
             ContentItem::InputText {
-                text: adam_protocol::models::local_image_open_tag_text(1),
+                text: lha_protocol::models::local_image_open_tag_text(1),
             },
             ContentItem::InputImage { image_url },
             ContentItem::InputText {
-                text: adam_protocol::models::image_close_tag_text(),
+                text: lha_protocol::models::image_close_tag_text(),
             },
             ContentItem::InputText {
                 text: "pasted image".to_string(),
@@ -231,11 +231,11 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
         role: "user".to_string(),
         content: vec![
             ContentItem::InputText {
-                text: adam_protocol::models::image_open_tag_text(),
+                text: lha_protocol::models::image_open_tag_text(),
             },
             ContentItem::InputImage { image_url },
             ContentItem::InputText {
-                text: adam_protocol::models::image_close_tag_text(),
+                text: lha_protocol::models::image_close_tag_text(),
             },
             ContentItem::InputText {
                 text: "dropped image".to_string(),

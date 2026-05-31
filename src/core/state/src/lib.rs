@@ -2,7 +2,7 @@
 //!
 //! This crate is intentionally small and focused: it extracts rollout metadata
 //! from JSONL rollouts and mirrors it into a local SQLite database. Backfill
-//! orchestration and rollout scanning live in `adam-agent`.
+//! orchestration and rollout scanning live in `lha-agent`.
 
 mod extract;
 pub mod log_db;
@@ -43,10 +43,10 @@ pub use model::ThreadsPage;
 pub use runtime::STATE_DB_FILENAME;
 
 /// Errors encountered during DB operations. Tags: [stage]
-pub const DB_ERROR_METRIC: &str = "adam.db.error";
+pub const DB_ERROR_METRIC: &str = "lha.db.error";
 /// Metrics on backfill process during first init of the db. Tags: [status]
-pub const DB_METRIC_BACKFILL: &str = "adam.db.backfill";
+pub const DB_METRIC_BACKFILL: &str = "lha.db.backfill";
 /// Metrics on backfill duration during first init of the db. Tags: [status]
-pub const DB_METRIC_BACKFILL_DURATION_MS: &str = "adam.db.backfill.duration_ms";
+pub const DB_METRIC_BACKFILL_DURATION_MS: &str = "lha.db.backfill.duration_ms";
 /// Metrics on errors during comparison between DB and rollout file. Tags: [stage]
-pub const DB_METRIC_COMPARE_ERROR: &str = "adam.db.compare_error";
+pub const DB_METRIC_COMPARE_ERROR: &str = "lha.db.compare_error";

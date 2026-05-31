@@ -1,6 +1,3 @@
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_protocol::user_input::UserInput;
 use anyhow::Result;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -9,6 +6,9 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -68,7 +68,7 @@ async fn quota_exceeded_emits_single_error_event() -> Result<()> {
         }
     }
 
-    assert_eq!(error_events, 1, "expected exactly one Adam:Error event");
+    assert_eq!(error_events, 1, "expected exactly one LHA:Error event");
 
     Ok(())
 }

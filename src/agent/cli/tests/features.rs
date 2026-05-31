@@ -4,23 +4,23 @@ use anyhow::Result;
 use predicates::str::contains;
 use tempfile::TempDir;
 
-fn codex_command(adam_home: &Path) -> Result<assert_cmd::Command> {
-    let mut cmd = assert_cmd::Command::new(adam_utils_cargo_bin::cargo_bin("adam")?);
-    cmd.env("ADAM_HOME", adam_home);
+fn codex_command(lha_home: &Path) -> Result<assert_cmd::Command> {
+    let mut cmd = assert_cmd::Command::new(lha_utils_cargo_bin::cargo_bin("lha")?);
+    cmd.env("LHA_HOME", lha_home);
     Ok(cmd)
 }
 
 #[tokio::test]
 async fn features_enable_writes_feature_flag_to_config() -> Result<()> {
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
 
-    let mut cmd = codex_command(adam_home.path())?;
+    let mut cmd = codex_command(lha_home.path())?;
     cmd.args(["features", "enable", "unified_exec"])
         .assert()
         .success()
         .stdout(contains("Enabled feature `unified_exec` in config.toml."));
 
-    let config = std::fs::read_to_string(adam_home.path().join("config.toml"))?;
+    let config = std::fs::read_to_string(lha_home.path().join("config.toml"))?;
     assert!(config.contains("[features]"));
     assert!(config.contains("unified_exec = true"));
 
@@ -29,15 +29,15 @@ async fn features_enable_writes_feature_flag_to_config() -> Result<()> {
 
 #[tokio::test]
 async fn features_disable_writes_feature_flag_to_config() -> Result<()> {
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
 
-    let mut cmd = codex_command(adam_home.path())?;
+    let mut cmd = codex_command(lha_home.path())?;
     cmd.args(["features", "disable", "shell_tool"])
         .assert()
         .success()
         .stdout(contains("Disabled feature `shell_tool` in config.toml."));
 
-    let config = std::fs::read_to_string(adam_home.path().join("config.toml"))?;
+    let config = std::fs::read_to_string(lha_home.path().join("config.toml"))?;
     assert!(config.contains("[features]"));
     assert!(config.contains("shell_tool = false"));
 
@@ -46,9 +46,9 @@ async fn features_disable_writes_feature_flag_to_config() -> Result<()> {
 
 #[tokio::test]
 async fn features_enable_under_development_feature_prints_warning() -> Result<()> {
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
 
-    let mut cmd = codex_command(adam_home.path())?;
+    let mut cmd = codex_command(lha_home.path())?;
     cmd.args(["features", "enable", "sqlite"])
         .assert()
         .success()

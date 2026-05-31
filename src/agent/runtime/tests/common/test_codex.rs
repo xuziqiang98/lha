@@ -3,20 +3,20 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use adam_agent::CodexAuth;
-use adam_agent::CodexThread;
-use adam_agent::ThreadManager;
-use adam_agent::config::Config;
-use adam_agent::features::Feature;
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::SandboxPolicy;
-use adam_agent::protocol::SessionConfiguredEvent;
-use adam_llm::built_in_runtime_endpoints;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::user_input::UserInput;
 use anyhow::Result;
+use lha_agent::CodexAuth;
+use lha_agent::CodexThread;
+use lha_agent::ThreadManager;
+use lha_agent::config::Config;
+use lha_agent::features::Feature;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::SandboxPolicy;
+use lha_agent::protocol::SessionConfiguredEvent;
+use lha_llm::built_in_runtime_endpoints;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::user_input::UserInput;
 use serde_json::Value;
 use tempfile::TempDir;
 use wiremock::MockServer;
@@ -173,13 +173,13 @@ impl TestCodexBuilder {
             auth.clone(),
             config.model_provider_id.as_str(),
             config.model_provider.clone(),
-            config.adam_home.clone(),
+            config.lha_home.clone(),
         );
         let thread_manager = Arc::new(thread_manager);
 
         let new_conversation = match resume_from {
             Some(path) => {
-                let auth_manager = adam_agent::AuthManager::from_auth_for_testing(auth);
+                let auth_manager = lha_agent::AuthManager::from_auth_for_testing(auth);
                 thread_manager
                     .resume_thread_from_rollout(config.clone(), path, auth_manager)
                     .await?
@@ -214,7 +214,7 @@ impl TestCodexBuilder {
         for hook in self.pre_build_hooks.drain(..) {
             hook(home.path());
         }
-        if let Ok(path) = adam_utils_cargo_bin::cargo_bin("adam") {
+        if let Ok(path) = lha_utils_cargo_bin::cargo_bin("lha") {
             config.codex_linux_sandbox_exe = Some(path);
         }
 
@@ -248,8 +248,8 @@ impl TestCodex {
         self.cwd.path()
     }
 
-    pub fn adam_home_path(&self) -> &Path {
-        self.config.adam_home.as_path()
+    pub fn lha_home_path(&self) -> &Path {
+        self.config.lha_home.as_path()
     }
 
     pub fn workspace_path(&self, rel: impl AsRef<Path>) -> PathBuf {

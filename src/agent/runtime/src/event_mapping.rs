@@ -1,19 +1,19 @@
-use adam_protocol::items::AgentMessageContent;
-use adam_protocol::items::AgentMessageItem;
-use adam_protocol::items::ReasoningItem;
-use adam_protocol::items::TurnItem;
-use adam_protocol::items::UserMessageItem;
-use adam_protocol::items::WebSearchItem;
-use adam_protocol::models::ContentItem;
-use adam_protocol::models::ReasoningItemContent;
-use adam_protocol::models::ReasoningItemReasoningSummary;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::models::WebSearchAction;
-use adam_protocol::models::is_image_close_tag_text;
-use adam_protocol::models::is_image_open_tag_text;
-use adam_protocol::models::is_local_image_close_tag_text;
-use adam_protocol::models::is_local_image_open_tag_text;
-use adam_protocol::user_input::UserInput;
+use lha_protocol::items::AgentMessageContent;
+use lha_protocol::items::AgentMessageItem;
+use lha_protocol::items::ReasoningItem;
+use lha_protocol::items::TurnItem;
+use lha_protocol::items::UserMessageItem;
+use lha_protocol::items::WebSearchItem;
+use lha_protocol::models::ContentItem;
+use lha_protocol::models::ReasoningItemContent;
+use lha_protocol::models::ReasoningItemReasoningSummary;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::models::WebSearchAction;
+use lha_protocol::models::is_image_close_tag_text;
+use lha_protocol::models::is_image_open_tag_text;
+use lha_protocol::models::is_local_image_close_tag_text;
+use lha_protocol::models::is_local_image_open_tag_text;
+use lha_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -152,15 +152,15 @@ where
 #[cfg(test)]
 mod tests {
     use super::parse_turn_item;
-    use adam_protocol::items::AgentMessageContent;
-    use adam_protocol::items::TurnItem;
-    use adam_protocol::items::WebSearchItem;
-    use adam_protocol::models::ContentItem;
-    use adam_protocol::models::ReasoningItemContent;
-    use adam_protocol::models::ReasoningItemReasoningSummary;
-    use adam_protocol::models::TranscriptItem;
-    use adam_protocol::models::WebSearchAction;
-    use adam_protocol::user_input::UserInput;
+    use lha_protocol::items::AgentMessageContent;
+    use lha_protocol::items::TurnItem;
+    use lha_protocol::items::WebSearchItem;
+    use lha_protocol::models::ContentItem;
+    use lha_protocol::models::ReasoningItemContent;
+    use lha_protocol::models::ReasoningItemReasoningSummary;
+    use lha_protocol::models::TranscriptItem;
+    use lha_protocol::models::WebSearchAction;
+    use lha_protocol::user_input::UserInput;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn skips_local_image_label_text() {
         let image_url = "data:image/png;base64,abc".to_string();
-        let label = adam_protocol::models::local_image_open_tag_text(1);
+        let label = lha_protocol::models::local_image_open_tag_text(1);
         let user_text = "Please review this image.".to_string();
 
         let item = TranscriptItem::Message {
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn skips_unnamed_image_label_text() {
         let image_url = "data:image/png;base64,abc".to_string();
-        let label = adam_protocol::models::image_open_tag_text();
+        let label = lha_protocol::models::image_open_tag_text();
         let user_text = "Please review this image.".to_string();
 
         let item = TranscriptItem::Message {
@@ -259,7 +259,7 @@ mod tests {
                     image_url: image_url.clone(),
                 },
                 ContentItem::InputText {
-                    text: adam_protocol::models::image_close_tag_text(),
+                    text: lha_protocol::models::image_close_tag_text(),
                 },
                 ContentItem::InputText {
                     text: user_text.clone(),
@@ -343,7 +343,7 @@ mod tests {
             id: Some("msg-1".to_string()),
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
-                text: "Hello from Adam".to_string(),
+                text: "Hello from LHA".to_string(),
             }],
             end_turn: None,
         };
@@ -355,7 +355,7 @@ mod tests {
                 let Some(AgentMessageContent::Text { text }) = message.content.first() else {
                     panic!("expected agent message text content");
                 };
-                assert_eq!(text, "Hello from Adam");
+                assert_eq!(text, "Hello from LHA");
             }
             other => panic!("expected TurnItem::AgentMessage, got {other:?}"),
         }

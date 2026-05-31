@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use adam_protocol::protocol::SkillScope;
+use lha_protocol::protocol::SkillScope;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillMetadata {

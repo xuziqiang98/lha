@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use adam_agent::config::Config;
-use adam_agent::protocol::Event;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::SessionConfiguredEvent;
+use lha_agent::config::Config;
+use lha_agent::protocol::Event;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::SessionConfiguredEvent;
 use tracing::error;
 
 use crate::event_processor::CodexStatus;

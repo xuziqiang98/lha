@@ -12,9 +12,9 @@ use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
 use crate::sandboxing::SandboxTransformError;
 use crate::state::SessionServices;
-use adam_protocol::approvals::ExecPolicyAmendment;
-use adam_protocol::protocol::AskForApproval;
-use adam_protocol::protocol::ReviewDecision;
+use lha_protocol::approvals::ExecPolicyAmendment;
+use lha_protocol::protocol::AskForApproval;
+use lha_protocol::protocol::ReviewDecision;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -256,7 +256,7 @@ pub(crate) struct ToolCtx<'a> {
 #[derive(Debug)]
 pub(crate) enum ToolError {
     Rejected(String),
-    Adam(CodexErr),
+    LHA(CodexErr),
 }
 
 pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
@@ -274,7 +274,7 @@ pub(crate) struct SandboxAttempt<'a> {
     pub(crate) manager: &'a SandboxManager,
     pub(crate) sandbox_cwd: &'a Path,
     pub codex_linux_sandbox_exe: Option<&'a std::path::PathBuf>,
-    pub windows_sandbox_level: adam_protocol::config_types::WindowsSandboxLevel,
+    pub windows_sandbox_level: lha_protocol::config_types::WindowsSandboxLevel,
 }
 
 impl<'a> SandboxAttempt<'a> {
@@ -296,7 +296,7 @@ impl<'a> SandboxAttempt<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_protocol::protocol::NetworkAccess;
+    use lha_protocol::protocol::NetworkAccess;
     use pretty_assertions::assert_eq;
 
     #[test]

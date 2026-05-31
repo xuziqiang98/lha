@@ -15,8 +15,8 @@ use crate::exec::StreamOutput;
 use crate::exec::is_likely_sandbox_denied;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::formatted_truncate_text;
-use adam_utils_pty::ExecCommandSession;
-use adam_utils_pty::SpawnedPty;
+use lha_utils_pty::ExecCommandSession;
+use lha_utils_pty::SpawnedPty;
 
 use super::UNIFIED_EXEC_OUTPUT_MAX_TOKENS;
 use super::UnifiedExecError;

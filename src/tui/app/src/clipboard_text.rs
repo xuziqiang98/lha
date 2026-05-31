@@ -1,4 +1,4 @@
-use adam_agent::config::types::Osc52TmuxMode;
+use lha_agent::config::types::Osc52TmuxMode;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ClipboardTextConfig {
@@ -116,7 +116,7 @@ fn write_text_to_linux_system_clipboard(text: &str) -> Result<(), String> {
     let text = text.to_string();
     let (tx, rx) = mpsc::sync_channel(1);
     std::thread::Builder::new()
-        .name("adam-clipboard-text".to_string())
+        .name("lha-clipboard-text".to_string())
         .spawn(move || {
             let result = (|| -> Result<arboard::Clipboard, String> {
                 let mut clipboard = arboard::Clipboard::new().map_err(|err| err.to_string())?;

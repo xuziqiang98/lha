@@ -1,11 +1,5 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::SandboxPolicy;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::user_input::UserInput;
 use anyhow::Result;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -16,6 +10,12 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::SandboxPolicy;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::user_input::UserInput;
 use serde_json::json;
 use std::fs;
 
@@ -29,7 +29,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
     }
 
     let mut builder = test_codex().with_config(|config| {
-        let policy_path = config.adam_home.join("rules").join("policy.rules");
+        let policy_path = config.lha_home.join("rules").join("policy.rules");
         fs::create_dir_all(
             policy_path
                 .parent()

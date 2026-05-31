@@ -1,12 +1,12 @@
 #![allow(clippy::unwrap_used)]
 
-use adam_agent::features::Feature;
-use adam_protocol::config_types::WebSearchMode;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
+use lha_agent::features::Feature;
+use lha_protocol::config_types::WebSearchMode;
 
 fn sse_completed(id: &str) -> String {
     load_sse_fixture_with_id("../fixtures/completed_template.json", id)
@@ -52,7 +52,7 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
     let test = builder
         .build(&server)
         .await
-        .expect("create test Adam conversation");
+        .expect("create test LHA conversation");
 
     test.submit_turn("hello tools").await.expect("submit turn");
 

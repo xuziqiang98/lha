@@ -5,6 +5,6 @@ import type { IdentityKind } from "./IdentityKind";
 import type { Settings } from "./Settings";
 
 /**
- * Identity for an Adam session.
+ * Identity for an LHA session.
  */
 export type Identity = { kind: IdentityKind, settings: Settings, };

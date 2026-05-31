@@ -1,14 +1,14 @@
-use adam_protocol::config_types::Verbosity;
-use adam_protocol::openai_models::ApplyPatchToolType;
-use adam_protocol::openai_models::ConfigShellToolType;
-use adam_protocol::openai_models::ModelInfo;
-use adam_protocol::openai_models::ModelInstructionsVariables;
-use adam_protocol::openai_models::ModelMessages;
-use adam_protocol::openai_models::ModelVisibility;
-use adam_protocol::openai_models::ReasoningEffort;
-use adam_protocol::openai_models::ReasoningEffortPreset;
-use adam_protocol::openai_models::TruncationMode;
-use adam_protocol::openai_models::TruncationPolicyConfig;
+use lha_protocol::config_types::Verbosity;
+use lha_protocol::openai_models::ApplyPatchToolType;
+use lha_protocol::openai_models::ConfigShellToolType;
+use lha_protocol::openai_models::ModelInfo;
+use lha_protocol::openai_models::ModelInstructionsVariables;
+use lha_protocol::openai_models::ModelMessages;
+use lha_protocol::openai_models::ModelVisibility;
+use lha_protocol::openai_models::ReasoningEffort;
+use lha_protocol::openai_models::ReasoningEffortPreset;
+use lha_protocol::openai_models::TruncationMode;
+use lha_protocol::openai_models::TruncationPolicyConfig;
 
 use crate::config::Config;
 use crate::features::Feature;
@@ -314,7 +314,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             context_window: Some(CONTEXT_WINDOW_272K),
         )
     } else {
-        warn!("Unknown model {slug} is used. This will degrade the performance of Adam.");
+        warn!("Unknown model {slug} is used. This will degrade the performance of LHA.");
         model_info!(
             slug,
             context_window: None,

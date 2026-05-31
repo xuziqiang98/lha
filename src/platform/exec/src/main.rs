@@ -1,19 +1,19 @@
-//! Entry-point for the `adam-exec` binary.
+//! Entry-point for the `lha-exec` binary.
 //!
-//! When this CLI is invoked normally, it parses the standard `adam-exec` CLI
-//! options and launches the non-interactive Adam agent. However, if it is
-//! invoked with arg0 as `adam-linux-sandbox`, we instead treat the invocation
-//! as a request to run the logic for the standalone `adam-linux-sandbox`
+//! When this CLI is invoked normally, it parses the standard `lha-exec` CLI
+//! options and launches the non-interactive LHA agent. However, if it is
+//! invoked with arg0 as `lha-linux-sandbox`, we instead treat the invocation
+//! as a request to run the logic for the standalone `lha-linux-sandbox`
 //! executable (i.e., parse any -s args and then run a *sandboxed* command under
 //! Landlock + seccomp.
 //!
 //! This allows us to ship a completely separate set of functionality as part
-//! of the `adam-exec` binary.
-use adam_arg0::arg0_dispatch_or_else;
-use adam_common::CliConfigOverrides;
-use adam_exec::Cli;
-use adam_exec::run_main;
+//! of the `lha-exec` binary.
 use clap::Parser;
+use lha_arg0::arg0_dispatch_or_else;
+use lha_common::CliConfigOverrides;
+use lha_exec::Cli;
+use lha_exec::run_main;
 
 #[derive(Parser, Debug)]
 struct TopCli {
@@ -48,7 +48,7 @@ mod tests {
     fn top_cli_parses_resume_prompt_after_config_flag() {
         const PROMPT: &str = "echo resume-with-global-flags-after-subcommand";
         let cli = TopCli::parse_from([
-            "adam-exec",
+            "lha-exec",
             "resume",
             "--last",
             "--json",
@@ -61,7 +61,7 @@ mod tests {
             PROMPT,
         ]);
 
-        let Some(adam_exec::Command::Resume(args)) = cli.inner.command else {
+        let Some(lha_exec::Command::Resume(args)) = cli.inner.command else {
             panic!("expected resume command");
         };
         let effective_prompt = args.prompt.clone().or_else(|| {

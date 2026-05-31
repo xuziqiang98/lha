@@ -2,11 +2,11 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use adam_rmcp_client::ElicitationAction;
-use adam_rmcp_client::ElicitationResponse;
-use adam_rmcp_client::RmcpClient;
-use adam_utils_cargo_bin::CargoBinError;
 use futures::FutureExt as _;
+use lha_rmcp_client::ElicitationAction;
+use lha_rmcp_client::ElicitationResponse;
+use lha_rmcp_client::RmcpClient;
+use lha_utils_cargo_bin::CargoBinError;
 use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
 use mcp_types::InitializeRequestParams;
@@ -21,7 +21,7 @@ use serde_json::json;
 const RESOURCE_URI: &str = "memo://codex/example-note";
 
 fn stdio_server_bin() -> Result<PathBuf, CargoBinError> {
-    adam_utils_cargo_bin::cargo_bin("test_stdio_server")
+    lha_utils_cargo_bin::cargo_bin("test_stdio_server")
 }
 
 fn init_params() -> InitializeRequestParams {
@@ -35,7 +35,7 @@ fn init_params() -> InitializeRequestParams {
         client_info: Implementation {
             name: "codex-test".into(),
             version: "0.0.0-test".into(),
-            title: Some("Adam rmcp resource test".into()),
+            title: Some("LHA rmcp resource test".into()),
             user_agent: None,
         },
         protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_string(),
@@ -103,7 +103,7 @@ async fn rmcp_client_can_list_and_read_resources() -> anyhow::Result<()> {
                 ),
                 mime_type: Some("text/plain".to_string()),
                 name: "codex-memo".to_string(),
-                title: Some("Adam Memo".to_string()),
+                title: Some("LHA Memo".to_string()),
                 uri_template: "memo://codex/{slug}".to_string(),
             }],
         }

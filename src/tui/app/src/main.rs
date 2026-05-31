@@ -1,8 +1,8 @@
-use adam_arg0::arg0_dispatch_or_else;
-use adam_common::CliConfigOverrides;
-use adam_tui::Cli;
-use adam_tui::run_main;
 use clap::Parser;
+use lha_arg0::arg0_dispatch_or_else;
+use lha_common::CliConfigOverrides;
+use lha_tui::Cli;
+use lha_tui::run_main;
 
 #[derive(Parser, Debug)]
 struct TopCli {
@@ -24,7 +24,7 @@ fn main() -> anyhow::Result<()> {
         let exit_info = run_main(inner, codex_linux_sandbox_exe).await?;
         let token_usage = exit_info.token_usage;
         if !token_usage.is_zero() {
-            println!("{}", adam_agent::protocol::FinalOutput::from(token_usage),);
+            println!("{}", lha_agent::protocol::FinalOutput::from(token_usage),);
         }
         Ok(())
     })

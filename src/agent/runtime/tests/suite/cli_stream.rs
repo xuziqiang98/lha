@@ -1,9 +1,9 @@
-use adam_agent::RolloutRecorder;
-use adam_agent::protocol::GitInfo;
-use adam_utils_cargo_bin::find_resource;
 use assert_cmd::Command as AssertCommand;
 use core_test_support::fs_wait;
 use core_test_support::skip_if_no_network;
+use lha_agent::RolloutRecorder;
+use lha_agent::protocol::GitInfo;
+use lha_utils_cargo_bin::find_resource;
 use std::time::Duration;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -15,7 +15,7 @@ use wiremock::matchers::path;
 
 fn repo_root() -> std::path::PathBuf {
     #[expect(clippy::expect_used)]
-    adam_utils_cargo_bin::repo_root().expect("failed to resolve repo root")
+    lha_utils_cargo_bin::repo_root().expect("failed to resolve repo root")
 }
 
 fn cli_responses_fixture() -> std::path::PathBuf {
@@ -56,7 +56,7 @@ async fn chat_mode_stream_cli() {
         "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", dialect = \"chat\" }}",
         server.uri()
     );
-    let bin = adam_utils_cargo_bin::cargo_bin("adam").unwrap();
+    let bin = lha_utils_cargo_bin::cargo_bin("lha").unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
@@ -67,7 +67,7 @@ async fn chat_mode_stream_cli() {
         .arg("-C")
         .arg(&repo_root)
         .arg("hello?");
-    cmd.env("ADAM_HOME", home.path())
+    cmd.env("LHA_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
 
@@ -88,7 +88,7 @@ async fn chat_mode_stream_cli() {
         home.path(),
         10,
         None,
-        adam_agent::ThreadSortKey::UpdatedAt,
+        lha_agent::ThreadSortKey::UpdatedAt,
         &[],
         Some(provider_filter.as_slice()),
         "mock",
@@ -134,7 +134,7 @@ async fn exec_cli_applies_model_instructions_file() {
     let custom_path_str = custom_path.to_string_lossy().replace('\\', "/");
 
     // Build a provider override that points at the mock server and instructs
-    // Adam to use the Responses API with the dummy env var.
+    // LHA to use the Responses API with the dummy env var.
     let provider_override = format!(
         "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", dialect = \"responses\" }}",
         server.uri()
@@ -142,7 +142,7 @@ async fn exec_cli_applies_model_instructions_file() {
 
     let home = TempDir::new().unwrap();
     let repo_root = repo_root();
-    let bin = adam_utils_cargo_bin::cargo_bin("adam").unwrap();
+    let bin = lha_utils_cargo_bin::cargo_bin("lha").unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
@@ -155,7 +155,7 @@ async fn exec_cli_applies_model_instructions_file() {
         .arg("-C")
         .arg(&repo_root)
         .arg("hello?\n");
-    cmd.env("ADAM_HOME", home.path())
+    cmd.env("LHA_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
 
@@ -194,14 +194,14 @@ async fn responses_api_stream_cli() {
     let repo_root = repo_root();
 
     let home = TempDir::new().unwrap();
-    let bin = adam_utils_cargo_bin::cargo_bin("adam").unwrap();
+    let bin = lha_utils_cargo_bin::cargo_bin("lha").unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-C")
         .arg(&repo_root)
         .arg("hello?");
-    cmd.env("ADAM_HOME", home.path())
+    cmd.env("LHA_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", fixture)
         .env("OPENAI_BASE_URL", "http://unused.local");
@@ -230,14 +230,14 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     let repo_root = repo_root();
 
     // 4. Run the codex CLI and invoke `exec`, which is what records a session.
-    let bin = adam_utils_cargo_bin::cargo_bin("adam").unwrap();
+    let bin = lha_utils_cargo_bin::cargo_bin("lha").unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-C")
         .arg(&repo_root)
         .arg(&prompt);
-    cmd.env("ADAM_HOME", home.path())
+    cmd.env("LHA_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
         // Required for CLI arg parsing even though fixture short-circuits network usage.
@@ -246,7 +246,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     let output = cmd.output().unwrap();
     assert!(
         output.status.success(),
-        "adam-cli exec failed: {}",
+        "lha-cli exec failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -351,7 +351,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     // Second run: resume should update the existing file.
     let marker2 = format!("integration-resume-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
-    let bin2 = adam_utils_cargo_bin::cargo_bin("adam").unwrap();
+    let bin2 = lha_utils_cargo_bin::cargo_bin("lha").unwrap();
     let mut cmd2 = AssertCommand::new(bin2);
     cmd2.arg("exec")
         .arg("--skip-git-repo-check")
@@ -360,13 +360,13 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .arg(&prompt2)
         .arg("resume")
         .arg("--last");
-    cmd2.env("ADAM_HOME", home.path())
+    cmd2.env("LHA_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
         .env("OPENAI_BASE_URL", "http://unused.local");
 
     let output2 = cmd2.output().unwrap();
-    assert!(output2.status.success(), "resume adam-cli run failed");
+    assert!(output2.status.success(), "resume lha-cli run failed");
 
     // Find the new session file containing the resumed marker.
     let marker2_clone = marker2.clone();
@@ -478,7 +478,7 @@ async fn integration_git_info_unit_test() {
         .unwrap();
 
     // 3. Test git info collection directly
-    let git_info = adam_agent::git_info::collect_git_info(&git_repo).await;
+    let git_info = lha_agent::git_info::collect_git_info(&git_repo).await;
 
     // 4. Verify git info is present and contains expected data
     assert!(git_info.is_some(), "Git info should be collected");

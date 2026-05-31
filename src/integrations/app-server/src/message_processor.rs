@@ -6,33 +6,33 @@ use crate::codex_message_processor::CodexMessageProcessorArgs;
 use crate::config_api::ConfigApi;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
-use adam_agent::AuthManager;
-use adam_agent::ThreadManager;
-use adam_agent::config::Config;
-use adam_agent::config_loader::CloudRequirementsLoader;
-use adam_agent::config_loader::LoaderOverrides;
-use adam_agent::default_client::SetOriginatorError;
-use adam_agent::default_client::USER_AGENT_SUFFIX;
-use adam_agent::default_client::get_adam_user_agent;
-use adam_agent::default_client::set_default_client_residency_requirement;
-use adam_agent::default_client::set_default_originator;
-use adam_app_server_protocol::ClientInfo;
-use adam_app_server_protocol::ClientRequest;
-use adam_app_server_protocol::ConfigBatchWriteParams;
-use adam_app_server_protocol::ConfigReadParams;
-use adam_app_server_protocol::ConfigValueWriteParams;
-use adam_app_server_protocol::ConfigWarningNotification;
-use adam_app_server_protocol::InitializeResponse;
-use adam_app_server_protocol::JSONRPCError;
-use adam_app_server_protocol::JSONRPCErrorError;
-use adam_app_server_protocol::JSONRPCNotification;
-use adam_app_server_protocol::JSONRPCRequest;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::ServerNotification;
-use adam_feedback::CodexFeedback;
-use adam_protocol::ThreadId;
-use adam_protocol::protocol::SessionSource;
+use lha_agent::AuthManager;
+use lha_agent::ThreadManager;
+use lha_agent::config::Config;
+use lha_agent::config_loader::CloudRequirementsLoader;
+use lha_agent::config_loader::LoaderOverrides;
+use lha_agent::default_client::SetOriginatorError;
+use lha_agent::default_client::USER_AGENT_SUFFIX;
+use lha_agent::default_client::get_lha_user_agent;
+use lha_agent::default_client::set_default_client_residency_requirement;
+use lha_agent::default_client::set_default_originator;
+use lha_app_server_protocol::ClientInfo;
+use lha_app_server_protocol::ClientRequest;
+use lha_app_server_protocol::ConfigBatchWriteParams;
+use lha_app_server_protocol::ConfigReadParams;
+use lha_app_server_protocol::ConfigValueWriteParams;
+use lha_app_server_protocol::ConfigWarningNotification;
+use lha_app_server_protocol::InitializeResponse;
+use lha_app_server_protocol::JSONRPCError;
+use lha_app_server_protocol::JSONRPCErrorError;
+use lha_app_server_protocol::JSONRPCNotification;
+use lha_app_server_protocol::JSONRPCRequest;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::ServerNotification;
+use lha_feedback::CodexFeedback;
+use lha_protocol::ThreadId;
+use lha_protocol::protocol::SessionSource;
 use tokio::sync::broadcast;
 use toml::Value as TomlValue;
 
@@ -71,9 +71,9 @@ impl MessageProcessor {
             config_warnings,
         } = args;
         let outgoing = Arc::new(outgoing);
-        let auth_manager = AuthManager::shared(config.adam_home.clone(), false);
+        let auth_manager = AuthManager::shared(config.lha_home.clone(), false);
         let thread_manager = Arc::new(ThreadManager::new(
-            config.adam_home.clone(),
+            config.lha_home.clone(),
             auth_manager.clone(),
             config.model_provider_id.as_str(),
             config.model_provider.clone(),
@@ -90,7 +90,7 @@ impl MessageProcessor {
             feedback,
         });
         let config_api = ConfigApi::new(
-            config.adam_home.clone(),
+            config.lha_home.clone(),
             cli_overrides,
             loader_overrides,
             cloud_requirements,
@@ -167,7 +167,7 @@ impl MessageProcessor {
                             }
                             SetOriginatorError::AlreadyInitialized => {
                                 // No-op. This is expected to happen if the originator is already set via env var.
-                                // TODO(owen): Once we remove support for ADAM_INTERNAL_ORIGINATOR_OVERRIDE,
+                                // TODO(owen): Once we remove support for LHA_INTERNAL_ORIGINATOR_OVERRIDE,
                                 // this will be an unexpected state and we can return a JSON-RPC error indicating
                                 // internal server error.
                             }
@@ -179,7 +179,7 @@ impl MessageProcessor {
                         *suffix = Some(user_agent_suffix);
                     }
 
-                    let user_agent = get_adam_user_agent();
+                    let user_agent = get_lha_user_agent();
                     let response = InitializeResponse { user_agent };
                     self.outgoing.send_response(request_id, response).await;
 

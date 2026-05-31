@@ -1,14 +1,3 @@
-use adam_agent::ARCHIVED_SESSIONS_SUBDIR;
-use adam_app_server_protocol::GitInfo as ApiGitInfo;
-use adam_app_server_protocol::JSONRPCError;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::SessionSource;
-use adam_app_server_protocol::ThreadListResponse;
-use adam_app_server_protocol::ThreadSortKey;
-use adam_app_server_protocol::ThreadSourceKind;
-use adam_protocol::protocol::GitInfo as CoreGitInfo;
-use adam_protocol::protocol::SessionSource as CoreSessionSource;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
@@ -19,6 +8,17 @@ use app_test_support::rollout_path;
 use app_test_support::to_response;
 use chrono::DateTime;
 use chrono::Utc;
+use lha_agent::ARCHIVED_SESSIONS_SUBDIR;
+use lha_app_server_protocol::GitInfo as ApiGitInfo;
+use lha_app_server_protocol::JSONRPCError;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::SessionSource;
+use lha_app_server_protocol::ThreadListResponse;
+use lha_app_server_protocol::ThreadSortKey;
+use lha_app_server_protocol::ThreadSourceKind;
+use lha_protocol::protocol::GitInfo as CoreGitInfo;
+use lha_protocol::protocol::SessionSource as CoreSessionSource;
 use pretty_assertions::assert_eq;
 use std::cmp::Reverse;
 use std::fs;
@@ -32,8 +32,8 @@ use uuid::Uuid;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-async fn init_mcp(adam_home: &Path) -> Result<McpProcess> {
-    let mut mcp = McpProcess::new(adam_home).await?;
+async fn init_mcp(lha_home: &Path) -> Result<McpProcess> {
+    let mut mcp = McpProcess::new(lha_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     Ok(mcp)
 }
@@ -59,7 +59,7 @@ async fn list_threads_with_sort(
     archived: Option<bool>,
 ) -> Result<ThreadListResponse> {
     let request_id = mcp
-        .send_thread_list_request(adam_app_server_protocol::ThreadListParams {
+        .send_thread_list_request(lha_app_server_protocol::ThreadListParams {
             cursor,
             limit,
             sort_key,
@@ -77,7 +77,7 @@ async fn list_threads_with_sort(
 }
 
 fn create_fake_rollouts<F, G>(
-    adam_home: &Path,
+    lha_home: &Path,
     count: usize,
     provider_for_index: F,
     timestamp_for_index: G,
@@ -91,7 +91,7 @@ where
     for i in 0..count {
         let (ts_file, ts_rfc) = timestamp_for_index(i);
         ids.push(create_fake_rollout(
-            adam_home,
+            lha_home,
             &ts_file,
             &ts_rfc,
             preview,
@@ -128,10 +128,10 @@ fn set_rollout_mtime(path: &Path, updated_at_rfc3339: &str) -> Result<()> {
 
 #[tokio::test]
 async fn thread_list_basic_empty() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_minimal_config(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_minimal_config(lha_home.path())?;
 
-    let mut mcp = init_mcp(adam_home.path()).await?;
+    let mut mcp = init_mcp(lha_home.path()).await?;
 
     let ThreadListResponse { data, next_cursor } = list_threads(
         &mut mcp,
@@ -149,8 +149,8 @@ async fn thread_list_basic_empty() -> Result<()> {
 }
 
 // Minimal config.toml for listing.
-fn create_minimal_config(adam_home: &std::path::Path) -> std::io::Result<()> {
-    let config_toml = adam_home.join("config.toml");
+fn create_minimal_config(lha_home: &std::path::Path) -> std::io::Result<()> {
+    let config_toml = lha_home.join("config.toml");
     std::fs::write(
         config_toml,
         r#"
@@ -161,19 +161,19 @@ approval_policy = "never"
 
 #[tokio::test]
 async fn thread_list_skips_unsupported_rollouts() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_minimal_config(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_minimal_config(lha_home.path())?;
 
     let valid_id = create_fake_rollout_with_schema_version(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-01T12-00-00",
         "2025-01-01T12:00:00Z",
         "valid",
         Some("mock_provider"),
-        Some(adam_protocol::protocol::current_rollout_schema_version()),
+        Some(lha_protocol::protocol::current_rollout_schema_version()),
     )?;
     create_fake_rollout_with_schema_version(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-02T12-00-00",
         "2025-01-02T12:00:00Z",
         "v2",
@@ -181,7 +181,7 @@ async fn thread_list_skips_unsupported_rollouts() -> Result<()> {
         Some(2),
     )?;
     create_fake_rollout_with_schema_version(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-03T12-00-00",
         "2025-01-03T12:00:00Z",
         "missing",
@@ -189,7 +189,7 @@ async fn thread_list_skips_unsupported_rollouts() -> Result<()> {
         None,
     )?;
 
-    let mut mcp = init_mcp(adam_home.path()).await?;
+    let mut mcp = init_mcp(lha_home.path()).await?;
     let ThreadListResponse { data, next_cursor } = list_threads(
         &mut mcp,
         None,
@@ -210,12 +210,12 @@ async fn thread_list_skips_unsupported_rollouts() -> Result<()> {
 
 #[tokio::test]
 async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_minimal_config(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_minimal_config(lha_home.path())?;
 
     // Create three rollouts so we can paginate with limit=2.
     let _a = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-02T12-00-00",
         "2025-01-02T12:00:00Z",
         "Hello",
@@ -223,7 +223,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         None,
     )?;
     let _b = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-01T13-00-00",
         "2025-01-01T13:00:00Z",
         "Hello",
@@ -231,7 +231,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         None,
     )?;
     let _c = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-01T12-00-00",
         "2025-01-01T12:00:00Z",
         "Hello",
@@ -239,7 +239,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         None,
     )?;
 
-    let mut mcp = init_mcp(adam_home.path()).await?;
+    let mut mcp = init_mcp(lha_home.path()).await?;
 
     // Page 1: limit 2 → expect next_cursor Some.
     let ThreadListResponse {
@@ -298,12 +298,12 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
 
 #[tokio::test]
 async fn thread_list_respects_provider_filter() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_minimal_config(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_minimal_config(lha_home.path())?;
 
     // Create rollouts under two providers.
     let _a = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-02T10-00-00",
         "2025-01-02T10:00:00Z",
         "X",
@@ -311,7 +311,7 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
         None,
     )?; // mock_provider
     let _b = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-02T11-00-00",
         "2025-01-02T11:00:00Z",
         "X",
@@ -319,7 +319,7 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
         None,
     )?;
 
-    let mut mcp = init_mcp(adam_home.path()).await?;
+    let mut mcp = init_mcp(lha_home.path()).await?;
 
     // Filter to only other_provider; expect 1 item, nextCursor None.
     let ThreadListResponse { data, next_cursor } = list_threads(
@@ -349,11 +349,11 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
 
 #[tokio::test]
 async fn thread_list_empty_source_kinds_defaults_to_interactive_only() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_minimal_config(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_minimal_config(lha_home.path())?;
 
     let cli_id = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-02-01T10-00-00",
         "2025-02-01T10:00:00Z",
         "CLI",
@@ -361,7 +361,7 @@ async fn thread_list_empty_source_kinds_defaults_to_interactive_only() -> Result
         None,
     )?;
     let exec_id = create_fake_rollout_with_source(
-        adam_home.path(),
+        lha_home.path(),
         "2025-02-01T11-00-00",
         "2025-02-01T11:00:00Z",
         "Exec",
@@ -370,7 +370,7 @@ async fn thread_list_empty_source_kinds_defaults_to_interactive_only() -> Result
         CoreSessionSource::Exec,
     )?;
 
-    let mut mcp = init_mcp(adam_home.path()).await?;
+    let mut mcp = init_mcp(lha_home.path()).await?;
 
     let ThreadListResponse { data, next_cursor } = list_threads(
         &mut mcp,
@@ -393,14 +393,14 @@ async fn thread_list_empty_source_kinds_defaults_to_interactive_only() -> Result
 
 #[tokio::test]
 async fn thread_list_fetches_until_limit_or_exhausted() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_minimal_config(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_minimal_config(lha_home.path())?;
 
     // Newest 16 conversations belong to a different provider; the older 8 are the
     // only ones that match the filter. We request 8 so the server must keep
     // paging past the first two pages to reach the desired count.
     create_fake_rollouts(
-        adam_home.path(),
+        lha_home.path(),
         24,
         |i| {
             if i < 16 {
@@ -413,7 +413,7 @@ async fn thread_list_fetches_until_limit_or_exhausted() -> Result<()> {
         "Hello",
     )?;
 
-    let mut mcp = init_mcp(adam_home.path()).await?;
+    let mut mcp = init_mcp(lha_home.path()).await?;
 
     // Request 8 threads for the target provider; the matches only start on the
     // third page so we rely on pagination to reach the limit.
@@ -446,11 +446,11 @@ async fn thread_list_fetches_until_limit_or_exhausted() -> Result<()> {
 
 #[tokio::test]
 async fn thread_list_enforces_max_limit() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_minimal_config(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_minimal_config(lha_home.path())?;
 
     create_fake_rollouts(
-        adam_home.path(),
+        lha_home.path(),
         105,
         |_| "mock_provider",
         |i| {
@@ -461,7 +461,7 @@ async fn thread_list_enforces_max_limit() -> Result<()> {
         "Hello",
     )?;
 
-    let mut mcp = init_mcp(adam_home.path()).await?;
+    let mut mcp = init_mcp(lha_home.path()).await?;
 
     let ThreadListResponse { data, next_cursor } = list_threads(
         &mut mcp,
@@ -487,13 +487,13 @@ async fn thread_list_enforces_max_limit() -> Result<()> {
 
 #[tokio::test]
 async fn thread_list_stops_when_not_enough_filtered_results_exist() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_minimal_config(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_minimal_config(lha_home.path())?;
 
     // Only the last 7 conversations match the provider filter; we ask for 10 to
     // ensure the server exhausts pagination without looping forever.
     create_fake_rollouts(
-        adam_home.path(),
+        lha_home.path(),
         22,
         |i| {
             if i < 15 {
@@ -506,7 +506,7 @@ async fn thread_list_stops_when_not_enough_filtered_results_exist() -> Result<()
         "Hello",
     )?;
 
-    let mut mcp = init_mcp(adam_home.path()).await?;
+    let mut mcp = init_mcp(lha_home.path()).await?;
 
     // Request more threads than exist after filtering; expect all matches to be
     // returned with nextCursor None.
@@ -539,8 +539,8 @@ async fn thread_list_stops_when_not_enough_filtered_results_exist() -> Result<()
 
 #[tokio::test]
 async fn thread_list_includes_git_info() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_minimal_config(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_minimal_config(lha_home.path())?;
 
     let git_info = CoreGitInfo {
         commit_hash: Some("abc123".to_string()),
@@ -548,7 +548,7 @@ async fn thread_list_includes_git_info() -> Result<()> {
         repository_url: Some("https://example.com/repo.git".to_string()),
     };
     let conversation_id = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-02-01T09-00-00",
         "2025-02-01T09:00:00Z",
         "Git info preview",
@@ -556,7 +556,7 @@ async fn thread_list_includes_git_info() -> Result<()> {
         Some(git_info),
     )?;
 
-    let mut mcp = init_mcp(adam_home.path()).await?;
+    let mut mcp = init_mcp(lha_home.path()).await?;
 
     let ThreadListResponse { data, .. } = list_threads(
         &mut mcp,
@@ -587,11 +587,11 @@ async fn thread_list_includes_git_info() -> Result<()> {
 
 #[tokio::test]
 async fn thread_list_default_sorts_by_created_at() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_minimal_config(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_minimal_config(lha_home.path())?;
 
     let id_a = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-02T12-00-00",
         "2025-01-02T12:00:00Z",
         "Hello",
@@ -599,7 +599,7 @@ async fn thread_list_default_sorts_by_created_at() -> Result<()> {
         None,
     )?;
     let id_b = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-01T13-00-00",
         "2025-01-01T13:00:00Z",
         "Hello",
@@ -607,7 +607,7 @@ async fn thread_list_default_sorts_by_created_at() -> Result<()> {
         None,
     )?;
     let id_c = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-01T12-00-00",
         "2025-01-01T12:00:00Z",
         "Hello",
@@ -615,7 +615,7 @@ async fn thread_list_default_sorts_by_created_at() -> Result<()> {
         None,
     )?;
 
-    let mut mcp = init_mcp(adam_home.path()).await?;
+    let mut mcp = init_mcp(lha_home.path()).await?;
 
     let ThreadListResponse { data, .. } = list_threads_with_sort(
         &mut mcp,
@@ -636,11 +636,11 @@ async fn thread_list_default_sorts_by_created_at() -> Result<()> {
 
 #[tokio::test]
 async fn thread_list_sort_updated_at_orders_by_mtime() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_minimal_config(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_minimal_config(lha_home.path())?;
 
     let id_old = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-01T10-00-00",
         "2025-01-01T10:00:00Z",
         "Hello",
@@ -648,7 +648,7 @@ async fn thread_list_sort_updated_at_orders_by_mtime() -> Result<()> {
         None,
     )?;
     let id_mid = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-01T11-00-00",
         "2025-01-01T11:00:00Z",
         "Hello",
@@ -656,7 +656,7 @@ async fn thread_list_sort_updated_at_orders_by_mtime() -> Result<()> {
         None,
     )?;
     let id_new = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-01-01T12-00-00",
         "2025-01-01T12:00:00Z",
         "Hello",
@@ -665,19 +665,19 @@ async fn thread_list_sort_updated_at_orders_by_mtime() -> Result<()> {
     )?;
 
     set_rollout_mtime(
-        rollout_path(adam_home.path(), "2025-01-01T10-00-00", &id_old).as_path(),
+        rollout_path(lha_home.path(), "2025-01-01T10-00-00", &id_old).as_path(),
         "2025-01-03T00:00:00Z",
     )?;
     set_rollout_mtime(
-        rollout_path(adam_home.path(), "2025-01-01T11-00-00", &id_mid).as_path(),
+        rollout_path(lha_home.path(), "2025-01-01T11-00-00", &id_mid).as_path(),
         "2025-01-02T00:00:00Z",
     )?;
     set_rollout_mtime(
-        rollout_path(adam_home.path(), "2025-01-01T12-00-00", &id_new).as_path(),
+        rollout_path(lha_home.path(), "2025-01-01T12-00-00", &id_new).as_path(),
         "2025-01-01T00:00:00Z",
     )?;
 
-    let mut mcp = init_mcp(adam_home.path()).await?;
+    let mut mcp = init_mcp(lha_home.path()).await?;
 
     let ThreadListResponse { data, .. } = list_threads_with_sort(
         &mut mcp,
@@ -698,11 +698,11 @@ async fn thread_list_sort_updated_at_orders_by_mtime() -> Result<()> {
 
 #[tokio::test]
 async fn thread_list_updated_at_paginates_with_cursor() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_minimal_config(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_minimal_config(lha_home.path())?;
 
     let id_a = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-02-01T10-00-00",
         "2025-02-01T10:00:00Z",
         "Hello",
@@ -710,7 +710,7 @@ async fn thread_list_updated_at_paginates_with_cursor() -> Result<()> {
         None,
     )?;
     let id_b = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-02-01T11-00-00",
         "2025-02-01T11:00:00Z",
         "Hello",
@@ -718,7 +718,7 @@ async fn thread_list_updated_at_paginates_with_cursor() -> Result<()> {
         None,
     )?;
     let id_c = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-02-01T12-00-00",
         "2025-02-01T12:00:00Z",
         "Hello",
@@ -727,19 +727,19 @@ async fn thread_list_updated_at_paginates_with_cursor() -> Result<()> {
     )?;
 
     set_rollout_mtime(
-        rollout_path(adam_home.path(), "2025-02-01T10-00-00", &id_a).as_path(),
+        rollout_path(lha_home.path(), "2025-02-01T10-00-00", &id_a).as_path(),
         "2025-02-03T00:00:00Z",
     )?;
     set_rollout_mtime(
-        rollout_path(adam_home.path(), "2025-02-01T11-00-00", &id_b).as_path(),
+        rollout_path(lha_home.path(), "2025-02-01T11-00-00", &id_b).as_path(),
         "2025-02-02T00:00:00Z",
     )?;
     set_rollout_mtime(
-        rollout_path(adam_home.path(), "2025-02-01T12-00-00", &id_c).as_path(),
+        rollout_path(lha_home.path(), "2025-02-01T12-00-00", &id_c).as_path(),
         "2025-02-01T00:00:00Z",
     )?;
 
-    let mut mcp = init_mcp(adam_home.path()).await?;
+    let mut mcp = init_mcp(lha_home.path()).await?;
 
     let ThreadListResponse {
         data: page1,
@@ -780,11 +780,11 @@ async fn thread_list_updated_at_paginates_with_cursor() -> Result<()> {
 
 #[tokio::test]
 async fn thread_list_created_at_tie_breaks_by_uuid() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_minimal_config(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_minimal_config(lha_home.path())?;
 
     let id_a = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-02-01T10-00-00",
         "2025-02-01T10:00:00Z",
         "Hello",
@@ -792,7 +792,7 @@ async fn thread_list_created_at_tie_breaks_by_uuid() -> Result<()> {
         None,
     )?;
     let id_b = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-02-01T10-00-00",
         "2025-02-01T10:00:00Z",
         "Hello",
@@ -800,7 +800,7 @@ async fn thread_list_created_at_tie_breaks_by_uuid() -> Result<()> {
         None,
     )?;
 
-    let mut mcp = init_mcp(adam_home.path()).await?;
+    let mut mcp = init_mcp(lha_home.path()).await?;
 
     let ThreadListResponse { data, .. } = list_threads(
         &mut mcp,
@@ -823,11 +823,11 @@ async fn thread_list_created_at_tie_breaks_by_uuid() -> Result<()> {
 
 #[tokio::test]
 async fn thread_list_updated_at_tie_breaks_by_uuid() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_minimal_config(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_minimal_config(lha_home.path())?;
 
     let id_a = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-02-01T10-00-00",
         "2025-02-01T10:00:00Z",
         "Hello",
@@ -835,7 +835,7 @@ async fn thread_list_updated_at_tie_breaks_by_uuid() -> Result<()> {
         None,
     )?;
     let id_b = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-02-01T11-00-00",
         "2025-02-01T11:00:00Z",
         "Hello",
@@ -845,15 +845,15 @@ async fn thread_list_updated_at_tie_breaks_by_uuid() -> Result<()> {
 
     let updated_at = "2025-02-03T00:00:00Z";
     set_rollout_mtime(
-        rollout_path(adam_home.path(), "2025-02-01T10-00-00", &id_a).as_path(),
+        rollout_path(lha_home.path(), "2025-02-01T10-00-00", &id_a).as_path(),
         updated_at,
     )?;
     set_rollout_mtime(
-        rollout_path(adam_home.path(), "2025-02-01T11-00-00", &id_b).as_path(),
+        rollout_path(lha_home.path(), "2025-02-01T11-00-00", &id_b).as_path(),
         updated_at,
     )?;
 
-    let mut mcp = init_mcp(adam_home.path()).await?;
+    let mut mcp = init_mcp(lha_home.path()).await?;
 
     let ThreadListResponse { data, .. } = list_threads_with_sort(
         &mut mcp,
@@ -877,11 +877,11 @@ async fn thread_list_updated_at_tie_breaks_by_uuid() -> Result<()> {
 
 #[tokio::test]
 async fn thread_list_updated_at_uses_mtime() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_minimal_config(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_minimal_config(lha_home.path())?;
 
     let thread_id = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-02-01T10-00-00",
         "2025-02-01T10:00:00Z",
         "Hello",
@@ -890,11 +890,11 @@ async fn thread_list_updated_at_uses_mtime() -> Result<()> {
     )?;
 
     set_rollout_mtime(
-        rollout_path(adam_home.path(), "2025-02-01T10-00-00", &thread_id).as_path(),
+        rollout_path(lha_home.path(), "2025-02-01T10-00-00", &thread_id).as_path(),
         "2025-02-05T00:00:00Z",
     )?;
 
-    let mut mcp = init_mcp(adam_home.path()).await?;
+    let mut mcp = init_mcp(lha_home.path()).await?;
 
     let ThreadListResponse { data, .. } = list_threads_with_sort(
         &mut mcp,
@@ -923,11 +923,11 @@ async fn thread_list_updated_at_uses_mtime() -> Result<()> {
 
 #[tokio::test]
 async fn thread_list_archived_filter() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_minimal_config(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_minimal_config(lha_home.path())?;
 
     let active_id = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-03-01T10-00-00",
         "2025-03-01T10:00:00Z",
         "Active",
@@ -935,7 +935,7 @@ async fn thread_list_archived_filter() -> Result<()> {
         None,
     )?;
     let archived_id = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-03-01T09-00-00",
         "2025-03-01T09:00:00Z",
         "Archived",
@@ -943,9 +943,9 @@ async fn thread_list_archived_filter() -> Result<()> {
         None,
     )?;
 
-    let archived_dir = adam_home.path().join(ARCHIVED_SESSIONS_SUBDIR);
+    let archived_dir = lha_home.path().join(ARCHIVED_SESSIONS_SUBDIR);
     fs::create_dir_all(&archived_dir)?;
-    let archived_source = rollout_path(adam_home.path(), "2025-03-01T09-00-00", &archived_id);
+    let archived_source = rollout_path(lha_home.path(), "2025-03-01T09-00-00", &archived_id);
     let archived_dest = archived_dir.join(
         archived_source
             .file_name()
@@ -953,7 +953,7 @@ async fn thread_list_archived_filter() -> Result<()> {
     );
     fs::rename(&archived_source, &archived_dest)?;
 
-    let mut mcp = init_mcp(adam_home.path()).await?;
+    let mut mcp = init_mcp(lha_home.path()).await?;
 
     let ThreadListResponse { data, .. } = list_threads(
         &mut mcp,
@@ -984,16 +984,16 @@ async fn thread_list_archived_filter() -> Result<()> {
 
 #[tokio::test]
 async fn thread_list_uses_latest_turn_context_cwd() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_minimal_config(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_minimal_config(lha_home.path())?;
 
-    let session_cwd = adam_home.path().join("session");
-    let latest_cwd = adam_home.path().join("latest");
+    let session_cwd = lha_home.path().join("session");
+    let latest_cwd = lha_home.path().join("latest");
     fs::create_dir_all(&session_cwd)?;
     fs::create_dir_all(&latest_cwd)?;
 
     create_fake_rollout_with_cwds(
-        adam_home.path(),
+        lha_home.path(),
         "2025-03-02T10-00-00",
         "2025-03-02T10:00:00Z",
         "Hello",
@@ -1003,7 +1003,7 @@ async fn thread_list_uses_latest_turn_context_cwd() -> Result<()> {
         Some(latest_cwd.clone()),
     )?;
 
-    let mut mcp = init_mcp(adam_home.path()).await?;
+    let mut mcp = init_mcp(lha_home.path()).await?;
     let ThreadListResponse { data, .. } = list_threads(
         &mut mcp,
         None,
@@ -1022,13 +1022,13 @@ async fn thread_list_uses_latest_turn_context_cwd() -> Result<()> {
 
 #[tokio::test]
 async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_minimal_config(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_minimal_config(lha_home.path())?;
 
-    let mut mcp = init_mcp(adam_home.path()).await?;
+    let mut mcp = init_mcp(lha_home.path()).await?;
 
     let request_id = mcp
-        .send_thread_list_request(adam_app_server_protocol::ThreadListParams {
+        .send_thread_list_request(lha_app_server_protocol::ThreadListParams {
             cursor: Some("not-a-cursor".to_string()),
             limit: Some(2),
             sort_key: None,

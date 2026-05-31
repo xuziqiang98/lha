@@ -7,15 +7,15 @@ use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
-use adam_protocol::ThreadId;
-use adam_protocol::protocol::SessionSource;
+use lha_protocol::ThreadId;
+use lha_protocol::protocol::SessionSource;
 
-use adam_agent::AuthManager;
-use adam_agent::ThreadManager;
-use adam_agent::config::Config;
-use adam_agent::default_client::USER_AGENT_SUFFIX;
-use adam_agent::default_client::get_adam_user_agent;
-use adam_agent::protocol::Submission;
+use lha_agent::AuthManager;
+use lha_agent::ThreadManager;
+use lha_agent::config::Config;
+use lha_agent::default_client::USER_AGENT_SUFFIX;
+use lha_agent::default_client::get_lha_user_agent;
+use lha_agent::protocol::Submission;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
 use mcp_types::ClientRequest as McpClientRequest;
@@ -53,9 +53,9 @@ impl MessageProcessor {
         config: Arc<Config>,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
-        let auth_manager = AuthManager::shared(config.adam_home.clone(), false);
+        let auth_manager = AuthManager::shared(config.lha_home.clone(), false);
         let thread_manager = Arc::new(ThreadManager::new(
-            config.adam_home.clone(),
+            config.lha_home.clone(),
             auth_manager,
             config.model_provider_id.as_str(),
             config.model_provider.clone(),
@@ -218,10 +218,10 @@ impl MessageProcessor {
             instructions: None,
             protocol_version: params.protocol_version.clone(),
             server_info: mcp_types::Implementation {
-                name: "adam-mcp-server".to_string(),
+                name: "lha-mcp-server".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
-                title: Some("Adam".to_string()),
-                user_agent: Some(get_adam_user_agent()),
+                title: Some("LHA".to_string()),
+                user_agent: Some(get_lha_user_agent()),
             },
         };
 
@@ -324,8 +324,8 @@ impl MessageProcessor {
         let CallToolRequestParams { name, arguments } = params;
 
         match name.as_str() {
-            "adam" => self.handle_tool_call_codex(id, arguments).await,
-            "adam-reply" => {
+            "lha" => self.handle_tool_call_codex(id, arguments).await,
+            "lha-reply" => {
                 self.handle_tool_call_codex_session_reply(id, arguments)
                     .await
             }
@@ -357,7 +357,7 @@ impl MessageProcessor {
                             content: vec![ContentBlock::TextContent(TextContent {
                                 r#type: "text".to_owned(),
                                 text: format!(
-                                    "Failed to load Adam configuration from overrides: {e}"
+                                    "Failed to load LHA configuration from overrides: {e}"
                                 ),
                                 annotations: None,
                             })],
@@ -373,7 +373,7 @@ impl MessageProcessor {
                     let result = CallToolResult {
                         content: vec![ContentBlock::TextContent(TextContent {
                             r#type: "text".to_owned(),
-                            text: format!("Failed to parse configuration for Adam tool: {e}"),
+                            text: format!("Failed to parse configuration for LHA tool: {e}"),
                             annotations: None,
                         })],
                         is_error: Some(true),
@@ -389,7 +389,7 @@ impl MessageProcessor {
                     content: vec![ContentBlock::TextContent(TextContent {
                         r#type: "text".to_string(),
                         text:
-                            "Missing arguments for adam tool-call; the `prompt` field is required."
+                            "Missing arguments for lha tool-call; the `prompt` field is required."
                                 .to_string(),
                         annotations: None,
                     })],
@@ -407,10 +407,10 @@ impl MessageProcessor {
         let thread_manager = self.thread_manager.clone();
         let running_requests_id_to_codex_uuid = self.running_requests_id_to_codex_uuid.clone();
 
-        // Spawn an async task to handle the Adam session so that we do not
+        // Spawn an async task to handle the LHA session so that we do not
         // block the synchronous message-processing loop.
         task::spawn(async move {
-            // Run the Adam session and stream events back to the client.
+            // Run the LHA session and stream events back to the client.
             crate::codex_tool_runner::run_codex_tool_session(
                 id,
                 initial_prompt,
@@ -435,11 +435,11 @@ impl MessageProcessor {
             Some(json_val) => match serde_json::from_value::<CodexToolCallReplyParam>(json_val) {
                 Ok(params) => params,
                 Err(e) => {
-                    tracing::error!("Failed to parse Adam tool call reply parameters: {e}");
+                    tracing::error!("Failed to parse LHA tool call reply parameters: {e}");
                     let result = CallToolResult {
                         content: vec![ContentBlock::TextContent(TextContent {
                             r#type: "text".to_owned(),
-                            text: format!("Failed to parse configuration for Adam tool: {e}"),
+                            text: format!("Failed to parse configuration for LHA tool: {e}"),
                             annotations: None,
                         })],
                         is_error: Some(true),
@@ -452,12 +452,12 @@ impl MessageProcessor {
             },
             None => {
                 tracing::error!(
-                    "Missing arguments for adam-reply tool-call; the `thread_id` and `prompt` fields are required."
+                    "Missing arguments for lha-reply tool-call; the `thread_id` and `prompt` fields are required."
                 );
                 let result = CallToolResult {
                     content: vec![ContentBlock::TextContent(TextContent {
                         r#type: "text".to_owned(),
-                        text: "Missing arguments for adam-reply tool-call; the `thread_id` and `prompt` fields are required.".to_owned(),
+                        text: "Missing arguments for lha-reply tool-call; the `thread_id` and `prompt` fields are required.".to_owned(),
                         annotations: None,
                     })],
                     is_error: Some(true),
@@ -568,7 +568,7 @@ impl MessageProcessor {
         };
         tracing::info!("thread_id: {thread_id}");
 
-        // Obtain the Adam thread from the server.
+        // Obtain the LHA thread from the server.
         let codex_arc = match self.thread_manager.get_thread(thread_id).await {
             Ok(c) => c,
             Err(_) => {
@@ -577,15 +577,15 @@ impl MessageProcessor {
             }
         };
 
-        // Submit interrupt to Adam.
+        // Submit interrupt to LHA.
         let err = codex_arc
             .submit_with_id(Submission {
                 id: request_id_string,
-                op: adam_agent::protocol::Op::Interrupt,
+                op: lha_agent::protocol::Op::Interrupt,
             })
             .await;
         if let Err(e) = err {
-            tracing::error!("Failed to submit interrupt to Adam: {e}");
+            tracing::error!("Failed to submit interrupt to LHA: {e}");
             return;
         }
         // unregister the id so we don't keep it in the map

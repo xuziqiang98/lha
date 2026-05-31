@@ -1,9 +1,9 @@
-use adam_protocol::openai_models::ModelPreset;
-use adam_protocol::openai_models::ReasoningEffort;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use lha_protocol::openai_models::ModelPreset;
+use lha_protocol::openai_models::ReasoningEffort;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -363,7 +363,7 @@ impl ModelSelectionModal {
             ),
             ModelSelectionStage::All { .. } => (
                 "Select Model and Effort",
-                "Access legacy models by running adam -m <model_name> or in your config.toml",
+                "Access legacy models by running lha -m <model_name> or in your config.toml",
             ),
             ModelSelectionStage::Reasoning { preset, .. } => {
                 header.push(
@@ -926,7 +926,7 @@ mod tests {
     use super::*;
 
     use crate::test_backend::VT100Backend;
-    use adam_protocol::openai_models::ReasoningEffortPreset;
+    use lha_protocol::openai_models::ReasoningEffortPreset;
     use pretty_assertions::assert_eq;
     use ratatui::Terminal;
 

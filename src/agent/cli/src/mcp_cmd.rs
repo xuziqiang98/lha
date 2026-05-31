@@ -1,29 +1,29 @@
 use std::collections::HashMap;
 
-use adam_agent::config::Config;
-use adam_agent::config::edit::ConfigEditsBuilder;
-use adam_agent::config::find_adam_home;
-use adam_agent::config::load_global_mcp_servers;
-use adam_agent::config::types::McpServerConfig;
-use adam_agent::config::types::McpServerTransportConfig;
-use adam_agent::mcp::auth::McpOAuthLoginSupport;
-use adam_agent::mcp::auth::compute_auth_statuses;
-use adam_agent::mcp::auth::oauth_login_support;
-use adam_agent::protocol::McpAuthStatus;
-use adam_common::CliConfigOverrides;
-use adam_common::format_env_display::format_env_display;
-use adam_rmcp_client::delete_oauth_tokens;
-use adam_rmcp_client::perform_oauth_login;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use clap::ArgGroup;
+use lha_agent::config::Config;
+use lha_agent::config::edit::ConfigEditsBuilder;
+use lha_agent::config::find_lha_home;
+use lha_agent::config::load_global_mcp_servers;
+use lha_agent::config::types::McpServerConfig;
+use lha_agent::config::types::McpServerTransportConfig;
+use lha_agent::mcp::auth::McpOAuthLoginSupport;
+use lha_agent::mcp::auth::compute_auth_statuses;
+use lha_agent::mcp::auth::oauth_login_support;
+use lha_agent::protocol::McpAuthStatus;
+use lha_common::CliConfigOverrides;
+use lha_common::format_env_display::format_env_display;
+use lha_rmcp_client::delete_oauth_tokens;
+use lha_rmcp_client::perform_oauth_login;
 
 /// Subcommands:
 /// - `list`   — list configured servers (with `--json`)
 /// - `get`    — show a single server (with `--json`)
-/// - `add`    — add a server launcher entry to `~/.adam/config.toml`
+/// - `add`    — add a server launcher entry to `~/.lha/config.toml`
 /// - `remove` — delete a server entry
 /// - `login`  — authenticate with MCP server using OAuth
 /// - `logout` — remove OAuth credentials for MCP server
@@ -64,7 +64,7 @@ pub struct GetArgs {
 }
 
 #[derive(Debug, clap::Parser)]
-#[command(override_usage = "adam mcp add [OPTIONS] <NAME> (--url <URL> | -- <COMMAND>...)")]
+#[command(override_usage = "lha mcp add [OPTIONS] <NAME> (--url <URL> | -- <COMMAND>...)")]
 pub struct AddArgs {
     /// Name for the MCP server configuration.
     pub name: String,
@@ -196,10 +196,10 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
 
     validate_server_name(&name)?;
 
-    let adam_home = find_adam_home().context("failed to resolve ADAM_HOME")?;
-    let mut servers = load_global_mcp_servers(&adam_home)
+    let lha_home = find_lha_home().context("failed to resolve LHA_HOME")?;
+    let mut servers = load_global_mcp_servers(&lha_home)
         .await
-        .with_context(|| format!("failed to load MCP servers from {}", adam_home.display()))?;
+        .with_context(|| format!("failed to load MCP servers from {}", lha_home.display()))?;
 
     let transport = match transport_args {
         AddMcpTransportArgs {
@@ -253,11 +253,11 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
 
     servers.insert(name.clone(), new_entry);
 
-    ConfigEditsBuilder::new(&adam_home)
+    ConfigEditsBuilder::new(&lha_home)
         .replace_mcp_servers(&servers)
         .apply()
         .await
-        .with_context(|| format!("failed to write MCP servers to {}", adam_home.display()))?;
+        .with_context(|| format!("failed to write MCP servers to {}", lha_home.display()))?;
 
     println!("Added global MCP server '{name}'.");
 
@@ -278,7 +278,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         }
         McpOAuthLoginSupport::Unsupported => {}
         McpOAuthLoginSupport::Unknown(_) => println!(
-            "MCP server may or may not require login. Run `adam mcp login {name}` to login."
+            "MCP server may or may not require login. Run `lha mcp login {name}` to login."
         ),
     }
 
@@ -294,19 +294,19 @@ async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveAr
 
     validate_server_name(&name)?;
 
-    let adam_home = find_adam_home().context("failed to resolve ADAM_HOME")?;
-    let mut servers = load_global_mcp_servers(&adam_home)
+    let lha_home = find_lha_home().context("failed to resolve LHA_HOME")?;
+    let mut servers = load_global_mcp_servers(&lha_home)
         .await
-        .with_context(|| format!("failed to load MCP servers from {}", adam_home.display()))?;
+        .with_context(|| format!("failed to load MCP servers from {}", lha_home.display()))?;
 
     let removed = servers.remove(&name).is_some();
 
     if removed {
-        ConfigEditsBuilder::new(&adam_home)
+        ConfigEditsBuilder::new(&lha_home)
             .replace_mcp_servers(&servers)
             .apply()
             .await
-            .with_context(|| format!("failed to write MCP servers to {}", adam_home.display()))?;
+            .with_context(|| format!("failed to write MCP servers to {}", lha_home.display()))?;
     }
 
     if removed {
@@ -467,7 +467,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
     }
 
     if entries.is_empty() {
-        println!("No MCP servers configured yet. Try `adam mcp add my-tool -- my-command`.");
+        println!("No MCP servers configured yet. Try `lha mcp add my-tool -- my-command`.");
         return Ok(());
     }
 
@@ -795,7 +795,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
     if let Some(timeout) = server.tool_timeout_sec {
         println!("  tool_timeout_sec: {}", timeout.as_secs_f64());
     }
-    println!("  remove: adam mcp remove {}", get_args.name);
+    println!("  remove: lha mcp remove {}", get_args.name);
 
     Ok(())
 }

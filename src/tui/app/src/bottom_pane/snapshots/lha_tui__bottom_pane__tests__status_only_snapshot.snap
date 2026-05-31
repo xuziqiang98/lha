@@ -1,0 +1,10 @@
+---
+source: src/tui/app/src/bottom_pane/mod.rs
+expression: "render_snapshot(&pane, area)"
+---
+• Working (0s • esc to interrupt)               
+                                                
+                                                
+› Ask LHA to do anything                        
+                                                
+  loading · 100% left

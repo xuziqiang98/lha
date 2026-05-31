@@ -8,16 +8,16 @@ use crate::tools::handlers::delegated_jobs::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::delegated_jobs::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolRegistryBuilder;
-use adam_llm::FunctionToolDescriptor as ResponsesApiTool;
-use adam_llm::ToolDescriptor;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::WebSearchMode;
-use adam_protocol::dynamic_tools::DynamicToolSpec;
-use adam_protocol::models::VIEW_IMAGE_TOOL_NAME;
-use adam_protocol::openai_models::ApplyPatchToolType;
-use adam_protocol::openai_models::ConfigShellToolType;
-use adam_protocol::openai_models::ModelInfo;
-use adam_protocol::protocol::SessionSource;
+use lha_llm::FunctionToolDescriptor as ResponsesApiTool;
+use lha_llm::ToolDescriptor;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::WebSearchMode;
+use lha_protocol::dynamic_tools::DynamicToolSpec;
+use lha_protocol::models::VIEW_IMAGE_TOOL_NAME;
+use lha_protocol::openai_models::ApplyPatchToolType;
+use lha_protocol::openai_models::ConfigShellToolType;
+use lha_protocol::openai_models::ModelInfo;
+use lha_protocol::protocol::SessionSource;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -27,9 +27,9 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-pub use adam_llm::ToolInputSchema as JsonSchema;
+pub use lha_llm::ToolInputSchema as JsonSchema;
 #[cfg_attr(not(test), allow(dead_code))]
-pub type AdditionalProperties = adam_llm::AdditionalProperties;
+pub type AdditionalProperties = lha_llm::AdditionalProperties;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
@@ -77,7 +77,7 @@ impl ToolsConfig {
             ConfigShellToolType::Disabled
         } else if features.enabled(Feature::UnifiedExec) {
             // If ConPTY not supported (for old Windows versions), fallback on ShellCommand.
-            if adam_utils_pty::conpty_supported() {
+            if lha_utils_pty::conpty_supported() {
                 ConfigShellToolType::UnifiedExec
             } else {
                 ConfigShellToolType::ShellCommand
@@ -834,7 +834,7 @@ fn create_test_sync_tool() -> ToolDescriptor {
 
     ToolDescriptor::Function(ResponsesApiTool {
         name: "test_sync_tool".to_string(),
-        description: "Internal synchronization helper used by Adam integration tests.".to_string(),
+        description: "Internal synchronization helper used by LHA integration tests.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -1783,7 +1783,7 @@ mod tests {
     use crate::config::test_config;
     use crate::models_manager::manager::ModelsManager;
     use crate::tools::registry::ConfiguredToolSpec;
-    use adam_llm::FreeformToolDescriptor;
+    use lha_llm::FreeformToolDescriptor;
     use mcp_types::ToolInputSchema;
     use pretty_assertions::assert_eq;
 

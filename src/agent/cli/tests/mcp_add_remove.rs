@@ -1,30 +1,30 @@
 use std::path::Path;
 
-use adam_agent::config::load_global_mcp_servers;
-use adam_agent::config::types::McpServerTransportConfig;
 use anyhow::Result;
+use lha_agent::config::load_global_mcp_servers;
+use lha_agent::config::types::McpServerTransportConfig;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
-fn codex_command(adam_home: &Path) -> Result<assert_cmd::Command> {
-    let mut cmd = assert_cmd::Command::new(adam_utils_cargo_bin::cargo_bin("adam")?);
-    cmd.env("ADAM_HOME", adam_home);
+fn codex_command(lha_home: &Path) -> Result<assert_cmd::Command> {
+    let mut cmd = assert_cmd::Command::new(lha_utils_cargo_bin::cargo_bin("lha")?);
+    cmd.env("LHA_HOME", lha_home);
     Ok(cmd)
 }
 
 #[tokio::test]
 async fn add_and_remove_server_updates_global_config() -> Result<()> {
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
 
-    let mut add_cmd = codex_command(adam_home.path())?;
+    let mut add_cmd = codex_command(lha_home.path())?;
     add_cmd
         .args(["mcp", "add", "docs", "--", "echo", "hello"])
         .assert()
         .success()
         .stdout(contains("Added global MCP server 'docs'."));
 
-    let servers = load_global_mcp_servers(adam_home.path()).await?;
+    let servers = load_global_mcp_servers(lha_home.path()).await?;
     assert_eq!(servers.len(), 1);
     let docs = servers.get("docs").expect("server should exist");
     match &docs.transport {
@@ -45,24 +45,24 @@ async fn add_and_remove_server_updates_global_config() -> Result<()> {
     }
     assert!(docs.enabled);
 
-    let mut remove_cmd = codex_command(adam_home.path())?;
+    let mut remove_cmd = codex_command(lha_home.path())?;
     remove_cmd
         .args(["mcp", "remove", "docs"])
         .assert()
         .success()
         .stdout(contains("Removed global MCP server 'docs'."));
 
-    let servers = load_global_mcp_servers(adam_home.path()).await?;
+    let servers = load_global_mcp_servers(lha_home.path()).await?;
     assert!(servers.is_empty());
 
-    let mut remove_again_cmd = codex_command(adam_home.path())?;
+    let mut remove_again_cmd = codex_command(lha_home.path())?;
     remove_again_cmd
         .args(["mcp", "remove", "docs"])
         .assert()
         .success()
         .stdout(contains("No MCP server named 'docs' found."));
 
-    let servers = load_global_mcp_servers(adam_home.path()).await?;
+    let servers = load_global_mcp_servers(lha_home.path()).await?;
     assert!(servers.is_empty());
 
     Ok(())
@@ -70,9 +70,9 @@ async fn add_and_remove_server_updates_global_config() -> Result<()> {
 
 #[tokio::test]
 async fn add_with_env_preserves_key_order_and_values() -> Result<()> {
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
 
-    let mut add_cmd = codex_command(adam_home.path())?;
+    let mut add_cmd = codex_command(lha_home.path())?;
     add_cmd
         .args([
             "mcp",
@@ -89,7 +89,7 @@ async fn add_with_env_preserves_key_order_and_values() -> Result<()> {
         .assert()
         .success();
 
-    let servers = load_global_mcp_servers(adam_home.path()).await?;
+    let servers = load_global_mcp_servers(lha_home.path()).await?;
     let envy = servers.get("envy").expect("server should exist");
     let env = match &envy.transport {
         McpServerTransportConfig::Stdio { env: Some(env), .. } => env,
@@ -106,15 +106,15 @@ async fn add_with_env_preserves_key_order_and_values() -> Result<()> {
 
 #[tokio::test]
 async fn add_streamable_http_without_manual_token() -> Result<()> {
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
 
-    let mut add_cmd = codex_command(adam_home.path())?;
+    let mut add_cmd = codex_command(lha_home.path())?;
     add_cmd
         .args(["mcp", "add", "github", "--url", "https://example.com/mcp"])
         .assert()
         .success();
 
-    let servers = load_global_mcp_servers(adam_home.path()).await?;
+    let servers = load_global_mcp_servers(lha_home.path()).await?;
     let github = servers.get("github").expect("github server should exist");
     match &github.transport {
         McpServerTransportConfig::StreamableHttp {
@@ -132,17 +132,17 @@ async fn add_streamable_http_without_manual_token() -> Result<()> {
     }
     assert!(github.enabled);
 
-    assert!(!adam_home.path().join(".credentials.json").exists());
-    assert!(!adam_home.path().join(".env").exists());
+    assert!(!lha_home.path().join(".credentials.json").exists());
+    assert!(!lha_home.path().join(".env").exists());
 
     Ok(())
 }
 
 #[tokio::test]
 async fn add_streamable_http_with_custom_env_var() -> Result<()> {
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
 
-    let mut add_cmd = codex_command(adam_home.path())?;
+    let mut add_cmd = codex_command(lha_home.path())?;
     add_cmd
         .args([
             "mcp",
@@ -156,7 +156,7 @@ async fn add_streamable_http_with_custom_env_var() -> Result<()> {
         .assert()
         .success();
 
-    let servers = load_global_mcp_servers(adam_home.path()).await?;
+    let servers = load_global_mcp_servers(lha_home.path()).await?;
     let issues = servers.get("issues").expect("issues server should exist");
     match &issues.transport {
         McpServerTransportConfig::StreamableHttp {
@@ -178,9 +178,9 @@ async fn add_streamable_http_with_custom_env_var() -> Result<()> {
 
 #[tokio::test]
 async fn add_streamable_http_rejects_removed_flag() -> Result<()> {
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
 
-    let mut add_cmd = codex_command(adam_home.path())?;
+    let mut add_cmd = codex_command(lha_home.path())?;
     add_cmd
         .args([
             "mcp",
@@ -194,7 +194,7 @@ async fn add_streamable_http_rejects_removed_flag() -> Result<()> {
         .failure()
         .stderr(contains("--with-bearer-token"));
 
-    let servers = load_global_mcp_servers(adam_home.path()).await?;
+    let servers = load_global_mcp_servers(lha_home.path()).await?;
     assert!(servers.is_empty());
 
     Ok(())
@@ -202,9 +202,9 @@ async fn add_streamable_http_rejects_removed_flag() -> Result<()> {
 
 #[tokio::test]
 async fn add_cant_add_command_and_url() -> Result<()> {
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
 
-    let mut add_cmd = codex_command(adam_home.path())?;
+    let mut add_cmd = codex_command(lha_home.path())?;
     add_cmd
         .args([
             "mcp",
@@ -221,7 +221,7 @@ async fn add_cant_add_command_and_url() -> Result<()> {
         .failure()
         .stderr(contains("unexpected argument '--command' found"));
 
-    let servers = load_global_mcp_servers(adam_home.path()).await?;
+    let servers = load_global_mcp_servers(lha_home.path()).await?;
     assert!(servers.is_empty());
 
     Ok(())

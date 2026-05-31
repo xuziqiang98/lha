@@ -1,18 +1,18 @@
-use adam_agent::ARCHIVED_SESSIONS_SUBDIR;
-use adam_agent::SESSIONS_SUBDIR;
-use adam_agent::config::ConfigToml;
-use adam_agent::personality_migration::PERSONALITY_MIGRATION_FILENAME;
-use adam_agent::personality_migration::PersonalityMigrationStatus;
-use adam_agent::personality_migration::maybe_migrate_personality;
-use adam_protocol::ThreadId;
-use adam_protocol::config_types::Personality;
-use adam_protocol::protocol::EventMsg;
-use adam_protocol::protocol::RolloutItem;
-use adam_protocol::protocol::RolloutLine;
-use adam_protocol::protocol::SessionMeta;
-use adam_protocol::protocol::SessionMetaLine;
-use adam_protocol::protocol::SessionSource;
-use adam_protocol::protocol::UserMessageEvent;
+use lha_agent::ARCHIVED_SESSIONS_SUBDIR;
+use lha_agent::SESSIONS_SUBDIR;
+use lha_agent::config::ConfigToml;
+use lha_agent::personality_migration::PERSONALITY_MIGRATION_FILENAME;
+use lha_agent::personality_migration::PersonalityMigrationStatus;
+use lha_agent::personality_migration::maybe_migrate_personality;
+use lha_protocol::ThreadId;
+use lha_protocol::config_types::Personality;
+use lha_protocol::protocol::EventMsg;
+use lha_protocol::protocol::RolloutItem;
+use lha_protocol::protocol::RolloutLine;
+use lha_protocol::protocol::SessionMeta;
+use lha_protocol::protocol::SessionMetaLine;
+use lha_protocol::protocol::SessionSource;
+use lha_protocol::protocol::UserMessageEvent;
 use pretty_assertions::assert_eq;
 use std::io;
 use std::path::Path;
@@ -21,14 +21,14 @@ use tokio::io::AsyncWriteExt;
 
 const TEST_TIMESTAMP: &str = "2025-01-01T00-00-00";
 
-async fn read_config_toml(adam_home: &Path) -> io::Result<ConfigToml> {
-    let contents = tokio::fs::read_to_string(adam_home.join("config.toml")).await?;
+async fn read_config_toml(lha_home: &Path) -> io::Result<ConfigToml> {
+    let contents = tokio::fs::read_to_string(lha_home.join("config.toml")).await?;
     toml::from_str(&contents).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
-async fn write_session_with_user_event(adam_home: &Path) -> io::Result<()> {
+async fn write_session_with_user_event(lha_home: &Path) -> io::Result<()> {
     let thread_id = ThreadId::new();
-    let dir = adam_home
+    let dir = lha_home
         .join(SESSIONS_SUBDIR)
         .join("2025")
         .join("01")
@@ -36,9 +36,9 @@ async fn write_session_with_user_event(adam_home: &Path) -> io::Result<()> {
     write_rollout_with_user_event(&dir, thread_id).await
 }
 
-async fn write_archived_session_with_user_event(adam_home: &Path) -> io::Result<()> {
+async fn write_archived_session_with_user_event(lha_home: &Path) -> io::Result<()> {
     let thread_id = ThreadId::new();
-    let dir = adam_home.join(ARCHIVED_SESSIONS_SUBDIR);
+    let dir = lha_home.join(ARCHIVED_SESSIONS_SUBDIR);
     write_rollout_with_user_event(&dir, thread_id).await
 }
 
@@ -55,7 +55,7 @@ async fn write_rollout_with_user_event(dir: &Path, thread_id: ThreadId) -> io::R
             cwd: std::path::PathBuf::from("."),
             originator: "test_originator".to_string(),
             cli_version: "test_version".to_string(),
-            rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+            rollout_schema_version: lha_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
             source: SessionSource::Cli,
             model_provider: None,
             base_instructions: None,

@@ -1,7 +1,7 @@
-use adam_common::ApprovalModeCliArg;
-use adam_common::CliConfigOverrides;
 use clap::Parser;
 use clap::ValueHint;
+use lha_common::ApprovalModeCliArg;
+use lha_common::CliConfigOverrides;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug, Default)]
@@ -60,7 +60,7 @@ pub struct Cli {
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
     #[arg(long = "sandbox", short = 's')]
-    pub sandbox_mode: Option<adam_common::SandboxModeCliArg>,
+    pub sandbox_mode: Option<lha_common::SandboxModeCliArg>,
 
     /// Configure when the model requires human approval before executing a command.
     #[arg(long = "ask-for-approval", short = 'a')]

@@ -3,15 +3,15 @@ use std::env;
 use std::path::Path;
 use std::path::PathBuf;
 
-use adam_agent::parse_command;
-use adam_agent::protocol::FileChange;
-use adam_agent::protocol::ReviewDecision;
-use adam_agent::spawn::ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use adam_mcp_server::CodexToolCallParam;
-use adam_mcp_server::ExecApprovalElicitRequestParams;
-use adam_mcp_server::ExecApprovalResponse;
-use adam_mcp_server::PatchApprovalElicitRequestParams;
-use adam_mcp_server::PatchApprovalResponse;
+use lha_agent::parse_command;
+use lha_agent::protocol::FileChange;
+use lha_agent::protocol::ReviewDecision;
+use lha_agent::spawn::LHA_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use lha_mcp_server::CodexToolCallParam;
+use lha_mcp_server::ExecApprovalElicitRequestParams;
+use lha_mcp_server::ExecApprovalResponse;
+use lha_mcp_server::PatchApprovalElicitRequestParams;
+use lha_mcp_server::PatchApprovalResponse;
 use mcp_types::ElicitRequest;
 use mcp_types::ElicitRequestParamsRequestedSchema;
 use mcp_types::JSONRPC_VERSION;
@@ -41,9 +41,9 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// command, as expected.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_shell_command_approval_triggers_elicitation() {
-    if env::var(ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+    if env::var(LHA_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
-            "Skipping test because it cannot execute when network is disabled in a Adam sandbox."
+            "Skipping test because it cannot execute when network is disabled in a LHA sandbox."
         );
         return;
     }
@@ -95,7 +95,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     // In turn, it should reply with a tool call, which the MCP should forward
     // as an elicitation.
     let codex_request_id = mcp_process
-        .send_adam_tool_call(CodexToolCallParam {
+        .send_lha_tool_call(CodexToolCallParam {
             prompt: "run `git init`".to_string(),
             ..Default::default()
         })
@@ -180,10 +180,10 @@ fn create_expected_elicitation_request(
     workdir: &Path,
     codex_mcp_tool_call_id: String,
     codex_event_id: String,
-    thread_id: adam_protocol::ThreadId,
+    thread_id: lha_protocol::ThreadId,
 ) -> anyhow::Result<JSONRPCRequest> {
     let expected_message = format!(
-        "Allow Adam to run `{}` in `{}`?",
+        "Allow LHA to run `{}` in `{}`?",
         shlex::try_join(command.iter().map(std::convert::AsRef::as_ref))?,
         workdir.to_string_lossy()
     );
@@ -215,9 +215,9 @@ fn create_expected_elicitation_request(
 /// sending the approval applies the patch, as expected.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_patch_approval_triggers_elicitation() {
-    if env::var(ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+    if env::var(LHA_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
-            "Skipping test because it cannot execute when network is disabled in a Adam sandbox."
+            "Skipping test because it cannot execute when network is disabled in a LHA sandbox."
         );
         return;
     }
@@ -255,7 +255,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
 
     // Send a "codex" tool request that will trigger the apply_patch command
     let codex_request_id = mcp_process
-        .send_adam_tool_call(CodexToolCallParam {
+        .send_lha_tool_call(CodexToolCallParam {
             cwd: Some(cwd.path().to_string_lossy().to_string()),
             prompt: "please modify the test file".to_string(),
             ..Default::default()
@@ -357,15 +357,15 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
         )?])
         .await;
 
-    // Run `adam mcp` with a specific config.toml.
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
-    let mut mcp_process = McpProcess::new(adam_home.path()).await?;
+    // Run `lha mcp` with a specific config.toml.
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
+    let mut mcp_process = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
 
     // Send a "codex" tool request, which should hit the completions endpoint.
     let codex_request_id = mcp_process
-        .send_adam_tool_call(CodexToolCallParam {
+        .send_lha_tool_call(CodexToolCallParam {
             prompt: "How are you?".to_string(),
             base_instructions: Some("You are a helpful assistant.".to_string()),
             developer_instructions: Some("Foreshadow upcoming tool calls.".to_string()),
@@ -441,13 +441,13 @@ fn create_expected_patch_approval_elicitation_request(
     reason: Option<String>,
     codex_mcp_tool_call_id: String,
     codex_event_id: String,
-    thread_id: adam_protocol::ThreadId,
+    thread_id: lha_protocol::ThreadId,
 ) -> anyhow::Result<JSONRPCRequest> {
     let mut message_lines = Vec::new();
     if let Some(r) = &reason {
         message_lines.push(r.clone());
     }
-    message_lines.push("Allow Adam to apply proposed code changes?".to_string());
+    message_lines.push("Allow LHA to apply proposed code changes?".to_string());
 
     Ok(JSONRPCRequest {
         jsonrpc: JSONRPC_VERSION.into(),
@@ -486,22 +486,22 @@ pub struct McpHandle {
 
 async fn create_mcp_process(responses: Vec<String>) -> anyhow::Result<McpHandle> {
     let server = create_mock_chat_completions_server(responses).await;
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
-    let mut mcp_process = McpProcess::new(adam_home.path()).await?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
+    let mut mcp_process = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
     Ok(McpHandle {
         process: mcp_process,
         server,
-        dir: adam_home,
+        dir: lha_home,
     })
 }
 
-/// Create a Adam config that uses the mock server as the model provider.
+/// Create a LHA config that uses the mock server as the model provider.
 /// It also uses `approval_policy = "untrusted"` so that we exercise the
 /// elicitation code path for shell commands.
-fn create_config_toml(adam_home: &Path, server_uri: &str) -> std::io::Result<()> {
-    let config_toml = adam_home.join("config.toml");
+fn create_config_toml(lha_home: &Path, server_uri: &str) -> std::io::Result<()> {
+    let config_toml = lha_home.join("config.toml");
     std::fs::write(
         config_toml,
         format!(

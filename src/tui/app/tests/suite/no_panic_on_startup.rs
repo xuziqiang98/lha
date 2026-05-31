@@ -17,9 +17,9 @@ async fn malformed_rules_should_not_panic() -> anyhow::Result<()> {
     }
 
     let tmp = tempfile::tempdir()?;
-    let adam_home = tmp.path();
+    let lha_home = tmp.path();
     std::fs::write(
-        adam_home.join("rules"),
+        lha_home.join("rules"),
         "rules should be a directory not a file",
     )?;
 
@@ -42,10 +42,10 @@ bearer_token = "sk-test"
 "#,
         cwd = cwd.display()
     );
-    std::fs::write(adam_home.join("config.toml"), config_contents)?;
+    std::fs::write(lha_home.join("config.toml"), config_contents)?;
 
-    let CodexCliOutput { exit_code, output } = run_codex_cli(adam_home, cwd).await?;
-    assert_ne!(0, exit_code, "Adam CLI should exit nonzero.");
+    let CodexCliOutput { exit_code, output } = run_codex_cli(lha_home, cwd).await?;
+    assert_ne!(0, exit_code, "LHA CLI should exit nonzero.");
     assert!(
         output.contains("ERROR: Failed to initialize codex:"),
         "expected startup error in output, got: {output}"
@@ -63,18 +63,18 @@ struct CodexCliOutput {
 }
 
 async fn run_codex_cli(
-    adam_home: impl AsRef<Path>,
+    lha_home: impl AsRef<Path>,
     cwd: impl AsRef<Path>,
 ) -> anyhow::Result<CodexCliOutput> {
-    let (program, args, timeout_secs) = match adam_utils_cargo_bin::cargo_bin("adam") {
+    let (program, args, timeout_secs) = match lha_utils_cargo_bin::cargo_bin("lha") {
         Ok(path) => (
             path.to_string_lossy().into_owned(),
             vec!["-c".to_string(), "analytics.enabled=false".to_string()],
             10,
         ),
-        Err(adam_utils_cargo_bin::CargoBinError::NotFound { .. })
-        | Err(adam_utils_cargo_bin::CargoBinError::ResolvedPathDoesNotExist { .. }) => {
-            let built_binary = build_adam_binary().await?;
+        Err(lha_utils_cargo_bin::CargoBinError::NotFound { .. })
+        | Err(lha_utils_cargo_bin::CargoBinError::ResolvedPathDoesNotExist { .. }) => {
+            let built_binary = build_lha_binary().await?;
             (
                 built_binary.to_string_lossy().into_owned(),
                 vec!["-c".to_string(), "analytics.enabled=false".to_string()],
@@ -86,12 +86,12 @@ async fn run_codex_cli(
 
     let mut env = HashMap::new();
     env.insert(
-        "ADAM_HOME".to_string(),
-        adam_home.as_ref().display().to_string(),
+        "LHA_HOME".to_string(),
+        lha_home.as_ref().display().to_string(),
     );
 
     let spawned =
-        adam_utils_pty::spawn_pty_process(&program, &args, cwd.as_ref(), &env, &None).await?;
+        lha_utils_pty::spawn_pty_process(&program, &args, cwd.as_ref(), &env, &None).await?;
     let mut output = Vec::new();
     let mut output_rx = spawned.output_rx;
     let mut exit_rx = spawned.exit_rx;
@@ -146,7 +146,7 @@ fn cli_manifest_path() -> anyhow::Result<PathBuf> {
     Ok(workspace_root.join("cli/Cargo.toml"))
 }
 
-async fn build_adam_binary() -> anyhow::Result<PathBuf> {
+async fn build_lha_binary() -> anyhow::Result<PathBuf> {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let cli_manifest_path = cli_manifest_path()?;
     let workspace_root = cli_manifest_path
@@ -163,22 +163,22 @@ async fn build_adam_binary() -> anyhow::Result<PathBuf> {
             "--manifest-path",
             cli_manifest_path.to_string_lossy().as_ref(),
             "--bin",
-            "adam",
+            "lha",
         ])
         .current_dir(workspace_root)
         .status()
         .await?;
 
     if !status.success() {
-        anyhow::bail!("failed to build adam binary via cargo before PTY test");
+        anyhow::bail!("failed to build lha binary via cargo before PTY test");
     }
 
     let target_dir = cargo_target_directory(&cargo, &cli_manifest_path, workspace_root).await?;
-    let binary_name = if cfg!(windows) { "adam.exe" } else { "adam" };
+    let binary_name = if cfg!(windows) { "lha.exe" } else { "lha" };
     let binary_path = target_dir.join("debug").join(binary_name);
     if !binary_path.exists() {
         anyhow::bail!(
-            "built adam binary was not found at {} (cargo target dir: {})",
+            "built lha binary was not found at {} (cargo target dir: {})",
             binary_path.display(),
             target_dir.display()
         );

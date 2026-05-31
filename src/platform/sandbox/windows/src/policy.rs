@@ -1,5 +1,5 @@
 use anyhow::Result;
-pub use adam_protocol::protocol::SandboxPolicy;
+pub use lha_protocol::protocol::SandboxPolicy;
 
 pub fn parse_policy(value: &str) -> Result<SandboxPolicy> {
     match value {
@@ -39,8 +39,8 @@ mod tests {
     #[test]
     fn rejects_external_sandbox_json() {
         let payload = serde_json::to_string(
-            &adam_protocol::protocol::SandboxPolicy::ExternalSandbox {
-                network_access: adam_protocol::protocol::NetworkAccess::Enabled,
+            &lha_protocol::protocol::SandboxPolicy::ExternalSandbox {
+                network_access: lha_protocol::protocol::NetworkAccess::Enabled,
             },
         )
         .unwrap();

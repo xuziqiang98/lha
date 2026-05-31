@@ -11,10 +11,10 @@ pub struct TestCodexExecBuilder {
 impl TestCodexExecBuilder {
     pub fn cmd(&self) -> assert_cmd::Command {
         let mut cmd = assert_cmd::Command::new(
-            adam_utils_cargo_bin::cargo_bin("adam-exec").expect("should find binary for adam-exec"),
+            lha_utils_cargo_bin::cargo_bin("lha-exec").expect("should find binary for lha-exec"),
         );
         cmd.current_dir(self.cwd.path())
-            .env("ADAM_HOME", self.home.path())
+            .env("LHA_HOME", self.home.path())
             .env("OPENAI_API_KEY", "dummy");
         cmd
     }

@@ -11,47 +11,47 @@ pub mod event_processor_with_jsonl_output;
 mod event_processor_with_raw_event_output;
 pub mod exec_events;
 
-use adam_agent::AuthManager;
-use adam_agent::NewThread;
-use adam_agent::ThreadManager;
-use adam_agent::config::Config;
-use adam_agent::config::ConfigBuilder;
-use adam_agent::config::ConfigOverrides;
-use adam_agent::config::find_adam_home;
-use adam_agent::config::load_config_as_toml_with_cli_overrides;
-use adam_agent::config_loader::CloudRequirementsLoader;
-use adam_agent::config_loader::ConfigLoadError;
-use adam_agent::config_loader::format_config_error_with_source;
-use adam_agent::env::ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR;
-use adam_agent::env::ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR;
-use adam_agent::env::ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR;
-use adam_agent::env::ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR;
-use adam_agent::git_info::get_git_repo_root;
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::Event;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::ReviewRequest;
-use adam_agent::protocol::ReviewTarget;
-use adam_agent::protocol::SandboxPolicy;
-use adam_agent::protocol::SessionSource;
-use adam_llm::CatalogRefreshStrategy;
-use adam_llm::RuntimeEndpoint;
-use adam_protocol::approvals::ElicitationAction;
-use adam_protocol::config_types::Identity;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::SandboxMode;
-use adam_protocol::config_types::Settings;
-use adam_protocol::config_types::WindowsSandboxLevel;
-use adam_protocol::openai_models::ReasoningEffort;
-use adam_protocol::user_input::UserInput;
-use adam_utils_absolute_path::AbsolutePathBuf;
 pub use cli::Cli;
 pub use cli::Command;
 pub use cli::ReviewArgs;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use event_processor_with_raw_event_output::EventProcessorWithRawEventOutput;
+use lha_agent::AuthManager;
+use lha_agent::NewThread;
+use lha_agent::ThreadManager;
+use lha_agent::config::Config;
+use lha_agent::config::ConfigBuilder;
+use lha_agent::config::ConfigOverrides;
+use lha_agent::config::find_lha_home;
+use lha_agent::config::load_config_as_toml_with_cli_overrides;
+use lha_agent::config_loader::CloudRequirementsLoader;
+use lha_agent::config_loader::ConfigLoadError;
+use lha_agent::config_loader::format_config_error_with_source;
+use lha_agent::env::LHA_AGENT_JOB_AUTH_TOKEN_ENV_VAR;
+use lha_agent::env::LHA_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR;
+use lha_agent::env::LHA_AGENT_JOB_SANDBOX_POLICY_ENV_VAR;
+use lha_agent::env::LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR;
+use lha_agent::git_info::get_git_repo_root;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::Event;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::ReviewRequest;
+use lha_agent::protocol::ReviewTarget;
+use lha_agent::protocol::SandboxPolicy;
+use lha_agent::protocol::SessionSource;
+use lha_llm::CatalogRefreshStrategy;
+use lha_llm::RuntimeEndpoint;
+use lha_protocol::approvals::ElicitationAction;
+use lha_protocol::config_types::Identity;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::SandboxMode;
+use lha_protocol::config_types::Settings;
+use lha_protocol::config_types::WindowsSandboxLevel;
+use lha_protocol::openai_models::ReasoningEffort;
+use lha_protocol::user_input::UserInput;
+use lha_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -74,10 +74,10 @@ use uuid::Uuid;
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
-use adam_agent::default_client::set_default_client_residency_requirement;
-use adam_agent::default_client::set_default_originator;
-use adam_agent::find_thread_path_by_id_str;
-use adam_agent::find_thread_path_by_name_str;
+use lha_agent::default_client::set_default_client_residency_requirement;
+use lha_agent::default_client::set_default_originator;
+use lha_agent::find_thread_path_by_id_str;
+use lha_agent::find_thread_path_by_name_str;
 
 enum InitialOperation {
     UserTurn {
@@ -91,8 +91,8 @@ enum InitialOperation {
 
 #[derive(Clone)]
 struct ThreadEventEnvelope {
-    thread_id: adam_protocol::ThreadId,
-    thread: Arc<adam_agent::CodexThread>,
+    thread_id: lha_protocol::ThreadId,
+    thread: Arc<lha_agent::CodexThread>,
     event: Event,
 }
 
@@ -110,12 +110,12 @@ struct AgentJobStartupContext {
 }
 
 fn take_agent_job_startup_context() -> anyhow::Result<AgentJobStartupContext> {
-    let provider_context = std::env::var(ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR).ok();
-    let auth_token = std::env::var(ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR)
+    let provider_context = std::env::var(LHA_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR).ok();
+    let auth_token = std::env::var(LHA_AGENT_JOB_AUTH_TOKEN_ENV_VAR)
         .ok()
         .filter(|token| !token.trim().is_empty());
-    let sandbox_policy = std::env::var(ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR).ok();
-    let windows_sandbox_level = std::env::var(ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR).ok();
+    let sandbox_policy = std::env::var(LHA_AGENT_JOB_SANDBOX_POLICY_ENV_VAR).ok();
+    let windows_sandbox_level = std::env::var(LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR).ok();
     clear_agent_job_context_env();
 
     let model_provider_overrides = match provider_context {
@@ -131,11 +131,11 @@ fn take_agent_job_startup_context() -> anyhow::Result<AgentJobStartupContext> {
     };
 
     let sandbox_policy = parse_agent_job_env_json::<SandboxPolicy>(
-        ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR,
+        LHA_AGENT_JOB_SANDBOX_POLICY_ENV_VAR,
         sandbox_policy,
     )?;
     let windows_sandbox_level = parse_agent_job_env_json::<WindowsSandboxLevel>(
-        ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR,
+        LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR,
         windows_sandbox_level,
     )?;
 
@@ -159,14 +159,14 @@ where
 }
 
 fn clear_agent_job_context_env() {
-    // SAFETY: `adam-exec` calls this during startup before it creates session
+    // SAFETY: `lha-exec` calls this during startup before it creates session
     // services or any worker threads that could concurrently read the process
     // environment.
     unsafe {
-        std::env::remove_var(ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR);
-        std::env::remove_var(ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR);
-        std::env::remove_var(ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR);
-        std::env::remove_var(ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR);
+        std::env::remove_var(LHA_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR);
+        std::env::remove_var(LHA_AGENT_JOB_AUTH_TOKEN_ENV_VAR);
+        std::env::remove_var(LHA_AGENT_JOB_SANDBOX_POLICY_ENV_VAR);
+        std::env::remove_var(LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR);
     }
 }
 
@@ -174,7 +174,7 @@ fn startup_sandbox_overrides(
     full_auto: bool,
     dangerously_bypass_approvals_and_sandbox: bool,
     inherited_sandbox_policy: Option<&SandboxPolicy>,
-    sandbox_mode_cli_arg: Option<adam_common::SandboxModeCliArg>,
+    sandbox_mode_cli_arg: Option<lha_common::SandboxModeCliArg>,
 ) -> (Option<SandboxPolicy>, Option<SandboxMode>) {
     if full_auto {
         (None, Some(SandboxMode::WorkspaceWrite))
@@ -188,8 +188,8 @@ fn startup_sandbox_overrides(
 }
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
-    if let Err(err) = set_default_originator("adam_exec".to_string()) {
-        tracing::warn!(?err, "Failed to set adam exec originator override {err:?}");
+    if let Err(err) = set_default_originator("lha_exec".to_string()) {
+        tracing::warn!(?err, "Failed to set lha exec originator override {err:?}");
     }
 
     let Cli {
@@ -269,17 +269,17 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]
-    let adam_home = match find_adam_home() {
-        Ok(adam_home) => adam_home,
+    let lha_home = match find_lha_home() {
+        Ok(lha_home) => lha_home,
         Err(err) => {
-            eprintln!("Error finding adam home: {err}");
+            eprintln!("Error finding lha home: {err}");
             std::process::exit(1);
         }
     };
 
     #[allow(clippy::print_stderr)]
     let _config_toml = match load_config_as_toml_with_cli_overrides(
-        &adam_home,
+        &lha_home,
         &config_cwd,
         cli_kv_overrides.clone(),
     )
@@ -340,7 +340,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     set_default_client_residency_requirement(config.enforce_residency.value());
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        adam_agent::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, false)
+        lha_agent::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, false)
     })) {
         Ok(Ok(otel)) => otel,
         Ok(Err(e)) => {
@@ -394,9 +394,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         std::process::exit(1);
     }
 
-    let auth_manager = AuthManager::shared(config.adam_home.clone(), true);
+    let auth_manager = AuthManager::shared(config.lha_home.clone(), true);
     let thread_manager = Arc::new(ThreadManager::new(
-        config.adam_home.clone(),
+        config.lha_home.clone(),
         auth_manager.clone(),
         config.model_provider_id.as_str(),
         config.model_provider.clone(),
@@ -434,7 +434,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let (initial_operation, prompt_summary) = match (command, prompt, images) {
         (Some(ExecCommand::Review(review_cli)), _, _) => {
             let review_request = build_review_request(review_cli)?;
-            let summary = adam_agent::review_prompts::user_facing_hint(&review_request.target);
+            let summary = lha_agent::review_prompts::user_facing_hint(&review_request.target);
             (InitialOperation::Review { review_request }, summary)
         }
         (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
@@ -491,11 +491,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     };
 
-    // Print the effective configuration and initial request so users can see what Adam
+    // Print the effective configuration and initial request so users can see what LHA
     // is using.
     event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
 
-    info!("Adam initialized with event: {session_configured:?}");
+    info!("LHA initialized with event: {session_configured:?}");
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ThreadEventEnvelope>();
     let attached_threads = Arc::new(Mutex::new(HashSet::from([primary_thread_id])));
@@ -506,7 +506,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         tokio::spawn(async move {
             if tokio::signal::ctrl_c().await.is_ok() {
                 tracing::debug!("Keyboard interrupt");
-                // Immediately notify Adam to abort any in-flight task.
+                // Immediately notify LHA to abort any in-flight task.
                 thread.submit(Op::Interrupt).await.ok();
             }
         });
@@ -634,8 +634,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 }
 
 fn spawn_thread_listener(
-    thread_id: adam_protocol::ThreadId,
-    thread: Arc<adam_agent::CodexThread>,
+    thread_id: lha_protocol::ThreadId,
+    thread: Arc<lha_agent::CodexThread>,
     tx: tokio::sync::mpsc::UnboundedSender<ThreadEventEnvelope>,
 ) {
     tokio::spawn(async move {
@@ -679,11 +679,11 @@ async fn resolve_resume_path(
         } else {
             Some(config.cwd.as_path())
         };
-        match adam_agent::RolloutRecorder::find_latest_thread_path(
-            &config.adam_home,
+        match lha_agent::RolloutRecorder::find_latest_thread_path(
+            &config.lha_home,
             1,
             None,
-            adam_agent::ThreadSortKey::UpdatedAt,
+            lha_agent::ThreadSortKey::UpdatedAt,
             &[],
             None,
             &config.model_provider_id,
@@ -699,10 +699,10 @@ async fn resolve_resume_path(
         }
     } else if let Some(id_str) = args.session_id.as_deref() {
         if Uuid::parse_str(id_str).is_ok() {
-            let path = find_thread_path_by_id_str(&config.adam_home, id_str).await?;
+            let path = find_thread_path_by_id_str(&config.lha_home, id_str).await?;
             Ok(path)
         } else {
-            let path = find_thread_path_by_name_str(&config.adam_home, id_str).await?;
+            let path = find_thread_path_by_name_str(&config.lha_home, id_str).await?;
             Ok(path)
         }
     } else {
@@ -750,11 +750,11 @@ fn identity_for_kind(
         },
     };
     let mask = match kind {
-        IdentityKind::Nobody => adam_identity::nobody_preset(),
-        IdentityKind::Planner => adam_identity::planner_preset(),
-        IdentityKind::Programmer => adam_identity::programmer_preset(),
-        IdentityKind::Explorer => adam_identity::explorer_preset(),
-        IdentityKind::Reviewer => adam_identity::reviewer_preset(),
+        IdentityKind::Nobody => lha_identity::nobody_preset(),
+        IdentityKind::Planner => lha_identity::planner_preset(),
+        IdentityKind::Programmer => lha_identity::programmer_preset(),
+        IdentityKind::Explorer => lha_identity::explorer_preset(),
+        IdentityKind::Reviewer => lha_identity::reviewer_preset(),
     };
     base.apply_mask(&mask)
 }
@@ -940,7 +940,7 @@ fn build_review_request(args: ReviewArgs) -> anyhow::Result<ReviewRequest> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_agent::protocol::NetworkAccess;
+    use lha_agent::protocol::NetworkAccess;
     use pretty_assertions::assert_eq;
     use std::sync::Mutex as StdMutex;
 
@@ -984,15 +984,15 @@ mod tests {
             model_provider: provider,
         };
         set_env_var(
-            ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR,
+            LHA_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR,
             &serde_json::to_string(&context).expect("provider context json"),
         );
-        set_env_var(ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR, "secret-token");
+        set_env_var(LHA_AGENT_JOB_AUTH_TOKEN_ENV_VAR, "secret-token");
 
         let context = take_agent_job_startup_context().expect("startup context");
 
-        assert!(std::env::var(ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR).is_err());
-        assert!(std::env::var(ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR).is_err());
+        assert!(std::env::var(LHA_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR).is_err());
+        assert!(std::env::var(LHA_AGENT_JOB_AUTH_TOKEN_ENV_VAR).is_err());
         let provider = context
             .model_provider_overrides
             .get("mock.main")
@@ -1025,19 +1025,19 @@ mod tests {
             exclude_slash_tmp: false,
         };
         set_env_var(
-            ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR,
+            LHA_AGENT_JOB_SANDBOX_POLICY_ENV_VAR,
             &serde_json::to_string(&expected_policy).expect("sandbox policy json"),
         );
         set_env_var(
-            ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR,
+            LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR,
             &serde_json::to_string(&WindowsSandboxLevel::RestrictedToken)
                 .expect("windows sandbox level json"),
         );
 
         let context = take_agent_job_startup_context().expect("startup context");
 
-        assert!(std::env::var(ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR).is_err());
-        assert!(std::env::var(ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR).is_err());
+        assert!(std::env::var(LHA_AGENT_JOB_SANDBOX_POLICY_ENV_VAR).is_err());
+        assert!(std::env::var(LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR).is_err());
         assert_eq!(context.sandbox_policy, Some(expected_policy));
         assert_eq!(
             context.windows_sandbox_level,
@@ -1049,14 +1049,14 @@ mod tests {
     fn agent_job_startup_context_rejects_invalid_sandbox_env() {
         let _guard = ENV_LOCK.lock().expect("env lock");
         clear_agent_job_context_env();
-        set_env_var(ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR, "not json");
+        set_env_var(LHA_AGENT_JOB_SANDBOX_POLICY_ENV_VAR, "not json");
 
         let err = take_agent_job_startup_context().expect_err("invalid sandbox env");
 
-        assert!(std::env::var(ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR).is_err());
+        assert!(std::env::var(LHA_AGENT_JOB_SANDBOX_POLICY_ENV_VAR).is_err());
         assert!(
             err.to_string()
-                .contains("invalid ADAM_AGENT_JOB_SANDBOX_POLICY value")
+                .contains("invalid LHA_AGENT_JOB_SANDBOX_POLICY value")
         );
     }
 
@@ -1070,7 +1070,7 @@ mod tests {
             false,
             false,
             Some(&policy),
-            Some(adam_common::SandboxModeCliArg::DangerFullAccess),
+            Some(lha_common::SandboxModeCliArg::DangerFullAccess),
         );
 
         assert_eq!(overrides, (Some(policy), None));
@@ -1089,7 +1089,7 @@ mod tests {
             false,
             false,
             Some(&policy),
-            Some(adam_common::SandboxModeCliArg::ReadOnly),
+            Some(lha_common::SandboxModeCliArg::ReadOnly),
         );
 
         assert_eq!(overrides, (Some(policy), None));
@@ -1101,7 +1101,7 @@ mod tests {
             false,
             false,
             None,
-            Some(adam_common::SandboxModeCliArg::WorkspaceWrite),
+            Some(lha_common::SandboxModeCliArg::WorkspaceWrite),
         );
 
         assert_eq!(overrides, (None, Some(SandboxMode::WorkspaceWrite)));

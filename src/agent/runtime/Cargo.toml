@@ -1,25 +1,25 @@
 [package]
 edition.workspace = true
 license.workspace = true
-name = "adam-agent"
+name = "lha-agent"
 version.workspace = true
 build = "build.rs"
 
 [lib]
 doctest = false
-name = "adam_agent"
+name = "lha_agent"
 path = "src/lib.rs"
 
 [[bin]]
-name = "adam-write-config-schema"
+name = "lha-write-config-schema"
 path = "src/bin/config_schema.rs"
 
 [[bin]]
-name = "adam-write-models-schema"
+name = "lha-write-models-schema"
 path = "src/bin/models_schema.rs"
 
 [[bin]]
-name = "adam-write-state-schema"
+name = "lha-write-state-schema"
 path = "src/bin/state_schema.rs"
 
 [lints]
@@ -34,29 +34,29 @@ base64 = { workspace = true }
 chardetng = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
-adam-api = { workspace = true }
-adam-agent-core = { workspace = true }
-adam-agent-runtime = { workspace = true }
-adam-app-server-protocol = { workspace = true }
-adam-apply-patch = { workspace = true }
-adam-async-utils = { workspace = true }
-adam-client = { workspace = true }
-adam-execpolicy = { workspace = true }
-adam-file-search = { workspace = true }
-adam-git = { workspace = true }
-adam-identity = { workspace = true }
-adam-keyring-store = { workspace = true }
-adam-llm = { workspace = true }
-adam-otel = { workspace = true }
-adam-protocol = { workspace = true }
-adam-rmcp-client = { workspace = true }
-adam-state = { workspace = true }
-adam-utils-absolute-path = { workspace = true }
-adam-utils-home-dir = { workspace = true }
-adam-utils-pty = { workspace = true }
-adam-utils-readiness = { workspace = true }
-adam-utils-string = { workspace = true }
-adam-windows-sandbox = { package = "adam-windows-sandbox", path = "../../platform/sandbox/windows" }
+lha-api = { workspace = true }
+lha-agent-core = { workspace = true }
+lha-agent-runtime = { workspace = true }
+lha-app-server-protocol = { workspace = true }
+lha-apply-patch = { workspace = true }
+lha-async-utils = { workspace = true }
+lha-client = { workspace = true }
+lha-execpolicy = { workspace = true }
+lha-file-search = { workspace = true }
+lha-git = { workspace = true }
+lha-identity = { workspace = true }
+lha-keyring-store = { workspace = true }
+lha-llm = { workspace = true }
+lha-otel = { workspace = true }
+lha-protocol = { workspace = true }
+lha-rmcp-client = { workspace = true }
+lha-state = { workspace = true }
+lha-utils-absolute-path = { workspace = true }
+lha-utils-home-dir = { workspace = true }
+lha-utils-pty = { workspace = true }
+lha-utils-readiness = { workspace = true }
+lha-utils-string = { workspace = true }
+lha-windows-sandbox = { package = "lha-windows-sandbox", path = "../../platform/sandbox/windows" }
 dunce = { workspace = true }
 dirs = { workspace = true }
 encoding_rs = { workspace = true }
@@ -147,14 +147,14 @@ keyring = { workspace = true, features = ["sync-secret-service"] }
 [dev-dependencies]
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
-adam-arg0 = { workspace = true }
-adam-agent = { path = ".", default-features = false, features = [
+lha-arg0 = { workspace = true }
+lha-agent = { path = ".", default-features = false, features = [
     "deterministic_process_ids",
 ] }
-adam-otel = { workspace = true, features = [
+lha-otel = { workspace = true, features = [
     "disable-default-metrics-exporter",
 ] }
-adam-utils-cargo-bin = { workspace = true }
+lha-utils-cargo-bin = { workspace = true }
 core_test_support = { workspace = true }
 ctor = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png"] }

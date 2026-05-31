@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use adam_protocol::ThreadId;
+use lha_protocol::ThreadId;
 use tracing::error;
 
 use crate::parse_command::shlex_join;
@@ -9,7 +9,7 @@ use crate::parse_command::shlex_join;
 /// Emit structured feedback metadata as key/value pairs.
 ///
 /// This logs a tracing event with `target: "feedback_tags"`. If
-/// `adam_feedback::CodexFeedback::metadata_layer()` is installed, these fields are captured and
+/// `lha_feedback::CodexFeedback::metadata_layer()` is installed, these fields are captured and
 /// later attached as tags when feedback is uploaded.
 ///
 /// Values are wrapped with [`tracing::field::DebugValue`], so the expression only needs to
@@ -18,8 +18,8 @@ use crate::parse_command::shlex_join;
 /// Example:
 ///
 /// ```rust
-/// adam_agent::feedback_tags!(model = "gpt-5", cached = true);
-/// adam_agent::feedback_tags!(provider = provider_id, request_id = request_id);
+/// lha_agent::feedback_tags!(model = "gpt-5", cached = true);
+/// lha_agent::feedback_tags!(provider = provider_id, request_id = request_id);
 /// ```
 #[macro_export]
 macro_rules! feedback_tags {
@@ -66,9 +66,9 @@ pub fn resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>) ->
         let needs_double_dash = target.starts_with('-');
         let escaped = shlex_join(&[target]);
         if needs_double_dash {
-            format!("adam resume -- {escaped}")
+            format!("lha resume -- {escaped}")
         } else {
-            format!("adam resume {escaped}")
+            format!("lha resume {escaped}")
         }
     })
 }
@@ -98,7 +98,7 @@ mod tests {
     fn resume_command_prefers_name_over_id() {
         let thread_id = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
         let command = resume_command(Some("my-thread"), Some(thread_id));
-        assert_eq!(command, Some("adam resume my-thread".to_string()));
+        assert_eq!(command, Some("lha resume my-thread".to_string()));
     }
 
     #[test]
@@ -107,7 +107,7 @@ mod tests {
         let command = resume_command(None, Some(thread_id));
         assert_eq!(
             command,
-            Some("adam resume 123e4567-e89b-12d3-a456-426614174000".to_string())
+            Some("lha resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
     }
 
@@ -120,15 +120,12 @@ mod tests {
     #[test]
     fn resume_command_quotes_thread_name_when_needed() {
         let command = resume_command(Some("-starts-with-dash"), None);
-        assert_eq!(
-            command,
-            Some("adam resume -- -starts-with-dash".to_string())
-        );
+        assert_eq!(command, Some("lha resume -- -starts-with-dash".to_string()));
 
         let command = resume_command(Some("two words"), None);
-        assert_eq!(command, Some("adam resume 'two words'".to_string()));
+        assert_eq!(command, Some("lha resume 'two words'".to_string()));
 
         let command = resume_command(Some("quote'case"), None);
-        assert_eq!(command, Some("adam resume \"quote'case\"".to_string()));
+        assert_eq!(command, Some("lha resume \"quote'case\"".to_string()));
     }
 }

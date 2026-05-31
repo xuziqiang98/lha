@@ -6,7 +6,7 @@ import type { ThreadId } from "./ThreadId";
 
 export type ExecCommandApprovalParams = { conversationId: ThreadId,
 /**
- * Use to correlate this with [adam_agent::protocol::ExecCommandBeginEvent]
- * and [adam_agent::protocol::ExecCommandEndEvent].
+ * Use to correlate this with [lha_agent::protocol::ExecCommandBeginEvent]
+ * and [lha_agent::protocol::ExecCommandEndEvent].
  */
 callId: string, command: Array<string>, cwd: string, reason: string | null, parsedCmd: Array<ParsedCommand>, };

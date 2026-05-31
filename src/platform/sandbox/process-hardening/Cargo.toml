@@ -1,11 +1,11 @@
 [package]
-name = "adam-process-hardening"
+name = "lha-process-hardening"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "adam_process_hardening"
+name = "lha_process_hardening"
 path = "src/lib.rs"
 
 [lints]

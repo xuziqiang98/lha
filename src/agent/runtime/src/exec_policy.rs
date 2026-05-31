@@ -9,17 +9,17 @@ use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::is_dangerous_command::command_might_be_dangerous;
 use crate::is_safe_command::is_known_safe_command;
-use adam_execpolicy::AmendError;
-use adam_execpolicy::Decision;
-use adam_execpolicy::Error as ExecPolicyRuleError;
-use adam_execpolicy::Evaluation;
-use adam_execpolicy::Policy;
-use adam_execpolicy::PolicyParser;
-use adam_execpolicy::RuleMatch;
-use adam_execpolicy::blocking_append_allow_prefix_rule;
-use adam_protocol::approvals::ExecPolicyAmendment;
-use adam_protocol::protocol::AskForApproval;
-use adam_protocol::protocol::SandboxPolicy;
+use lha_execpolicy::AmendError;
+use lha_execpolicy::Decision;
+use lha_execpolicy::Error as ExecPolicyRuleError;
+use lha_execpolicy::Evaluation;
+use lha_execpolicy::Policy;
+use lha_execpolicy::PolicyParser;
+use lha_execpolicy::RuleMatch;
+use lha_execpolicy::blocking_append_allow_prefix_rule;
+use lha_protocol::approvals::ExecPolicyAmendment;
+use lha_protocol::protocol::AskForApproval;
+use lha_protocol::protocol::SandboxPolicy;
 use thiserror::Error;
 use tokio::fs;
 use tokio::task::spawn_blocking;
@@ -61,7 +61,7 @@ pub enum ExecPolicyError {
     #[error("failed to parse rules file {path}: {source}")]
     ParsePolicy {
         path: String,
-        source: adam_execpolicy::Error,
+        source: lha_execpolicy::Error,
     },
 }
 
@@ -190,10 +190,10 @@ impl ExecPolicyManager {
 
     pub(crate) async fn append_amendment_and_update(
         &self,
-        adam_home: &Path,
+        lha_home: &Path,
         amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
-        let policy_path = default_policy_path(adam_home);
+        let policy_path = default_policy_path(lha_home);
         let prefix = amendment.command.clone();
         spawn_blocking({
             let policy_path = policy_path.clone();
@@ -248,7 +248,7 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
     // from each layer, so that higher-precedence layers can override
     // rules defined in lower-precedence ones.
     let mut policy_paths = Vec::new();
-    // Include disabled project layers so .adam/rules still applies when
+    // Include disabled project layers so .lha/rules still applies when
     // project config.toml is trust-disabled.
     for layer in config_stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true) {
         if let Some(config_folder) = layer.config_folder() {
@@ -358,8 +358,8 @@ pub fn render_decision_for_unmatched_command(
     }
 }
 
-fn default_policy_path(adam_home: &Path) -> PathBuf {
-    adam_home.join(RULES_DIR_NAME).join(DEFAULT_POLICY_FILE)
+fn default_policy_path(lha_home: &Path) -> PathBuf {
+    lha_home.join(RULES_DIR_NAME).join(DEFAULT_POLICY_FILE)
 }
 
 /// Derive a proposed execpolicy amendment when a command requires user approval
@@ -564,10 +564,10 @@ mod tests {
     use crate::config_loader::ConfigRequirementsToml;
     use crate::features::Feature;
     use crate::features::Features;
-    use adam_app_server_protocol::ConfigLayerSource;
-    use adam_protocol::protocol::AskForApproval;
-    use adam_protocol::protocol::SandboxPolicy;
-    use adam_utils_absolute_path::AbsolutePathBuf;
+    use lha_app_server_protocol::ConfigLayerSource;
+    use lha_protocol::protocol::AskForApproval;
+    use lha_protocol::protocol::SandboxPolicy;
+    use lha_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
@@ -575,11 +575,11 @@ mod tests {
     use tempfile::tempdir;
     use toml::Value as TomlValue;
 
-    fn config_stack_for_dot_adam_folder(dot_adam_folder: &Path) -> ConfigLayerStack {
-        let dot_adam_folder =
-            AbsolutePathBuf::from_absolute_path(dot_adam_folder).expect("absolute dot_adam_folder");
+    fn config_stack_for_dot_lha_folder(dot_lha_folder: &Path) -> ConfigLayerStack {
+        let dot_lha_folder =
+            AbsolutePathBuf::from_absolute_path(dot_lha_folder).expect("absolute dot_lha_folder");
         let layer = ConfigLayerEntry::new(
-            ConfigLayerSource::Project { dot_adam_folder },
+            ConfigLayerSource::Project { dot_lha_folder },
             TomlValue::Table(Default::default()),
         );
         ConfigLayerStack::new(
@@ -595,7 +595,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.disable(Feature::ExecPolicy);
         let temp_dir = tempdir().expect("create temp dir");
-        let config_stack = config_stack_for_dot_adam_folder(temp_dir.path());
+        let config_stack = config_stack_for_dot_lha_folder(temp_dir.path());
 
         let manager = ExecPolicyManager::load(&features, &config_stack)
             .await
@@ -631,7 +631,7 @@ mod tests {
     #[tokio::test]
     async fn loads_policies_from_policy_subdirectory() {
         let temp_dir = tempdir().expect("create temp dir");
-        let config_stack = config_stack_for_dot_adam_folder(temp_dir.path());
+        let config_stack = config_stack_for_dot_lha_folder(temp_dir.path());
         let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
         fs::create_dir_all(&policy_dir).expect("create policy dir");
         fs::write(
@@ -660,7 +660,7 @@ mod tests {
     #[tokio::test]
     async fn ignores_policies_outside_policy_dir() {
         let temp_dir = tempdir().expect("create temp dir");
-        let config_stack = config_stack_for_dot_adam_folder(temp_dir.path());
+        let config_stack = config_stack_for_dot_lha_folder(temp_dir.path());
         fs::write(
             temp_dir.path().join("root.rules"),
             r#"prefix_rule(pattern=["ls"], decision="prompt")"#,
@@ -693,10 +693,10 @@ mod tests {
             r#"prefix_rule(pattern=["ls"], decision="forbidden")"#,
         )?;
 
-        let project_dot_adam_folder = AbsolutePathBuf::from_absolute_path(project_dir.path())?;
+        let project_dot_lha_folder = AbsolutePathBuf::from_absolute_path(project_dir.path())?;
         let layers = vec![ConfigLayerEntry::new_disabled(
             ConfigLayerSource::Project {
-                dot_adam_folder: project_dot_adam_folder,
+                dot_lha_folder: project_dot_lha_folder,
             },
             TomlValue::Table(Default::default()),
             "trust disabled",
@@ -745,7 +745,7 @@ mod tests {
 
         let user_config_toml =
             AbsolutePathBuf::from_absolute_path(user_dir.path().join("config.toml"))?;
-        let project_dot_adam_folder = AbsolutePathBuf::from_absolute_path(project_dir.path())?;
+        let project_dot_lha_folder = AbsolutePathBuf::from_absolute_path(project_dir.path())?;
         let layers = vec![
             ConfigLayerEntry::new(
                 ConfigLayerSource::User {
@@ -755,7 +755,7 @@ mod tests {
             ),
             ConfigLayerEntry::new(
                 ConfigLayerSource::Project {
-                    dot_adam_folder: project_dot_adam_folder,
+                    dot_lha_folder: project_dot_lha_folder,
                 },
                 TomlValue::Table(Default::default()),
             ),
@@ -1025,12 +1025,12 @@ prefix_rule(
 
     #[tokio::test]
     async fn append_execpolicy_amendment_updates_policy_and_file() {
-        let adam_home = tempdir().expect("create temp dir");
+        let lha_home = tempdir().expect("create temp dir");
         let prefix = vec!["echo".to_string(), "hello".to_string()];
         let manager = ExecPolicyManager::default();
 
         manager
-            .append_amendment_and_update(adam_home.path(), &ExecPolicyAmendment::from(prefix))
+            .append_amendment_and_update(lha_home.path(), &ExecPolicyAmendment::from(prefix))
             .await
             .expect("update policy");
         let updated_policy = manager.current();
@@ -1047,7 +1047,7 @@ prefix_rule(
             }
         ));
 
-        let contents = fs::read_to_string(default_policy_path(adam_home.path()))
+        let contents = fs::read_to_string(default_policy_path(lha_home.path()))
             .expect("policy file should have been created");
         assert_eq!(
             contents,
@@ -1058,11 +1058,11 @@ prefix_rule(
 
     #[tokio::test]
     async fn append_execpolicy_amendment_rejects_empty_prefix() {
-        let adam_home = tempdir().expect("create temp dir");
+        let lha_home = tempdir().expect("create temp dir");
         let manager = ExecPolicyManager::default();
 
         let result = manager
-            .append_amendment_and_update(adam_home.path(), &ExecPolicyAmendment::from(vec![]))
+            .append_amendment_and_update(lha_home.path(), &ExecPolicyAmendment::from(vec![]))
             .await;
 
         assert!(matches!(

@@ -8,24 +8,24 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use adam_agent::config::types::McpServerConfig;
-use adam_agent::config::types::McpServerTransportConfig;
+use lha_agent::config::types::McpServerConfig;
+use lha_agent::config::types::McpServerTransportConfig;
 
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::McpInvocation;
-use adam_agent::protocol::McpToolCallBeginEvent;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::SandboxPolicy;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::user_input::UserInput;
-use adam_utils_cargo_bin::cargo_bin;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::McpInvocation;
+use lha_agent::protocol::McpToolCallBeginEvent;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::SandboxPolicy;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::user_input::UserInput;
+use lha_utils_cargo_bin::cargo_bin;
 use mcp_types::ContentBlock;
 use serde_json::Value;
 use serde_json::json;
@@ -842,9 +842,9 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// This test writes to a fallback credentials file in ADAM_HOME.
-/// Ideally, we wouldn't need to serialize the test but it's much more cumbersome to wire ADAM_HOME through the code.
-#[serial(adam_home)]
+/// This test writes to a fallback credentials file in LHA_HOME.
+/// Ideally, we wouldn't need to serialize the test but it's much more cumbersome to wire LHA_HOME through the code.
+#[serial(lha_home)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
@@ -905,7 +905,7 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
         .await?;
 
     let temp_home = tempdir()?;
-    let _guard = EnvVarGuard::set("ADAM_HOME", temp_home.path().as_os_str());
+    let _guard = EnvVarGuard::set("LHA_HOME", temp_home.path().as_os_str());
     write_fallback_oauth_tokens(
         temp_home.path(),
         server_name,

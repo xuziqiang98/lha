@@ -158,7 +158,7 @@ mod windows_impl {
         !policy.has_full_network_access()
     }
 
-    fn ensure_adam_home_exists(p: &Path) -> Result<()> {
+    fn ensure_lha_home_exists(p: &Path) -> Result<()> {
         std::fs::create_dir_all(p)?;
         Ok(())
     }
@@ -201,7 +201,7 @@ mod windows_impl {
     pub fn run_windows_sandbox_capture(
         policy_json_or_preset: &str,
         sandbox_policy_cwd: &Path,
-        adam_home: &Path,
+        lha_home: &Path,
         command: Vec<String>,
         cwd: &Path,
         mut env_map: HashMap<String, String>,
@@ -214,9 +214,9 @@ mod windows_impl {
         if apply_network_block {
             apply_no_network_to_env(&mut env_map)?;
         }
-        ensure_adam_home_exists(adam_home)?;
+        ensure_lha_home_exists(lha_home)?;
         let current_dir = cwd.to_path_buf();
-        let sandbox_base = adam_home.join(".sandbox");
+        let sandbox_base = lha_home.join(".sandbox");
         std::fs::create_dir_all(&sandbox_base)?;
         let logs_base_dir = Some(sandbox_base.as_path());
         log_start(&command, logs_base_dir);
@@ -228,7 +228,7 @@ mod windows_impl {
         ) {
             anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
         }
-        let caps = load_or_create_cap_sids(adam_home)?;
+        let caps = load_or_create_cap_sids(lha_home)?;
         let (h_token, psid_to_use): (HANDLE, *mut c_void) = unsafe {
             match &policy {
                 SandboxPolicy::ReadOnly => {
@@ -485,9 +485,9 @@ mod windows_impl {
 
 #[cfg(not(target_os = "windows"))]
 mod stub {
-    use adam_protocol::protocol::SandboxPolicy;
     use anyhow::bail;
     use anyhow::Result;
+    use lha_protocol::protocol::SandboxPolicy;
     use std::collections::HashMap;
     use std::path::Path;
 
@@ -502,7 +502,7 @@ mod stub {
     pub fn run_windows_sandbox_capture(
         _policy_json_or_preset: &str,
         _sandbox_policy_cwd: &Path,
-        _adam_home: &Path,
+        _lha_home: &Path,
         _command: Vec<String>,
         _cwd: &Path,
         _env_map: HashMap<String, String>,
@@ -512,7 +512,7 @@ mod stub {
     }
 
     pub fn apply_world_writable_scan_and_denies(
-        _adam_home: &Path,
+        _lha_home: &Path,
         _cwd: &Path,
         _env_map: &HashMap<String, String>,
         _sandbox_policy: &SandboxPolicy,

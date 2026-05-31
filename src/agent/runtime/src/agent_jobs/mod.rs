@@ -1,19 +1,19 @@
 use crate::client::TurnRuntime;
 use crate::config::model_ref::ModelRef;
-use crate::env::ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR;
-use crate::env::ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR;
-use crate::env::ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR;
-use crate::env::ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR;
+use crate::env::LHA_AGENT_JOB_AUTH_TOKEN_ENV_VAR;
+use crate::env::LHA_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR;
+use crate::env::LHA_AGENT_JOB_SANDBOX_POLICY_ENV_VAR;
+use crate::env::LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR;
 use crate::error::CodexErr;
-use adam_llm::RuntimeEndpoint;
-use adam_protocol::ThreadId;
-use adam_protocol::config_types::WindowsSandboxLevel;
-use adam_protocol::protocol::AgentJobDisplayStatus;
-use adam_protocol::protocol::AgentJobKind;
-use adam_protocol::protocol::AgentJobStatusEvent;
-use adam_protocol::protocol::Event;
-use adam_protocol::protocol::EventMsg;
-use adam_protocol::protocol::SandboxPolicy;
+use lha_llm::RuntimeEndpoint;
+use lha_protocol::ThreadId;
+use lha_protocol::config_types::WindowsSandboxLevel;
+use lha_protocol::protocol::AgentJobDisplayStatus;
+use lha_protocol::protocol::AgentJobKind;
+use lha_protocol::protocol::AgentJobStatusEvent;
+use lha_protocol::protocol::Event;
+use lha_protocol::protocol::EventMsg;
+use lha_protocol::protocol::SandboxPolicy;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -138,7 +138,7 @@ impl AgentJobSnapshot {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AgentJobExecConfig {
-    pub(crate) adam_home: PathBuf,
+    pub(crate) lha_home: PathBuf,
     pub(crate) model_arg: Option<String>,
     pub(crate) profile_arg: Option<String>,
     pub(crate) model_provider_id: String,
@@ -190,7 +190,7 @@ impl AgentJobExecConfig {
         let mut model_provider = runtime.endpoint();
         let auth_token = model_provider.bearer_token.take();
         Self {
-            adam_home: config.adam_home.clone(),
+            lha_home: config.lha_home.clone(),
             model_arg: Some(canonical_model_arg(&config.model_provider_id, model)),
             profile_arg: config.active_profile.clone(),
             model_provider_id: config.model_provider_id.clone(),
@@ -244,12 +244,12 @@ pub(crate) struct AgentJobManager {
     semaphore: Arc<Semaphore>,
     configured_max_runtime: Duration,
     exec_bin_override: Option<PathBuf>,
-    adam_home: PathBuf,
+    lha_home: PathBuf,
 }
 
 impl AgentJobManager {
     pub(crate) fn new(
-        adam_home: PathBuf,
+        lha_home: PathBuf,
         max_jobs: Option<usize>,
         default_max_runtime_seconds: Option<u64>,
     ) -> Self {
@@ -260,7 +260,7 @@ impl AgentJobManager {
                 default_max_runtime_seconds.unwrap_or(DEFAULT_JOB_MAX_RUNTIME_SECONDS),
             ),
             exec_bin_override: None,
-            adam_home,
+            lha_home,
         }
     }
 
@@ -288,7 +288,7 @@ impl AgentJobManager {
             CodexErr::UnsupportedOperation("agent job concurrency limit reached".to_string())
         })?;
         let id = format!("agent-job-{}", Uuid::new_v4());
-        let job_dir = create_job_dir(&self.adam_home, parent_thread_id, &id).await?;
+        let job_dir = create_job_dir(&self.lha_home, parent_thread_id, &id).await?;
         let prompt_path = job_dir.join("prompt.txt");
         let metadata_path = job_dir.join("metadata.json");
         let status_path = job_dir.join("status.json");
@@ -310,7 +310,7 @@ impl AgentJobManager {
             max_runtime_seconds: max_runtime.as_secs(),
         };
         write_json_private_file(&metadata_path, &metadata, "agent job metadata").await?;
-        let mut command = match build_adam_exec_command(
+        let mut command = match build_lha_exec_command(
             self.exec_bin_override.as_ref(),
             &agent_type,
             &cwd,
@@ -354,14 +354,14 @@ impl AgentJobManager {
             Ok(child) => child,
             Err(err) => {
                 let status = AgentJobStatus::Failed {
-                    message: format!("failed to spawn adam exec agent job: {err}"),
+                    message: format!("failed to spawn lha exec agent job: {err}"),
                     exit_code: None,
                 };
                 if let Err(status_err) = persist_status(&status_path, &status).await {
                     tracing::warn!("failed to persist agent job spawn failure: {status_err}");
                 }
                 return Err(CodexErr::Fatal(format!(
-                    "failed to spawn adam exec agent job: {err}"
+                    "failed to spawn lha exec agent job: {err}"
                 )));
             }
         };
@@ -536,11 +536,11 @@ impl JobCloseHandle {
 }
 
 async fn create_job_dir(
-    adam_home: &Path,
+    lha_home: &Path,
     parent_thread_id: ThreadId,
     id: &str,
 ) -> Result<PathBuf, CodexErr> {
-    let root = adam_home.join(JOBS_DIR);
+    let root = lha_home.join(JOBS_DIR);
     let session_dir = root.join(parent_thread_id.to_string());
     let job_dir = session_dir.join(id);
     for path in [&root, &session_dir, &job_dir] {
@@ -636,7 +636,7 @@ fn unix_timestamp_seconds() -> u64 {
         .unwrap_or_default()
 }
 
-fn build_adam_exec_command(
+fn build_lha_exec_command(
     exec_bin_override: Option<&PathBuf>,
     agent_type: &AgentJobType,
     cwd: &PathBuf,
@@ -644,13 +644,13 @@ fn build_adam_exec_command(
     result_path: &std::path::Path,
     internal_raw_events: bool,
 ) -> Result<Command, CodexErr> {
-    let program = resolve_adam_exec_program(exec_bin_override)?;
+    let program = resolve_lha_exec_program(exec_bin_override)?;
     let mut command = Command::new(&program);
     let file_name = program
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default();
-    if !file_name.contains("adam-exec") {
+    if !file_name.contains("lha-exec") {
         command.arg("exec");
     }
     if let Some(profile) = exec_config.profile_arg.as_deref() {
@@ -665,13 +665,13 @@ fn build_adam_exec_command(
     };
     let provider_context_json = serde_json::to_string(&provider_context)
         .map_err(|err| CodexErr::Fatal(format!("failed to serialize agent job context: {err}")))?;
-    command.env("ADAM_HOME", &exec_config.adam_home);
+    command.env("LHA_HOME", &exec_config.lha_home);
     command.env(
-        ADAM_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR,
+        LHA_AGENT_JOB_PROVIDER_CONTEXT_ENV_VAR,
         provider_context_json,
     );
     if let Some(auth_token) = exec_config.auth_token.as_deref() {
-        command.env(ADAM_AGENT_JOB_AUTH_TOKEN_ENV_VAR, auth_token);
+        command.env(LHA_AGENT_JOB_AUTH_TOKEN_ENV_VAR, auth_token);
     }
     let sandbox_policy_json = serde_json::to_string(&exec_config.sandbox_policy)
         .map_err(|err| CodexErr::Fatal(format!("failed to serialize agent job sandbox: {err}")))?;
@@ -681,9 +681,9 @@ fn build_adam_exec_command(
                 "failed to serialize agent job windows sandbox level: {err}"
             ))
         })?;
-    command.env(ADAM_AGENT_JOB_SANDBOX_POLICY_ENV_VAR, sandbox_policy_json);
+    command.env(LHA_AGENT_JOB_SANDBOX_POLICY_ENV_VAR, sandbox_policy_json);
     command.env(
-        ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR,
+        LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL_ENV_VAR,
         windows_sandbox_level_json,
     );
     if internal_raw_events {
@@ -749,11 +749,11 @@ fn spawn_raw_event_stdout_reader(
     })
 }
 
-fn resolve_adam_exec_program(exec_bin_override: Option<&PathBuf>) -> Result<PathBuf, CodexErr> {
+fn resolve_lha_exec_program(exec_bin_override: Option<&PathBuf>) -> Result<PathBuf, CodexErr> {
     if let Some(path) = exec_bin_override {
         return Ok(path.clone());
     }
-    if let Some(path) = std::env::var_os("ADAM_AGENT_EXEC_BIN") {
+    if let Some(path) = std::env::var_os("LHA_AGENT_EXEC_BIN") {
         return Ok(PathBuf::from(path));
     }
 
@@ -762,20 +762,20 @@ fn resolve_adam_exec_program(exec_bin_override: Option<&PathBuf>) -> Result<Path
     if executable_supports_exec(&current_exe) {
         return Ok(current_exe);
     }
-    if let Some(path) = sibling_binary(&current_exe, "adam-exec") {
+    if let Some(path) = sibling_binary(&current_exe, "lha-exec") {
         return Ok(path);
     }
-    if let Some(path) = sibling_binary(&current_exe, "adam") {
+    if let Some(path) = sibling_binary(&current_exe, "lha") {
         return Ok(path);
     }
-    if let Ok(path) = which::which("adam-exec") {
+    if let Ok(path) = which::which("lha-exec") {
         return Ok(path);
     }
-    if let Ok(path) = which::which("adam") {
+    if let Ok(path) = which::which("lha") {
         return Ok(path);
     }
     Err(CodexErr::Fatal(
-        "adam exec not found; install adam-exec/adam or set ADAM_AGENT_EXEC_BIN".to_string(),
+        "lha exec not found; install lha-exec/lha or set LHA_AGENT_EXEC_BIN".to_string(),
     ))
 }
 
@@ -804,7 +804,7 @@ fn executable_supports_exec(path: &Path) -> bool {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default();
-    file_name == executable_name("adam-exec") || file_name == executable_name("adam")
+    file_name == executable_name("lha-exec") || file_name == executable_name("lha")
 }
 
 struct AgentJobWatcher {
@@ -908,13 +908,13 @@ mod tests {
 
     fn write_script(dir: &tempfile::TempDir, name: &str, body: &str) -> PathBuf {
         let path = dir.path().join(name);
-        std::fs::write(&path, body).unwrap_or_else(|err| panic!("write fake adam exec: {err}"));
+        std::fs::write(&path, body).unwrap_or_else(|err| panic!("write fake lha exec: {err}"));
         let mut permissions = std::fs::metadata(&path)
             .unwrap_or_else(|err| panic!("metadata: {err}"))
             .permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(&path, permissions)
-            .unwrap_or_else(|err| panic!("chmod fake adam exec: {err}"));
+            .unwrap_or_else(|err| panic!("chmod fake lha exec: {err}"));
         path
     }
 
@@ -926,9 +926,9 @@ mod tests {
             & 0o777
     }
 
-    fn test_exec_config(adam_home: &Path, model_arg: &str) -> AgentJobExecConfig {
+    fn test_exec_config(lha_home: &Path, model_arg: &str) -> AgentJobExecConfig {
         AgentJobExecConfig {
-            adam_home: adam_home.to_path_buf(),
+            lha_home: lha_home.to_path_buf(),
             model_arg: Some(model_arg.to_string()),
             profile_arg: None,
             model_provider_id: "test-provider.main".to_string(),
@@ -992,25 +992,23 @@ mod tests {
     }
 
     #[test]
-    fn executable_supports_exec_only_accepts_adam_or_adam_exec() {
+    fn executable_supports_exec_only_accepts_lha_or_lha_exec() {
+        assert!(executable_supports_exec(Path::new(&executable_name("lha"))));
         assert!(executable_supports_exec(Path::new(&executable_name(
-            "adam"
+            "lha-exec"
         ))));
-        assert!(executable_supports_exec(Path::new(&executable_name(
-            "adam-exec"
-        ))));
-        assert!(!executable_supports_exec(Path::new("adam-tui")));
-        assert!(!executable_supports_exec(Path::new("adam-app-server")));
-        assert!(!executable_supports_exec(Path::new("adam-agent-tests")));
+        assert!(!executable_supports_exec(Path::new("lha-tui")));
+        assert!(!executable_supports_exec(Path::new("lha-app-server")));
+        assert!(!executable_supports_exec(Path::new("lha-agent-tests")));
     }
 
     #[tokio::test]
     async fn job_completes_with_result_file() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let adam_home = tempfile::tempdir().expect("adam home");
+        let lha_home = tempfile::tempdir().expect("lha home");
         let script = write_script(
             &dir,
-            "adam-exec-fake",
+            "lha-exec-fake",
             r#"#!/bin/sh
 out=""
 while [ "$#" -gt 0 ]; do
@@ -1025,7 +1023,7 @@ cat >/dev/null
 printf "explorer result" > "$out"
 "#,
         );
-        let manager = AgentJobManager::new(adam_home.path().to_path_buf(), Some(1), Some(5))
+        let manager = AgentJobManager::new(lha_home.path().to_path_buf(), Some(1), Some(5))
             .with_exec_bin_for_tests(script);
         let parent_thread_id = ThreadId::new();
         let snapshot = manager
@@ -1034,7 +1032,7 @@ printf "explorer result" > "$out"
                 AgentJobType::Explorer,
                 "inspect this".to_string(),
                 dir.path().to_path_buf(),
-                test_exec_config(adam_home.path(), "test-provider.main:test-model"),
+                test_exec_config(lha_home.path(), "test-provider.main:test-model"),
                 AgentJobSpawnOptions::log_only(None),
             )
             .await
@@ -1053,7 +1051,7 @@ printf "explorer result" > "$out"
             }
         );
 
-        let job_dir = adam_home
+        let job_dir = lha_home
             .path()
             .join(JOBS_DIR)
             .join(parent_thread_id.to_string())
@@ -1080,11 +1078,11 @@ printf "explorer result" > "$out"
     #[tokio::test]
     async fn raw_event_mode_forwards_events_and_logs_stdout() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let adam_home = tempfile::tempdir().expect("adam home");
+        let lha_home = tempfile::tempdir().expect("lha home");
         let args_log = dir.path().join("args.txt");
         let script = write_script(
             &dir,
-            "adam-exec-fake",
+            "lha-exec-fake",
             &format!(
                 r#"#!/bin/sh
 out=""
@@ -1107,7 +1105,7 @@ printf "raw mode result" > "$out"
                 args_log = args_log.display()
             ),
         );
-        let manager = AgentJobManager::new(adam_home.path().to_path_buf(), Some(1), Some(5))
+        let manager = AgentJobManager::new(lha_home.path().to_path_buf(), Some(1), Some(5))
             .with_exec_bin_for_tests(script);
         let parent_thread_id = ThreadId::new();
         let (progress_tx, mut progress_rx) = mpsc::unbounded_channel();
@@ -1117,7 +1115,7 @@ printf "raw mode result" > "$out"
                 AgentJobType::Explorer,
                 "inspect this".to_string(),
                 dir.path().to_path_buf(),
-                test_exec_config(adam_home.path(), "test-provider.main:test-model"),
+                test_exec_config(lha_home.path(), "test-provider.main:test-model"),
                 AgentJobSpawnOptions::raw_events(None, progress_tx),
             )
             .await
@@ -1151,7 +1149,7 @@ printf "raw mode result" > "$out"
             "expected raw event mode arg: {args:?}"
         );
 
-        let stdout_path = adam_home
+        let stdout_path = lha_home
             .path()
             .join(JOBS_DIR)
             .join(parent_thread_id.to_string())
@@ -1166,10 +1164,10 @@ printf "raw mode result" > "$out"
     #[tokio::test]
     async fn requested_runtime_is_capped_by_configured_max() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let adam_home = tempfile::tempdir().expect("adam home");
+        let lha_home = tempfile::tempdir().expect("lha home");
         let script = write_script(
             &dir,
-            "adam-exec-fake",
+            "lha-exec-fake",
             r#"#!/bin/sh
 out=""
 while [ "$#" -gt 0 ]; do
@@ -1184,7 +1182,7 @@ cat >/dev/null
 printf "runtime result" > "$out"
 "#,
         );
-        let manager = AgentJobManager::new(adam_home.path().to_path_buf(), Some(1), Some(3))
+        let manager = AgentJobManager::new(lha_home.path().to_path_buf(), Some(1), Some(3))
             .with_exec_bin_for_tests(script);
         let parent_thread_id = ThreadId::new();
         let snapshot = manager
@@ -1193,7 +1191,7 @@ printf "runtime result" > "$out"
                 AgentJobType::Explorer,
                 "inspect this".to_string(),
                 dir.path().to_path_buf(),
-                test_exec_config(adam_home.path(), "test-provider.main:test-model"),
+                test_exec_config(lha_home.path(), "test-provider.main:test-model"),
                 AgentJobSpawnOptions::log_only(Some(9999)),
             )
             .await
@@ -1202,7 +1200,7 @@ printf "runtime result" > "$out"
             .wait(std::slice::from_ref(&snapshot.id), Duration::from_secs(5))
             .await;
 
-        let metadata_path = adam_home
+        let metadata_path = lha_home
             .path()
             .join(JOBS_DIR)
             .join(parent_thread_id.to_string())
@@ -1219,8 +1217,8 @@ printf "runtime result" > "$out"
     #[tokio::test]
     async fn zero_requested_runtime_is_rejected() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let adam_home = tempfile::tempdir().expect("adam home");
-        let manager = AgentJobManager::new(adam_home.path().to_path_buf(), Some(1), Some(5));
+        let lha_home = tempfile::tempdir().expect("lha home");
+        let manager = AgentJobManager::new(lha_home.path().to_path_buf(), Some(1), Some(5));
 
         let err = manager
             .spawn(
@@ -1228,7 +1226,7 @@ printf "runtime result" > "$out"
                 AgentJobType::Explorer,
                 "inspect this".to_string(),
                 dir.path().to_path_buf(),
-                test_exec_config(adam_home.path(), "test-provider.main:test-model"),
+                test_exec_config(lha_home.path(), "test-provider.main:test-model"),
                 AgentJobSpawnOptions::log_only(Some(0)),
             )
             .await
@@ -1241,22 +1239,22 @@ printf "runtime result" > "$out"
     }
 
     #[tokio::test]
-    async fn job_passes_profile_and_model_ref_to_adam_exec() {
+    async fn job_passes_profile_and_model_ref_to_lha_exec() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let adam_home = tempfile::tempdir().expect("adam home");
+        let lha_home = tempfile::tempdir().expect("lha home");
         let script = write_script(
             &dir,
-            "adam-exec-fake",
+            "lha-exec-fake",
             r#"#!/bin/sh
 script_dir=$(dirname "$0")
 out=""
 : > "$script_dir/args.txt"
 {
-  printf "ADAM_HOME=%s\n" "$ADAM_HOME"
-  printf "AUTH_TOKEN=%s\n" "$ADAM_AGENT_JOB_AUTH_TOKEN"
-  printf "PROVIDER_CONTEXT=%s\n" "$ADAM_AGENT_JOB_PROVIDER_CONTEXT"
-  printf "SANDBOX_POLICY=%s\n" "$ADAM_AGENT_JOB_SANDBOX_POLICY"
-  printf "WINDOWS_SANDBOX_LEVEL=%s\n" "$ADAM_AGENT_JOB_WINDOWS_SANDBOX_LEVEL"
+  printf "LHA_HOME=%s\n" "$LHA_HOME"
+  printf "AUTH_TOKEN=%s\n" "$LHA_AGENT_JOB_AUTH_TOKEN"
+  printf "PROVIDER_CONTEXT=%s\n" "$LHA_AGENT_JOB_PROVIDER_CONTEXT"
+  printf "SANDBOX_POLICY=%s\n" "$LHA_AGENT_JOB_SANDBOX_POLICY"
+  printf "WINDOWS_SANDBOX_LEVEL=%s\n" "$LHA_AGENT_JOB_WINDOWS_SANDBOX_LEVEL"
 } > "$script_dir/env.txt"
 for arg in "$@"; do
   printf "%s\n" "$arg" >> "$script_dir/args.txt"
@@ -1273,7 +1271,7 @@ cat >/dev/null
 printf "args result" > "$out"
 "#,
         );
-        let manager = AgentJobManager::new(adam_home.path().to_path_buf(), Some(1), Some(5))
+        let manager = AgentJobManager::new(lha_home.path().to_path_buf(), Some(1), Some(5))
             .with_exec_bin_for_tests(script);
         let parent_thread_id = ThreadId::new();
         let snapshot = manager
@@ -1283,7 +1281,7 @@ printf "args result" > "$out"
                 "inspect this".to_string(),
                 dir.path().to_path_buf(),
                 AgentJobExecConfig {
-                    adam_home: adam_home.path().to_path_buf(),
+                    lha_home: lha_home.path().to_path_buf(),
                     model_arg: Some("provider-a.main:model-a".to_string()),
                     profile_arg: Some("work".to_string()),
                     model_provider_id: "provider-a.main".to_string(),
@@ -1344,13 +1342,13 @@ printf "args result" > "$out"
         );
 
         let child_env = std::fs::read_to_string(dir.path().join("env.txt")).expect("child env log");
-        assert!(child_env.contains(&format!("ADAM_HOME={}", adam_home.path().display())));
+        assert!(child_env.contains(&format!("LHA_HOME={}", lha_home.path().display())));
         assert!(child_env.contains("AUTH_TOKEN=secret-token"));
         assert!(child_env.contains("provider-a.main"));
         assert!(child_env.contains("SANDBOX_POLICY={\"type\":\"workspace-write\""));
         assert!(child_env.contains("WINDOWS_SANDBOX_LEVEL=\"disabled\""));
 
-        let job_dir = adam_home
+        let job_dir = lha_home
             .path()
             .join(JOBS_DIR)
             .join(parent_thread_id.to_string())
@@ -1374,15 +1372,15 @@ printf "args result" > "$out"
     #[tokio::test]
     async fn close_cancels_running_job() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let adam_home = tempfile::tempdir().expect("adam home");
+        let lha_home = tempfile::tempdir().expect("lha home");
         let script = write_script(
             &dir,
-            "adam-exec-fake",
+            "lha-exec-fake",
             r#"#!/bin/sh
 exec sleep 30
 "#,
         );
-        let manager = AgentJobManager::new(adam_home.path().to_path_buf(), Some(1), Some(30))
+        let manager = AgentJobManager::new(lha_home.path().to_path_buf(), Some(1), Some(30))
             .with_exec_bin_for_tests(script);
         let parent_thread_id = ThreadId::new();
         let snapshot = manager
@@ -1391,7 +1389,7 @@ exec sleep 30
                 AgentJobType::Explorer,
                 "inspect this".to_string(),
                 dir.path().to_path_buf(),
-                test_exec_config(adam_home.path(), "test-provider.main:test-model"),
+                test_exec_config(lha_home.path(), "test-provider.main:test-model"),
                 AgentJobSpawnOptions::log_only(None),
             )
             .await
@@ -1403,7 +1401,7 @@ exec sleep 30
 
         let persisted_status = serde_json::from_str::<AgentJobStatus>(
             &std::fs::read_to_string(
-                adam_home
+                lha_home
                     .path()
                     .join(JOBS_DIR)
                     .join(parent_thread_id.to_string())
@@ -1419,15 +1417,15 @@ exec sleep 30
     #[tokio::test]
     async fn close_all_cancels_running_jobs() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let adam_home = tempfile::tempdir().expect("adam home");
+        let lha_home = tempfile::tempdir().expect("lha home");
         let script = write_script(
             &dir,
-            "adam-exec-fake",
+            "lha-exec-fake",
             r#"#!/bin/sh
 exec sleep 30
 "#,
         );
-        let manager = AgentJobManager::new(adam_home.path().to_path_buf(), Some(2), Some(30))
+        let manager = AgentJobManager::new(lha_home.path().to_path_buf(), Some(2), Some(30))
             .with_exec_bin_for_tests(script);
         let parent_thread_id = ThreadId::new();
         let first = manager
@@ -1436,7 +1434,7 @@ exec sleep 30
                 AgentJobType::Explorer,
                 "inspect first".to_string(),
                 dir.path().to_path_buf(),
-                test_exec_config(adam_home.path(), "test-provider.main:test-model"),
+                test_exec_config(lha_home.path(), "test-provider.main:test-model"),
                 AgentJobSpawnOptions::log_only(None),
             )
             .await
@@ -1447,7 +1445,7 @@ exec sleep 30
                 AgentJobType::Explorer,
                 "inspect second".to_string(),
                 dir.path().to_path_buf(),
-                test_exec_config(adam_home.path(), "test-provider.main:test-model"),
+                test_exec_config(lha_home.path(), "test-provider.main:test-model"),
                 AgentJobSpawnOptions::log_only(None),
             )
             .await
@@ -1464,7 +1462,7 @@ exec sleep 30
         for snapshot in [&first, &second] {
             let persisted_status = serde_json::from_str::<AgentJobStatus>(
                 &std::fs::read_to_string(
-                    adam_home
+                    lha_home
                         .path()
                         .join(JOBS_DIR)
                         .join(parent_thread_id.to_string())

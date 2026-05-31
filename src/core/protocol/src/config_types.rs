@@ -5,10 +5,10 @@ use strum_macros::Display;
 use ts_rs::TS;
 
 use crate::openai_models::ReasoningEffort;
-pub use adam_llm_types::Personality;
-pub use adam_llm_types::ReasoningSummary;
-pub use adam_llm_types::Verbosity;
-pub use adam_llm_types::WebSearchMode;
+pub use lha_llm_types::Personality;
+pub use lha_llm_types::ReasoningSummary;
+pub use lha_llm_types::Verbosity;
+pub use lha_llm_types::WebSearchMode;
 
 #[derive(
     Deserialize, Debug, Clone, Copy, PartialEq, Default, Serialize, Display, JsonSchema, TS,
@@ -49,7 +49,7 @@ pub enum TrustLevel {
     Untrusted,
 }
 
-/// Built-in Adam identity kind.
+/// Built-in LHA identity kind.
 #[derive(
     Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, TS, Default,
 )]
@@ -63,7 +63,7 @@ pub enum IdentityKind {
     Reviewer,
 }
 
-/// Identity for an Adam session.
+/// Identity for an LHA session.
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 pub struct Identity {

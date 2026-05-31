@@ -10,25 +10,25 @@
 
 use std::path::PathBuf;
 
-use adam_agent::connectors::AppInfo;
-use adam_agent::protocol::Event;
-use adam_common::approval_presets::ApprovalPreset;
-use adam_file_search::FileMatch;
-use adam_protocol::ThreadId;
-use adam_protocol::openai_models::ModelPreset;
-use adam_protocol::openai_models::ReasoningEffort;
+use lha_agent::connectors::AppInfo;
+use lha_agent::protocol::Event;
+use lha_common::approval_presets::ApprovalPreset;
+use lha_file_search::FileMatch;
+use lha_protocol::ThreadId;
+use lha_protocol::openai_models::ModelPreset;
+use lha_protocol::openai_models::ReasoningEffort;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::changelog::ChangelogOutput;
 use crate::history_cell::HistoryCell;
 use crate::provider_config::CustomProviderConfig;
 
-use adam_agent::features::Feature;
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::ReviewRequest;
-use adam_agent::protocol::SandboxPolicy;
-use adam_protocol::config_types::IdentityMask;
-use adam_protocol::config_types::Personality;
+use lha_agent::features::Feature;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::ReviewRequest;
+use lha_agent::protocol::SandboxPolicy;
+use lha_protocol::config_types::IdentityMask;
+use lha_protocol::config_types::Personality;
 
 #[derive(Debug, Clone)]
 pub(crate) enum BuddyConfigEdit {
@@ -86,7 +86,7 @@ pub(crate) enum AppEvent {
 
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
-    CodexOp(adam_agent::protocol::Op),
+    CodexOp(lha_agent::protocol::Op),
 
     /// Start a review using the current slash/TUI behavior.
     StartReview {

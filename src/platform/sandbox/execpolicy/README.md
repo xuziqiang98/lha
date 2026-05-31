@@ -1,4 +1,4 @@
-# adam-execpolicy
+# lha-execpolicy
 
 ## Overview
 
@@ -25,7 +25,7 @@ prefix_rule(
 
 ## CLI
 
-- From the Adam CLI, run `codex execpolicy check` subcommand with one or more policy files (for example `src/default.rules`) to check a command:
+- From the LHA CLI, run `codex execpolicy check` subcommand with one or more policy files (for example `src/default.rules`) to check a command:
 
 ```bash
 codex execpolicy check --rules path/to/policy.rules git status
@@ -35,7 +35,7 @@ codex execpolicy check --rules path/to/policy.rules git status
 - You can also run the standalone dev binary directly during development:
 
 ```bash
-cargo run -p adam-execpolicy -- check --rules path/to/policy.rules git status
+cargo run -p lha-execpolicy -- check --rules path/to/policy.rules git status
 ```
 
 - Example outcomes:

@@ -2,8 +2,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::items::TurnItem;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::items::TurnItem;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
@@ -15,12 +15,12 @@ use crate::parse_turn_item;
 use crate::proposed_plan_parser::strip_proposed_plan_blocks;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
-use adam_llm::ToolCallPayload;
-use adam_llm::ToolCallRequest;
-use adam_llm::ToolResultItem;
-use adam_llm::ToolResultPayload;
-use adam_llm::TranscriptItem;
 use futures::Future;
+use lha_llm::ToolCallPayload;
+use lha_llm::ToolCallRequest;
+use lha_llm::ToolResultItem;
+use lha_llm::ToolResultPayload;
+use lha_llm::TranscriptItem;
 use tracing::debug;
 use tracing::instrument;
 
@@ -174,12 +174,12 @@ pub(crate) async fn handle_non_tool_response_item(
                     .content
                     .iter()
                     .map(|entry| match entry {
-                        adam_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+                        lha_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
                     })
                     .collect::<String>();
                 let stripped = strip_proposed_plan_blocks(&combined);
                 agent_message.content =
-                    vec![adam_protocol::items::AgentMessageContent::Text { text: stripped }];
+                    vec![lha_protocol::items::AgentMessageContent::Text { text: stripped }];
             }
             Some(turn_item)
         }
@@ -201,7 +201,7 @@ pub(crate) fn last_assistant_message_from_item(
         let combined = content
             .iter()
             .filter_map(|ci| match ci {
-                adam_protocol::models::ContentItem::OutputText { text } => Some(text.as_str()),
+                lha_protocol::models::ContentItem::OutputText { text } => Some(text.as_str()),
                 _ => None,
             })
             .collect::<String>();

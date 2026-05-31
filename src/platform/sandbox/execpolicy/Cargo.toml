@@ -1,16 +1,16 @@
 [package]
-name = "adam-execpolicy"
+name = "lha-execpolicy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Adam exec policy: prefix-based Starlark rules for command decisions."
+description = "LHA exec policy: prefix-based Starlark rules for command decisions."
 
 [lib]
-name = "adam_execpolicy"
+name = "lha_execpolicy"
 path = "src/lib.rs"
 
 [[bin]]
-name = "adam-execpolicy"
+name = "lha-execpolicy"
 path = "src/main.rs"
 
 [lints]

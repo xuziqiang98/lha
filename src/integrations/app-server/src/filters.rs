@@ -1,6 +1,6 @@
-use adam_agent::INTERACTIVE_SESSION_SOURCES;
-use adam_app_server_protocol::ThreadSourceKind;
-use adam_protocol::protocol::SessionSource as CoreSessionSource;
+use lha_agent::INTERACTIVE_SESSION_SOURCES;
+use lha_app_server_protocol::ThreadSourceKind;
+use lha_protocol::protocol::SessionSource as CoreSessionSource;
 
 pub(crate) fn compute_source_filters(
     source_kinds: Option<Vec<ThreadSourceKind>>,

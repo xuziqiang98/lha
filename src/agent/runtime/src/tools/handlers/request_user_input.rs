@@ -7,8 +7,8 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::request_user_input::RequestUserInputArgs;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::request_user_input::RequestUserInputArgs;
 
 pub struct RequestUserInputHandler;
 

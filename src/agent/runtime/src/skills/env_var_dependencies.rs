@@ -3,9 +3,9 @@ use std::collections::HashSet;
 use std::env;
 use std::sync::Arc;
 
-use adam_protocol::request_user_input::RequestUserInputArgs;
-use adam_protocol::request_user_input::RequestUserInputQuestion;
-use adam_protocol::request_user_input::RequestUserInputResponse;
+use lha_protocol::request_user_input::RequestUserInputArgs;
+use lha_protocol::request_user_input::RequestUserInputQuestion;
+use lha_protocol::request_user_input::RequestUserInputResponse;
 use tracing::warn;
 
 use crate::codex::Session;

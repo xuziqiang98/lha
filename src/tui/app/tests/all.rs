@@ -4,6 +4,6 @@
 mod test_backend;
 
 #[allow(unused_imports)]
-use adam_cli as _; // Keep dev-dep for cargo-shear; tests spawn the codex binary.
+use lha_cli as _; // Keep dev-dep for cargo-shear; tests spawn the codex binary.
 
 mod suite;

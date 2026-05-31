@@ -3,18 +3,18 @@ use crate::error::Result as CodexResult;
 use crate::protocol::Event;
 use crate::protocol::Op;
 use crate::protocol::Submission;
-use adam_agent_runtime::SessionSnapshot;
-use adam_agent_runtime::SessionStatus;
-use adam_llm::RuntimeEndpoint;
-use adam_llm::RuntimeMetadata;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::Personality;
-use adam_protocol::openai_models::ReasoningEffort;
-use adam_protocol::protocol::AskForApproval;
-use adam_protocol::protocol::SandboxPolicy;
-use adam_protocol::protocol::SessionSource;
+use lha_agent_runtime::SessionSnapshot;
+use lha_agent_runtime::SessionStatus;
+use lha_llm::RuntimeEndpoint;
+use lha_llm::RuntimeMetadata;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::Personality;
+use lha_protocol::openai_models::ReasoningEffort;
+use lha_protocol::protocol::AskForApproval;
+use lha_protocol::protocol::SandboxPolicy;
+use lha_protocol::protocol::SessionSource;
 #[cfg(any(test, feature = "test-support"))]
-use adam_protocol::workflow::WorkflowDefinition;
+use lha_protocol::workflow::WorkflowDefinition;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -41,7 +41,7 @@ pub struct CodexThread {
 }
 
 /// Conduit for the bidirectional stream of messages that compose a thread
-/// (formerly called a conversation) in Adam.
+/// (formerly called a conversation) in LHA.
 impl CodexThread {
     pub(crate) fn new(codex: Codex, rollout_path: Option<PathBuf>) -> Self {
         Self {
@@ -112,7 +112,7 @@ impl CodexThread {
     pub async fn set_workflow_for_testing(
         &self,
         definition: WorkflowDefinition,
-    ) -> std::result::Result<(), Vec<adam_protocol::workflow::WorkflowValidationError>> {
+    ) -> std::result::Result<(), Vec<lha_protocol::workflow::WorkflowValidationError>> {
         self.codex
             .session
             .set_workflow_for_testing(definition)

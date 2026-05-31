@@ -1,10 +1,10 @@
-use adam_app_server_protocol::ClientInfo;
-use adam_app_server_protocol::InitializeResponse;
-use adam_app_server_protocol::JSONRPCMessage;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
+use lha_app_server_protocol::ClientInfo;
+use lha_app_server_protocol::InitializeResponse;
+use lha_app_server_protocol::JSONRPCMessage;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -16,15 +16,15 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     let responses = Vec::new();
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri(), "never")?;
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
 
     let message = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.initialize_with_client_info(ClientInfo {
-            name: "adam_vscode".to_string(),
-            title: Some("Adam VS Code Extension".to_string()),
+            name: "lha_vscode".to_string(),
+            title: Some("LHA VS Code Extension".to_string()),
             version: "0.1.0".to_string(),
         }),
     )
@@ -35,7 +35,7 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     };
     let InitializeResponse { user_agent } = to_response::<InitializeResponse>(response)?;
 
-    assert!(user_agent.starts_with("adam_vscode/"));
+    assert!(user_agent.starts_with("lha_vscode/"));
     Ok(())
 }
 
@@ -43,13 +43,13 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
 async fn initialize_respects_originator_override_env_var() -> Result<()> {
     let responses = Vec::new();
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri(), "never")?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri(), "never")?;
     let mut mcp = McpProcess::new_with_env(
-        adam_home.path(),
+        lha_home.path(),
         &[(
-            "ADAM_INTERNAL_ORIGINATOR_OVERRIDE",
-            Some("adam_originator_via_env_var"),
+            "LHA_INTERNAL_ORIGINATOR_OVERRIDE",
+            Some("lha_originator_via_env_var"),
         )],
     )
     .await?;
@@ -57,8 +57,8 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
     let message = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.initialize_with_client_info(ClientInfo {
-            name: "adam_vscode".to_string(),
-            title: Some("Adam VS Code Extension".to_string()),
+            name: "lha_vscode".to_string(),
+            title: Some("LHA VS Code Extension".to_string()),
             version: "0.1.0".to_string(),
         }),
     )
@@ -69,7 +69,7 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
     };
     let InitializeResponse { user_agent } = to_response::<InitializeResponse>(response)?;
 
-    assert!(user_agent.starts_with("adam_originator_via_env_var/"));
+    assert!(user_agent.starts_with("lha_originator_via_env_var/"));
     Ok(())
 }
 
@@ -77,11 +77,11 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
 async fn initialize_rejects_invalid_client_name() -> Result<()> {
     let responses = Vec::new();
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri(), "never")?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri(), "never")?;
     let mut mcp = McpProcess::new_with_env(
-        adam_home.path(),
-        &[("ADAM_INTERNAL_ORIGINATOR_OVERRIDE", None)],
+        lha_home.path(),
+        &[("LHA_INTERNAL_ORIGINATOR_OVERRIDE", None)],
     )
     .await?;
 
@@ -110,12 +110,12 @@ async fn initialize_rejects_invalid_client_name() -> Result<()> {
 
 // Helper to create a config.toml pointing at the mock model server.
 fn create_config_toml(
-    adam_home: &Path,
+    lha_home: &Path,
     server_uri: &str,
     approval_policy: &str,
 ) -> std::io::Result<()> {
     app_test_support::write_mock_responses_config_toml_with_options(
-        adam_home,
+        lha_home,
         server_uri,
         &std::collections::BTreeMap::new(),
         20_000,

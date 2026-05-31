@@ -253,7 +253,7 @@ This context is separate from user messages and base instructions.
 
 ## Implementation Location
 
-The first implementation belongs in the Adam product runtime:
+The first implementation belongs in the LHA product runtime:
 
 - Protocol and rollout data types: `src/core/protocol`
 - Workflow engine and validation: `src/agent/runtime/src/workflow`
@@ -261,7 +261,7 @@ The first implementation belongs in the Adam product runtime:
 - Tool filtering: `src/agent/runtime/src/tools/spec.rs`
 - Session wiring: `src/agent/runtime/src/codex.rs` and session state
 
-It should not be moved into `adam-agent-runtime` until the product-specific
+It should not be moved into `lha-agent-runtime` until the product-specific
 policy surface is better understood.
 
 ## Testing Expectations

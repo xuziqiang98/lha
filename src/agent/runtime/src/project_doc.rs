@@ -247,9 +247,9 @@ mod tests {
     /// value is cleared to mimic a scenario where no system instructions have
     /// been configured.
     async fn make_config(root: &TempDir, limit: usize, instructions: Option<&str>) -> Config {
-        let adam_home = TempDir::new().unwrap();
+        let lha_home = TempDir::new().unwrap();
         let mut config = ConfigBuilder::default()
-            .adam_home(adam_home.path().to_path_buf())
+            .lha_home(lha_home.path().to_path_buf())
             .build()
             .await
             .expect("defaults for test should always succeed");
@@ -496,7 +496,7 @@ mod tests {
         fs::write(tmp.path().join("AGENTS.md"), "base doc").unwrap();
 
         let cfg = make_config(&tmp, 4096, None).await;
-        create_skill(cfg.adam_home.clone(), "pdf-processing", "extract from pdfs");
+        create_skill(cfg.lha_home.clone(), "pdf-processing", "extract from pdfs");
 
         let skills = load_skills(&cfg);
         let res = get_user_instructions(
@@ -506,11 +506,11 @@ mod tests {
         .await
         .expect("instructions expected");
         let expected_path = dunce::canonicalize(
-            cfg.adam_home
+            cfg.lha_home
                 .join("skills/pdf-processing/SKILL.md")
                 .as_path(),
         )
-        .unwrap_or_else(|_| cfg.adam_home.join("skills/pdf-processing/SKILL.md"));
+        .unwrap_or_else(|_| cfg.lha_home.join("skills/pdf-processing/SKILL.md"));
         let expected_path_str = expected_path.to_string_lossy().replace('\\', "/");
         let usage_rules = "- Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.\n- Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.\n- Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.\n- How to use a skill (progressive disclosure):\n  1) After deciding to use a skill, open its `SKILL.md`. Read only enough to follow the workflow.\n  2) When `SKILL.md` references relative paths (e.g., `scripts/foo.py`), resolve them relative to the skill directory listed above first, and only consider other paths if needed.\n  3) If `SKILL.md` points to extra folders such as `references/`, load only the specific files needed for the request; don't bulk-load everything.\n  4) If `scripts/` exist, prefer running or patching them instead of retyping large code blocks.\n  5) If `assets/` or templates exist, reuse them instead of recreating from scratch.\n- Coordination and sequencing:\n  - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.\n  - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.\n- Context hygiene:\n  - Keep context small: summarize long sections instead of pasting them; only load extra files when needed.\n  - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.\n  - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.\n- Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.";
         let expected = format!(
@@ -523,7 +523,7 @@ mod tests {
     async fn skills_render_without_project_doc() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let cfg = make_config(&tmp, 4096, None).await;
-        create_skill(cfg.adam_home.clone(), "linting", "run clippy");
+        create_skill(cfg.lha_home.clone(), "linting", "run clippy");
 
         let skills = load_skills(&cfg);
         let res = get_user_instructions(
@@ -533,8 +533,8 @@ mod tests {
         .await
         .expect("instructions expected");
         let expected_path =
-            dunce::canonicalize(cfg.adam_home.join("skills/linting/SKILL.md").as_path())
-                .unwrap_or_else(|_| cfg.adam_home.join("skills/linting/SKILL.md"));
+            dunce::canonicalize(cfg.lha_home.join("skills/linting/SKILL.md").as_path())
+                .unwrap_or_else(|_| cfg.lha_home.join("skills/linting/SKILL.md"));
         let expected_path_str = expected_path.to_string_lossy().replace('\\', "/");
         let usage_rules = "- Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.\n- Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.\n- Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.\n- How to use a skill (progressive disclosure):\n  1) After deciding to use a skill, open its `SKILL.md`. Read only enough to follow the workflow.\n  2) When `SKILL.md` references relative paths (e.g., `scripts/foo.py`), resolve them relative to the skill directory listed above first, and only consider other paths if needed.\n  3) If `SKILL.md` points to extra folders such as `references/`, load only the specific files needed for the request; don't bulk-load everything.\n  4) If `scripts/` exist, prefer running or patching them instead of retyping large code blocks.\n  5) If `assets/` or templates exist, reuse them instead of recreating from scratch.\n- Coordination and sequencing:\n  - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.\n  - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.\n- Context hygiene:\n  - Keep context small: summarize long sections instead of pasting them; only load extra files when needed.\n  - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.\n  - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.\n- Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.";
         let expected = format!(
@@ -543,8 +543,8 @@ mod tests {
         assert_eq!(res, expected);
     }
 
-    fn create_skill(adam_home: PathBuf, name: &str, description: &str) {
-        let skill_dir = adam_home.join(format!("skills/{name}"));
+    fn create_skill(lha_home: PathBuf, name: &str, description: &str) {
+        let skill_dir = lha_home.join(format!("skills/{name}"));
         fs::create_dir_all(&skill_dir).unwrap();
         let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
         fs::write(skill_dir.join("SKILL.md"), content).unwrap();

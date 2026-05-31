@@ -5,14 +5,14 @@ use crate::proposed_plan_parser::ProposedPlanParser;
 use crate::proposed_plan_parser::ProposedPlanSegment;
 use crate::proposed_plan_parser::extract_proposed_plan_text;
 use crate::telemetry::SseTelemetry;
-use adam_client::ByteStream;
-use adam_client::StreamResponse;
-use adam_llm_types::ContentItem;
-use adam_llm_types::TokenUsage;
-use adam_llm_types::ToolCallPayload;
-use adam_llm_types::TranscriptItem;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
+use lha_client::ByteStream;
+use lha_client::StreamResponse;
+use lha_llm_types::ContentItem;
+use lha_llm_types::TokenUsage;
+use lha_llm_types::ToolCallPayload;
+use lha_llm_types::TranscriptItem;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -497,8 +497,8 @@ fn next_assistant_item_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_llm_types::TranscriptItem;
     use futures::TryStreamExt;
+    use lha_llm_types::TranscriptItem;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc;
     use tokio_util::io::ReaderStream;
@@ -506,7 +506,7 @@ mod tests {
     fn build_stream(body: &str) -> ByteStream {
         let reader = std::io::Cursor::new(body.to_string());
         let stream = ReaderStream::new(reader)
-            .map_err(|err| adam_client::TransportError::Network(err.to_string()));
+            .map_err(|err| lha_client::TransportError::Network(err.to_string()));
         Box::pin(stream)
     }
 

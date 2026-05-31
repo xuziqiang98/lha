@@ -10,50 +10,50 @@ use tokio::process::Child;
 use tokio::process::ChildStdin;
 use tokio::process::ChildStdout;
 
-use adam_agent::default_client::ADAM_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
-use adam_app_server_protocol::AddConversationListenerParams;
-use adam_app_server_protocol::AppsListParams;
-use adam_app_server_protocol::ArchiveConversationParams;
-use adam_app_server_protocol::ClientInfo;
-use adam_app_server_protocol::ClientNotification;
-use adam_app_server_protocol::ConfigBatchWriteParams;
-use adam_app_server_protocol::ConfigReadParams;
-use adam_app_server_protocol::ConfigValueWriteParams;
-use adam_app_server_protocol::FeedbackUploadParams;
-use adam_app_server_protocol::ForkConversationParams;
-use adam_app_server_protocol::IdentityListParams;
-use adam_app_server_protocol::InitializeParams;
-use adam_app_server_protocol::InterruptConversationParams;
-use adam_app_server_protocol::JSONRPCError;
-use adam_app_server_protocol::JSONRPCErrorError;
-use adam_app_server_protocol::JSONRPCMessage;
-use adam_app_server_protocol::JSONRPCNotification;
-use adam_app_server_protocol::JSONRPCRequest;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::ListConversationsParams;
-use adam_app_server_protocol::ModelListParams;
-use adam_app_server_protocol::NewConversationParams;
-use adam_app_server_protocol::RemoveConversationListenerParams;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::ResumeConversationParams;
-use adam_app_server_protocol::ReviewStartParams;
-use adam_app_server_protocol::SendUserMessageParams;
-use adam_app_server_protocol::SendUserTurnParams;
-use adam_app_server_protocol::ServerRequest;
-use adam_app_server_protocol::SetDefaultModelParams;
-use adam_app_server_protocol::ThreadArchiveParams;
-use adam_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
-use adam_app_server_protocol::ThreadForkParams;
-use adam_app_server_protocol::ThreadListParams;
-use adam_app_server_protocol::ThreadLoadedListParams;
-use adam_app_server_protocol::ThreadReadParams;
-use adam_app_server_protocol::ThreadResumeParams;
-use adam_app_server_protocol::ThreadRollbackParams;
-use adam_app_server_protocol::ThreadStartParams;
-use adam_app_server_protocol::ThreadUnarchiveParams;
-use adam_app_server_protocol::TurnInterruptParams;
-use adam_app_server_protocol::TurnStartParams;
 use anyhow::Context;
+use lha_agent::default_client::LHA_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
+use lha_app_server_protocol::AddConversationListenerParams;
+use lha_app_server_protocol::AppsListParams;
+use lha_app_server_protocol::ArchiveConversationParams;
+use lha_app_server_protocol::ClientInfo;
+use lha_app_server_protocol::ClientNotification;
+use lha_app_server_protocol::ConfigBatchWriteParams;
+use lha_app_server_protocol::ConfigReadParams;
+use lha_app_server_protocol::ConfigValueWriteParams;
+use lha_app_server_protocol::FeedbackUploadParams;
+use lha_app_server_protocol::ForkConversationParams;
+use lha_app_server_protocol::IdentityListParams;
+use lha_app_server_protocol::InitializeParams;
+use lha_app_server_protocol::InterruptConversationParams;
+use lha_app_server_protocol::JSONRPCError;
+use lha_app_server_protocol::JSONRPCErrorError;
+use lha_app_server_protocol::JSONRPCMessage;
+use lha_app_server_protocol::JSONRPCNotification;
+use lha_app_server_protocol::JSONRPCRequest;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::ListConversationsParams;
+use lha_app_server_protocol::ModelListParams;
+use lha_app_server_protocol::NewConversationParams;
+use lha_app_server_protocol::RemoveConversationListenerParams;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::ResumeConversationParams;
+use lha_app_server_protocol::ReviewStartParams;
+use lha_app_server_protocol::SendUserMessageParams;
+use lha_app_server_protocol::SendUserTurnParams;
+use lha_app_server_protocol::ServerRequest;
+use lha_app_server_protocol::SetDefaultModelParams;
+use lha_app_server_protocol::ThreadArchiveParams;
+use lha_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
+use lha_app_server_protocol::ThreadForkParams;
+use lha_app_server_protocol::ThreadListParams;
+use lha_app_server_protocol::ThreadLoadedListParams;
+use lha_app_server_protocol::ThreadReadParams;
+use lha_app_server_protocol::ThreadResumeParams;
+use lha_app_server_protocol::ThreadRollbackParams;
+use lha_app_server_protocol::ThreadStartParams;
+use lha_app_server_protocol::ThreadUnarchiveParams;
+use lha_app_server_protocol::TurnInterruptParams;
+use lha_app_server_protocol::TurnStartParams;
 use tokio::process::Command;
 
 pub struct McpProcess {
@@ -70,8 +70,8 @@ pub struct McpProcess {
 
 pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
 
-fn ensure_models_json(adam_home: &Path) -> std::io::Result<()> {
-    let models_json = adam_home.join("models.json");
+fn ensure_models_json(lha_home: &Path) -> std::io::Result<()> {
+    let models_json = lha_home.join("models.json");
     if !models_json.exists() {
         std::fs::write(models_json, r#"{"providers":{}}"#)?;
     }
@@ -79,8 +79,8 @@ fn ensure_models_json(adam_home: &Path) -> std::io::Result<()> {
 }
 
 impl McpProcess {
-    pub async fn new(adam_home: &Path) -> anyhow::Result<Self> {
-        Self::new_with_env(adam_home, &[]).await
+    pub async fn new(lha_home: &Path) -> anyhow::Result<Self> {
+        Self::new_with_env(lha_home, &[]).await
     }
 
     /// Creates a new MCP process, allowing tests to override or remove
@@ -89,20 +89,20 @@ impl McpProcess {
     /// Pass a tuple of (key, Some(value)) to set/override, or (key, None) to
     /// remove a variable from the child's environment.
     pub async fn new_with_env(
-        adam_home: &Path,
+        lha_home: &Path,
         env_overrides: &[(&str, Option<&str>)],
     ) -> anyhow::Result<Self> {
-        ensure_models_json(adam_home)?;
-        let program = adam_utils_cargo_bin::cargo_bin("adam-app-server")
-            .context("should find binary for adam-app-server")?;
+        ensure_models_json(lha_home)?;
+        let program = lha_utils_cargo_bin::cargo_bin("lha-app-server")
+            .context("should find binary for lha-app-server")?;
         let mut cmd = Command::new(program);
 
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
-        cmd.env("ADAM_HOME", adam_home);
+        cmd.env("LHA_HOME", lha_home);
         cmd.env("RUST_LOG", "debug");
-        cmd.env_remove(ADAM_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
+        cmd.env_remove(LHA_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
 
         for (k, v) in env_overrides {
             match v {
@@ -118,7 +118,7 @@ impl McpProcess {
         let mut process = cmd
             .kill_on_drop(true)
             .spawn()
-            .context("adam-mcp-server proc should start")?;
+            .context("lha-mcp-server proc should start")?;
         let stdin = process
             .stdin
             .take()

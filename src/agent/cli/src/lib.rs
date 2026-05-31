@@ -1,8 +1,8 @@
 pub mod debug_sandbox;
 mod exit_status;
 
-use adam_common::CliConfigOverrides;
 use clap::Parser;
+use lha_common::CliConfigOverrides;
 
 #[derive(Debug, Parser)]
 pub struct SeatbeltCommand {

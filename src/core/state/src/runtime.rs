@@ -15,11 +15,11 @@ use crate::model::anchor_from_item;
 use crate::model::datetime_to_epoch_millis;
 use crate::model::datetime_to_epoch_seconds;
 use crate::paths::file_modified_time_utc;
-use adam_otel::OtelManager;
-use adam_protocol::ThreadId;
-use adam_protocol::protocol::RolloutItem;
 use chrono::DateTime;
 use chrono::Utc;
+use lha_otel::OtelManager;
+use lha_protocol::ThreadId;
+use lha_protocol::protocol::RolloutItem;
 use sqlx::QueryBuilder;
 use sqlx::Row;
 use sqlx::Sqlite;
@@ -37,7 +37,7 @@ use uuid::Uuid;
 
 pub const STATE_DB_FILENAME: &str = "state.sqlite";
 
-const METRIC_DB_INIT: &str = "adam.db.init";
+const METRIC_DB_INIT: &str = "lha.db.init";
 
 pub struct GoalUpdate {
     pub objective: Option<String>,
@@ -103,22 +103,22 @@ pub enum PlanRunAccountingMode {
 
 #[derive(Clone)]
 pub struct StateRuntime {
-    adam_home: PathBuf,
+    lha_home: PathBuf,
     default_provider: String,
     pool: Arc<sqlx::SqlitePool>,
 }
 
 impl StateRuntime {
-    /// Initialize the state runtime using the provided Adam home and default provider.
+    /// Initialize the state runtime using the provided LHA home and default provider.
     ///
-    /// This opens (and migrates) the SQLite database at `adam_home/state.sqlite`.
+    /// This opens (and migrates) the SQLite database at `lha_home/state.sqlite`.
     pub async fn init(
-        adam_home: PathBuf,
+        lha_home: PathBuf,
         default_provider: String,
         otel: Option<OtelManager>,
     ) -> anyhow::Result<Arc<Self>> {
-        tokio::fs::create_dir_all(&adam_home).await?;
-        let state_path = adam_home.join(STATE_DB_FILENAME);
+        tokio::fs::create_dir_all(&lha_home).await?;
+        let state_path = lha_home.join(STATE_DB_FILENAME);
         let existed = tokio::fs::try_exists(&state_path).await.unwrap_or(false);
         let pool = match open_sqlite(&state_path).await {
             Ok(db) => Arc::new(db),
@@ -135,7 +135,7 @@ impl StateRuntime {
         }
         let runtime = Arc::new(Self {
             pool,
-            adam_home,
+            lha_home,
             default_provider,
         });
         if !existed && let Some(otel) = otel.as_ref() {
@@ -144,9 +144,9 @@ impl StateRuntime {
         Ok(runtime)
     }
 
-    /// Return the configured Adam home directory for this runtime.
-    pub fn adam_home(&self) -> &Path {
-        self.adam_home.as_path()
+    /// Return the configured LHA home directory for this runtime.
+    pub fn lha_home(&self) -> &Path {
+        self.lha_home.as_path()
     }
 
     pub async fn get_thread_goal(
@@ -1939,7 +1939,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     async fn test_runtime() -> Arc<StateRuntime> {
-        let path = std::env::temp_dir().join(format!("adam-state-test-{}", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("lha-state-test-{}", Uuid::new_v4()));
         StateRuntime::init(path, "test-provider".to_string(), None)
             .await
             .expect("state runtime should initialize")

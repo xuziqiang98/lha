@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 
-use adam_agent::config::set_project_trust_level;
-use adam_agent::git_info::resolve_root_git_project_for_trust;
-use adam_protocol::config_types::TrustLevel;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use lha_agent::config::set_project_trust_level;
+use lha_agent::git_info::resolve_root_git_project_for_trust;
+use lha_protocol::config_types::TrustLevel;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -25,7 +25,7 @@ use crate::selection_list::selection_option_row;
 
 use super::onboarding_screen::StepState;
 pub(crate) struct TrustDirectoryWidget {
-    pub adam_home: PathBuf,
+    pub lha_home: PathBuf,
     pub cwd: PathBuf,
     pub is_git_repo: bool,
     pub selection: Option<TrustDirectorySelection>,
@@ -45,13 +45,13 @@ impl WidgetRef for &TrustDirectoryWidget {
 
         column.push(Line::from(vec![
             "> ".into(),
-            "You are running Adam in ".bold(),
+            "You are running LHA in ".bold(),
             self.cwd.to_string_lossy().to_string().into(),
         ]));
         column.push("");
 
         let guidance = if self.is_git_repo {
-            "Since this folder is version controlled, you may wish to allow Adam to work in this folder without asking for approval."
+            "Since this folder is version controlled, you may wish to allow LHA to work in this folder without asking for approval."
         } else {
             "Since this folder is not version controlled, we recommend requiring approval of all edits and commands."
         };
@@ -66,7 +66,7 @@ impl WidgetRef for &TrustDirectoryWidget {
         let mut options: Vec<(&str, TrustDirectorySelection)> = Vec::new();
         if self.is_git_repo {
             options.push((
-                "Yes, allow Adam to work in this folder without asking for approval",
+                "Yes, allow LHA to work in this folder without asking for approval",
                 TrustDirectorySelection::Trust,
             ));
             options.push((
@@ -75,7 +75,7 @@ impl WidgetRef for &TrustDirectoryWidget {
             ));
         } else {
             options.push((
-                "Allow Adam to work in this folder without asking for approval",
+                "Allow LHA to work in this folder without asking for approval",
                 TrustDirectorySelection::Trust,
             ));
             options.push((
@@ -154,7 +154,7 @@ impl TrustDirectoryWidget {
     fn handle_trust(&mut self) {
         let target =
             resolve_root_git_project_for_trust(&self.cwd).unwrap_or_else(|| self.cwd.clone());
-        if let Err(e) = set_project_trust_level(&self.adam_home, &target, TrustLevel::Trusted) {
+        if let Err(e) = set_project_trust_level(&self.lha_home, &target, TrustLevel::Trusted) {
             tracing::error!("Failed to set project trusted: {e:?}");
             self.error = Some(format!("Failed to set trust for {}: {e}", target.display()));
         }
@@ -166,7 +166,7 @@ impl TrustDirectoryWidget {
         self.highlighted = TrustDirectorySelection::DontTrust;
         let target =
             resolve_root_git_project_for_trust(&self.cwd).unwrap_or_else(|| self.cwd.clone());
-        if let Err(e) = set_project_trust_level(&self.adam_home, &target, TrustLevel::Untrusted) {
+        if let Err(e) = set_project_trust_level(&self.lha_home, &target, TrustLevel::Untrusted) {
             tracing::error!("Failed to set project untrusted: {e:?}");
             self.error = Some(format!(
                 "Failed to set untrusted for {}: {e}",
@@ -194,9 +194,9 @@ mod tests {
 
     #[test]
     fn release_event_does_not_change_selection() {
-        let adam_home = TempDir::new().expect("temp home");
+        let lha_home = TempDir::new().expect("temp home");
         let mut widget = TrustDirectoryWidget {
-            adam_home: adam_home.path().to_path_buf(),
+            lha_home: lha_home.path().to_path_buf(),
             cwd: PathBuf::from("."),
             is_git_repo: false,
             selection: None,
@@ -218,9 +218,9 @@ mod tests {
 
     #[test]
     fn renders_snapshot_for_git_repo() {
-        let adam_home = TempDir::new().expect("temp home");
+        let lha_home = TempDir::new().expect("temp home");
         let widget = TrustDirectoryWidget {
-            adam_home: adam_home.path().to_path_buf(),
+            lha_home: lha_home.path().to_path_buf(),
             cwd: PathBuf::from("/workspace/project"),
             is_git_repo: true,
             selection: None,

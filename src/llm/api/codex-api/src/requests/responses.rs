@@ -6,10 +6,10 @@ use crate::provider::Provider;
 use crate::requests::headers::build_conversation_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
-use adam_llm_types::ToolCallPayload;
-use adam_llm_types::ToolResultPayload;
-use adam_llm_types::TranscriptItem;
 use http::HeaderMap;
+use lha_llm_types::ToolCallPayload;
+use lha_llm_types::ToolResultPayload;
+use lha_llm_types::TranscriptItem;
 use serde_json::Value;
 use serde_json::json;
 
@@ -281,8 +281,8 @@ mod tests {
     use super::*;
     use crate::provider::RetryConfig;
     use crate::provider::WireApi;
-    use adam_llm_types::ContentItem;
     use http::HeaderValue;
+    use lha_llm_types::ContentItem;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
 

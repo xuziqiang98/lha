@@ -1,11 +1,11 @@
 [package]
-name = "adam-arg0"
+name = "lha-arg0"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "adam_arg0"
+name = "lha_arg0"
 path = "src/lib.rs"
 
 [lints]
@@ -13,9 +13,9 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-adam-apply-patch = { workspace = true }
-adam-agent = { workspace = true }
-adam-linux-sandbox = { workspace = true }
+lha-apply-patch = { workspace = true }
+lha-agent = { workspace = true }
+lha-linux-sandbox = { workspace = true }
 dotenvy = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }

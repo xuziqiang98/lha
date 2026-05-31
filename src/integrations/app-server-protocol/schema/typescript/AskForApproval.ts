@@ -4,6 +4,6 @@
 
 /**
  * Determines the conditions under which the user is consulted to approve
- * running the command proposed by Adam.
+ * running the command proposed by LHA.
  */
 export type AskForApproval = "untrusted" | "on-failure" | "on-request" | "never";

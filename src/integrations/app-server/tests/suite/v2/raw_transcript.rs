@@ -1,20 +1,20 @@
-use adam_app_server_protocol::JSONRPCNotification;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::RawTranscriptItemCompletedNotification;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::Thread;
-use adam_app_server_protocol::ThreadStartParams;
-use adam_app_server_protocol::ThreadStartResponse;
-use adam_app_server_protocol::TurnStartParams;
-use adam_app_server_protocol::TurnStartResponse;
-use adam_app_server_protocol::UserInput as V2UserInput;
-use adam_protocol::models::ContentItem;
-use adam_protocol::models::TranscriptItem;
 use anyhow::Context;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use core_test_support::responses;
+use lha_app_server_protocol::JSONRPCNotification;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::RawTranscriptItemCompletedNotification;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::Thread;
+use lha_app_server_protocol::ThreadStartParams;
+use lha_app_server_protocol::ThreadStartResponse;
+use lha_app_server_protocol::TurnStartParams;
+use lha_app_server_protocol::TurnStartResponse;
+use lha_app_server_protocol::UserInput as V2UserInput;
+use lha_protocol::models::ContentItem;
+use lha_protocol::models::TranscriptItem;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -33,10 +33,10 @@ async fn thread_start_emits_raw_transcript_notifications_when_opted_in() -> Resu
     ]);
     let _response_mock = responses::mount_sse_once(&server, body).await;
 
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread = start_thread(&mut mcp, true).await?;
@@ -70,10 +70,10 @@ async fn thread_start_does_not_emit_raw_transcript_notifications_by_default() ->
     ]);
     let _response_mock = responses::mount_sse_once(&server, body).await;
 
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path(), &server.uri())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread = start_thread(&mut mcp, false).await?;
@@ -153,9 +153,9 @@ fn item_contains_text(item: &TranscriptItem, expected_text: &str) -> bool {
     })
 }
 
-fn create_config_toml(adam_home: &Path, server_uri: &str) -> std::io::Result<()> {
+fn create_config_toml(lha_home: &Path, server_uri: &str) -> std::io::Result<()> {
     app_test_support::write_mock_responses_config_toml_with_options(
-        adam_home,
+        lha_home,
         server_uri,
         &BTreeMap::new(),
         20_000,

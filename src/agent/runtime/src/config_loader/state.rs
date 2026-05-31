@@ -4,10 +4,10 @@ use crate::config_loader::ConfigRequirementsToml;
 use super::fingerprint::record_origins;
 use super::fingerprint::version_for_toml;
 use super::merge::merge_toml_values;
-use adam_app_server_protocol::ConfigLayer;
-use adam_app_server_protocol::ConfigLayerMetadata;
-use adam_app_server_protocol::ConfigLayerSource;
-use adam_utils_absolute_path::AbsolutePathBuf;
+use lha_app_server_protocol::ConfigLayer;
+use lha_app_server_protocol::ConfigLayerMetadata;
+use lha_app_server_protocol::ConfigLayerSource;
+use lha_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -76,13 +76,13 @@ impl ConfigLayerEntry {
         }
     }
 
-    // Get the `.adam/` folder associated with this config layer, if any.
+    // Get the `.lha/` folder associated with this config layer, if any.
     pub fn config_folder(&self) -> Option<AbsolutePathBuf> {
         match &self.name {
             ConfigLayerSource::Mdm { .. } => None,
             ConfigLayerSource::System { file } => file.parent(),
             ConfigLayerSource::User { file } => file.parent(),
-            ConfigLayerSource::Project { dot_adam_folder } => Some(dot_adam_folder.clone()),
+            ConfigLayerSource::Project { dot_lha_folder } => Some(dot_lha_folder.clone()),
             ConfigLayerSource::SessionFlags => None,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => None,
             ConfigLayerSource::LegacyManagedConfigTomlFromMdm => None,
@@ -250,7 +250,7 @@ fn verify_layer_ordering(layers: &[ConfigLayerEntry]) -> std::io::Result<Option<
     // 1. There is at most one user config layer.
     // 2. Project layers are ordered from root to cwd.
     let mut user_layer_index: Option<usize> = None;
-    let mut previous_project_dot_adam_folder: Option<&AbsolutePathBuf> = None;
+    let mut previous_project_dot_lha_folder: Option<&AbsolutePathBuf> = None;
     for (index, layer) in layers.iter().enumerate() {
         if matches!(layer.name, ConfigLayerSource::User { .. }) {
             if user_layer_index.is_some() {
@@ -263,18 +263,18 @@ fn verify_layer_ordering(layers: &[ConfigLayerEntry]) -> std::io::Result<Option<
         }
 
         if let ConfigLayerSource::Project {
-            dot_adam_folder: current_project_dot_adam_folder,
+            dot_lha_folder: current_project_dot_lha_folder,
         } = &layer.name
         {
-            if let Some(previous) = previous_project_dot_adam_folder {
+            if let Some(previous) = previous_project_dot_lha_folder {
                 let Some(parent) = previous.as_path().parent() else {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "project layer has no parent directory",
                     ));
                 };
-                if previous == current_project_dot_adam_folder
-                    || !current_project_dot_adam_folder
+                if previous == current_project_dot_lha_folder
+                    || !current_project_dot_lha_folder
                         .as_path()
                         .ancestors()
                         .any(|ancestor| ancestor == parent)
@@ -285,7 +285,7 @@ fn verify_layer_ordering(layers: &[ConfigLayerEntry]) -> std::io::Result<Option<
                     ));
                 }
             }
-            previous_project_dot_adam_folder = Some(current_project_dot_adam_folder);
+            previous_project_dot_lha_folder = Some(current_project_dot_lha_folder);
         }
     }
 

@@ -3,19 +3,19 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use adam_agent::Cursor;
-use adam_agent::INTERACTIVE_SESSION_SOURCES;
-use adam_agent::RolloutRecorder;
-use adam_agent::ThreadItem;
-use adam_agent::ThreadSortKey;
-use adam_agent::ThreadsPage;
-use adam_protocol::items::TurnItem;
 use chrono::DateTime;
 use chrono::Utc;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use lha_agent::Cursor;
+use lha_agent::INTERACTIVE_SESSION_SOURCES;
+use lha_agent::RolloutRecorder;
+use lha_agent::ThreadItem;
+use lha_agent::ThreadSortKey;
+use lha_agent::ThreadsPage;
+use lha_protocol::items::TurnItem;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
@@ -33,8 +33,8 @@ use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::protocol::SessionMetaLine;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::protocol::SessionMetaLine;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
@@ -78,7 +78,7 @@ impl SessionPickerAction {
 
 #[derive(Clone)]
 struct PageLoadRequest {
-    adam_home: PathBuf,
+    lha_home: PathBuf,
     cursor: Option<Cursor>,
     request_token: usize,
     search_token: Option<usize>,
@@ -101,14 +101,14 @@ enum BackgroundEvent {
 /// time (e.g., "5 seconds ago"), and the absolute path.
 pub async fn run_resume_picker(
     tui: &mut Tui,
-    adam_home: &Path,
+    lha_home: &Path,
     default_provider: &str,
     resolved_cwd: Option<&Path>,
     show_all: bool,
 ) -> Result<SessionSelection> {
     run_session_picker(
         tui,
-        adam_home,
+        lha_home,
         default_provider,
         resolved_cwd,
         show_all,
@@ -119,14 +119,14 @@ pub async fn run_resume_picker(
 
 pub async fn run_fork_picker(
     tui: &mut Tui,
-    adam_home: &Path,
+    lha_home: &Path,
     default_provider: &str,
     resolved_cwd: Option<&Path>,
     show_all: bool,
 ) -> Result<SessionSelection> {
     run_session_picker(
         tui,
-        adam_home,
+        lha_home,
         default_provider,
         resolved_cwd,
         show_all,
@@ -137,7 +137,7 @@ pub async fn run_fork_picker(
 
 async fn run_session_picker(
     tui: &mut Tui,
-    adam_home: &Path,
+    lha_home: &Path,
     default_provider: &str,
     resolved_cwd: Option<&Path>,
     show_all: bool,
@@ -153,7 +153,7 @@ async fn run_session_picker(
         let tx = loader_tx.clone();
         tokio::spawn(async move {
             let page = RolloutRecorder::list_threads(
-                &request.adam_home,
+                &request.lha_home,
                 PAGE_SIZE,
                 request.cursor.as_ref(),
                 ThreadSortKey::CreatedAt,
@@ -172,7 +172,7 @@ async fn run_session_picker(
     });
 
     let mut state = PickerState::new(
-        adam_home.to_path_buf(),
+        lha_home.to_path_buf(),
         tui.frame_requester(),
         page_loader,
         default_provider.clone(),
@@ -221,7 +221,7 @@ async fn run_session_picker(
 }
 
 struct PickerState {
-    adam_home: PathBuf,
+    lha_home: PathBuf,
     requester: FrameRequester,
     pagination: PaginationState,
     all_rows: Vec<Row>,
@@ -302,7 +302,7 @@ struct Row {
 
 impl PickerState {
     fn new(
-        adam_home: PathBuf,
+        lha_home: PathBuf,
         requester: FrameRequester,
         page_loader: PageLoader,
         default_provider: String,
@@ -311,7 +311,7 @@ impl PickerState {
         action: SessionPickerAction,
     ) -> Self {
         Self {
-            adam_home,
+            lha_home,
             requester,
             pagination: PaginationState {
                 next_cursor: None,
@@ -427,7 +427,7 @@ impl PickerState {
         self.request_frame();
 
         (self.page_loader)(PageLoadRequest {
-            adam_home: self.adam_home.clone(),
+            lha_home: self.lha_home.clone(),
             cursor: None,
             request_token,
             search_token: None,
@@ -643,7 +643,7 @@ impl PickerState {
         self.request_frame();
 
         (self.page_loader)(PageLoadRequest {
-            adam_home: self.adam_home.clone(),
+            lha_home: self.lha_home.clone(),
             cursor: Some(cursor),
             request_token,
             search_token,
@@ -731,7 +731,7 @@ fn extract_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
 fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
     head.iter()
         .filter_map(|value| serde_json::from_value::<TranscriptItem>(value.clone()).ok())
-        .find_map(|item| match adam_agent::parse_turn_item(&item) {
+        .find_map(|item| match lha_agent::parse_turn_item(&item) {
             Some(TurnItem::UserMessage(user)) => Some(user.message()),
             _ => None,
         })
@@ -1085,20 +1085,20 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_protocol::models::ContentItem;
-    use adam_protocol::models::TranscriptItem;
-    use adam_protocol::protocol::EventMsg;
-    use adam_protocol::protocol::GitInfo;
-    use adam_protocol::protocol::RolloutItem;
-    use adam_protocol::protocol::RolloutLine;
-    use adam_protocol::protocol::SessionMeta;
-    use adam_protocol::protocol::SessionSource;
-    use adam_protocol::protocol::UserMessageEvent;
     use chrono::Duration;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
+    use lha_protocol::models::ContentItem;
+    use lha_protocol::models::TranscriptItem;
+    use lha_protocol::protocol::EventMsg;
+    use lha_protocol::protocol::GitInfo;
+    use lha_protocol::protocol::RolloutItem;
+    use lha_protocol::protocol::RolloutLine;
+    use lha_protocol::protocol::SessionMeta;
+    use lha_protocol::protocol::SessionSource;
+    use lha_protocol::protocol::UserMessageEvent;
     use serde_json::json;
     use std::path::Path;
     use std::path::PathBuf;
@@ -1159,13 +1159,13 @@ mod tests {
                 timestamp: ts.to_rfc3339(),
                 item: RolloutItem::SessionMeta(SessionMetaLine {
                     meta: SessionMeta {
-                        id: adam_protocol::ThreadId::default(),
+                        id: lha_protocol::ThreadId::default(),
                         forked_from_id: None,
                         timestamp: ts.to_rfc3339(),
                         cwd: PathBuf::from(cwd),
                         originator: "user".to_string(),
                         cli_version: "0.0.0".to_string(),
-                        rollout_schema_version: adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+                        rollout_schema_version: lha_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
                         source: SessionSource::Cli,
                         model_provider: Some(provider.to_string()),
                         base_instructions: None,
@@ -1434,7 +1434,7 @@ mod tests {
         );
 
         let page = RolloutRecorder::list_threads(
-            &state.adam_home,
+            &state.lha_home,
             PAGE_SIZE,
             None,
             ThreadSortKey::CreatedAt,

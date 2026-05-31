@@ -34,17 +34,17 @@ use windows_sys::Win32::Security::LookupAccountNameW;
 use windows_sys::Win32::Security::LookupAccountSidW;
 use windows_sys::Win32::Security::SID_NAME_USE;
 
-use adam_windows_sandbox::dpapi_protect;
-use adam_windows_sandbox::sandbox_dir;
-use adam_windows_sandbox::sandbox_secrets_dir;
-use adam_windows_sandbox::string_from_sid_bytes;
-use adam_windows_sandbox::to_wide;
-use adam_windows_sandbox::SetupErrorCode;
-use adam_windows_sandbox::SetupFailure;
-use adam_windows_sandbox::SETUP_VERSION;
+use lha_windows_sandbox::dpapi_protect;
+use lha_windows_sandbox::sandbox_dir;
+use lha_windows_sandbox::sandbox_secrets_dir;
+use lha_windows_sandbox::string_from_sid_bytes;
+use lha_windows_sandbox::to_wide;
+use lha_windows_sandbox::SetupErrorCode;
+use lha_windows_sandbox::SetupFailure;
+use lha_windows_sandbox::SETUP_VERSION;
 
 pub const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
-const SANDBOX_USERS_GROUP_COMMENT: &str = "Adam sandbox internal group (managed)";
+const SANDBOX_USERS_GROUP_COMMENT: &str = "LHA sandbox internal group (managed)";
 const SID_ADMINISTRATORS: &str = "S-1-5-32-544";
 const SID_USERS: &str = "S-1-5-32-545";
 const SID_AUTHENTICATED_USERS: &str = "S-1-5-11";
@@ -60,7 +60,7 @@ pub fn resolve_sandbox_users_group_sid() -> Result<Vec<u8>> {
 }
 
 pub fn provision_sandbox_users(
-    adam_home: &Path,
+    lha_home: &Path,
     offline_username: &str,
     online_username: &str,
     log: &mut File,
@@ -75,7 +75,7 @@ pub fn provision_sandbox_users(
     ensure_sandbox_user(offline_username, &offline_password, log)?;
     ensure_sandbox_user(online_username, &online_password, log)?;
     write_secrets(
-        adam_home,
+        lha_home,
         offline_username,
         &offline_password,
         online_username,
@@ -393,13 +393,13 @@ struct SetupMarker {
 }
 
 fn write_secrets(
-    adam_home: &Path,
+    lha_home: &Path,
     offline_user: &str,
     offline_pwd: &str,
     online_user: &str,
     online_pwd: &str,
 ) -> Result<()> {
-    let sandbox_dir = sandbox_dir(adam_home);
+    let sandbox_dir = sandbox_dir(lha_home);
     std::fs::create_dir_all(&sandbox_dir).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperUsersFileWriteFailed,
@@ -409,7 +409,7 @@ fn write_secrets(
             ),
         ))
     })?;
-    let secrets_dir = sandbox_secrets_dir(adam_home);
+    let secrets_dir = sandbox_secrets_dir(lha_home);
     std::fs::create_dir_all(&secrets_dir).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperUsersFileWriteFailed,

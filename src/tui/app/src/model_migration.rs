@@ -82,7 +82,7 @@ pub(crate) fn migration_copy_for_models(
     }
 
     let heading_text = Span::from(format!(
-        "Adam just got an upgrade. Introducing {target_display_name}."
+        "LHA just got an upgrade. Introducing {target_display_name}."
     ))
     .bold();
     let description_line: Line<'static>;
@@ -330,7 +330,7 @@ impl ModelMigrationScreen {
     fn render_menu(&self, column: &mut ColumnRenderable) {
         column.push(Line::from(""));
         column.push(
-            Paragraph::new("Choose how you'd like Adam to proceed.")
+            Paragraph::new("Choose how you'd like LHA to proceed.")
                 .wrap(Wrap { trim: false })
                 .inset(Insets::tlbr(0, 2, 0, 0)),
         );
@@ -402,7 +402,7 @@ mod tests {
                 ),
                 None,
                 "gpt-5.1-codex-max".to_string(),
-                Some("Adam-optimized flagship for deep and fast reasoning.".to_string()),
+                Some("LHA-optimized flagship for deep and fast reasoning.".to_string()),
                 true,
             ),
         );
@@ -458,7 +458,7 @@ mod tests {
                 None,
                 None,
                 "gpt-5.1-codex-max".to_string(),
-                Some("Adam-optimized flagship for deep and fast reasoning.".to_string()),
+                Some("LHA-optimized flagship for deep and fast reasoning.".to_string()),
                 false,
             ),
         );
@@ -485,7 +485,7 @@ mod tests {
                 None,
                 None,
                 "gpt-5.1-codex-mini".to_string(),
-                Some("Optimized for adam. Cheaper, faster, but less capable.".to_string()),
+                Some("Optimized for lha. Cheaper, faster, but less capable.".to_string()),
                 false,
             ),
         );

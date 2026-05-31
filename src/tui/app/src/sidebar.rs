@@ -1,8 +1,8 @@
 use crate::buddy;
 use crate::buddy::state::BuddyState;
 use crate::status::format_tokens_compact;
-use adam_protocol::plan_tool::StepStatus;
-use adam_protocol::protocol::AgentJobDisplayStatus;
+use lha_protocol::plan_tool::StepStatus;
+use lha_protocol::protocol::AgentJobDisplayStatus;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;

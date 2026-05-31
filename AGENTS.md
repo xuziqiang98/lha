@@ -2,12 +2,12 @@
 
 In this repo, the Rust code lives under `src/`:
 
-- Crate names are generally prefixed with `adam-`. For example, `src/agent/runtime` is `adam-agent` and `src/core/agent-core` is `adam-agent-core`.
+- Crate names are generally prefixed with `lha-`. For example, `src/agent/runtime` is `lha-agent` and `src/core/agent-core` is `lha-agent-core`.
 - When using format! and you can inline variables into {}, always do that.
 - Install any commands the repo relies on (for example `just`, `rg`, or `cargo-insta`) if they aren't already available before running instructions here.
-- Never add or modify any code related to `ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR` or `ADAM_SANDBOX_ENV_VAR`.
-  - You operate in a sandbox where `ADAM_SANDBOX_NETWORK_DISABLED=1` will be set whenever you use the `shell` tool. Any existing code that uses `ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR` was authored with this fact in mind. It is often used to early exit out of tests that the author knew you would not be able to run given your sandbox limitations.
-  - Similarly, when you spawn a process using Seatbelt (`/usr/bin/sandbox-exec`), `ADAM_SANDBOX=seatbelt` will be set on the child process. Integration tests that want to run Seatbelt themselves cannot be run under Seatbelt, so checks for `ADAM_SANDBOX=seatbelt` are also often used to early exit out of tests, as appropriate.
+- Never add or modify any code related to `LHA_SANDBOX_NETWORK_DISABLED_ENV_VAR` or `LHA_SANDBOX_ENV_VAR`.
+  - You operate in a sandbox where `LHA_SANDBOX_NETWORK_DISABLED=1` will be set whenever you use the `shell` tool. Any existing code that uses `LHA_SANDBOX_NETWORK_DISABLED_ENV_VAR` was authored with this fact in mind. It is often used to early exit out of tests that the author knew you would not be able to run given your sandbox limitations.
+  - Similarly, when you spawn a process using Seatbelt (`/usr/bin/sandbox-exec`), `LHA_SANDBOX=seatbelt` will be set on the child process. Integration tests that want to run Seatbelt themselves cannot be run under Seatbelt, so checks for `LHA_SANDBOX=seatbelt` are also often used to early exit out of tests, as appropriate.
 - Always collapse if statements per https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
 - Always inline format! args when possible per https://rust-lang.github.io/rust-clippy/master/index.html#uninlined_format_args
 - Use method references over closures when possible per https://rust-lang.github.io/rust-clippy/master/index.html#redundant_closure_for_method_calls
@@ -18,7 +18,7 @@ In this repo, the Rust code lives under `src/`:
 
 Run `just fmt` from the repository root automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
 
-1. Run the test for the specific project that was changed. For example, if changes were made in `src/tui/app`, run `cargo test -p adam-tui`.
+1. Run the test for the specific project that was changed. For example, if changes were made in `src/tui/app`, run `cargo test -p lha-tui`.
 2. Once those pass, if any changes were made in common, core, or protocol, run the complete test suite with `cargo test --all-features`. project-specific or individual tests can be run without asking the user, but do ask the user before running the complete test suite.
 
 Before finalizing a large change to the Rust workspace, run `just fix -p <project>` to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace-wide Clippy builds; only run `just fix` without `-p` if you changed shared crates.
@@ -62,13 +62,13 @@ See `src/tui/app/styles.md`.
 This repo uses snapshot tests (via `insta`), especially in `src/tui/app`, to validate rendered output. When UI or text output changes intentionally, update the snapshots as follows:
 
 - Run tests to generate any updated snapshots:
-  - `cargo test -p adam-tui`
+  - `cargo test -p lha-tui`
 - Check what’s pending:
-  - `cargo insta pending-snapshots -p adam-tui`
+  - `cargo insta pending-snapshots -p lha-tui`
 - Review changes by reading the generated `*.snap.new` files directly in the repo, or preview a specific file:
-  - `cargo insta show -p adam-tui path/to/file.snap.new`
+  - `cargo insta show -p lha-tui path/to/file.snap.new`
 - Only if you intend to accept all new snapshots in this crate, run:
-  - `cargo insta accept -p adam-tui`
+  - `cargo insta accept -p lha-tui`
 
 If you don’t have the tool:
 
@@ -82,12 +82,12 @@ If you don’t have the tool:
 
 ### Spawning workspace binaries in tests
 
-- Prefer `adam_utils_cargo_bin::cargo_bin("...")` over `assert_cmd::Command::cargo_bin(...)` or `escargot` when tests need to spawn first-party binaries.
-- When locating fixture files or test resources, avoid `env!("CARGO_MANIFEST_DIR")` in test code. Prefer `adam_utils_cargo_bin::find_resource!` so paths continue to resolve after `chdir`.
+- Prefer `lha_utils_cargo_bin::cargo_bin("...")` over `assert_cmd::Command::cargo_bin(...)` or `escargot` when tests need to spawn first-party binaries.
+- When locating fixture files or test resources, avoid `env!("CARGO_MANIFEST_DIR")` in test code. Prefer `lha_utils_cargo_bin::find_resource!` so paths continue to resolve after `chdir`.
 
 ### Integration tests (core)
 
-- Prefer the utilities in `core_test_support::responses` when writing end-to-end Adam agent tests.
+- Prefer the utilities in `core_test_support::responses` when writing end-to-end LHA agent tests.
 
 - All `mount_sse*` helpers return a `ResponseMock`; hold onto it so you can assert against outbound `/responses` POST bodies.
 - Use `ResponseMock::single_request()` when a test should only issue one POST, or `ResponseMock::requests()` to inspect every captured `ResponsesRequest`.

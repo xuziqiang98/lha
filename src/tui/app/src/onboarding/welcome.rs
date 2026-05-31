@@ -48,7 +48,7 @@ impl WidgetRef for &WelcomeWidget {
         let lines: Vec<Line> = vec![Line::from(vec![
             "  ".into(),
             "Welcome to ".into(),
-            "Adam".bold(),
+            "LHA".bold(),
             ", a lightweight command-line coding agent".into(),
         ])];
 

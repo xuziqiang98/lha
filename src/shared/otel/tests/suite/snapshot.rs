@@ -1,12 +1,12 @@
 use crate::harness::attributes_to_map;
 use crate::harness::find_metric;
-use adam_app_server_protocol::AuthMode;
-use adam_otel::OtelManager;
-use adam_otel::metrics::MetricsClient;
-use adam_otel::metrics::MetricsConfig;
-use adam_otel::metrics::Result;
-use adam_protocol::ThreadId;
-use adam_protocol::protocol::SessionSource;
+use lha_app_server_protocol::AuthMode;
+use lha_otel::OtelManager;
+use lha_otel::metrics::MetricsClient;
+use lha_otel::metrics::MetricsConfig;
+use lha_otel::metrics::Result;
+use lha_protocol::ThreadId;
+use lha_protocol::protocol::SessionSource;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use opentelemetry_sdk::metrics::data::AggregatedMetrics;
 use opentelemetry_sdk::metrics::data::MetricData;
@@ -18,11 +18,11 @@ fn snapshot_collects_metrics_without_shutdown() -> Result<()> {
     let exporter = InMemoryMetricExporter::default();
     let config = MetricsConfig::in_memory(
         "test",
-        "adam-cli",
+        "lha-cli",
         env!("CARGO_PKG_VERSION"),
         exporter.clone(),
     )
-    .with_tag("service", "adam-cli")?
+    .with_tag("service", "lha-cli")?
     .with_runtime_reader();
     let metrics = MetricsClient::new(config)?;
 
@@ -48,7 +48,7 @@ fn snapshot_collects_metrics_without_shutdown() -> Result<()> {
     };
 
     let expected = BTreeMap::from([
-        ("service".to_string(), "adam-cli".to_string()),
+        ("service".to_string(), "lha-cli".to_string()),
         ("success".to_string(), "true".to_string()),
         ("tool".to_string(), "shell".to_string()),
     ]);
@@ -65,8 +65,8 @@ fn snapshot_collects_metrics_without_shutdown() -> Result<()> {
 #[test]
 fn manager_snapshot_metrics_collects_without_shutdown() -> Result<()> {
     let exporter = InMemoryMetricExporter::default();
-    let config = MetricsConfig::in_memory("test", "adam-cli", env!("CARGO_PKG_VERSION"), exporter)
-        .with_tag("service", "adam-cli")?
+    let config = MetricsConfig::in_memory("test", "lha-cli", env!("CARGO_PKG_VERSION"), exporter)
+        .with_tag("service", "lha-cli")?
         .with_runtime_reader();
     let metrics = MetricsClient::new(config)?;
     let manager = OtelManager::new(
@@ -109,7 +109,7 @@ fn manager_snapshot_metrics_collects_without_shutdown() -> Result<()> {
         ),
         ("auth_mode".to_string(), AuthMode::ApiKey.to_string()),
         ("model".to_string(), "gpt-5.1".to_string()),
-        ("service".to_string(), "adam-cli".to_string()),
+        ("service".to_string(), "lha-cli".to_string()),
         ("session_source".to_string(), "cli".to_string()),
         ("success".to_string(), "true".to_string()),
         ("tool".to_string(), "shell".to_string()),

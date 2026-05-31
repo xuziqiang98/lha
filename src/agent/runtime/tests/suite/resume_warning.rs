@@ -1,24 +1,24 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use adam_agent::AuthManager;
-use adam_agent::CodexAuth;
-use adam_agent::NewThread;
-use adam_agent::ThreadManager;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::InitialHistory;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::ResumedHistory;
-use adam_agent::protocol::RolloutItem;
-use adam_agent::protocol::RolloutLine;
-use adam_agent::protocol::TurnContextItem;
-use adam_agent::protocol::WarningEvent;
-use adam_protocol::ThreadId;
-use adam_protocol::config_types::Identity;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::Settings;
 use core::time::Duration;
 use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;
+use lha_agent::AuthManager;
+use lha_agent::CodexAuth;
+use lha_agent::NewThread;
+use lha_agent::ThreadManager;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::InitialHistory;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::ResumedHistory;
+use lha_agent::protocol::RolloutItem;
+use lha_agent::protocol::RolloutLine;
+use lha_agent::protocol::TurnContextItem;
+use lha_agent::protocol::WarningEvent;
+use lha_protocol::ThreadId;
+use lha_protocol::config_types::Identity;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::Settings;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -35,7 +35,7 @@ fn identity(kind: IdentityKind, model: &str, developer_instructions: Option<&str
 }
 
 fn turn_context(
-    config: &adam_agent::config::Config,
+    config: &lha_agent::config::Config,
     model: &str,
     identity: Option<Identity>,
 ) -> TurnContextItem {
@@ -64,7 +64,7 @@ fn resumed_history(rollout_path: &Path, history: Vec<RolloutItem>) -> InitialHis
 }
 
 fn resume_history(
-    config: &adam_agent::config::Config,
+    config: &lha_agent::config::Config,
     previous_model: &str,
     rollout_path: &Path,
 ) -> InitialHistory {
@@ -237,7 +237,7 @@ async fn override_identity_without_turn_is_persisted_and_restored() {
         auth.clone(),
         config.model_provider_id.as_str(),
         config.model_provider.clone(),
-        config.adam_home.clone(),
+        config.lha_home.clone(),
     );
     let auth_manager = AuthManager::from_auth_for_testing(auth.clone());
 

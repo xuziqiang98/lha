@@ -1,0 +1,10 @@
+---
+source: src/tui/app/src/chatwidget/tests.rs
+expression: terminal.backend()
+---
+"• Booting MCP server: alpha (0s • esc to interrupt)                             "
+"                                                                                "
+"                                                                                "
+"› Ask LHA to do anything                                                        "
+"                                                                                "
+"  gpt-5.3-codex · 100% left · ~/Workspace/lha/src/tui/app                       "

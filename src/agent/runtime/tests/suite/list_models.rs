@@ -1,19 +1,19 @@
-use adam_agent::CodexAuth;
-use adam_agent::ThreadManager;
-use adam_agent::models_manager::manager::RefreshStrategy;
-use adam_agent::models_manager::model_presets::all_model_presets;
-use adam_llm::built_in_runtime_endpoints;
-use adam_protocol::openai_models::ModelPreset;
-use adam_protocol::openai_models::ModelsResponse;
 use anyhow::Result;
 use core_test_support::load_default_config_for_test;
+use lha_agent::CodexAuth;
+use lha_agent::ThreadManager;
+use lha_agent::models_manager::manager::RefreshStrategy;
+use lha_agent::models_manager::model_presets::all_model_presets;
+use lha_llm::built_in_runtime_endpoints;
+use lha_protocol::openai_models::ModelPreset;
+use lha_protocol::openai_models::ModelsResponse;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn list_models_returns_api_key_models() -> Result<()> {
-    let adam_home = tempdir()?;
-    let config = load_default_config_for_test(&adam_home).await;
+    let lha_home = tempdir()?;
+    let config = load_default_config_for_test(&lha_home).await;
     let manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("sk-test"),
         test_openai_endpoint(),
@@ -26,7 +26,7 @@ async fn list_models_returns_api_key_models() -> Result<()> {
 
     Ok(())
 }
-fn test_openai_endpoint() -> adam_llm::RuntimeEndpoint {
+fn test_openai_endpoint() -> lha_llm::RuntimeEndpoint {
     let mut endpoint = built_in_runtime_endpoints()["openai"].clone();
     endpoint.env_key = None;
     endpoint.env_key_instructions = None;

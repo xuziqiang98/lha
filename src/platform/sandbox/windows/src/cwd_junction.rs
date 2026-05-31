@@ -1,6 +1,6 @@
 #![cfg(target_os = "windows")]
 
-use adam_windows_sandbox::log_note;
+use lha_windows_sandbox::log_note;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -18,7 +18,7 @@ fn junction_name_for_path(path: &Path) -> String {
 
 fn junction_root_for_userprofile(userprofile: &str) -> PathBuf {
     PathBuf::from(userprofile)
-        .join(".adam")
+        .join(".lha")
         .join(".sandbox")
         .join("cwd")
 }

@@ -15,7 +15,7 @@ pub enum Error {
     #[error("turn aborted")]
     Aborted,
     #[error("runtime error: {0}")]
-    Runtime(#[from] adam_llm::Error),
+    Runtime(#[from] lha_llm::Error),
     #[error("tool error: {0}")]
     Tool(#[from] crate::tools::ToolError),
 }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use adam_protocol::user_input::UserInput;
+use lha_protocol::user_input::UserInput;
 
 use crate::connectors;
 use crate::skills::SkillMetadata;

@@ -1,14 +1,14 @@
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
-use adam_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
-use adam_app_server_protocol::ThreadStartParams;
-use adam_app_server_protocol::ThreadStartResponse;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_models_json;
 use app_test_support::write_state_json;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
+use lha_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
+use lha_app_server_protocol::ThreadStartParams;
+use lha_app_server_protocol::ThreadStartResponse;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -17,10 +17,10 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test]
 async fn thread_background_terminals_clean_returns_success_for_loaded_thread() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    create_config_toml(adam_home.path())?;
+    let lha_home = TempDir::new()?;
+    create_config_toml(lha_home.path())?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -52,18 +52,18 @@ async fn thread_background_terminals_clean_returns_success_for_loaded_thread() -
     Ok(())
 }
 
-fn create_config_toml(adam_home: &Path) -> std::io::Result<()> {
-    let config_toml = adam_home.join("config.toml");
+fn create_config_toml(lha_home: &Path) -> std::io::Result<()> {
+    let config_toml = lha_home.join("config.toml");
     std::fs::write(config_toml, config_contents())?;
     write_mock_responses_models_json(
-        adam_home,
+        lha_home,
         "https://example.com",
         "mock_provider",
         false,
         None,
         "mock-model",
     )?;
-    write_state_json(adam_home, "mock_provider.main:mock-model")
+    write_state_json(lha_home, "mock_provider.main:mock-model")
 }
 
 fn config_contents() -> &'static str {

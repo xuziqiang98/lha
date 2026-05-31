@@ -1,9 +1,9 @@
-use adam_common::CliConfigOverrides;
-use adam_protocol::config_types::IdentityKind;
 use clap::Args;
 use clap::FromArgMatches;
 use clap::Parser;
 use clap::ValueEnum;
+use lha_common::CliConfigOverrides;
+use lha_protocol::config_types::IdentityKind;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -30,7 +30,7 @@ pub struct Cli {
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
     #[arg(long = "sandbox", short = 's', value_enum)]
-    pub sandbox_mode: Option<adam_common::SandboxModeCliArg>,
+    pub sandbox_mode: Option<lha_common::SandboxModeCliArg>,
 
     /// Configuration profile from config.toml to specify default options.
     #[arg(long = "profile", short = 'p')]
@@ -59,7 +59,7 @@ pub struct Cli {
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
 
-    /// Allow running Adam outside a Git repository.
+    /// Allow running LHA outside a Git repository.
     #[arg(long = "skip-git-repo-check", global = true, default_value_t = false)]
     pub skip_git_repo_check: bool,
 
@@ -276,7 +276,7 @@ mod tests {
     fn resume_parses_prompt_after_global_flags() {
         const PROMPT: &str = "echo resume-with-global-flags-after-subcommand";
         let cli = Cli::parse_from([
-            "adam-exec",
+            "lha-exec",
             "resume",
             "--last",
             "--json",
@@ -302,14 +302,14 @@ mod tests {
 
     #[test]
     fn parses_identity_flag() {
-        let cli = Cli::parse_from(["adam-exec", "--identity", "explorer", "inspect"]);
+        let cli = Cli::parse_from(["lha-exec", "--identity", "explorer", "inspect"]);
 
         assert_eq!(cli.identity, Some(ExecIdentityArg::Explorer));
     }
 
     #[test]
     fn parses_internal_raw_events_flag() {
-        let cli = Cli::parse_from(["adam-exec", "--internal-raw-events", "inspect"]);
+        let cli = Cli::parse_from(["lha-exec", "--internal-raw-events", "inspect"]);
 
         assert!(cli.internal_raw_events);
         assert!(!cli.json);

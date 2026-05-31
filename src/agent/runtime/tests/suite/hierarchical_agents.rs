@@ -1,8 +1,8 @@
-use adam_agent::features::Feature;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
+use lha_agent::features::Feature;
 
 const HIERARCHICAL_AGENTS_SNIPPET: &str =
     "Files called AGENTS.md commonly appear in many places inside a container";

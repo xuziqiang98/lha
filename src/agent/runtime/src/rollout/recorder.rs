@@ -1,4 +1,4 @@
-//! Persist Adam session rollouts (.jsonl) so sessions can be replayed or inspected later.
+//! Persist LHA session rollouts (.jsonl) so sessions can be replayed or inspected later.
 
 use std::fs::File;
 use std::fs::{self};
@@ -7,9 +7,9 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 
-use adam_protocol::ThreadId;
-use adam_protocol::dynamic_tools::DynamicToolSpec;
-use adam_protocol::models::BaseInstructions;
+use lha_protocol::ThreadId;
+use lha_protocol::dynamic_tools::DynamicToolSpec;
+use lha_protocol::models::BaseInstructions;
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
@@ -37,16 +37,16 @@ use crate::default_client::originator;
 use crate::git_info::collect_git_info;
 use crate::state_db;
 use crate::state_db::StateDbHandle;
-use adam_protocol::protocol::InitialHistory;
-use adam_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3;
-use adam_protocol::protocol::ResumedHistory;
-use adam_protocol::protocol::RolloutItem;
-use adam_protocol::protocol::RolloutLine;
-use adam_protocol::protocol::SessionMeta;
-use adam_protocol::protocol::SessionMetaLine;
-use adam_protocol::protocol::SessionSource;
-use adam_protocol::protocol::current_rollout_schema_version;
-use adam_state::ThreadMetadataBuilder;
+use lha_protocol::protocol::InitialHistory;
+use lha_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3;
+use lha_protocol::protocol::ResumedHistory;
+use lha_protocol::protocol::RolloutItem;
+use lha_protocol::protocol::RolloutLine;
+use lha_protocol::protocol::SessionMeta;
+use lha_protocol::protocol::SessionMetaLine;
+use lha_protocol::protocol::SessionSource;
+use lha_protocol::protocol::current_rollout_schema_version;
+use lha_state::ThreadMetadataBuilder;
 
 #[derive(Debug)]
 pub(crate) struct UnsupportedRolloutSchema {
@@ -140,8 +140,8 @@ pub(crate) fn validate_rollout_line_schema_version(value: &Value) -> std::io::Re
 /// Rollouts are recorded as JSONL and can be inspected with tools such as:
 ///
 /// ```ignore
-/// $ jq -C . ~/.adam/sessions/rollout-2025-05-07T17-24-21-5973b6c0-94b8-487b-a530-2aeb6098ae0e.jsonl
-/// $ fx ~/.adam/sessions/rollout-2025-05-07T17-24-21-5973b6c0-94b8-487b-a530-2aeb6098ae0e.jsonl
+/// $ jq -C . ~/.lha/sessions/rollout-2025-05-07T17-24-21-5973b6c0-94b8-487b-a530-2aeb6098ae0e.jsonl
+/// $ fx ~/.lha/sessions/rollout-2025-05-07T17-24-21-5973b6c0-94b8-487b-a530-2aeb6098ae0e.jsonl
 /// ```
 #[derive(Clone)]
 pub struct RolloutRecorder {
@@ -198,10 +198,10 @@ impl RolloutRecorderParams {
 }
 
 impl RolloutRecorder {
-    /// List threads (rollout files) under the provided Adam home directory.
+    /// List threads (rollout files) under the provided LHA home directory.
     #[allow(clippy::too_many_arguments)]
     pub async fn list_threads(
-        adam_home: &Path,
+        lha_home: &Path,
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
@@ -212,7 +212,7 @@ impl RolloutRecorder {
     ) -> std::io::Result<ThreadsPage> {
         let stage = "list_threads";
         let page = get_threads(
-            adam_home,
+            lha_home,
             page_size,
             cursor,
             sort_key,
@@ -224,10 +224,10 @@ impl RolloutRecorder {
         .await?;
 
         // TODO(jif): drop after sqlite migration phase 1
-        let state_db_ctx = state_db::open_if_present(adam_home, default_provider).await;
+        let state_db_ctx = state_db::open_if_present(lha_home, default_provider).await;
         if let Some(db_ids) = state_db::list_thread_ids_db(
             state_db_ctx.as_deref(),
-            adam_home,
+            lha_home,
             page_size,
             cursor,
             sort_key,
@@ -255,7 +255,7 @@ impl RolloutRecorder {
     /// List archived threads (rollout files) under the archived sessions directory.
     #[allow(clippy::too_many_arguments)]
     pub async fn list_archived_threads(
-        adam_home: &Path,
+        lha_home: &Path,
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
@@ -265,7 +265,7 @@ impl RolloutRecorder {
         cwd_filter: Option<&Path>,
     ) -> std::io::Result<ThreadsPage> {
         let stage = "list_archived_threads";
-        let root = adam_home.join(ARCHIVED_SESSIONS_SUBDIR);
+        let root = lha_home.join(ARCHIVED_SESSIONS_SUBDIR);
         let page = get_threads_in_root(
             root,
             page_size,
@@ -282,10 +282,10 @@ impl RolloutRecorder {
         .await?;
 
         // TODO(jif): drop after sqlite migration phase 1
-        let state_db_ctx = state_db::open_if_present(adam_home, default_provider).await;
+        let state_db_ctx = state_db::open_if_present(lha_home, default_provider).await;
         if let Some(db_ids) = state_db::list_thread_ids_db(
             state_db_ctx.as_deref(),
-            adam_home,
+            lha_home,
             page_size,
             cursor,
             sort_key,
@@ -313,7 +313,7 @@ impl RolloutRecorder {
     /// Find the newest recorded thread path, optionally filtering to a matching cwd.
     #[allow(clippy::too_many_arguments)]
     pub async fn find_latest_thread_path(
-        adam_home: &Path,
+        lha_home: &Path,
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
@@ -325,7 +325,7 @@ impl RolloutRecorder {
         let mut cursor = cursor.cloned();
         loop {
             let page = Self::list_threads(
-                adam_home,
+                lha_home,
                 page_size,
                 cursor.as_ref(),
                 sort_key,
@@ -607,10 +607,10 @@ struct LogFileInfo {
 }
 
 fn create_log_file(config: &Config, conversation_id: ThreadId) -> std::io::Result<LogFileInfo> {
-    // Resolve ~/.adam/sessions/YYYY/MM/DD and create it if missing.
+    // Resolve ~/.lha/sessions/YYYY/MM/DD and create it if missing.
     let timestamp = OffsetDateTime::now_local()
         .map_err(|e| IoError::other(format!("failed to get local time: {e}")))?;
-    let mut dir = config.adam_home.clone();
+    let mut dir = config.lha_home.clone();
     dir.push(SESSIONS_SUBDIR);
     dir.push(timestamp.year().to_string());
     dir.push(format!("{:02}", u8::from(timestamp.month())));

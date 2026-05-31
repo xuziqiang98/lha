@@ -1,6 +1,6 @@
 use crate::config::ConfigToml;
 use crate::config::models_json::ModelsJson;
-use crate::config::state_json::AdamStateJson;
+use crate::config::state_json::LHAStateJson;
 use crate::config::types::RawMcpServerConfig;
 use crate::features::FEATURES;
 use schemars::r#gen::SchemaGenerator;
@@ -109,7 +109,7 @@ pub fn write_models_schema(out_path: &Path) -> anyhow::Result<()> {
 }
 
 pub fn write_state_schema(out_path: &Path) -> anyhow::Result<()> {
-    let json = schema_json_for::<AdamStateJson>()?;
+    let json = schema_json_for::<LHAStateJson>()?;
     std::fs::write(out_path, json)?;
     Ok(())
 }
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn config_schema_matches_fixture() {
-        let fixture_path = adam_utils_cargo_bin::find_resource!("config.schema.json")
+        let fixture_path = lha_utils_cargo_bin::find_resource!("config.schema.json")
             .expect("resolve config schema fixture path");
         let fixture = std::fs::read_to_string(fixture_path).expect("read config schema fixture");
         let fixture_value: serde_json::Value =

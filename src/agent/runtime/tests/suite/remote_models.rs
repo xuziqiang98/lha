@@ -3,27 +3,6 @@
 // unified exec is not supported on Windows OS
 use std::sync::Arc;
 
-use adam_agent::CodexAuth;
-use adam_agent::config::Config;
-use adam_agent::features::Feature;
-use adam_agent::models_manager::manager::ModelsManager;
-use adam_agent::models_manager::manager::RefreshStrategy;
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::ExecCommandSource;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::SandboxPolicy;
-use adam_llm::built_in_runtime_endpoints;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::openai_models::ConfigShellToolType;
-use adam_protocol::openai_models::ModelInfo;
-use adam_protocol::openai_models::ModelPreset;
-use adam_protocol::openai_models::ModelVisibility;
-use adam_protocol::openai_models::ModelsResponse;
-use adam_protocol::openai_models::ReasoningEffort;
-use adam_protocol::openai_models::ReasoningEffortPreset;
-use adam_protocol::openai_models::TruncationPolicyConfig;
-use adam_protocol::user_input::UserInput;
 use anyhow::Result;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_assistant_message;
@@ -41,6 +20,27 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use lha_agent::CodexAuth;
+use lha_agent::config::Config;
+use lha_agent::features::Feature;
+use lha_agent::models_manager::manager::ModelsManager;
+use lha_agent::models_manager::manager::RefreshStrategy;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::ExecCommandSource;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::SandboxPolicy;
+use lha_llm::built_in_runtime_endpoints;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::openai_models::ConfigShellToolType;
+use lha_protocol::openai_models::ModelInfo;
+use lha_protocol::openai_models::ModelPreset;
+use lha_protocol::openai_models::ModelVisibility;
+use lha_protocol::openai_models::ModelsResponse;
+use lha_protocol::openai_models::ReasoningEffort;
+use lha_protocol::openai_models::ReasoningEffortPreset;
+use lha_protocol::openai_models::TruncationPolicyConfig;
+use lha_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
@@ -421,16 +421,16 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
     )
     .await;
 
-    let adam_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&adam_home).await;
+    let lha_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&lha_home).await;
     config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::from_api_key("Test API Key");
     let mut provider = built_in_runtime_endpoints()["openai"].clone();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     let manager = ModelsManager::with_provider(
-        adam_home.path().to_path_buf(),
-        adam_agent::auth::AuthManager::from_auth_for_testing(auth),
+        lha_home.path().to_path_buf(),
+        lha_agent::auth::AuthManager::from_auth_for_testing(auth),
         "mock-provider",
         provider,
     );
@@ -485,16 +485,16 @@ async fn remote_models_merge_adds_new_high_priority_first() -> Result<()> {
     )
     .await;
 
-    let adam_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&adam_home).await;
+    let lha_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&lha_home).await;
     config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::from_api_key("Test API Key");
     let mut provider = built_in_runtime_endpoints()["openai"].clone();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     let manager = ModelsManager::with_provider(
-        adam_home.path().to_path_buf(),
-        adam_agent::auth::AuthManager::from_auth_for_testing(auth),
+        lha_home.path().to_path_buf(),
+        lha_agent::auth::AuthManager::from_auth_for_testing(auth),
         "mock-provider",
         provider,
     );
@@ -533,16 +533,16 @@ async fn remote_models_merge_replaces_overlapping_model() -> Result<()> {
     )
     .await;
 
-    let adam_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&adam_home).await;
+    let lha_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&lha_home).await;
     config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::from_api_key("Test API Key");
     let mut provider = built_in_runtime_endpoints()["openai"].clone();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     let manager = ModelsManager::with_provider(
-        adam_home.path().to_path_buf(),
-        adam_agent::auth::AuthManager::from_auth_for_testing(auth),
+        lha_home.path().to_path_buf(),
+        lha_agent::auth::AuthManager::from_auth_for_testing(auth),
         "mock-provider",
         provider,
     );
@@ -578,16 +578,16 @@ async fn remote_models_merge_preserves_bundled_models_on_empty_response() -> Res
     let server = MockServer::start().await;
     let models_mock = mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
 
-    let adam_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&adam_home).await;
+    let lha_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&lha_home).await;
     config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::from_api_key("Test API Key");
     let mut provider = built_in_runtime_endpoints()["openai"].clone();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     let manager = ModelsManager::with_provider(
-        adam_home.path().to_path_buf(),
-        adam_agent::auth::AuthManager::from_auth_for_testing(auth),
+        lha_home.path().to_path_buf(),
+        lha_agent::auth::AuthManager::from_auth_for_testing(auth),
         "mock-provider",
         provider,
     );
@@ -625,16 +625,16 @@ async fn remote_models_request_times_out_after_5s() -> Result<()> {
     )
     .await;
 
-    let adam_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&adam_home).await;
+    let lha_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&lha_home).await;
     config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::from_api_key("Test API Key");
     let mut provider = built_in_runtime_endpoints()["openai"].clone();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     let manager = ModelsManager::with_provider(
-        adam_home.path().to_path_buf(),
-        adam_agent::auth::AuthManager::from_auth_for_testing(auth),
+        lha_home.path().to_path_buf(),
+        lha_agent::auth::AuthManager::from_auth_for_testing(auth),
         "mock-provider",
         provider,
     );
@@ -693,16 +693,16 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     )
     .await;
 
-    let adam_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&adam_home).await;
+    let lha_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&lha_home).await;
     config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::from_api_key("Test API Key");
     let mut provider = built_in_runtime_endpoints()["openai"].clone();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     let manager = ModelsManager::with_provider(
-        adam_home.path().to_path_buf(),
-        adam_agent::auth::AuthManager::from_auth_for_testing(auth),
+        lha_home.path().to_path_buf(),
+        lha_agent::auth::AuthManager::from_auth_for_testing(auth),
         "mock-provider",
         provider,
     );

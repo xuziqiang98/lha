@@ -1,8 +1,8 @@
 # @openai/codex-responses-api-proxy
 
-<p align="center"><code>npm i -g @openai/codex-responses-api-proxy</code> to install <code>adam-responses-api-proxy</code></p>
+<p align="center"><code>npm i -g @openai/codex-responses-api-proxy</code> to install <code>lha-responses-api-proxy</code></p>
 
-This package distributes the prebuilt [Adam Responses API proxy binary](https://github.com/openai/codex/tree/main/src/integrations/responses-api-proxy) for macOS, Linux, and Windows.
+This package distributes the prebuilt [LHA Responses API proxy binary](https://github.com/openai/codex/tree/main/src/integrations/responses-api-proxy) for macOS, Linux, and Windows.
 
 To see available options, run:
 

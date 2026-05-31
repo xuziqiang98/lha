@@ -1,6 +1,6 @@
 //! Connection manager for Model Context Protocol (MCP) servers.
 //!
-//! The [`McpConnectionManager`] owns one [`adam_rmcp_client::RmcpClient`] per
+//! The [`McpConnectionManager`] owns one [`lha_rmcp_client::RmcpClient`] per
 //! configured server (keyed by the *server name*). It offers convenience
 //! helpers to query the available tools across *all* servers and returns them
 //! in a single aggregated map using the fully-qualified tool name
@@ -16,20 +16,6 @@ use std::time::Duration;
 
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::McpAuthStatusEntry;
-use adam_async_utils::CancelErr;
-use adam_async_utils::OrCancelExt;
-use adam_protocol::approvals::ElicitationRequestEvent;
-use adam_protocol::protocol::Event;
-use adam_protocol::protocol::EventMsg;
-use adam_protocol::protocol::McpStartupCompleteEvent;
-use adam_protocol::protocol::McpStartupFailure;
-use adam_protocol::protocol::McpStartupStatus;
-use adam_protocol::protocol::McpStartupUpdateEvent;
-use adam_protocol::protocol::SandboxPolicy;
-use adam_rmcp_client::ElicitationResponse;
-use adam_rmcp_client::OAuthCredentialsStoreMode;
-use adam_rmcp_client::RmcpClient;
-use adam_rmcp_client::SendElicitation;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -37,6 +23,20 @@ use async_channel::Sender;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use futures::future::Shared;
+use lha_async_utils::CancelErr;
+use lha_async_utils::OrCancelExt;
+use lha_protocol::approvals::ElicitationRequestEvent;
+use lha_protocol::protocol::Event;
+use lha_protocol::protocol::EventMsg;
+use lha_protocol::protocol::McpStartupCompleteEvent;
+use lha_protocol::protocol::McpStartupFailure;
+use lha_protocol::protocol::McpStartupStatus;
+use lha_protocol::protocol::McpStartupUpdateEvent;
+use lha_protocol::protocol::SandboxPolicy;
+use lha_rmcp_client::ElicitationResponse;
+use lha_rmcp_client::OAuthCredentialsStoreMode;
+use lha_rmcp_client::RmcpClient;
+use lha_rmcp_client::SendElicitation;
 use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
 use mcp_types::ListResourceTemplatesRequestParams;
@@ -861,9 +861,9 @@ async fn start_server_task(
         client_info: Implementation {
             name: "codex-mcp-client".to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
-            title: Some("Adam".into()),
-            // This field is used by Adam when it is an MCP
-            // server: it should not be used when Adam is
+            title: Some("LHA".into()),
+            // This field is used by LHA when it is an MCP
+            // server: it should not be used when LHA is
             // an MCP client.
             user_agent: None,
         },
@@ -1003,9 +1003,7 @@ fn mcp_init_error_display(
             "GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and config.toml:\n[mcp_servers.{server_name}]\nbearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN"
         )
     } else if is_mcp_client_auth_required_error(err) {
-        format!(
-            "The {server_name} MCP server is not logged in. Run `adam mcp login {server_name}`."
-        )
+        format!("The {server_name} MCP server is not logged in. Run `lha mcp login {server_name}`.")
     } else if is_mcp_client_startup_timeout_error(err) {
         let startup_timeout_secs = match entry {
             Some(entry) => match entry.config.startup_timeout_sec {
@@ -1046,7 +1044,7 @@ mod mcp_init_error_display_tests {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_protocol::protocol::McpAuthStatus;
+    use lha_protocol::protocol::McpAuthStatus;
     use mcp_types::ToolInputSchema;
     use std::collections::HashSet;
 
@@ -1263,7 +1261,7 @@ mod tests {
         let display = mcp_init_error_display(server_name, None, &err);
 
         let expected = format!(
-            "The {server_name} MCP server is not logged in. Run `adam mcp login {server_name}`."
+            "The {server_name} MCP server is not logged in. Run `lha mcp login {server_name}`."
         );
 
         assert_eq!(expected, display);

@@ -1,14 +1,14 @@
 #![expect(clippy::expect_used)]
 
-use adam_utils_cargo_bin::CargoBinError;
-use adam_utils_cargo_bin::find_resource;
+use lha_utils_cargo_bin::CargoBinError;
+use lha_utils_cargo_bin::find_resource;
 use tempfile::TempDir;
 
-use adam_agent::CodexThread;
-use adam_agent::config::Config;
-use adam_agent::config::ConfigBuilder;
-use adam_agent::config::ConfigOverrides;
-use adam_utils_absolute_path::AbsolutePathBuf;
+use lha_agent::CodexThread;
+use lha_agent::config::Config;
+use lha_agent::config::ConfigBuilder;
+use lha_agent::config::ConfigOverrides;
+use lha_utils_absolute_path::AbsolutePathBuf;
 use regex_lite::Regex;
 use std::path::PathBuf;
 
@@ -74,10 +74,10 @@ pub fn test_tmp_path_buf() -> PathBuf {
 
 /// Returns a default `Config` whose on-disk state is confined to the provided
 /// temporary directory. Using a per-test directory keeps tests hermetic and
-/// avoids clobbering a developer’s real `~/.adam`.
-pub async fn load_default_config_for_test(adam_home: &TempDir) -> Config {
+/// avoids clobbering a developer’s real `~/.lha`.
+pub async fn load_default_config_for_test(lha_home: &TempDir) -> Config {
     ConfigBuilder::default()
-        .adam_home(adam_home.path().to_path_buf())
+        .lha_home(lha_home.path().to_path_buf())
         .harness_overrides(default_test_overrides())
         .provider_config_required(false)
         .build()
@@ -184,9 +184,9 @@ pub fn load_sse_fixture_with_id(path: impl AsRef<std::path::Path>, id: &str) -> 
         .collect()
 }
 
-pub async fn wait_for_event<F>(codex: &CodexThread, predicate: F) -> adam_agent::protocol::EventMsg
+pub async fn wait_for_event<F>(codex: &CodexThread, predicate: F) -> lha_agent::protocol::EventMsg
 where
-    F: FnMut(&adam_agent::protocol::EventMsg) -> bool,
+    F: FnMut(&lha_agent::protocol::EventMsg) -> bool,
 {
     use tokio::time::Duration;
     wait_for_event_with_timeout(codex, predicate, Duration::from_secs(1)).await
@@ -194,7 +194,7 @@ where
 
 pub async fn wait_for_event_match<T, F>(codex: &CodexThread, matcher: F) -> T
 where
-    F: Fn(&adam_agent::protocol::EventMsg) -> Option<T>,
+    F: Fn(&lha_agent::protocol::EventMsg) -> Option<T>,
 {
     let ev = wait_for_event(codex, |ev| matcher(ev).is_some()).await;
     matcher(&ev).unwrap()
@@ -204,9 +204,9 @@ pub async fn wait_for_event_with_timeout<F>(
     codex: &CodexThread,
     mut predicate: F,
     wait_time: tokio::time::Duration,
-) -> adam_agent::protocol::EventMsg
+) -> lha_agent::protocol::EventMsg
 where
-    F: FnMut(&adam_agent::protocol::EventMsg) -> bool,
+    F: FnMut(&lha_agent::protocol::EventMsg) -> bool,
 {
     use tokio::time::Duration;
     use tokio::time::timeout;
@@ -223,15 +223,15 @@ where
 }
 
 pub fn sandbox_env_var() -> &'static str {
-    adam_agent::spawn::ADAM_SANDBOX_ENV_VAR
+    lha_agent::spawn::LHA_SANDBOX_ENV_VAR
 }
 
 pub fn sandbox_network_env_var() -> &'static str {
-    adam_agent::spawn::ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR
+    lha_agent::spawn::LHA_SANDBOX_NETWORK_DISABLED_ENV_VAR
 }
 
 pub fn format_with_current_shell(command: &str) -> Vec<String> {
-    adam_agent::shell::default_user_shell().derive_exec_args(command, true)
+    lha_agent::shell::default_user_shell().derive_exec_args(command, true)
 }
 
 pub fn format_with_current_shell_display(command: &str) -> String {
@@ -240,7 +240,7 @@ pub fn format_with_current_shell_display(command: &str) -> String {
 }
 
 pub fn format_with_current_shell_non_login(command: &str) -> Vec<String> {
-    adam_agent::shell::default_user_shell().derive_exec_args(command, false)
+    lha_agent::shell::default_user_shell().derive_exec_args(command, false)
 }
 
 pub fn format_with_current_shell_display_non_login(command: &str) -> String {
@@ -250,7 +250,7 @@ pub fn format_with_current_shell_display_non_login(command: &str) -> String {
 }
 
 pub fn stdio_server_bin() -> Result<String, CargoBinError> {
-    adam_utils_cargo_bin::cargo_bin("test_stdio_server").map(|p| p.to_string_lossy().to_string())
+    lha_utils_cargo_bin::cargo_bin("test_stdio_server").map(|p| p.to_string_lossy().to_string())
 }
 
 pub mod fs_wait {
@@ -427,7 +427,7 @@ macro_rules! skip_if_no_network {
     () => {{
         if ::std::env::var($crate::sandbox_network_env_var()).is_ok() {
             println!(
-                "Skipping test because it cannot execute when network is disabled in a Adam sandbox."
+                "Skipping test because it cannot execute when network is disabled in a LHA sandbox."
             );
             return;
         }
@@ -435,7 +435,7 @@ macro_rules! skip_if_no_network {
     ($return_value:expr $(,)?) => {{
         if ::std::env::var($crate::sandbox_network_env_var()).is_ok() {
             println!(
-                "Skipping test because it cannot execute when network is disabled in a Adam sandbox."
+                "Skipping test because it cannot execute when network is disabled in a LHA sandbox."
             );
             return $return_value;
         }

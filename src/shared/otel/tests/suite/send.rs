@@ -3,7 +3,7 @@ use crate::harness::build_metrics_with_defaults;
 use crate::harness::find_metric;
 use crate::harness::histogram_data;
 use crate::harness::latest_metrics;
-use adam_otel::metrics::Result;
+use lha_otel::metrics::Result;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 #[test]
 fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
     let (metrics, exporter) =
-        build_metrics_with_defaults(&[("service", "adam-cli"), ("env", "prod")])?;
+        build_metrics_with_defaults(&[("service", "lha-cli"), ("env", "prod")])?;
 
     metrics.counter("codex.turns", 1, &[("model", "gpt-5.1"), ("env", "dev")])?;
     metrics.histogram("codex.tool_latency", 25, &[("tool", "shell")])?;
@@ -34,7 +34,7 @@ fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
     };
 
     let expected_counter_attributes = BTreeMap::from([
-        ("service".to_string(), "adam-cli".to_string()),
+        ("service".to_string(), "lha-cli".to_string()),
         ("env".to_string(), "dev".to_string()),
         ("model".to_string(), "gpt-5.1".to_string()),
     ]);
@@ -64,7 +64,7 @@ fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
         },
     );
     let expected_histogram_attributes = BTreeMap::from([
-        ("service".to_string(), "adam-cli".to_string()),
+        ("service".to_string(), "lha-cli".to_string()),
         ("env".to_string(), "prod".to_string()),
         ("tool".to_string(), "shell".to_string()),
     ]);
@@ -77,7 +77,7 @@ fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
 #[test]
 fn send_merges_default_tags_per_line() -> Result<()> {
     let (metrics, exporter) =
-        build_metrics_with_defaults(&[("service", "adam-cli"), ("env", "prod"), ("region", "us")])?;
+        build_metrics_with_defaults(&[("service", "lha-cli"), ("env", "prod"), ("region", "us")])?;
 
     metrics.counter("codex.alpha", 1, &[("env", "dev"), ("component", "alpha")])?;
     metrics.counter(
@@ -107,7 +107,7 @@ fn send_merges_default_tags_per_line() -> Result<()> {
         ("component".to_string(), "alpha".to_string()),
         ("env".to_string(), "dev".to_string()),
         ("region".to_string(), "us".to_string()),
-        ("service".to_string(), "adam-cli".to_string()),
+        ("service".to_string(), "lha-cli".to_string()),
     ]);
     assert_eq!(alpha_attrs, expected_alpha_attrs);
 

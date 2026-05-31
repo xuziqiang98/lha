@@ -1,11 +1,11 @@
 # Clipboard Copying
 
-Adam uses two different clipboard paths for text copied from the TUI.
+LHA uses two different clipboard paths for text copied from the TUI.
 
-On a local Linux desktop, Adam first tries the system clipboard through the
+On a local Linux desktop, LHA first tries the system clipboard through the
 desktop session. If that fails, it falls back to OSC52.
 
-In remote terminals such as SSH or VS Code Remote, Adam first tries OSC52. OSC52
+In remote terminals such as SSH or VS Code Remote, LHA first tries OSC52. OSC52
 is an escape sequence sent to the terminal emulator so the local terminal can
 write its clipboard. This is what allows a process running on a remote Linux
 host to copy into the client machine's clipboard.
@@ -14,11 +14,11 @@ host to copy into the client machine's clipboard.
 
 tmux can forward OSC52 in two common ways:
 
-- `bare`: Adam sends a normal OSC52 sequence. tmux forwards it when
+- `bare`: LHA sends a normal OSC52 sequence. tmux forwards it when
   `set-clipboard on` is enabled and the terminal has the `Ms` capability.
-- `passthrough`: Adam wraps OSC52 in tmux passthrough escape sequences.
+- `passthrough`: LHA wraps OSC52 in tmux passthrough escape sequences.
 
-Configure the mode in `~/.adam/config.toml`:
+Configure the mode in `~/.lha/config.toml`:
 
 ```toml
 [tui]
@@ -27,11 +27,11 @@ osc52_tmux_mode = "auto"
 
 Supported values are:
 
-- `auto`: Adam's default strategy. In tmux, this currently uses `bare`.
+- `auto`: LHA's default strategy. In tmux, this currently uses `bare`.
 - `bare`: Send bare OSC52 inside tmux.
 - `passthrough`: Send tmux passthrough-wrapped OSC52 inside tmux.
 
-For Windows Termius connecting to Ubuntu over SSH and running Adam inside tmux,
+For Windows Termius connecting to Ubuntu over SSH and running LHA inside tmux,
 use:
 
 ```toml

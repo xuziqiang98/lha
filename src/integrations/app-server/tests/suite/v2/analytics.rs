@@ -1,14 +1,14 @@
-use adam_agent::config::ConfigBuilder;
-use adam_agent::config::types::OtelExporterKind;
-use adam_agent::config::types::OtelHttpProtocol;
 use anyhow::Result;
+use lha_agent::config::ConfigBuilder;
+use lha_agent::config::types::OtelExporterKind;
+use lha_agent::config::types::OtelHttpProtocol;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use tempfile::TempDir;
 
 const SERVICE_VERSION: &str = "0.0.0-test";
 
-fn set_metrics_exporter(config: &mut adam_agent::config::Config) {
+fn set_metrics_exporter(config: &mut lha_agent::config::Config) {
     config.otel.metrics_exporter = OtelExporterKind::OtlpHttp {
         endpoint: "http://localhost:4318".to_string(),
         headers: HashMap::new(),
@@ -19,18 +19,18 @@ fn set_metrics_exporter(config: &mut adam_agent::config::Config) {
 
 #[tokio::test]
 async fn app_server_default_analytics_disabled_without_flag() -> Result<()> {
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
     let mut config = ConfigBuilder::default()
-        .adam_home(adam_home.path().to_path_buf())
+        .lha_home(lha_home.path().to_path_buf())
         .build()
         .await?;
     set_metrics_exporter(&mut config);
     config.analytics_enabled = None;
 
-    let provider = adam_agent::otel_init::build_provider(
+    let provider = lha_agent::otel_init::build_provider(
         &config,
         SERVICE_VERSION,
-        Some("adam_app_server"),
+        Some("lha_app_server"),
         false,
     )
     .map_err(|err| anyhow::anyhow!(err.to_string()))?;
@@ -43,18 +43,18 @@ async fn app_server_default_analytics_disabled_without_flag() -> Result<()> {
 
 #[tokio::test]
 async fn app_server_default_analytics_enabled_with_flag() -> Result<()> {
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
     let mut config = ConfigBuilder::default()
-        .adam_home(adam_home.path().to_path_buf())
+        .lha_home(lha_home.path().to_path_buf())
         .build()
         .await?;
     set_metrics_exporter(&mut config);
     config.analytics_enabled = None;
 
-    let provider = adam_agent::otel_init::build_provider(
+    let provider = lha_agent::otel_init::build_provider(
         &config,
         SERVICE_VERSION,
-        Some("adam_app_server"),
+        Some("lha_app_server"),
         true,
     )
     .map_err(|err| anyhow::anyhow!(err.to_string()))?;

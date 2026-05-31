@@ -1,7 +1,7 @@
 [package]
 edition.workspace = true
 license.workspace = true
-name = "adam-client"
+name = "lha-client"
 version.workspace = true
 
 [dependencies]

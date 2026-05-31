@@ -1,6 +1,6 @@
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
-use adam_protocol::models::TranscriptItem;
+use lha_protocol::models::TranscriptItem;
 
 /// Whether a rollout `item` should be persisted in rollout files.
 #[inline]
@@ -9,7 +9,7 @@ pub(crate) fn is_persisted_response_item(item: &RolloutItem) -> bool {
         RolloutItem::TranscriptItem(item) => should_persist_response_item(item),
         RolloutItem::EventMsg(ev) => should_persist_event_msg(ev),
         RolloutItem::GhostSnapshot(_) => true,
-        // Persist Adam executive markers so we can analyze flows (e.g., compaction, API turns).
+        // Persist LHA executive markers so we can analyze flows (e.g., compaction, API turns).
         RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::Workflow(_)
@@ -55,8 +55,8 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
             // them on resume without bloating rollouts with every item lifecycle.
             matches!(
                 event.item,
-                adam_protocol::items::TurnItem::Plan(_)
-                    | adam_protocol::items::TurnItem::ContextCompaction(_)
+                lha_protocol::items::TurnItem::Plan(_)
+                    | lha_protocol::items::TurnItem::ContextCompaction(_)
             )
         }
         EventMsg::Error(_)
@@ -119,10 +119,10 @@ mod tests {
     use super::should_persist_event_msg;
     use crate::protocol::EventMsg;
     use crate::protocol::ItemCompletedEvent;
-    use adam_protocol::ThreadId;
-    use adam_protocol::items::ContextCompactionItem;
-    use adam_protocol::items::PlanItem;
-    use adam_protocol::items::TurnItem;
+    use lha_protocol::ThreadId;
+    use lha_protocol::items::ContextCompactionItem;
+    use lha_protocol::items::PlanItem;
+    use lha_protocol::items::TurnItem;
     use pretty_assertions::assert_eq;
 
     #[test]

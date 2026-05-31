@@ -93,8 +93,8 @@ pub fn compute_allow_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_protocol::protocol::SandboxPolicy;
-    use adam_utils_absolute_path::AbsolutePathBuf;
+    use lha_protocol::protocol::SandboxPolicy;
+    use lha_utils_absolute_path::AbsolutePathBuf;
     use std::fs;
     use tempfile::TempDir;
 

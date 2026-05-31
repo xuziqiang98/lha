@@ -7,12 +7,12 @@ use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::spec::JsonSchema;
-use adam_llm::FunctionToolDescriptor;
-use adam_llm::ToolDescriptor;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::plan_tool::UpdatePlanArgs;
-use adam_protocol::protocol::EventMsg;
 use async_trait::async_trait;
+use lha_llm::FunctionToolDescriptor;
+use lha_llm::ToolDescriptor;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::plan_tool::UpdatePlanArgs;
+use lha_protocol::protocol::EventMsg;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 

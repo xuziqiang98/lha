@@ -1,10 +1,10 @@
-use adam_app_server_protocol::GetUserAgentResponse;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::RequestId;
 use anyhow::Result;
 use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
+use lha_app_server_protocol::GetUserAgentResponse;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::RequestId;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -13,9 +13,9 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_user_agent_returns_current_codex_user_agent() -> Result<()> {
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_get_user_agent_request().await?;
@@ -30,7 +30,7 @@ async fn get_user_agent_returns_current_codex_user_agent() -> Result<()> {
     let os_type = os_info.os_type();
     let os_version = os_info.version();
     let architecture = os_info.architecture().unwrap_or("unknown");
-    let terminal_ua = adam_agent::terminal::user_agent();
+    let terminal_ua = lha_agent::terminal::user_agent();
     let user_agent = format!(
         "{originator}/{} ({os_type} {os_version}; {architecture}) {terminal_ua} ({DEFAULT_CLIENT_NAME}; 0.1.0)",
         env!("CARGO_PKG_VERSION")

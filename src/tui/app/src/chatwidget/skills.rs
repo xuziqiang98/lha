@@ -7,16 +7,16 @@ use super::ChatWidget;
 use crate::skills_helpers::skill_description;
 use crate::skills_helpers::skill_display_name;
 use crate::skills_modal::SkillsModalItem;
-use adam_agent::connectors::AppInfo;
-use adam_agent::connectors::connector_mention_slug;
-use adam_agent::protocol::ListSkillsResponseEvent;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::SkillMetadata as ProtocolSkillMetadata;
-use adam_agent::protocol::SkillsListEntry;
-use adam_agent::skills::model::SkillDependencies;
-use adam_agent::skills::model::SkillInterface;
-use adam_agent::skills::model::SkillMetadata;
-use adam_agent::skills::model::SkillToolDependency;
+use lha_agent::connectors::AppInfo;
+use lha_agent::connectors::connector_mention_slug;
+use lha_agent::protocol::ListSkillsResponseEvent;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::SkillMetadata as ProtocolSkillMetadata;
+use lha_agent::protocol::SkillsListEntry;
+use lha_agent::skills::model::SkillDependencies;
+use lha_agent::skills::model::SkillInterface;
+use lha_agent::skills::model::SkillMetadata;
+use lha_agent::skills::model::SkillToolDependency;
 
 #[derive(Debug)]
 pub(crate) enum SkillsModalItems {

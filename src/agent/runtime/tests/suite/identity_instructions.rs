@@ -1,11 +1,3 @@
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::IDENTITY_CLOSE_TAG;
-use adam_agent::protocol::IDENTITY_OPEN_TAG;
-use adam_agent::protocol::Op;
-use adam_protocol::config_types::Identity;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::Settings;
-use adam_protocol::user_input::UserInput;
 use anyhow::Result;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -15,6 +7,14 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::IDENTITY_CLOSE_TAG;
+use lha_agent::protocol::IDENTITY_OPEN_TAG;
+use lha_agent::protocol::Op;
+use lha_protocol::config_types::Identity;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::Settings;
+use lha_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 

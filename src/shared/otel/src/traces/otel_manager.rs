@@ -9,21 +9,21 @@ use crate::metrics::names::WEBSOCKET_EVENT_DURATION_METRIC;
 use crate::metrics::names::WEBSOCKET_REQUEST_COUNT_METRIC;
 use crate::metrics::names::WEBSOCKET_REQUEST_DURATION_METRIC;
 use crate::otel_provider::traceparent_context_from_env;
-use adam_api::ApiError;
-use adam_api::ResponseEvent;
-use adam_llm_types::TranscriptItem;
-use adam_protocol::ThreadId;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::openai_models::ReasoningEffort;
-use adam_protocol::protocol::AskForApproval;
-use adam_protocol::protocol::ReviewDecision;
-use adam_protocol::protocol::SandboxPolicy;
-use adam_protocol::protocol::SessionSource;
-use adam_protocol::user_input::UserInput;
 use chrono::SecondsFormat;
 use chrono::Utc;
 use eventsource_stream::Event as StreamEvent;
 use eventsource_stream::EventStreamError as StreamError;
+use lha_api::ApiError;
+use lha_api::ResponseEvent;
+use lha_llm_types::TranscriptItem;
+use lha_protocol::ThreadId;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::openai_models::ReasoningEffort;
+use lha_protocol::protocol::AskForApproval;
+use lha_protocol::protocol::ReviewDecision;
+use lha_protocol::protocol::SandboxPolicy;
+use lha_protocol::protocol::SessionSource;
+use lha_protocol::user_input::UserInput;
 use reqwest::Error;
 use reqwest::Response;
 use std::borrow::Cow;
@@ -672,14 +672,14 @@ impl OtelManager {
                 }
             }
             TranscriptItem::ToolCall { payload, .. } => match payload {
-                adam_llm_types::ToolCallPayload::JsonArguments { .. } => "function_call".into(),
-                adam_llm_types::ToolCallPayload::TextInput { .. } => "custom_tool_call".into(),
+                lha_llm_types::ToolCallPayload::JsonArguments { .. } => "function_call".into(),
+                lha_llm_types::ToolCallPayload::TextInput { .. } => "custom_tool_call".into(),
             },
             TranscriptItem::ToolResult { payload, .. } => match payload {
-                adam_llm_types::ToolResultPayload::Structured { .. } => {
+                lha_llm_types::ToolResultPayload::Structured { .. } => {
                     "function_call_output".into()
                 }
-                adam_llm_types::ToolResultPayload::Text { .. } => "custom_tool_call_output".into(),
+                lha_llm_types::ToolResultPayload::Text { .. } => "custom_tool_call_output".into(),
             },
             TranscriptItem::Unknown { .. } => "unknown".into(),
         }

@@ -3,24 +3,24 @@ use crate::rollout;
 use crate::rollout::list::parse_timestamp_uuid_from_filename;
 use crate::rollout::recorder::RolloutRecorder;
 use crate::rollout::recorder::is_unsupported_rollout_schema_anyhow;
-use adam_otel::OtelManager;
-use adam_protocol::ThreadId;
-use adam_protocol::protocol::AskForApproval;
-use adam_protocol::protocol::RolloutItem;
-use adam_protocol::protocol::SandboxPolicy;
-use adam_protocol::protocol::SessionMetaLine;
-use adam_protocol::protocol::SessionSource;
-use adam_state::BackfillStats;
-use adam_state::DB_ERROR_METRIC;
-use adam_state::DB_METRIC_BACKFILL;
-use adam_state::DB_METRIC_BACKFILL_DURATION_MS;
-use adam_state::ExtractionOutcome;
-use adam_state::ThreadMetadataBuilder;
-use adam_state::apply_rollout_item;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Timelike;
 use chrono::Utc;
+use lha_otel::OtelManager;
+use lha_protocol::ThreadId;
+use lha_protocol::protocol::AskForApproval;
+use lha_protocol::protocol::RolloutItem;
+use lha_protocol::protocol::SandboxPolicy;
+use lha_protocol::protocol::SessionMetaLine;
+use lha_protocol::protocol::SessionSource;
+use lha_state::BackfillStats;
+use lha_state::DB_ERROR_METRIC;
+use lha_state::DB_METRIC_BACKFILL;
+use lha_state::DB_METRIC_BACKFILL_DURATION_MS;
+use lha_state::ExtractionOutcome;
+use lha_state::ThreadMetadataBuilder;
+use lha_state::apply_rollout_item;
 use std::cmp::Reverse;
 use std::path::Path;
 use std::path::PathBuf;
@@ -128,13 +128,13 @@ pub(crate) async fn extract_metadata_from_rollout(
 }
 
 pub(crate) async fn backfill_sessions(
-    runtime: &adam_state::StateRuntime,
+    runtime: &lha_state::StateRuntime,
     config: &Config,
     otel: Option<&OtelManager>,
 ) {
     let timer = otel.and_then(|otel| otel.start_timer(DB_METRIC_BACKFILL_DURATION_MS, &[]).ok());
-    let sessions_root = config.adam_home.join(rollout::SESSIONS_SUBDIR);
-    let archived_root = config.adam_home.join(rollout::ARCHIVED_SESSIONS_SUBDIR);
+    let sessions_root = config.lha_home.join(rollout::SESSIONS_SUBDIR);
+    let archived_root = config.lha_home.join(rollout::ARCHIVED_SESSIONS_SUBDIR);
     let mut rollout_paths: Vec<(PathBuf, bool)> = Vec::new();
     for (root, archived) in [(sessions_root, false), (archived_root, true)] {
         if !tokio::fs::try_exists(&root).await.unwrap_or(false) {
@@ -285,18 +285,18 @@ async fn collect_rollout_paths(root: &Path) -> std::io::Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_protocol::ThreadId;
-    use adam_protocol::protocol::CompactedItem;
-    use adam_protocol::protocol::RolloutItem;
-    use adam_protocol::protocol::RolloutLine;
-    use adam_protocol::protocol::SessionMeta;
-    use adam_protocol::protocol::SessionMetaLine;
-    use adam_protocol::protocol::SessionSource;
-    use adam_state::ThreadMetadataBuilder;
     use chrono::DateTime;
     use chrono::NaiveDateTime;
     use chrono::Timelike;
     use chrono::Utc;
+    use lha_protocol::ThreadId;
+    use lha_protocol::protocol::CompactedItem;
+    use lha_protocol::protocol::RolloutItem;
+    use lha_protocol::protocol::RolloutLine;
+    use lha_protocol::protocol::SessionMeta;
+    use lha_protocol::protocol::SessionMetaLine;
+    use lha_protocol::protocol::SessionSource;
+    use lha_state::ThreadMetadataBuilder;
     use pretty_assertions::assert_eq;
     use std::fs::File;
     use std::io::Write;
@@ -319,7 +319,7 @@ mod tests {
             cwd: dir.path().to_path_buf(),
             originator: "cli".to_string(),
             cli_version: "0.0.0".to_string(),
-            rollout_schema_version: adam_protocol::protocol::current_rollout_schema_version(),
+            rollout_schema_version: lha_protocol::protocol::current_rollout_schema_version(),
             source: SessionSource::default(),
             model_provider: Some("openai".to_string()),
             base_instructions: None,

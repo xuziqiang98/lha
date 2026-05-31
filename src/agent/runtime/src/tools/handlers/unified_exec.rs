@@ -153,7 +153,7 @@ impl ToolHandler for UnifiedExecHandler {
                 if sandbox_permissions.requires_escalated_permissions()
                     && !matches!(
                         context.turn.approval_policy,
-                        adam_protocol::protocol::AskForApproval::OnRequest
+                        lha_protocol::protocol::AskForApproval::OnRequest
                     )
                 {
                     let approval_policy = context.turn.approval_policy;

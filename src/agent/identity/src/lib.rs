@@ -1,7 +1,7 @@
-use adam_protocol::config_types::IdentityCapabilities;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::IdentityMask;
-use adam_protocol::openai_models::ReasoningEffort;
+use lha_protocol::config_types::IdentityCapabilities;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::IdentityMask;
+use lha_protocol::openai_models::ReasoningEffort;
 
 const PLANNER_PROMPT: &str = include_str!("../planner/prompt.md");
 const PROGRAMMER_PROMPT: &str = include_str!("../programmer/prompt.md");

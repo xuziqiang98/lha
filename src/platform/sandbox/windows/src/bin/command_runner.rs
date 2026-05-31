@@ -8,5 +8,5 @@ fn main() -> anyhow::Result<()> {
 
 #[cfg(not(target_os = "windows"))]
 fn main() {
-    panic!("adam-command-runner is Windows-only");
+    panic!("lha-command-runner is Windows-only");
 }

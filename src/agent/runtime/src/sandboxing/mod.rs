@@ -18,11 +18,11 @@ use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 #[cfg(target_os = "macos")]
 use crate::seatbelt::create_seatbelt_command_args;
 #[cfg(target_os = "macos")]
-use crate::spawn::ADAM_SANDBOX_ENV_VAR;
-use crate::spawn::ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use crate::spawn::LHA_SANDBOX_ENV_VAR;
+use crate::spawn::LHA_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use crate::tools::sandboxing::SandboxablePreference;
-use adam_protocol::config_types::WindowsSandboxLevel;
-pub use adam_protocol::models::SandboxPermissions;
+use lha_protocol::config_types::WindowsSandboxLevel;
+pub use lha_protocol::models::SandboxPermissions;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -59,7 +59,7 @@ pub enum SandboxPreference {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SandboxTransformError {
-    #[error("missing adam-linux-sandbox executable path")]
+    #[error("missing lha-linux-sandbox executable path")]
     MissingLinuxSandboxExecutable,
     #[cfg(not(target_os = "macos"))]
     #[error("seatbelt sandbox is only available on macOS")]
@@ -114,7 +114,7 @@ impl SandboxManager {
         let mut env = spec.env;
         if !policy.has_full_network_access() {
             env.insert(
-                ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR.to_string(),
+                LHA_SANDBOX_NETWORK_DISABLED_ENV_VAR.to_string(),
                 "1".to_string(),
             );
         }
@@ -128,7 +128,7 @@ impl SandboxManager {
             #[cfg(target_os = "macos")]
             SandboxType::MacosSeatbelt => {
                 let mut seatbelt_env = HashMap::new();
-                seatbelt_env.insert(ADAM_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
+                seatbelt_env.insert(LHA_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
                 let mut args =
                     create_seatbelt_command_args(command.clone(), policy, sandbox_policy_cwd);
                 let mut full_command = Vec::with_capacity(1 + args.len());
@@ -149,11 +149,11 @@ impl SandboxManager {
                 (
                     full_command,
                     HashMap::new(),
-                    Some("adam-linux-sandbox".to_string()),
+                    Some("lha-linux-sandbox".to_string()),
                 )
             }
             // On Windows, the restricted token sandbox executes in-process via the
-            // adam-windows-sandbox crate. We leave the command unchanged here and
+            // lha-windows-sandbox crate. We leave the command unchanged here and
             // branch during execution based on the sandbox type.
             #[cfg(target_os = "windows")]
             SandboxType::WindowsRestrictedToken => (command, HashMap::new(), None),

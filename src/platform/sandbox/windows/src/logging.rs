@@ -4,7 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use adam_utils_string::take_bytes_at_char_boundary;
+use lha_utils_string::take_bytes_at_char_boundary;
 
 const LOG_COMMAND_PREVIEW_LIMIT: usize = 200;
 pub const LOG_FILE_NAME: &str = "sandbox.log";

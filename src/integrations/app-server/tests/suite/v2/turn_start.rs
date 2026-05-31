@@ -1,37 +1,3 @@
-use adam_agent::config::state_json::AdamStateStore;
-use adam_agent::features::Feature;
-use adam_agent::protocol_config_types::ReasoningSummary;
-use adam_app_server_protocol::ByteRange;
-use adam_app_server_protocol::ClientInfo;
-use adam_app_server_protocol::CommandExecutionApprovalDecision;
-use adam_app_server_protocol::CommandExecutionRequestApprovalResponse;
-use adam_app_server_protocol::CommandExecutionStatus;
-use adam_app_server_protocol::FileChangeApprovalDecision;
-use adam_app_server_protocol::FileChangeOutputDeltaNotification;
-use adam_app_server_protocol::FileChangeRequestApprovalResponse;
-use adam_app_server_protocol::ItemCompletedNotification;
-use adam_app_server_protocol::ItemStartedNotification;
-use adam_app_server_protocol::JSONRPCNotification;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::PatchApplyStatus;
-use adam_app_server_protocol::PatchChangeKind;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::ServerRequest;
-use adam_app_server_protocol::TextElement;
-use adam_app_server_protocol::ThreadItem;
-use adam_app_server_protocol::ThreadStartParams;
-use adam_app_server_protocol::ThreadStartResponse;
-use adam_app_server_protocol::TurnCompletedNotification;
-use adam_app_server_protocol::TurnStartParams;
-use adam_app_server_protocol::TurnStartResponse;
-use adam_app_server_protocol::TurnStartedNotification;
-use adam_app_server_protocol::TurnStatus;
-use adam_app_server_protocol::UserInput as V2UserInput;
-use adam_protocol::config_types::Identity;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::Personality;
-use adam_protocol::config_types::Settings;
-use adam_protocol::openai_models::ReasoningEffort;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_apply_patch_sse_response;
@@ -44,6 +10,40 @@ use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
+use lha_agent::config::state_json::LHAStateStore;
+use lha_agent::features::Feature;
+use lha_agent::protocol_config_types::ReasoningSummary;
+use lha_app_server_protocol::ByteRange;
+use lha_app_server_protocol::ClientInfo;
+use lha_app_server_protocol::CommandExecutionApprovalDecision;
+use lha_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use lha_app_server_protocol::CommandExecutionStatus;
+use lha_app_server_protocol::FileChangeApprovalDecision;
+use lha_app_server_protocol::FileChangeOutputDeltaNotification;
+use lha_app_server_protocol::FileChangeRequestApprovalResponse;
+use lha_app_server_protocol::ItemCompletedNotification;
+use lha_app_server_protocol::ItemStartedNotification;
+use lha_app_server_protocol::JSONRPCNotification;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::PatchApplyStatus;
+use lha_app_server_protocol::PatchChangeKind;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::ServerRequest;
+use lha_app_server_protocol::TextElement;
+use lha_app_server_protocol::ThreadItem;
+use lha_app_server_protocol::ThreadStartParams;
+use lha_app_server_protocol::ThreadStartResponse;
+use lha_app_server_protocol::TurnCompletedNotification;
+use lha_app_server_protocol::TurnStartParams;
+use lha_app_server_protocol::TurnStartResponse;
+use lha_app_server_protocol::TurnStartedNotification;
+use lha_app_server_protocol::TurnStatus;
+use lha_app_server_protocol::UserInput as V2UserInput;
+use lha_protocol::config_types::Identity;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::Personality;
+use lha_protocol::config_types::Settings;
+use lha_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -51,27 +51,27 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-const TEST_ORIGINATOR: &str = "adam_vscode";
+const TEST_ORIGINATOR: &str = "lha_vscode";
 
 #[tokio::test]
 async fn turn_start_sends_originator_header() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
     create_config_toml(
-        adam_home.path(),
+        lha_home.path(),
         &server.uri(),
         "never",
         &BTreeMap::from([(Feature::Personality, true)]),
     )?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.initialize_with_client_info(ClientInfo {
             name: TEST_ORIGINATOR.to_string(),
-            title: Some("Adam VS Code Extension".to_string()),
+            title: Some("LHA VS Code Extension".to_string()),
             version: "0.1.0".to_string(),
         }),
     )
@@ -133,15 +133,15 @@ async fn turn_start_emits_user_message_item_with_text_elements() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
     create_config_toml(
-        adam_home.path(),
+        lha_home.path(),
         &server.uri(),
         "never",
         &BTreeMap::from([(Feature::Personality, true)]),
     )?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -217,7 +217,7 @@ async fn turn_start_emits_user_message_item_with_text_elements() -> Result<()> {
 #[tokio::test]
 async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<()> {
     // Provide a mock server and config so model wiring is valid.
-    // Three Adam turns hit the mock model (session start + two turn/start calls).
+    // Three LHA turns hit the mock model (session start + two turn/start calls).
     let responses = vec![
         create_final_assistant_message_sse_response("Done")?,
         create_final_assistant_message_sse_response("Done")?,
@@ -225,15 +225,15 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     ];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
     create_config_toml(
-        adam_home.path(),
+        lha_home.path(),
         &server.uri(),
         "never",
         &BTreeMap::from([(Feature::Personality, true)]),
     )?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Start a thread (v2) and capture its id.
@@ -280,7 +280,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     assert_eq!(started.thread_id, thread.id);
     assert_eq!(
         started.turn.status,
-        adam_app_server_protocol::TurnStatus::InProgress
+        lha_app_server_protocol::TurnStatus::InProgress
     );
 
     // Send a second turn that exercises the overrides path: change the model.
@@ -340,15 +340,15 @@ async fn turn_start_accepts_identity_override_v2() -> Result<()> {
     ]);
     let response_mock = responses::mount_sse_once(&server, body).await;
 
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
     create_config_toml(
-        adam_home.path(),
+        lha_home.path(),
         &server.uri(),
         "never",
         &BTreeMap::default(),
     )?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -404,7 +404,7 @@ async fn turn_start_accepts_identity_override_v2() -> Result<()> {
     let request = response_mock.single_request();
     let payload = request.body_json();
     assert_eq!(payload["model"].as_str(), Some("mock-model-identity"));
-    let state = AdamStateStore::new(adam_home.path()).load()?;
+    let state = LHAStateStore::new(lha_home.path()).load()?;
     assert_eq!(state.last_selected_identity, Some(IdentityKind::Nobody));
 
     Ok(())
@@ -422,15 +422,15 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
     ]);
     let response_mock = responses::mount_sse_once(&server, body).await;
 
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
     create_config_toml(
-        adam_home.path(),
+        lha_home.path(),
         &server.uri(),
         "never",
         &BTreeMap::from([(Feature::Personality, true)]),
     )?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -503,15 +503,15 @@ async fn turn_start_change_personality_mid_thread_v2() -> Result<()> {
     ]);
     let response_mock = responses::mount_sse_sequence(&server, vec![sse1, sse2]).await;
 
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
     create_config_toml(
-        adam_home.path(),
+        lha_home.path(),
         &server.uri(),
         "never",
         &BTreeMap::from([(Feature::Personality, true)]),
     )?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -599,7 +599,7 @@ async fn turn_start_change_personality_mid_thread_v2() -> Result<()> {
 
 #[tokio::test]
 async fn turn_start_accepts_local_image_input() -> Result<()> {
-    // Two Adam turns hit the mock model (session start + turn/start).
+    // Two LHA turns hit the mock model (session start + turn/start).
     let responses = vec![
         create_final_assistant_message_sse_response("Done")?,
         create_final_assistant_message_sse_response("Done")?,
@@ -608,15 +608,15 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
     // which the strict matcher does not currently cover.
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
     create_config_toml(
-        adam_home.path(),
+        lha_home.path(),
         &server.uri(),
         "never",
         &BTreeMap::default(),
     )?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -632,7 +632,7 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
 
-    let image_path = adam_home.path().join("image.png");
+    let image_path = lha_home.path().join("image.png");
     // No need to actually write the file; we just exercise the input path.
 
     let turn_req = mcp
@@ -659,7 +659,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
-    let adam_home = tmp.path().to_path_buf();
+    let lha_home = tmp.path().to_path_buf();
 
     // Mock server: first turn requests a shell call (elicitation), then completes.
     // Second turn same, but we'll set approval_policy=never to avoid elicitation.
@@ -690,13 +690,13 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     let server = create_mock_responses_server_sequence(responses).await;
     // Default approval is untrusted to force elicitation on first turn.
     create_config_toml(
-        adam_home.as_path(),
+        lha_home.as_path(),
         &server.uri(),
         "untrusted",
         &BTreeMap::default(),
     )?;
 
-    let mut mcp = McpProcess::new(adam_home.as_path()).await?;
+    let mut mcp = McpProcess::new(lha_home.as_path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // thread/start
@@ -745,12 +745,12 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     // Approve and wait for task completion
     mcp.send_response(
         request_id,
-        serde_json::json!({ "decision": adam_agent::protocol::ReviewDecision::Approved }),
+        serde_json::json!({ "decision": lha_agent::protocol::ReviewDecision::Approved }),
     )
     .await?;
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/task_complete"),
+        mcp.read_stream_until_notification_message("lha/event/task_complete"),
     )
     .await??;
     timeout(
@@ -767,8 +767,8 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
                 text: "run python again".to_string(),
                 text_elements: Vec::new(),
             }],
-            approval_policy: Some(adam_app_server_protocol::AskForApproval::Never),
-            sandbox_policy: Some(adam_app_server_protocol::SandboxPolicy::DangerFullAccess),
+            approval_policy: Some(lha_app_server_protocol::AskForApproval::Never),
+            sandbox_policy: Some(lha_app_server_protocol::SandboxPolicy::DangerFullAccess),
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
@@ -784,7 +784,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     // Ensure we do NOT receive a CommandExecutionRequestApproval request before task completes
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/task_complete"),
+        mcp.read_stream_until_notification_message("lha/event/task_complete"),
     )
     .await??;
     timeout(
@@ -801,7 +801,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
-    let adam_home = tmp.path().to_path_buf();
+    let lha_home = tmp.path().to_path_buf();
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
 
@@ -820,13 +820,13 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     create_config_toml(
-        adam_home.as_path(),
+        lha_home.as_path(),
         &server.uri(),
         "untrusted",
         &BTreeMap::default(),
     )?;
 
-    let mut mcp = McpProcess::new(adam_home.as_path()).await?;
+    let mut mcp = McpProcess::new(lha_home.as_path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -933,7 +933,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/task_complete"),
+        mcp.read_stream_until_notification_message("lha/event/task_complete"),
     )
     .await??;
 
@@ -945,8 +945,8 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
-    let adam_home = tmp.path().join("adam_home");
-    std::fs::create_dir(&adam_home)?;
+    let lha_home = tmp.path().join("lha_home");
+    std::fs::create_dir(&lha_home)?;
     let workspace_root = tmp.path().join("workspace");
     std::fs::create_dir(&workspace_root)?;
     let first_cwd = workspace_root.join("turn1");
@@ -971,9 +971,9 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
         create_final_assistant_message_sse_response("done second")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(&adam_home, &server.uri(), "untrusted", &BTreeMap::default())?;
+    create_config_toml(&lha_home, &server.uri(), "untrusted", &BTreeMap::default())?;
 
-    let mut mcp = McpProcess::new(&adam_home).await?;
+    let mut mcp = McpProcess::new(&lha_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // thread/start
@@ -999,8 +999,8 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: Some(first_cwd.clone()),
-            approval_policy: Some(adam_app_server_protocol::AskForApproval::Never),
-            sandbox_policy: Some(adam_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+            approval_policy: Some(lha_app_server_protocol::AskForApproval::Never),
+            sandbox_policy: Some(lha_app_server_protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![first_cwd.try_into()?],
                 network_access: false,
                 exclude_tmpdir_env_var: false,
@@ -1021,7 +1021,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     .await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/task_complete"),
+        mcp.read_stream_until_notification_message("lha/event/task_complete"),
     )
     .await??;
     mcp.clear_message_buffer();
@@ -1035,8 +1035,8 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: Some(second_cwd.clone()),
-            approval_policy: Some(adam_app_server_protocol::AskForApproval::Never),
-            sandbox_policy: Some(adam_app_server_protocol::SandboxPolicy::DangerFullAccess),
+            approval_policy: Some(lha_app_server_protocol::AskForApproval::Never),
+            sandbox_policy: Some(lha_app_server_protocol::SandboxPolicy::DangerFullAccess),
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
@@ -1084,7 +1084,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/task_complete"),
+        mcp.read_stream_until_notification_message("lha/event/task_complete"),
     )
     .await??;
 
@@ -1096,8 +1096,8 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
-    let adam_home = tmp.path().join("adam_home");
-    std::fs::create_dir(&adam_home)?;
+    let lha_home = tmp.path().join("lha_home");
+    std::fs::create_dir(&lha_home)?;
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
 
@@ -1111,9 +1111,9 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
         create_final_assistant_message_sse_response("patch applied")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(&adam_home, &server.uri(), "untrusted", &BTreeMap::default())?;
+    create_config_toml(&lha_home, &server.uri(), "untrusted", &BTreeMap::default())?;
 
-    let mut mcp = McpProcess::new(&adam_home).await?;
+    let mut mcp = McpProcess::new(&lha_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_req = mcp
@@ -1188,7 +1188,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     let expected_readme_path = expected_readme_path.to_string_lossy().into_owned();
     pretty_assertions::assert_eq!(
         started_changes,
-        vec![adam_app_server_protocol::FileUpdateChange {
+        vec![lha_app_server_protocol::FileUpdateChange {
             path: expected_readme_path.clone(),
             kind: PatchChangeKind::Add,
             diff: "new line\n".to_string(),
@@ -1248,7 +1248,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/task_complete"),
+        mcp.read_stream_until_notification_message("lha/event/task_complete"),
     )
     .await??;
 
@@ -1263,8 +1263,8 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
-    let adam_home = tmp.path().join("adam_home");
-    std::fs::create_dir(&adam_home)?;
+    let lha_home = tmp.path().join("lha_home");
+    std::fs::create_dir(&lha_home)?;
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
 
@@ -1288,9 +1288,9 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
         create_final_assistant_message_sse_response("patch 2 applied")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(&adam_home, &server.uri(), "untrusted", &BTreeMap::default())?;
+    create_config_toml(&lha_home, &server.uri(), "untrusted", &BTreeMap::default())?;
 
-    let mut mcp = McpProcess::new(&adam_home).await?;
+    let mut mcp = McpProcess::new(&lha_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_req = mcp
@@ -1377,7 +1377,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
     .await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/task_complete"),
+        mcp.read_stream_until_notification_message("lha/event/task_complete"),
     )
     .await??;
 
@@ -1435,7 +1435,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
     .await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/task_complete"),
+        mcp.read_stream_until_notification_message("lha/event/task_complete"),
     )
     .await??;
 
@@ -1449,8 +1449,8 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
-    let adam_home = tmp.path().join("adam_home");
-    std::fs::create_dir(&adam_home)?;
+    let lha_home = tmp.path().join("lha_home");
+    std::fs::create_dir(&lha_home)?;
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
 
@@ -1464,9 +1464,9 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
         create_final_assistant_message_sse_response("patch declined")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(&adam_home, &server.uri(), "untrusted", &BTreeMap::default())?;
+    create_config_toml(&lha_home, &server.uri(), "untrusted", &BTreeMap::default())?;
 
-    let mut mcp = McpProcess::new(&adam_home).await?;
+    let mut mcp = McpProcess::new(&lha_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_req = mcp
@@ -1541,7 +1541,7 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
     let expected_readme_path_str = expected_readme_path.to_string_lossy().into_owned();
     pretty_assertions::assert_eq!(
         started_changes,
-        vec![adam_app_server_protocol::FileUpdateChange {
+        vec![lha_app_server_protocol::FileUpdateChange {
             path: expected_readme_path_str.clone(),
             kind: PatchChangeKind::Add,
             diff: "new line\n".to_string(),
@@ -1581,7 +1581,7 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/task_complete"),
+        mcp.read_stream_until_notification_message("lha/event/task_complete"),
     )
     .await??;
 
@@ -1603,15 +1603,15 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
         create_final_assistant_message_sse_response("done")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
     create_config_toml(
-        adam_home.path(),
+        lha_home.path(),
         &server.uri(),
         "never",
         &BTreeMap::from([(Feature::UnifiedExec, true)]),
     )?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -1730,7 +1730,7 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
 
 // Helper to create a config.toml pointing at the mock model server.
 fn create_config_toml(
-    adam_home: &Path,
+    lha_home: &Path,
     server_uri: &str,
     approval_policy: &str,
     feature_flags: &BTreeMap<Feature, bool>,
@@ -1740,7 +1740,7 @@ fn create_config_toml(
         features.insert(*feature, *enabled);
     }
     app_test_support::write_mock_responses_config_toml_with_options(
-        adam_home,
+        lha_home,
         server_uri,
         &features,
         20_000,

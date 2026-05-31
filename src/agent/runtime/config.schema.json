@@ -29,14 +29,14 @@
       "description": "Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.",
       "properties": {
         "enabled": {
-          "description": "When `false`, disables analytics across Adam product surfaces in this profile.",
+          "description": "When `false`, disables analytics across LHA product surfaces in this profile.",
           "type": "boolean"
         }
       },
       "type": "object"
     },
     "AskForApproval": {
-      "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Adam.",
+      "description": "Determines the conditions under which the user is consulted to approve running the command proposed by LHA.",
       "oneOf": [
         {
           "description": "Under this policy, only \"known safe\" commands—as determined by `is_safe_command()`—that **only read files** are auto‑approved. Everything else will ask the user to approve.",
@@ -337,7 +337,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "description": "When `false`, disables the feedback flow across Adam product surfaces.",
+          "description": "When `false`, disables the feedback flow across LHA product surfaces.",
           "type": "boolean"
         }
       },
@@ -365,7 +365,7 @@
     },
     "History": {
       "additionalProperties": false,
-      "description": "Settings that govern if and what will be written to `~/.adam/history.jsonl`.",
+      "description": "Settings that govern if and what will be written to `~/.lha/history.jsonl`.",
       "properties": {
         "max_bytes": {
           "description": "If set, the maximum size of the history file in bytes. The oldest entries are dropped once the file exceeds this limit.",
@@ -406,7 +406,7 @@
       ]
     },
     "Notice": {
-      "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Adam IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
+      "description": "Settings for notices we display to users via the tui and app-server clients (primarily the LHA IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
       "properties": {
         "hide_full_access_warning": {
           "description": "Tracks whether the user has acknowledged the full access warning prompt.",
@@ -457,17 +457,17 @@
       ]
     },
     "OAuthCredentialsStoreMode": {
-      "description": "Determine where Adam should store and read MCP credentials.",
+      "description": "Determine where LHA should store and read MCP credentials.",
       "oneOf": [
         {
-          "description": "`Keyring` when available; otherwise, `File`. Credentials stored in the keyring will only be readable by Adam unless the user explicitly grants access via OS-level keyring access.",
+          "description": "`Keyring` when available; otherwise, `File`. Credentials stored in the keyring will only be readable by LHA unless the user explicitly grants access via OS-level keyring access.",
           "enum": [
             "auto"
           ],
           "type": "string"
         },
         {
-          "description": "ADAM_HOME/.credentials.json This file will be readable to Adam and other applications running as the same user.",
+          "description": "LHA_HOME/.credentials.json This file will be readable to LHA and other applications running as the same user.",
           "enum": [
             "file"
           ],
@@ -486,7 +486,7 @@
       "description": "OSC52 sequence style to use when the TUI copies text from inside tmux.",
       "oneOf": [
         {
-          "description": "Let Adam choose the tmux OSC52 strategy.",
+          "description": "Let LHA choose the tmux OSC52 strategy.",
           "enum": [
             "auto"
           ],
@@ -1120,7 +1120,7 @@
       "type": "string"
     }
   },
-  "description": "Base config deserialized from ~/.adam/config.toml.",
+  "description": "Base config deserialized from ~/.lha/config.toml.",
   "properties": {
     "agents": {
       "allOf": [
@@ -1136,7 +1136,7 @@
           "$ref": "#/definitions/AnalyticsConfigToml"
         }
       ],
-      "description": "When `false`, disables analytics across Adam product surfaces in this machine. Defaults to `true`."
+      "description": "When `false`, disables analytics across LHA product surfaces in this machine. Defaults to `true`."
     },
     "approval_policy": {
       "allOf": [
@@ -1147,7 +1147,7 @@
       "description": "Default approval policy for executing commands."
     },
     "check_for_update_on_startup": {
-      "description": "When `true`, checks for Adam updates on startup and surfaces update prompts. Set to `false` only if your Adam updates are centrally managed. Defaults to `true`.",
+      "description": "When `true`, checks for LHA updates on startup and surfaces update prompts. Set to `false` only if your LHA updates are centrally managed. Defaults to `true`.",
       "type": "boolean"
     },
     "compact_prompt": {
@@ -1297,7 +1297,7 @@
           "$ref": "#/definitions/FeedbackConfigToml"
         }
       ],
-      "description": "When `false`, disables feedback collection across Adam product surfaces. Defaults to `true`."
+      "description": "When `false`, disables feedback collection across LHA product surfaces. Defaults to `true`."
     },
     "file_opener": {
       "allOf": [
@@ -1327,14 +1327,14 @@
         }
       ],
       "default": null,
-      "description": "Settings that govern if and what will be written to `~/.adam/history.jsonl`."
+      "description": "Settings that govern if and what will be written to `~/.lha/history.jsonl`."
     },
     "instructions": {
       "description": "System instructions.",
       "type": "string"
     },
     "mcp_oauth_callback_port": {
-      "description": "Optional fixed port for the local HTTP callback server used during MCP OAuth login. When unset, Adam will bind to an ephemeral port chosen by the OS.",
+      "description": "Optional fixed port for the local HTTP callback server used during MCP OAuth login. When unset, LHA will bind to an ephemeral port chosen by the OS.",
       "format": "uint16",
       "minimum": 0.0,
       "type": "integer"
@@ -1346,14 +1346,14 @@
         }
       ],
       "default": null,
-      "description": "Preferred backend for storing MCP OAuth credentials. keyring: Use an OS-specific keyring service. https://github.com/openai/codex/blob/main/src/resources/rmcp-client/src/oauth.rs#L2 file: Use a file in the Adam home directory. auto (default): Use the OS-specific keyring service if available, otherwise use a file."
+      "description": "Preferred backend for storing MCP OAuth credentials. keyring: Use an OS-specific keyring service. https://github.com/openai/codex/blob/main/src/resources/rmcp-client/src/oauth.rs#L2 file: Use a file in the LHA home directory. auto (default): Use the OS-specific keyring service if available, otherwise use a file."
     },
     "mcp_servers": {
       "additionalProperties": {
         "$ref": "#/definitions/RawMcpServerConfig"
       },
       "default": {},
-      "description": "Definition for MCP servers that Adam can reach out to for tool calls.",
+      "description": "Definition for MCP servers that LHA can reach out to for tool calls.",
       "type": "object"
     },
     "model_instructions_file": {
@@ -1362,7 +1362,7 @@
           "$ref": "#/definitions/AbsolutePathBuf"
         }
       ],
-      "description": "Optional path to a file containing model instructions that will override the built-in instructions for the selected model. Users are STRONGLY DISCOURAGED from using this field, as deviating from the instructions sanctioned by Adam will likely degrade model performance."
+      "description": "Optional path to a file containing model instructions that will override the built-in instructions for the selected model. Users are STRONGLY DISCOURAGED from using this field, as deviating from the instructions sanctioned by LHA will likely degrade model performance."
     },
     "model_reasoning_summary": {
       "$ref": "#/definitions/ReasoningSummary"
@@ -1438,7 +1438,7 @@
     },
     "project_root_markers": {
       "default": null,
-      "description": "Markers used to detect the project root when searching parent directories for `.adam` folders. Defaults to [\".git\"] when unset.",
+      "description": "Markers used to detect the project root when searching parent directories for `.lha` folders. Defaults to [\".git\"] when unset.",
       "items": {
         "type": "string"
       },

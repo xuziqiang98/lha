@@ -2,7 +2,7 @@ use crate::bash::extract_bash_command;
 use crate::bash::try_parse_shell;
 use crate::bash::try_parse_word_only_commands_sequence;
 use crate::powershell::extract_powershell_command;
-use adam_protocol::parse_command::ParsedCommand;
+use lha_protocol::parse_command::ParsedCommand;
 use shlex::split as shlex_split;
 use shlex::try_join as shlex_try_join;
 use std::path::PathBuf;
@@ -19,7 +19,7 @@ pub fn extract_shell_command(command: &[String]) -> Option<(&str, &str)> {
 
 /// DO NOT REVIEW THIS CODE BY HAND
 /// This parsing code is quite complex and not easy to hand-modify.
-/// The easiest way to iterate is to add unit tests and have Adam fix the implementation.
+/// The easiest way to iterate is to add unit tests and have LHA fix the implementation.
 /// To encourage this, the tests have been put directly below this function rather than at the bottom of the
 ///
 /// Parses metadata out of an arbitrary command.
@@ -42,7 +42,7 @@ pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
 
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
-/// Tests are at the top to encourage using TDD + Adam to fix the implementation.
+/// Tests are at the top to encourage using TDD + LHA to fix the implementation.
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
@@ -548,10 +548,10 @@ mod tests {
     #[test]
     fn supports_grep_recursive_current_dir() {
         assert_parsed(
-            &vec_str(&["grep", "-R", "ADAM_SANDBOX_ENV_VAR", "-n", "."]),
+            &vec_str(&["grep", "-R", "LHA_SANDBOX_ENV_VAR", "-n", "."]),
             vec![ParsedCommand::Search {
-                cmd: "grep -R ADAM_SANDBOX_ENV_VAR -n .".to_string(),
-                query: Some("ADAM_SANDBOX_ENV_VAR".to_string()),
+                cmd: "grep -R LHA_SANDBOX_ENV_VAR -n .".to_string(),
+                query: Some("LHA_SANDBOX_ENV_VAR".to_string()),
                 path: Some(".".to_string()),
             }],
         );
@@ -563,13 +563,13 @@ mod tests {
             &vec_str(&[
                 "grep",
                 "-R",
-                "ADAM_SANDBOX_ENV_VAR",
+                "LHA_SANDBOX_ENV_VAR",
                 "-n",
                 "core/src/spawn.rs",
             ]),
             vec![ParsedCommand::Search {
-                cmd: "grep -R ADAM_SANDBOX_ENV_VAR -n core/src/spawn.rs".to_string(),
-                query: Some("ADAM_SANDBOX_ENV_VAR".to_string()),
+                cmd: "grep -R LHA_SANDBOX_ENV_VAR -n core/src/spawn.rs".to_string(),
+                query: Some("LHA_SANDBOX_ENV_VAR".to_string()),
                 path: Some("spawn.rs".to_string()),
             }],
         );
@@ -671,12 +671,12 @@ mod tests {
     #[test]
     fn supports_single_string_script_with_cd_and_pipe() {
         let inner =
-            r#"cd /Users/pakrym/code/codex && rg -n "adam_api" src/resources -S | head -n 50"#;
+            r#"cd /Users/pakrym/code/codex && rg -n "lha_api" src/resources -S | head -n 50"#;
         assert_parsed(
             &vec_str(&["bash", "-lc", inner]),
             vec![ParsedCommand::Search {
-                cmd: "rg -n adam_api src/resources -S".to_string(),
-                query: Some("adam_api".to_string()),
+                cmd: "rg -n lha_api src/resources -S".to_string(),
+                query: Some("lha_api".to_string()),
                 path: Some("resources".to_string()),
             }],
         );

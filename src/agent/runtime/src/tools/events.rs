@@ -15,7 +15,7 @@ use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::TurnDiffEvent;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::sandboxing::ToolError;
-use adam_protocol::parse_command::ParsedCommand;
+use lha_protocol::parse_command::ParsedCommand;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -285,14 +285,14 @@ impl ToolEmitter {
                 };
                 (event, result)
             }
-            Err(ToolError::Adam(CodexErr::Sandbox(SandboxErr::Timeout { output })))
-            | Err(ToolError::Adam(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
+            Err(ToolError::LHA(CodexErr::Sandbox(SandboxErr::Timeout { output })))
+            | Err(ToolError::LHA(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
                 let response = self.format_exec_output_for_model(&output, ctx);
                 let event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
                 let result = Err(FunctionCallError::RespondToModel(response));
                 (event, result)
             }
-            Err(ToolError::Adam(err)) => {
+            Err(ToolError::LHA(err)) => {
                 let message = format!("execution error: {err:?}");
                 let event = ToolEventStage::Failure(ToolEventFailure::Message(message.clone()));
                 let result = Err(FunctionCallError::RespondToModel(message));

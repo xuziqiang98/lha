@@ -12,12 +12,12 @@ use crate::shimmer::shimmer_spans;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
-use adam_agent::bash::extract_bash_command;
-use adam_agent::protocol::ExecCommandSource;
-use adam_ansi_escape::ansi_escape_line;
-use adam_common::elapsed::format_duration;
-use adam_protocol::parse_command::ParsedCommand;
 use itertools::Itertools;
+use lha_agent::bash::extract_bash_command;
+use lha_agent::protocol::ExecCommandSource;
+use lha_ansi_escape::ansi_escape_line;
+use lha_common::elapsed::format_duration;
+use lha_protocol::parse_command::ParsedCommand;
 use ratatui::prelude::*;
 use ratatui::style::Modifier;
 use ratatui::style::Stylize;
@@ -729,7 +729,7 @@ const EXEC_DISPLAY_LAYOUT: ExecDisplayLayout = ExecDisplayLayout::new(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_agent::protocol::ExecCommandSource;
+    use lha_agent::protocol::ExecCommandSource;
     use std::time::Duration;
 
     fn output_rows(lines: &[Line<'static>], width: u16) -> usize {

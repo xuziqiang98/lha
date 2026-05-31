@@ -1,9 +1,9 @@
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::IdentityMask;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::IdentityMask;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -137,7 +137,7 @@ impl IdentityModal {
 
         let mut lines: Vec<Line<'static>> = vec![
             "Select Identity".bold().into(),
-            "Pick how Adam should behave for future turns.".dim().into(),
+            "Pick how LHA should behave for future turns.".dim().into(),
             "".into(),
         ];
         let content_width = content_area.width.max(1) as usize;
@@ -259,7 +259,7 @@ mod tests {
             model: None,
             reasoning_effort: None,
             developer_instructions: None,
-            capabilities: adam_protocol::config_types::IdentityCapabilities { write_tools: false },
+            capabilities: lha_protocol::config_types::IdentityCapabilities { write_tools: false },
         }
     }
 

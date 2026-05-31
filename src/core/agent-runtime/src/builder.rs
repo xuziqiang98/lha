@@ -2,10 +2,10 @@ use crate::manager::AgentManager;
 use crate::tools::ToolHandler;
 use crate::tools::ToolRegistry;
 use crate::tools::ToolRegistryBuilder;
-use adam_llm::BaseInstructions;
-use adam_llm::Personality;
-use adam_llm::RuntimeMetadata;
-use adam_llm::SemanticRuntime;
+use lha_llm::BaseInstructions;
+use lha_llm::Personality;
+use lha_llm::RuntimeMetadata;
+use lha_llm::SemanticRuntime;
 use serde_json::Value;
 use std::sync::Arc;
 

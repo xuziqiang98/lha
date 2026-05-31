@@ -34,4 +34,4 @@ pub fn create_symlink(
 }
 
 #[cfg(not(any(unix, windows)))]
-compile_error!("adam-git symlink support is only implemented for Unix and Windows");
+compile_error!("lha-git symlink support is only implemented for Unix and Windows");

@@ -3,7 +3,7 @@ use super::diagnostics::config_error_from_toml;
 use super::diagnostics::io_error_from_config_error;
 #[cfg(target_os = "macos")]
 use super::macos::load_managed_admin_config_layer;
-use adam_utils_absolute_path::AbsolutePathBuf;
+use lha_utils_absolute_path::AbsolutePathBuf;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -11,7 +11,7 @@ use tokio::fs;
 use toml::Value as TomlValue;
 
 #[cfg(unix)]
-const ADAM_MANAGED_CONFIG_SYSTEM_PATH: &str = "/etc/adam/managed_config.toml";
+const LHA_MANAGED_CONFIG_SYSTEM_PATH: &str = "/etc/lha/managed_config.toml";
 
 #[derive(Debug, Clone)]
 pub(super) struct MangedConfigFromFile {
@@ -21,14 +21,14 @@ pub(super) struct MangedConfigFromFile {
 
 #[derive(Debug, Clone)]
 pub(super) struct LoadedConfigLayers {
-    /// If present, data read from a file such as `/etc/adam/managed_config.toml`.
+    /// If present, data read from a file such as `/etc/lha/managed_config.toml`.
     pub managed_config: Option<MangedConfigFromFile>,
     /// If present, data read from managed preferences (macOS only).
     pub managed_config_from_mdm: Option<TomlValue>,
 }
 
 pub(super) async fn load_config_layers_internal(
-    adam_home: &Path,
+    lha_home: &Path,
     overrides: LoaderOverrides,
 ) -> io::Result<LoadedConfigLayers> {
     #[cfg(target_os = "macos")]
@@ -45,7 +45,7 @@ pub(super) async fn load_config_layers_internal(
     } = overrides;
 
     let managed_config_path = AbsolutePathBuf::from_absolute_path(
-        managed_config_path.unwrap_or_else(|| managed_config_default_path(adam_home)),
+        managed_config_path.unwrap_or_else(|| managed_config_default_path(lha_home)),
     )?;
 
     let managed_config = read_config_from_path(&managed_config_path, false)
@@ -101,15 +101,15 @@ pub(super) async fn read_config_from_path(
 }
 
 /// Return the default managed config path.
-pub(super) fn managed_config_default_path(adam_home: &Path) -> PathBuf {
+pub(super) fn managed_config_default_path(lha_home: &Path) -> PathBuf {
     #[cfg(unix)]
     {
-        let _ = adam_home;
-        PathBuf::from(ADAM_MANAGED_CONFIG_SYSTEM_PATH)
+        let _ = lha_home;
+        PathBuf::from(LHA_MANAGED_CONFIG_SYSTEM_PATH)
     }
 
     #[cfg(not(unix))]
     {
-        adam_home.join("managed_config.toml")
+        lha_home.join("managed_config.toml")
     }
 }

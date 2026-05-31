@@ -1,11 +1,11 @@
-use adam_protocol::ThreadId;
-use adam_protocol::protocol::AskForApproval;
-use adam_protocol::protocol::SandboxPolicy;
-use adam_protocol::protocol::SessionSource;
 use anyhow::Result;
 use chrono::DateTime;
 use chrono::Timelike;
 use chrono::Utc;
+use lha_protocol::ThreadId;
+use lha_protocol::protocol::AskForApproval;
+use lha_protocol::protocol::SandboxPolicy;
+use lha_protocol::protocol::SessionSource;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use std::path::PathBuf;

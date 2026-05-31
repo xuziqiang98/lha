@@ -1,10 +1,10 @@
-use adam_agent::features::FEATURES;
-use adam_agent::features::Feature;
+use lha_agent::features::FEATURES;
+use lha_agent::features::Feature;
 use std::collections::BTreeMap;
 use std::path::Path;
 
 pub fn write_mock_responses_config_toml(
-    adam_home: &Path,
+    lha_home: &Path,
     server_uri: &str,
     feature_flags: &BTreeMap<Feature, bool>,
     auto_compact_limit: i64,
@@ -13,7 +13,7 @@ pub fn write_mock_responses_config_toml(
     compact_prompt: &str,
 ) -> std::io::Result<()> {
     write_mock_responses_config_toml_with_options(
-        adam_home,
+        lha_home,
         server_uri,
         feature_flags,
         auto_compact_limit,
@@ -27,7 +27,7 @@ pub fn write_mock_responses_config_toml(
 }
 
 pub fn write_mock_responses_config_toml_with_options(
-    adam_home: &Path,
+    lha_home: &Path,
     server_uri: &str,
     feature_flags: &BTreeMap<Feature, bool>,
     auto_compact_limit: i64,
@@ -56,15 +56,15 @@ pub fn write_mock_responses_config_toml_with_options(
         .collect::<Vec<_>>()
         .join("\n");
     write_mock_responses_models_json(
-        adam_home,
+        lha_home,
         server_uri,
         model_provider_id,
         requires_openai_auth.unwrap_or(false),
         Some(auto_compact_limit),
         model,
     )?;
-    write_state_json(adam_home, &format!("{model_provider_id}.main:{model}"))?;
-    let config_toml = adam_home.join("config.toml");
+    write_state_json(lha_home, &format!("{model_provider_id}.main:{model}"))?;
+    let config_toml = lha_home.join("config.toml");
     std::fs::write(
         config_toml,
         format!(
@@ -80,9 +80,9 @@ compact_prompt = "{compact_prompt}"
     )
 }
 
-pub fn write_state_json(adam_home: &Path, model_ref: &str) -> std::io::Result<()> {
+pub fn write_state_json(lha_home: &Path, model_ref: &str) -> std::io::Result<()> {
     std::fs::write(
-        adam_home.join("state.json"),
+        lha_home.join("state.json"),
         format!(
             r#"{{
   "last_selected_model": {{
@@ -99,7 +99,7 @@ pub fn write_state_json(adam_home: &Path, model_ref: &str) -> std::io::Result<()
 }
 
 pub fn write_mock_responses_models_json(
-    adam_home: &Path,
+    lha_home: &Path,
     server_uri: &str,
     provider_id: &str,
     _requires_openai_auth: bool,
@@ -110,7 +110,7 @@ pub fn write_mock_responses_models_json(
         .map(|limit| format!(",\n              \"auto_compact_token_limit\": {limit}"))
         .unwrap_or_default();
     std::fs::write(
-        adam_home.join("models.json"),
+        lha_home.join("models.json"),
         format!(
             r#"{{
   "providers": {{

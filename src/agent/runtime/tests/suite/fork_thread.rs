@@ -1,18 +1,18 @@
-use adam_agent::CodexAuth;
-use adam_agent::NewThread;
-use adam_agent::ThreadManager;
-use adam_agent::parse_turn_item;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::RolloutItem;
-use adam_agent::protocol::RolloutLine;
-use adam_protocol::items::TurnItem;
-use adam_protocol::user_input::UserInput;
 use core::time::Duration;
 use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use lha_agent::CodexAuth;
+use lha_agent::NewThread;
+use lha_agent::ThreadManager;
+use lha_agent::parse_turn_item;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::RolloutItem;
+use lha_agent::protocol::RolloutLine;
+use lha_protocol::items::TurnItem;
+use lha_protocol::user_input::UserInput;
 use tempfile::tempdir;
 use tokio::time::timeout;
 use wiremock::Mock;
@@ -28,8 +28,8 @@ fn sse_completed(id: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn start_thread_notifies_thread_created_subscribers() {
-    let adam_home = tempdir().expect("tempdir");
-    let config = load_default_config_for_test(&adam_home).await;
+    let lha_home = tempdir().expect("tempdir");
+    let config = load_default_config_for_test(&lha_home).await;
     let thread_manager = ThreadManager::with_models_provider(
         CodexAuth::from_api_key("sk-test"),
         config.model_provider.clone(),

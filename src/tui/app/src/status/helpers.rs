@@ -1,8 +1,8 @@
 use crate::exec_command::relativize_to_home;
 use crate::text_formatting;
-use adam_agent::config::Config;
-use adam_agent::project_doc::discover_project_doc_paths;
-use adam_agent::protocol::TokenUsage;
+use lha_agent::config::Config;
+use lha_agent::project_doc::discover_project_doc_paths;
+use lha_agent::protocol::TokenUsage;
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 

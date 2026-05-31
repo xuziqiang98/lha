@@ -14,7 +14,7 @@
 //! keystore that always encrypts secrets when they are transferred across the bus. If DBus isn't installed the keystore will fall back to the json
 //! file because we don't use the "vendored" feature.
 //!
-//! If the keyring is not available or fails, we fall back to ADAM_HOME/.credentials.json which is consistent with other coding CLI agents.
+//! If the keyring is not available or fails, we fall back to LHA_HOME/.credentials.json which is consistent with other coding CLI agents.
 
 use anyhow::Context;
 use anyhow::Error;
@@ -43,14 +43,14 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tracing::warn;
 
-use adam_keyring_store::DefaultKeyringStore;
-use adam_keyring_store::KeyringStore;
+use lha_keyring_store::DefaultKeyringStore;
+use lha_keyring_store::KeyringStore;
 use rmcp::transport::auth::AuthorizationManager;
 use tokio::sync::Mutex;
 
-use adam_utils_home_dir::find_adam_home;
+use lha_utils_home_dir::find_lha_home;
 
-const KEYRING_SERVICE: &str = "Adam MCP Credentials";
+const KEYRING_SERVICE: &str = "LHA MCP Credentials";
 const REFRESH_SKEW_MILLIS: u64 = 30_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -63,16 +63,16 @@ pub struct StoredOAuthTokens {
     pub expires_at: Option<u64>,
 }
 
-/// Determine where Adam should store and read MCP credentials.
+/// Determine where LHA should store and read MCP credentials.
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum OAuthCredentialsStoreMode {
     /// `Keyring` when available; otherwise, `File`.
-    /// Credentials stored in the keyring will only be readable by Adam unless the user explicitly grants access via OS-level keyring access.
+    /// Credentials stored in the keyring will only be readable by LHA unless the user explicitly grants access via OS-level keyring access.
     #[default]
     Auto,
-    /// ADAM_HOME/.credentials.json
-    /// This file will be readable to Adam and other applications running as the same user.
+    /// LHA_HOME/.credentials.json
+    /// This file will be readable to LHA and other applications running as the same user.
     File,
     /// Keyring when available, otherwise fail.
     Keyring,
@@ -535,7 +535,7 @@ fn compute_store_key(server_name: &str, server_url: &str) -> Result<String> {
 }
 
 fn fallback_file_path() -> Result<PathBuf> {
-    let mut path = find_adam_home()?;
+    let mut path = find_lha_home()?;
     path.push(FALLBACK_FILENAME);
     Ok(path)
 }
@@ -612,7 +612,7 @@ mod tests {
     use std::sync::PoisonError;
     use tempfile::tempdir;
 
-    use adam_keyring_store::tests::MockKeyringStore;
+    use lha_keyring_store::tests::MockKeyringStore;
 
     struct TempCodexHome {
         _guard: MutexGuard<'static, ()>,
@@ -626,9 +626,9 @@ mod tests {
                 .get_or_init(Mutex::default)
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            let dir = tempdir().expect("create ADAM_HOME temp dir");
+            let dir = tempdir().expect("create LHA_HOME temp dir");
             unsafe {
-                std::env::set_var("ADAM_HOME", dir.path());
+                std::env::set_var("LHA_HOME", dir.path());
             }
             Self {
                 _guard: guard,
@@ -640,7 +640,7 @@ mod tests {
     impl Drop for TempCodexHome {
         fn drop(&mut self) {
             unsafe {
-                std::env::remove_var("ADAM_HOME");
+                std::env::remove_var("LHA_HOME");
             }
         }
     }

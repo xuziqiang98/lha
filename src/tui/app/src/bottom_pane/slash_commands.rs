@@ -5,7 +5,7 @@
 //! and ensures they stay in sync.
 use std::str::FromStr;
 
-use adam_common::fuzzy_match::fuzzy_match;
+use lha_common::fuzzy_match::fuzzy_match;
 
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;

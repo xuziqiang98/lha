@@ -1,9 +1,9 @@
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
-use adam_llm::ToolDescriptor;
-use adam_llm::ToolResultItem;
 use async_trait::async_trait;
+use lha_llm::ToolDescriptor;
+use lha_llm::ToolResultItem;
 use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;

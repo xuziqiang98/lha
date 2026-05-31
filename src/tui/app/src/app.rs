@@ -64,57 +64,6 @@ use crate::skills_modal::SkillsModalAction;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
-use adam_agent::AuthManager;
-use adam_agent::ThreadManager;
-use adam_agent::config::Config;
-use adam_agent::config::ConfigBuilder;
-use adam_agent::config::ConfigOverrides;
-use adam_agent::config::display_model_provider_ref;
-use adam_agent::config::edit::ConfigEdit;
-use adam_agent::config::edit::ConfigEditsBuilder;
-use adam_agent::config::model_ref::ModelRef;
-use adam_agent::config::models_json::ModelsJson;
-use adam_agent::config::set_project_trust_level;
-use adam_agent::config::state_json::AdamStateStore;
-use adam_agent::config::types::TuiBuddy;
-use adam_agent::config_loader::ConfigLayerStackOrdering;
-use adam_agent::features::FEATURES;
-use adam_agent::features::Feature;
-use adam_agent::git_info::resolve_root_git_project_for_trust;
-use adam_agent::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
-use adam_agent::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::Event;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::FinalOutput;
-use adam_agent::protocol::ListSkillsResponseEvent;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::ReviewRequest;
-use adam_agent::protocol::SandboxPolicy;
-use adam_agent::protocol::SessionSource;
-use adam_agent::protocol::SkillErrorInfo;
-use adam_agent::protocol::TokenUsage;
-#[cfg(target_os = "windows")]
-use adam_agent::windows_sandbox::WindowsSandboxLevelExt;
-use adam_ansi_escape::ansi_escape_line;
-use adam_app_server_protocol::ConfigLayerSource;
-use adam_common::approval_presets::ApprovalPreset;
-use adam_common::approval_presets::builtin_approval_presets;
-use adam_llm::CatalogRefreshStrategy;
-use adam_llm::RuntimeEndpoint;
-use adam_otel::OtelManager;
-use adam_protocol::ThreadId;
-use adam_protocol::config_types::IdentityMask;
-use adam_protocol::config_types::Personality;
-use adam_protocol::config_types::TrustLevel;
-#[cfg(target_os = "windows")]
-use adam_protocol::config_types::WindowsSandboxLevel;
-use adam_protocol::items::TurnItem;
-use adam_protocol::openai_models::ModelPreset;
-use adam_protocol::openai_models::ModelUpgrade;
-use adam_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use adam_protocol::protocol::SessionConfiguredEvent;
-use adam_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -122,6 +71,57 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use crossterm::event::MouseEvent;
+use lha_agent::AuthManager;
+use lha_agent::ThreadManager;
+use lha_agent::config::Config;
+use lha_agent::config::ConfigBuilder;
+use lha_agent::config::ConfigOverrides;
+use lha_agent::config::display_model_provider_ref;
+use lha_agent::config::edit::ConfigEdit;
+use lha_agent::config::edit::ConfigEditsBuilder;
+use lha_agent::config::model_ref::ModelRef;
+use lha_agent::config::models_json::ModelsJson;
+use lha_agent::config::set_project_trust_level;
+use lha_agent::config::state_json::LHAStateStore;
+use lha_agent::config::types::TuiBuddy;
+use lha_agent::config_loader::ConfigLayerStackOrdering;
+use lha_agent::features::FEATURES;
+use lha_agent::features::Feature;
+use lha_agent::git_info::resolve_root_git_project_for_trust;
+use lha_agent::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
+use lha_agent::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::Event;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::FinalOutput;
+use lha_agent::protocol::ListSkillsResponseEvent;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::ReviewRequest;
+use lha_agent::protocol::SandboxPolicy;
+use lha_agent::protocol::SessionSource;
+use lha_agent::protocol::SkillErrorInfo;
+use lha_agent::protocol::TokenUsage;
+#[cfg(target_os = "windows")]
+use lha_agent::windows_sandbox::WindowsSandboxLevelExt;
+use lha_ansi_escape::ansi_escape_line;
+use lha_app_server_protocol::ConfigLayerSource;
+use lha_common::approval_presets::ApprovalPreset;
+use lha_common::approval_presets::builtin_approval_presets;
+use lha_llm::CatalogRefreshStrategy;
+use lha_llm::RuntimeEndpoint;
+use lha_otel::OtelManager;
+use lha_protocol::ThreadId;
+use lha_protocol::config_types::IdentityMask;
+use lha_protocol::config_types::Personality;
+use lha_protocol::config_types::TrustLevel;
+#[cfg(target_os = "windows")]
+use lha_protocol::config_types::WindowsSandboxLevel;
+use lha_protocol::items::TurnItem;
+use lha_protocol::openai_models::ModelPreset;
+use lha_protocol::openai_models::ModelUpgrade;
+use lha_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use lha_protocol::protocol::SessionConfiguredEvent;
+use lha_utils_absolute_path::AbsolutePathBuf;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -205,7 +205,7 @@ fn session_summary(
     }
 
     let usage_line = FinalOutput::from(token_usage).to_string();
-    let resume_command = adam_agent::util::resume_command(thread_name.as_deref(), thread_id);
+    let resume_command = lha_agent::util::resume_command(thread_name.as_deref(), thread_id);
     Some(SessionSummary {
         usage_line,
         resume_command,
@@ -249,14 +249,14 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
         .config_layer_stack
         .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
     {
-        let ConfigLayerSource::Project { dot_adam_folder } = &layer.name else {
+        let ConfigLayerSource::Project { dot_lha_folder } = &layer.name else {
             continue;
         };
         if layer.disabled_reason.is_none() {
             continue;
         }
         disabled_folders.push((
-            dot_adam_folder.as_path().display().to_string(),
+            dot_lha_folder.as_path().display().to_string(),
             layer
                 .disabled_reason
                 .as_ref()
@@ -578,7 +578,7 @@ pub(crate) struct App {
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
     /// When set, the next draw re-renders the transcript after a rollback.
     pub(crate) backtrack_render_pending: bool,
-    pub(crate) feedback: adam_feedback::CodexFeedback,
+    pub(crate) feedback: lha_feedback::CodexFeedback,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
 
@@ -864,7 +864,7 @@ impl App {
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
         tui: &mut tui::Tui,
-        cfg: adam_agent::config::Config,
+        cfg: lha_agent::config::Config,
     ) -> crate::chatwidget::ChatWidgetInit {
         crate::chatwidget::ChatWidgetInit {
             config: cfg,
@@ -889,7 +889,7 @@ impl App {
         overrides.cwd = Some(cwd.clone());
         let cwd_display = cwd.display().to_string();
         let config = ConfigBuilder::default()
-            .adam_home(self.config.adam_home.clone())
+            .lha_home(self.config.lha_home.clone())
             .cli_overrides(self.cli_kv_overrides.clone())
             .harness_overrides(overrides)
             .build()
@@ -943,7 +943,7 @@ impl App {
             .clone()
             .unwrap_or(DeferredStartupContinuation::StartFresh);
         let thread_manager = Arc::new(ThreadManager::new(
-            config.adam_home.clone(),
+            config.lha_home.clone(),
             self.auth_manager.clone(),
             config.model_provider_id.as_str(),
             config.model_provider.clone(),
@@ -992,7 +992,7 @@ impl App {
             None,
             None,
             config.otel.log_user_prompt,
-            adam_agent::terminal::user_agent(),
+            lha_agent::terminal::user_agent(),
             SessionSource::Cli,
         );
 
@@ -1090,7 +1090,7 @@ impl App {
     ) -> AppRunControl {
         let target = resolve_root_git_project_for_trust(&self.config.cwd)
             .unwrap_or_else(|| self.config.cwd.clone());
-        if let Err(err) = set_project_trust_level(&self.config.adam_home, &target, trust_level) {
+        if let Err(err) = set_project_trust_level(&self.config.lha_home, &target, trust_level) {
             let target_display = target.display();
             tracing::error!(%err, target = %target_display, "failed to persist project trust");
             self.chat_widget
@@ -1148,7 +1148,7 @@ impl App {
             }
         }
 
-        match ConfigEditsBuilder::new(&self.config.adam_home)
+        match ConfigEditsBuilder::new(&self.config.lha_home)
             .with_edits(edits)
             .apply()
             .await
@@ -1234,7 +1234,7 @@ impl App {
     }
 
     fn resolve_model_provider_for_model(&self, model: &str) -> std::result::Result<String, String> {
-        ModelsJson::load_from_adam_home(&self.config.adam_home)
+        ModelsJson::load_from_lha_home(&self.config.lha_home)
             .map_err(|err| format!("Failed to load models.json for model selection: {err}"))?
             .resolve_model_provider_for_model(model)
             .map(|provider_id| provider_id.unwrap_or_else(|| self.config.model_provider_id.clone()))
@@ -1357,7 +1357,7 @@ impl App {
         } else {
             ModelRef::new(provider_id.as_str(), "main", model.as_str())
         };
-        let save_result = AdamStateStore::new(&self.config.adam_home)
+        let save_result = LHAStateStore::new(&self.config.lha_home)
             .set_last_selected_model(&model_ref, effort, None)
             .map_err(anyhow::Error::from);
         if let Err(err) = save_result {
@@ -1370,7 +1370,7 @@ impl App {
             .await
             .map_err(|err| {
                 format!(
-                    "Saved model `{model}` with provider `{provider_id}`, but failed to activate it in this session: {err}. Restart Adam to use the updated settings."
+                    "Saved model `{model}` with provider `{provider_id}`, but failed to activate it in this session: {err}. Restart LHA to use the updated settings."
                 )
             })?;
         self.apply_model_selection_to_runtime(&model, effort);
@@ -1394,14 +1394,14 @@ impl App {
         self.provider_config_modal = None;
         self.chat_widget.dismiss_active_view();
 
-        match persist_custom_provider_files(&self.config.adam_home, &config) {
+        match persist_custom_provider_files(&self.config.lha_home, &config) {
             Ok(()) => {
                 if let Err(err) = self
                     .reload_runtime_provider_config(&provider_id, &model)
                     .await
                 {
                     self.chat_widget.add_error_message(format!(
-                        "Saved provider `{provider_label}` with model `{model}`, but failed to activate it in this session: {err}. Restart Adam to use the updated settings."
+                        "Saved provider `{provider_label}` with model `{model}`, but failed to activate it in this session: {err}. Restart LHA to use the updated settings."
                     ));
                     return AppRunControl::Continue;
                 }
@@ -1596,7 +1596,7 @@ impl App {
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         session_selection: SessionSelection,
-        feedback: adam_feedback::CodexFeedback,
+        feedback: lha_feedback::CodexFeedback,
         is_first_run: bool,
         show_provider_popup_on_startup: bool,
         show_trust_popup_on_startup: bool,
@@ -1610,7 +1610,7 @@ impl App {
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
         let thread_manager = Arc::new(ThreadManager::new(
-            config.adam_home.clone(),
+            config.lha_home.clone(),
             auth_manager.clone(),
             config.model_provider_id.as_str(),
             config.model_provider.clone(),
@@ -1649,7 +1649,7 @@ impl App {
             None,
             None,
             config.otel.log_user_prompt,
-            adam_agent::terminal::user_agent(),
+            lha_agent::terminal::user_agent(),
             SessionSource::Cli,
         );
 
@@ -1808,7 +1808,7 @@ impl App {
             show_provider_popup_on_startup.then(|| ProviderConfigModalState {
                 mode: ProviderConfigModalMode::Startup,
                 modal: ProviderConfigModal::new(
-                    config.adam_home.clone(),
+                    config.lha_home.clone(),
                     app_event_tx.clone(),
                     tui.frame_requester(),
                 ),
@@ -1888,8 +1888,8 @@ impl App {
                 != WindowsSandboxLevel::Disabled
                 && matches!(
                     app.config.sandbox_policy.get(),
-                    adam_agent::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | adam_agent::protocol::SandboxPolicy::ReadOnly
+                    lha_agent::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                        | lha_agent::protocol::SandboxPolicy::ReadOnly
                 )
                 && !app
                     .config
@@ -1900,7 +1900,7 @@ impl App {
                 let cwd = app.config.cwd.clone();
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
-                let logs_base_dir = app.config.adam_home.clone();
+                let logs_base_dir = app.config.lha_home.clone();
                 let sandbox_policy = app.config.sandbox_policy.get().clone();
                 Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
             }
@@ -2673,7 +2673,7 @@ impl App {
             AppEvent::OpenResumePicker => {
                 match crate::resume_picker::run_resume_picker(
                     tui,
-                    &self.config.adam_home,
+                    &self.config.lha_home,
                     &self.config.model_provider_id,
                     Some(self.config.cwd.as_path()),
                     false,
@@ -2996,11 +2996,11 @@ impl App {
             }
             AppEvent::OpenWindowsSandboxFallbackPrompt { preset, reason } => {
                 self.otel_manager
-                    .counter("adam.windows_sandbox.fallback_prompt_shown", 1, &[]);
+                    .counter("lha.windows_sandbox.fallback_prompt_shown", 1, &[]);
                 self.chat_widget.clear_windows_sandbox_setup_status();
                 if let Some(started_at) = self.windows_sandbox.setup_started_at.take() {
                     self.otel_manager.record_duration(
-                        "adam.windows_sandbox.elevated_setup_duration_ms",
+                        "lha.windows_sandbox.elevated_setup_duration_ms",
                         started_at.elapsed(),
                         &[("result", "failure")],
                     );
@@ -3018,12 +3018,12 @@ impl App {
                     let command_cwd = policy_cwd.clone();
                     let env_map: std::collections::HashMap<String, String> =
                         std::env::vars().collect();
-                    let adam_home = self.config.adam_home.clone();
+                    let lha_home = self.config.lha_home.clone();
                     let tx = self.app_event_tx.clone();
 
                     // If the elevated setup already ran on this machine, don't prompt for
                     // elevation again - just flip the config to use the elevated path.
-                    if adam_agent::windows_sandbox::sandbox_setup_is_complete(adam_home.as_path()) {
+                    if lha_agent::windows_sandbox::sandbox_setup_is_complete(lha_home.as_path()) {
                         tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
                             preset,
                             mode: WindowsSandboxEnableMode::Elevated,
@@ -3035,17 +3035,17 @@ impl App {
                     self.windows_sandbox.setup_started_at = Some(Instant::now());
                     let otel_manager = self.otel_manager.clone();
                     tokio::task::spawn_blocking(move || {
-                        let result = adam_agent::windows_sandbox::run_elevated_setup(
+                        let result = lha_agent::windows_sandbox::run_elevated_setup(
                             &policy,
                             policy_cwd.as_path(),
                             command_cwd.as_path(),
                             &env_map,
-                            adam_home.as_path(),
+                            lha_home.as_path(),
                         );
                         let event = match result {
                             Ok(()) => {
                                 otel_manager.counter(
-                                    "adam.windows_sandbox.elevated_setup_success",
+                                    "lha.windows_sandbox.elevated_setup_success",
                                     1,
                                     &[],
                                 );
@@ -3058,9 +3058,7 @@ impl App {
                                 let mut code_tag: Option<String> = None;
                                 let mut message_tag: Option<String> = None;
                                 if let Some((code, message)) =
-                                    adam_agent::windows_sandbox::elevated_setup_failure_details(
-                                        &err,
-                                    )
+                                    lha_agent::windows_sandbox::elevated_setup_failure_details(&err)
                                 {
                                     code_tag = Some(code);
                                     message_tag = Some(message);
@@ -3073,7 +3071,7 @@ impl App {
                                     tags.push(("message", message));
                                 }
                                 otel_manager.counter(
-                                    "adam.windows_sandbox.elevated_setup_failure",
+                                    "lha.windows_sandbox.elevated_setup_failure",
                                     1,
                                     &tags,
                                 );
@@ -3101,7 +3099,7 @@ impl App {
                     self.chat_widget.clear_windows_sandbox_setup_status();
                     if let Some(started_at) = self.windows_sandbox.setup_started_at.take() {
                         self.otel_manager.record_duration(
-                            "adam.windows_sandbox.elevated_setup_duration_ms",
+                            "lha.windows_sandbox.elevated_setup_duration_ms",
                             started_at.elapsed(),
                             &[("result", "success")],
                         );
@@ -3111,7 +3109,7 @@ impl App {
                     let elevated_key = Feature::WindowsSandboxElevated.key();
                     let elevated_enabled = matches!(mode, WindowsSandboxEnableMode::Elevated);
                     let mut builder =
-                        ConfigEditsBuilder::new(&self.config.adam_home).with_profile(profile);
+                        ConfigEditsBuilder::new(&self.config.lha_home).with_profile(profile);
                     if elevated_enabled {
                         builder = builder.set_feature_enabled(elevated_key, true);
                     } else {
@@ -3238,7 +3236,7 @@ impl App {
             }
             AppEvent::PersistPersonalitySelection { personality } => {
                 let profile = self.active_profile.as_deref();
-                match ConfigEditsBuilder::new(&self.config.adam_home)
+                match ConfigEditsBuilder::new(&self.config.lha_home)
                     .with_profile(profile)
                     .set_personality(Some(personality))
                     .apply()
@@ -3288,8 +3286,8 @@ impl App {
                 #[cfg(target_os = "windows")]
                 let policy_is_workspace_write_or_ro = matches!(
                     &policy,
-                    adam_agent::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | adam_agent::protocol::SandboxPolicy::ReadOnly
+                    lha_agent::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                        | lha_agent::protocol::SandboxPolicy::ReadOnly
                 );
 
                 if let Err(err) = self.config.sandbox_policy.set(policy.clone()) {
@@ -3299,7 +3297,7 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 #[cfg(target_os = "windows")]
-                if !matches!(&policy, adam_agent::protocol::SandboxPolicy::ReadOnly)
+                if !matches!(&policy, lha_agent::protocol::SandboxPolicy::ReadOnly)
                     || WindowsSandboxLevel::from_config(&self.config)
                         != WindowsSandboxLevel::Disabled
                 {
@@ -3332,7 +3330,7 @@ impl App {
                         let env_map: std::collections::HashMap<String, String> =
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
-                        let logs_base_dir = self.config.adam_home.clone();
+                        let logs_base_dir = self.config.lha_home.clone();
                         let sandbox_policy = self.config.sandbox_policy.get().clone();
                         Self::spawn_world_writable_scan(
                             cwd,
@@ -3361,7 +3359,7 @@ impl App {
                     .set_world_writable_warning_acknowledged(ack);
             }
             AppEvent::PersistFullAccessWarningAcknowledged => {
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.adam_home)
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.lha_home)
                     .set_hide_full_access_warning(true)
                     .apply()
                     .await
@@ -3376,7 +3374,7 @@ impl App {
                 }
             }
             AppEvent::PersistWorldWritableWarningAcknowledged => {
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.adam_home)
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.lha_home)
                     .set_hide_world_writable_warning(true)
                     .apply()
                     .await
@@ -3394,7 +3392,7 @@ impl App {
                 from_model,
                 to_model,
             } => {
-                if let Err(err) = ConfigEditsBuilder::new(&self.config.adam_home)
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.lha_home)
                     .record_model_migration_seen(from_model.as_str(), to_model.as_str())
                     .apply()
                     .await
@@ -3615,7 +3613,7 @@ impl App {
         (!model.starts_with("codex-auto-")).then(|| Self::reasoning_label(reasoning_effort))
     }
 
-    pub(crate) fn token_usage(&self) -> adam_agent::protocol::TokenUsage {
+    pub(crate) fn token_usage(&self) -> lha_agent::protocol::TokenUsage {
         self.chat_widget.token_usage()
     }
 
@@ -3637,7 +3635,7 @@ impl App {
         self.chat_widget.set_identity_mask(mask);
         self.chat_widget.sync_active_identity_to_runtime();
         if let Some(kind) = selected_kind {
-            match AdamStateStore::new(&self.config.adam_home).set_last_selected_identity(kind) {
+            match LHAStateStore::new(&self.config.lha_home).set_last_selected_identity(kind) {
                 Ok(()) => {
                     self.config.last_selected_identity = Some(kind);
                 }
@@ -3797,7 +3795,7 @@ impl App {
             path: path.clone(),
             enabled,
         }];
-        match ConfigEditsBuilder::new(&self.config.adam_home)
+        match ConfigEditsBuilder::new(&self.config.lha_home)
             .with_edits(edits)
             .apply()
             .await
@@ -3825,7 +3823,7 @@ impl App {
         let plan_completion_enabled = updates
             .iter()
             .any(|(feature, enabled)| *feature == Feature::PlanCompletion && *enabled);
-        let mut builder = ConfigEditsBuilder::new(&self.config.adam_home)
+        let mut builder = ConfigEditsBuilder::new(&self.config.lha_home)
             .with_profile(self.active_profile.as_deref());
         for (feature, enabled) in &updates {
             let feature_key = feature.key();
@@ -3874,7 +3872,7 @@ impl App {
                     self.chat_widget.add_info_message(
                         "YOLO plan completion was enabled.".to_string(),
                         Some(
-                            "Restart Adam TUI for this change to take effect in the current session."
+                            "Restart LHA TUI for this change to take effect in the current session."
                                 .to_string(),
                         ),
                     );
@@ -3912,7 +3910,7 @@ impl App {
         #[cfg(not(target_os = "windows"))]
         let windows_degraded_sandbox_enabled = false;
 
-        let show_elevate_sandbox_hint = adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+        let show_elevate_sandbox_hint = lha_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
             && windows_degraded_sandbox_enabled
             && presets.iter().any(|preset| preset.id == "auto");
 
@@ -3943,7 +3941,7 @@ impl App {
 
         let mut header = vec![
             "Update Model Permissions".bold().into(),
-            "Choose what Adam can do without approval.".dim().into(),
+            "Choose what LHA can do without approval.".dim().into(),
         ];
         if show_elevate_sandbox_hint {
             header.push("".into());
@@ -3984,9 +3982,9 @@ impl App {
             #[cfg(target_os = "windows")]
             {
                 if WindowsSandboxLevel::from_config(&self.config) == WindowsSandboxLevel::Disabled {
-                    if adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                        && adam_agent::windows_sandbox::sandbox_setup_is_complete(
-                            self.config.adam_home.as_path(),
+                    if lha_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                        && lha_agent::windows_sandbox::sandbox_setup_is_complete(
+                            self.config.lha_home.as_path(),
                         )
                     {
                         return ApprovalModeAction::EnableWindowsSandboxForAgentMode {
@@ -4029,7 +4027,7 @@ impl App {
         let header = vec![
             "Enable full access?".bold().into(),
             vec![
-                "When Adam runs with full access, it can edit any file on your computer and run commands with network, without your approval. ".into(),
+                "When LHA runs with full access, it can edit any file on your computer and run commands with network, without your approval. ".into(),
                 "Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior.".red(),
             ]
             .into(),
@@ -4154,7 +4152,7 @@ impl App {
     #[cfg(target_os = "windows")]
     fn open_windows_sandbox_enable_prompt_modal(&mut self, preset: ApprovalPreset) {
         self.chat_widget.dismiss_active_view();
-        if !adam_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED {
+        if !lha_agent::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED {
             let header = vec![
                 "Agent mode on Windows uses an experimental sandbox to limit network and filesystem access."
                     .bold()
@@ -4199,7 +4197,7 @@ impl App {
                 ChatWidget::preset_matches_current(current_approval, current_sandbox, preset)
             });
         self.otel_manager
-            .counter("adam.windows_sandbox.elevated_prompt_shown", 1, &[]);
+            .counter("lha.windows_sandbox.elevated_prompt_shown", 1, &[]);
 
         let stay_label = if stay_full_access {
             "Stay in Agent Full Access".to_string()
@@ -4233,7 +4231,7 @@ impl App {
                 disabled_reason: None,
                 action: ApprovalModeAction::BeginWindowsSandboxElevatedSetup {
                     preset,
-                    counter: Some("adam.windows_sandbox.elevated_prompt_accept"),
+                    counter: Some("lha.windows_sandbox.elevated_prompt_accept"),
                 },
             },
             ApprovalModeItem {
@@ -4243,7 +4241,7 @@ impl App {
                 disabled_reason: None,
                 action: ApprovalModeAction::StayInCurrentWindowsMode {
                     read_only_preset,
-                    counter: "adam.windows_sandbox.elevated_prompt_decline",
+                    counter: "lha.windows_sandbox.elevated_prompt_decline",
                 },
             },
         ];
@@ -4299,7 +4297,7 @@ impl App {
                 disabled_reason: None,
                 action: ApprovalModeAction::BeginWindowsSandboxElevatedSetup {
                     preset: preset.clone(),
-                    counter: Some("adam.windows_sandbox.fallback_retry_elevated"),
+                    counter: Some("lha.windows_sandbox.fallback_retry_elevated"),
                 },
             },
             ApprovalModeItem {
@@ -4310,7 +4308,7 @@ impl App {
                 action: ApprovalModeAction::EnableWindowsSandboxForAgentMode {
                     preset,
                     mode: WindowsSandboxEnableMode::Legacy,
-                    counter: Some("adam.windows_sandbox.fallback_use_legacy"),
+                    counter: Some("lha.windows_sandbox.fallback_use_legacy"),
                 },
             },
             ApprovalModeItem {
@@ -4320,7 +4318,7 @@ impl App {
                 disabled_reason: None,
                 action: ApprovalModeAction::StayInCurrentWindowsMode {
                     read_only_preset,
-                    counter: "adam.windows_sandbox.fallback_stay_current",
+                    counter: "lha.windows_sandbox.fallback_stay_current",
                 },
             },
         ];
@@ -4462,7 +4460,7 @@ impl App {
         self.provider_config_modal = Some(ProviderConfigModalState {
             mode,
             modal: ProviderConfigModal::new(
-                self.config.adam_home.clone(),
+                self.config.lha_home.clone(),
                 self.app_event_tx.clone(),
                 self.chat_widget.frame_requester(),
             ),
@@ -4498,7 +4496,7 @@ impl App {
             Err(external_editor::EditorError::MissingEditor) => {
                 self.chat_widget
                     .add_to_history(history_cell::new_error_event(
-                        "Cannot open external editor: set $VISUAL or $EDITOR before starting Adam."
+                        "Cannot open external editor: set $VISUAL or $EDITOR before starting LHA."
                             .to_string(),
                     ));
                 self.reset_external_editor_state(tui);
@@ -4637,11 +4635,11 @@ impl App {
         cwd: PathBuf,
         env_map: std::collections::HashMap<String, String>,
         logs_base_dir: PathBuf,
-        sandbox_policy: adam_agent::protocol::SandboxPolicy,
+        sandbox_policy: lha_agent::protocol::SandboxPolicy,
         tx: AppEventSender,
     ) {
         tokio::task::spawn_blocking(move || {
-            let result = adam_windows_sandbox::apply_world_writable_scan_and_denies(
+            let result = lha_windows_sandbox::apply_world_writable_scan_and_denies(
                 &logs_base_dir,
                 &cwd,
                 &env_map,
@@ -4678,36 +4676,36 @@ mod tests {
     use crate::provider_config::ApiProviderDialect;
     use crate::provider_config::CustomProviderConfig;
     use crate::provider_config::persist_custom_provider_files;
-    use adam_agent::AuthManager;
-    use adam_agent::CodexAuth;
-    use adam_agent::ThreadManager;
-    use adam_agent::config::CONFIG_TOML_FILE;
-    use adam_agent::config::ConfigBuilder;
-    use adam_agent::config::ConfigOverrides;
-    use adam_agent::config::models_json::ModelsDialect;
-    use adam_agent::config::models_json::ModelsEndpoint;
-    use adam_agent::config::models_json::ModelsJson;
-    use adam_agent::config::types::McpServerConfig;
-    use adam_agent::config::types::McpServerTransportConfig;
+    use lha_agent::AuthManager;
+    use lha_agent::CodexAuth;
+    use lha_agent::ThreadManager;
+    use lha_agent::config::CONFIG_TOML_FILE;
+    use lha_agent::config::ConfigBuilder;
+    use lha_agent::config::ConfigOverrides;
+    use lha_agent::config::models_json::ModelsDialect;
+    use lha_agent::config::models_json::ModelsEndpoint;
+    use lha_agent::config::models_json::ModelsJson;
+    use lha_agent::config::types::McpServerConfig;
+    use lha_agent::config::types::McpServerTransportConfig;
 
-    use adam_agent::features::Feature;
-    use adam_agent::models_manager::manager::ModelsManager;
-    use adam_agent::protocol::AskForApproval;
-    use adam_agent::protocol::Event;
-    use adam_agent::protocol::EventMsg;
-    use adam_agent::protocol::McpListToolsResponseEvent;
-    use adam_agent::protocol::ReviewRequest;
-    use adam_agent::protocol::ReviewTarget;
-    use adam_agent::protocol::SandboxPolicy;
-    use adam_agent::protocol::SessionConfiguredEvent;
-    use adam_agent::protocol::SessionSource;
-    use adam_agent::protocol::ThreadRolledBackEvent;
-    use adam_otel::OtelManager;
-    use adam_protocol::ThreadId;
-    use adam_protocol::config_types::IdentityKind;
-    use adam_protocol::config_types::TrustLevel;
-    use adam_protocol::user_input::TextElement;
     use insta::assert_snapshot;
+    use lha_agent::features::Feature;
+    use lha_agent::models_manager::manager::ModelsManager;
+    use lha_agent::protocol::AskForApproval;
+    use lha_agent::protocol::Event;
+    use lha_agent::protocol::EventMsg;
+    use lha_agent::protocol::McpListToolsResponseEvent;
+    use lha_agent::protocol::ReviewRequest;
+    use lha_agent::protocol::ReviewTarget;
+    use lha_agent::protocol::SandboxPolicy;
+    use lha_agent::protocol::SessionConfiguredEvent;
+    use lha_agent::protocol::SessionSource;
+    use lha_agent::protocol::ThreadRolledBackEvent;
+    use lha_otel::OtelManager;
+    use lha_protocol::ThreadId;
+    use lha_protocol::config_types::IdentityKind;
+    use lha_protocol::config_types::TrustLevel;
+    use lha_protocol::user_input::TextElement;
     use mcp_types::Tool;
     use mcp_types::ToolInputSchema;
     use pretty_assertions::assert_eq;
@@ -5023,7 +5021,7 @@ mod tests {
         app.provider_config_modal = Some(ProviderConfigModalState {
             mode: ProviderConfigModalMode::Startup,
             modal: ProviderConfigModal::new(
-                app.config.adam_home.clone(),
+                app.config.lha_home.clone(),
                 app.app_event_tx.clone(),
                 tui::FrameRequester::test_dummy(),
             ),
@@ -5371,7 +5369,7 @@ mod tests {
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
-            feedback: adam_feedback::CodexFeedback::new(),
+            feedback: lha_feedback::CodexFeedback::new(),
             pending_update_action: None,
             suppressed_shutdown_complete_threads: HashSet::new(),
             windows_sandbox: WindowsSandboxState::default(),
@@ -5442,7 +5440,7 @@ mod tests {
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
                 backtrack: BacktrackState::default(),
                 backtrack_render_pending: false,
-                feedback: adam_feedback::CodexFeedback::new(),
+                feedback: lha_feedback::CodexFeedback::new(),
                 pending_update_action: None,
                 suppressed_shutdown_complete_threads: HashSet::new(),
                 windows_sandbox: WindowsSandboxState::default(),
@@ -5596,11 +5594,11 @@ mod tests {
 
     #[tokio::test]
     async fn project_trust_rebuilds_full_config_for_deferred_startup() -> std::io::Result<()> {
-        let adam_home = tempdir()?;
+        let lha_home = tempdir()?;
         let workspace = tempdir()?;
         let workspace_key = workspace.path().to_string_lossy().replace('\\', "\\\\");
         std::fs::write(
-            adam_home.path().join(CONFIG_TOML_FILE),
+            lha_home.path().join(CONFIG_TOML_FILE),
             format!(
                 r#"
 profile = "saved"
@@ -5616,7 +5614,7 @@ trust_level = "untrusted"
 "#,
             ),
         )?;
-        let project_config_dir = workspace.path().join(".adam");
+        let project_config_dir = workspace.path().join(".lha");
         std::fs::create_dir_all(&project_config_dir)?;
         std::fs::write(
             project_config_dir.join(CONFIG_TOML_FILE),
@@ -5628,7 +5626,7 @@ show_raw_agent_reasoning = true
         )?;
 
         let initial_config = ConfigBuilder::default()
-            .adam_home(adam_home.path().to_path_buf())
+            .lha_home(lha_home.path().to_path_buf())
             .provider_config_required(false)
             .harness_overrides(ConfigOverrides {
                 cwd: Some(workspace.path().to_path_buf()),
@@ -5651,7 +5649,7 @@ show_raw_agent_reasoning = true
             CodexAuth::from_api_key("Test API Key"),
             initial_config.model_provider_id.as_str(),
             initial_config.model_provider.clone(),
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         ));
         let mut app = App {
             server: server.clone(),
@@ -5678,7 +5676,7 @@ show_raw_agent_reasoning = true
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
-            feedback: adam_feedback::CodexFeedback::new(),
+            feedback: lha_feedback::CodexFeedback::new(),
             pending_update_action: None,
             suppressed_shutdown_complete_threads: HashSet::new(),
             windows_sandbox: WindowsSandboxState::default(),
@@ -5711,7 +5709,7 @@ show_raw_agent_reasoning = true
             deferred_startup_continuation: Some(DeferredStartupContinuation::StartFresh),
         };
 
-        set_project_trust_level(adam_home.path(), workspace.path(), TrustLevel::Trusted)
+        set_project_trust_level(lha_home.path(), workspace.path(), TrustLevel::Trusted)
             .expect("set project trusted");
         let rebuilt = app
             .rebuild_config_for_cwd(workspace.path().to_path_buf())
@@ -5729,7 +5727,7 @@ show_raw_agent_reasoning = true
             CodexAuth::from_api_key("Test API Key"),
             rebuilt.model_provider_id.as_str(),
             rebuilt.model_provider.clone(),
-            adam_home.path().to_path_buf(),
+            lha_home.path().to_path_buf(),
         ));
         app.replace_chat_after_project_trust(
             rebuilt,
@@ -5821,11 +5819,11 @@ show_raw_agent_reasoning = true
             model: "gpt-test".to_string(),
             model_context_window: None,
         };
-        persist_provider_fixture(&app.config.adam_home, &saved);
+        persist_provider_fixture(&app.config.lha_home, &saved);
         app.provider_config_modal = Some(ProviderConfigModalState {
             mode: ProviderConfigModalMode::Startup,
             modal: ProviderConfigModal::new(
-                app.config.adam_home.clone(),
+                app.config.lha_home.clone(),
                 app.app_event_tx.clone(),
                 tui::FrameRequester::test_dummy(),
             ),
@@ -5843,16 +5841,16 @@ show_raw_agent_reasoning = true
         assert!(app.deferred_startup_continuation.is_some());
     }
 
-    fn persist_provider_fixture(adam_home: &Path, config: &CustomProviderConfig) {
-        persist_custom_provider_files(adam_home, config).expect("persist provider fixture");
+    fn persist_provider_fixture(lha_home: &Path, config: &CustomProviderConfig) {
+        persist_custom_provider_files(lha_home, config).expect("persist provider fixture");
     }
 
-    fn persist_selected_model_fixture(adam_home: &Path, provider_id: &str, model: &str) {
-        persist_selected_model_with_effort_fixture(adam_home, provider_id, model, None);
+    fn persist_selected_model_fixture(lha_home: &Path, provider_id: &str, model: &str) {
+        persist_selected_model_with_effort_fixture(lha_home, provider_id, model, None);
     }
 
     fn persist_selected_model_with_effort_fixture(
-        adam_home: &Path,
+        lha_home: &Path,
         provider_id: &str,
         model: &str,
         effort: Option<ReasoningEffortConfig>,
@@ -5862,18 +5860,18 @@ show_raw_agent_reasoning = true
         } else {
             ModelRef::new(provider_id, "main", model)
         };
-        AdamStateStore::new(adam_home)
+        LHAStateStore::new(lha_home)
             .set_last_selected_model(&model_ref, effort, None)
             .expect("persist state fixture");
     }
 
     fn persist_main_provider_fixture(
-        adam_home: &Path,
+        lha_home: &Path,
         provider_id: &str,
         model: &str,
         model_context_window: Option<i64>,
     ) {
-        let mut models_json = ModelsJson::load_from_adam_home(adam_home).expect("load models");
+        let mut models_json = ModelsJson::load_from_lha_home(lha_home).expect("load models");
         let provider = models_json
             .providers
             .entry(provider_id.to_string())
@@ -5903,19 +5901,17 @@ show_raw_agent_reasoning = true
             .entry(model.to_string())
             .or_default()
             .context_window = model_context_window;
-        models_json
-            .save_to_adam_home(adam_home)
-            .expect("save models");
+        models_json.save_to_lha_home(lha_home).expect("save models");
     }
 
-    fn write_profile_config(adam_home: &Path, contents: &str) {
-        std::fs::write(adam_home.join("config.toml"), contents).expect("write config");
+    fn write_profile_config(lha_home: &Path, contents: &str) {
+        std::fs::write(lha_home.join("config.toml"), contents).expect("write config");
     }
 
-    fn persist_provider_mapping_fixture(adam_home: &Path) {
-        persist_main_provider_fixture(adam_home, "provider_a", "model-a", None);
-        persist_main_provider_fixture(adam_home, "provider_b", "model-b", Some(64_000));
-        persist_selected_model_fixture(adam_home, "provider_a", "model-a");
+    fn persist_provider_mapping_fixture(lha_home: &Path) {
+        persist_main_provider_fixture(lha_home, "provider_a", "model-a", None);
+        persist_main_provider_fixture(lha_home, "provider_b", "model-b", Some(64_000));
+        persist_selected_model_fixture(lha_home, "provider_a", "model-a");
     }
 
     fn test_otel_manager(config: &Config, model: &str) -> OtelManager {
@@ -5934,7 +5930,7 @@ show_raw_agent_reasoning = true
     }
 
     fn all_model_presets() -> Vec<ModelPreset> {
-        adam_agent::models_manager::model_presets::all_model_presets().clone()
+        lha_agent::models_manager::model_presets::all_model_presets().clone()
     }
 
     #[tokio::test]
@@ -5972,9 +5968,8 @@ show_raw_agent_reasoning = true
         let history = drain_insert_history_text(&mut rx);
         assert!(history.contains("YOLO plan completion was enabled."));
         assert!(
-            history.contains(
-                "Restart Adam TUI for this change to take effect in the current session."
-            )
+            history
+                .contains("Restart LHA TUI for this change to take effect in the current session.")
         );
     }
 
@@ -5989,9 +5984,8 @@ show_raw_agent_reasoning = true
         let history = drain_insert_history_text(&mut rx);
         assert!(!history.contains("YOLO plan completion was enabled."));
         assert!(
-            !history.contains(
-                "Restart Adam TUI for this change to take effect in the current session."
-            )
+            !history
+                .contains("Restart LHA TUI for this change to take effect in the current session.")
         );
     }
 
@@ -6006,9 +6000,8 @@ show_raw_agent_reasoning = true
         let history = drain_insert_history_text(&mut rx);
         assert!(!history.contains("YOLO plan completion was enabled."));
         assert!(
-            !history.contains(
-                "Restart Adam TUI for this change to take effect in the current session."
-            )
+            !history
+                .contains("Restart LHA TUI for this change to take effect in the current session.")
         );
     }
 
@@ -6240,24 +6233,24 @@ show_raw_agent_reasoning = true
             .join("\n")
     }
 
-    fn test_skill(name: &str) -> adam_agent::protocol::SkillMetadata {
-        adam_agent::protocol::SkillMetadata {
+    fn test_skill(name: &str) -> lha_agent::protocol::SkillMetadata {
+        lha_agent::protocol::SkillMetadata {
             name: name.to_string(),
             description: format!("Description for {name}"),
             short_description: None,
             interface: None,
             dependencies: None,
             path: PathBuf::from(format!("/tmp/skills/{name}.toml")),
-            scope: adam_agent::protocol::SkillScope::User,
+            scope: lha_agent::protocol::SkillScope::User,
             enabled: true,
         }
     }
 
-    fn list_skills_event(cwd: PathBuf, skills: Vec<adam_agent::protocol::SkillMetadata>) -> Event {
+    fn list_skills_event(cwd: PathBuf, skills: Vec<lha_agent::protocol::SkillMetadata>) -> Event {
         Event {
             id: String::new(),
             msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent {
-                skills: vec![adam_agent::protocol::SkillsListEntry {
+                skills: vec![lha_agent::protocol::SkillsListEntry {
                     cwd,
                     skills,
                     errors: Vec::new(),
@@ -6271,16 +6264,16 @@ show_raw_agent_reasoning = true
         let mut app = make_test_app().await;
         app.chat_widget
             .set_skills_from_response(&ListSkillsResponseEvent {
-                skills: vec![adam_agent::protocol::SkillsListEntry {
+                skills: vec![lha_agent::protocol::SkillsListEntry {
                     cwd: app.config.cwd.clone(),
-                    skills: vec![adam_agent::protocol::SkillMetadata {
+                    skills: vec![lha_agent::protocol::SkillMetadata {
                         name: "repo_scout".to_string(),
                         description: "Summarize the repo layout".to_string(),
                         short_description: None,
                         interface: None,
                         dependencies: None,
                         path: PathBuf::from("/tmp/skills/repo_scout.toml"),
-                        scope: adam_agent::protocol::SkillScope::User,
+                        scope: lha_agent::protocol::SkillScope::User,
                         enabled: true,
                     }],
                     errors: Vec::new(),
@@ -6336,16 +6329,16 @@ show_raw_agent_reasoning = true
         app.handle_codex_event_now(Event {
             id: String::new(),
             msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent {
-                skills: vec![adam_agent::protocol::SkillsListEntry {
+                skills: vec![lha_agent::protocol::SkillsListEntry {
                     cwd: app.config.cwd.clone(),
-                    skills: vec![adam_agent::protocol::SkillMetadata {
+                    skills: vec![lha_agent::protocol::SkillMetadata {
                         name: "repo_scout".to_string(),
                         description: "Summarize the repo layout".to_string(),
                         short_description: None,
                         interface: None,
                         dependencies: None,
                         path: PathBuf::from("/tmp/skills/repo_scout.toml"),
-                        scope: adam_agent::protocol::SkillScope::User,
+                        scope: lha_agent::protocol::SkillScope::User,
                         enabled: true,
                     }],
                     errors: Vec::new(),
@@ -6545,7 +6538,7 @@ show_raw_agent_reasoning = true
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         app.chat_widget
             .set_skills_from_response(&ListSkillsResponseEvent {
-                skills: vec![adam_agent::protocol::SkillsListEntry {
+                skills: vec![lha_agent::protocol::SkillsListEntry {
                     cwd: app.config.cwd.clone(),
                     skills: Vec::new(),
                     errors: Vec::new(),
@@ -6577,7 +6570,7 @@ show_raw_agent_reasoning = true
         app.handle_codex_event_now(Event {
             id: String::new(),
             msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent {
-                skills: vec![adam_agent::protocol::SkillsListEntry {
+                skills: vec![lha_agent::protocol::SkillsListEntry {
                     cwd: app.config.cwd.clone(),
                     skills: Vec::new(),
                     errors: Vec::new(),
@@ -6598,16 +6591,16 @@ show_raw_agent_reasoning = true
         let mut app = make_test_app().await;
         app.chat_widget
             .set_skills_from_response(&ListSkillsResponseEvent {
-                skills: vec![adam_agent::protocol::SkillsListEntry {
+                skills: vec![lha_agent::protocol::SkillsListEntry {
                     cwd: app.config.cwd.clone(),
                     skills: vec![test_skill("repo_scout")],
                     errors: Vec::new(),
                 }],
             });
-        let adam_home = tempdir().expect("temp adam home");
-        let not_a_dir = adam_home.path().join("not-a-dir");
+        let lha_home = tempdir().expect("temp lha home");
+        let not_a_dir = lha_home.path().join("not-a-dir");
         std::fs::write(&not_a_dir, "not a directory").expect("write file");
-        app.config.adam_home = not_a_dir;
+        app.config.lha_home = not_a_dir;
 
         let result = app
             .set_skill_enabled(PathBuf::from("/tmp/skills/repo_scout.toml"), false)
@@ -6759,9 +6752,9 @@ show_raw_agent_reasoning = true
 
     #[tokio::test]
     async fn model_migration_prompt_shows_for_hidden_model() {
-        let adam_home = tempdir().expect("temp codex home");
+        let lha_home = tempdir().expect("temp codex home");
         let config = ConfigBuilder::default()
-            .adam_home(adam_home.path().to_path_buf())
+            .lha_home(lha_home.path().to_path_buf())
             .build()
             .await
             .expect("config");
@@ -7013,7 +7006,7 @@ show_raw_agent_reasoning = true
         );
         assert_eq!(
             summary.resume_command,
-            Some("adam resume 123e4567-e89b-12d3-a456-426614174000".to_string())
+            Some("lha resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
     }
 
@@ -7031,7 +7024,7 @@ show_raw_agent_reasoning = true
             .expect("summary");
         assert_eq!(
             summary.resume_command,
-            Some("adam resume my-session".to_string())
+            Some("lha resume my-session".to_string())
         );
     }
 
@@ -7054,11 +7047,11 @@ show_raw_agent_reasoning = true
             model: "gpt-other".to_string(),
             model_context_window: None,
         };
-        persist_provider_fixture(&app.config.adam_home, &existing);
-        persist_provider_fixture(&app.config.adam_home, &saved);
+        persist_provider_fixture(&app.config.lha_home, &existing);
+        persist_provider_fixture(&app.config.lha_home, &saved);
 
         app.config = ConfigBuilder::default()
-            .adam_home(app.config.adam_home.clone())
+            .lha_home(app.config.lha_home.clone())
             .build()
             .await
             .expect("reload config");
@@ -7087,7 +7080,7 @@ show_raw_agent_reasoning = true
         );
 
         assert_eq!(
-            AdamStateStore::new(&app.config.adam_home)
+            LHAStateStore::new(&app.config.lha_home)
                 .load()
                 .expect("state")
                 .last_selected_model
@@ -7108,7 +7101,7 @@ show_raw_agent_reasoning = true
             model: "gpt-test".to_string(),
             model_context_window: None,
         };
-        persist_provider_fixture(&app.config.adam_home, &saved);
+        persist_provider_fixture(&app.config.lha_home, &saved);
 
         app.handle_custom_provider_configured(None, saved).await;
 
@@ -7125,7 +7118,7 @@ show_raw_agent_reasoning = true
         );
 
         assert_eq!(
-            AdamStateStore::new(&app.config.adam_home)
+            LHAStateStore::new(&app.config.lha_home)
                 .load()
                 .expect("state")
                 .last_selected_model
@@ -7146,7 +7139,7 @@ show_raw_agent_reasoning = true
             model: "gpt-test".to_string(),
             model_context_window: Some(128_000),
         };
-        persist_provider_fixture(&app.config.adam_home, &saved);
+        persist_provider_fixture(&app.config.lha_home, &saved);
 
         app.handle_custom_provider_configured(None, saved).await;
 
@@ -7179,8 +7172,8 @@ show_raw_agent_reasoning = true
             model: "gpt-test".to_string(),
             model_context_window: None,
         };
-        persist_provider_fixture(&app.config.adam_home, &initial);
-        persist_provider_fixture(&app.config.adam_home, &saved);
+        persist_provider_fixture(&app.config.lha_home, &initial);
+        persist_provider_fixture(&app.config.lha_home, &saved);
 
         app.handle_custom_provider_configured(None, saved).await;
 
@@ -7209,8 +7202,8 @@ show_raw_agent_reasoning = true
             model: "gpt-other".to_string(),
             model_context_window: None,
         };
-        persist_provider_fixture(&app.config.adam_home, &initial);
-        persist_provider_fixture(&app.config.adam_home, &saved);
+        persist_provider_fixture(&app.config.lha_home, &initial);
+        persist_provider_fixture(&app.config.lha_home, &saved);
 
         app.handle_custom_provider_configured(None, saved).await;
 
@@ -7241,7 +7234,7 @@ show_raw_agent_reasoning = true
             model: "gpt-test".to_string(),
             model_context_window: None,
         };
-        persist_provider_fixture(&app.config.adam_home, &saved);
+        persist_provider_fixture(&app.config.lha_home, &saved);
 
         app.handle_custom_provider_configured(None, saved).await;
 
@@ -7258,9 +7251,9 @@ show_raw_agent_reasoning = true
     #[tokio::test]
     async fn persist_model_selection_switches_runtime_provider_from_models_json() {
         let mut app = make_test_app().await;
-        persist_provider_mapping_fixture(&app.config.adam_home);
+        persist_provider_mapping_fixture(&app.config.lha_home);
         write_profile_config(
-            &app.config.adam_home,
+            &app.config.lha_home,
             r#"profile = "saved"
 
 [profiles.saved]
@@ -7268,7 +7261,7 @@ show_raw_agent_reasoning = true
         );
 
         app.config = ConfigBuilder::default()
-            .adam_home(app.config.adam_home.clone())
+            .lha_home(app.config.lha_home.clone())
             .build()
             .await
             .expect("reload config");
@@ -7309,7 +7302,7 @@ show_raw_agent_reasoning = true
             Some(60_800)
         );
 
-        let state = AdamStateStore::new(&app.config.adam_home)
+        let state = LHAStateStore::new(&app.config.lha_home)
             .load()
             .expect("state");
         assert_eq!(
@@ -7328,9 +7321,9 @@ show_raw_agent_reasoning = true
     #[tokio::test]
     async fn persist_model_selection_reloads_context_limits_after_state_save() {
         let mut app = make_test_app().await;
-        persist_provider_mapping_fixture(&app.config.adam_home);
+        persist_provider_mapping_fixture(&app.config.lha_home);
         write_profile_config(
-            &app.config.adam_home,
+            &app.config.lha_home,
             r#"profile = "saved"
 
 [profiles.saved]
@@ -7338,7 +7331,7 @@ show_raw_agent_reasoning = true
         );
 
         app.config = ConfigBuilder::default()
-            .adam_home(app.config.adam_home.clone())
+            .lha_home(app.config.lha_home.clone())
             .build()
             .await
             .expect("reload config");
@@ -7379,7 +7372,7 @@ show_raw_agent_reasoning = true
             Some(60_800)
         );
 
-        let state = AdamStateStore::new(&app.config.adam_home)
+        let state = LHAStateStore::new(&app.config.lha_home)
             .load()
             .expect("state");
         assert_eq!(
@@ -7398,15 +7391,15 @@ show_raw_agent_reasoning = true
     #[tokio::test]
     async fn persist_model_selection_clears_reasoning_effort_when_none_passed() {
         let mut app = make_test_app().await;
-        persist_provider_mapping_fixture(&app.config.adam_home);
+        persist_provider_mapping_fixture(&app.config.lha_home);
         persist_selected_model_with_effort_fixture(
-            &app.config.adam_home,
+            &app.config.lha_home,
             "provider_a",
             "model-a",
             Some(ReasoningEffortConfig::High),
         );
         write_profile_config(
-            &app.config.adam_home,
+            &app.config.lha_home,
             r#"profile = "saved"
 
 [profiles.saved]
@@ -7414,7 +7407,7 @@ show_raw_agent_reasoning = true
         );
 
         app.config = ConfigBuilder::default()
-            .adam_home(app.config.adam_home.clone())
+            .lha_home(app.config.lha_home.clone())
             .build()
             .await
             .expect("reload config");
@@ -7437,7 +7430,7 @@ show_raw_agent_reasoning = true
         assert_eq!(app.chat_widget.current_model(), "model-b");
         assert_eq!(app.chat_widget.current_reasoning_effort(), None);
 
-        let state = AdamStateStore::new(&app.config.adam_home)
+        let state = LHAStateStore::new(&app.config.lha_home)
             .load()
             .expect("state");
         assert_eq!(
@@ -7453,12 +7446,12 @@ show_raw_agent_reasoning = true
     #[tokio::test]
     async fn persist_model_selection_rejects_ambiguous_provider_mapping() {
         let mut app = make_test_app().await;
-        persist_main_provider_fixture(&app.config.adam_home, "provider_a", "shared-model", None);
-        persist_main_provider_fixture(&app.config.adam_home, "provider_b", "shared-model", None);
-        persist_selected_model_fixture(&app.config.adam_home, "provider_a", "model-a");
+        persist_main_provider_fixture(&app.config.lha_home, "provider_a", "shared-model", None);
+        persist_main_provider_fixture(&app.config.lha_home, "provider_b", "shared-model", None);
+        persist_selected_model_fixture(&app.config.lha_home, "provider_a", "model-a");
 
         app.config = ConfigBuilder::default()
-            .adam_home(app.config.adam_home.clone())
+            .lha_home(app.config.lha_home.clone())
             .build()
             .await
             .expect("reload config");
@@ -7482,12 +7475,12 @@ show_raw_agent_reasoning = true
     #[tokio::test]
     async fn persist_model_selection_uses_explicit_provider_for_ambiguous_model() {
         let mut app = make_test_app().await;
-        persist_main_provider_fixture(&app.config.adam_home, "provider_a", "shared-model", None);
-        persist_main_provider_fixture(&app.config.adam_home, "provider_b", "shared-model", None);
-        persist_selected_model_fixture(&app.config.adam_home, "provider_a", "model-a");
+        persist_main_provider_fixture(&app.config.lha_home, "provider_a", "shared-model", None);
+        persist_main_provider_fixture(&app.config.lha_home, "provider_b", "shared-model", None);
+        persist_selected_model_fixture(&app.config.lha_home, "provider_a", "model-a");
 
         app.config = ConfigBuilder::default()
-            .adam_home(app.config.adam_home.clone())
+            .lha_home(app.config.lha_home.clone())
             .build()
             .await
             .expect("reload config");
@@ -7512,11 +7505,11 @@ show_raw_agent_reasoning = true
     #[tokio::test]
     async fn persist_model_selection_uses_explicit_openai_provider_for_builtin_same_slug() {
         let mut app = make_test_app().await;
-        persist_main_provider_fixture(&app.config.adam_home, "provider_a", "gpt-5.2", None);
-        persist_selected_model_fixture(&app.config.adam_home, "provider_a", "gpt-5.2");
+        persist_main_provider_fixture(&app.config.lha_home, "provider_a", "gpt-5.2", None);
+        persist_selected_model_fixture(&app.config.lha_home, "provider_a", "gpt-5.2");
 
         app.config = ConfigBuilder::default()
-            .adam_home(app.config.adam_home.clone())
+            .lha_home(app.config.lha_home.clone())
             .build()
             .await
             .expect("reload config");
@@ -7537,10 +7530,10 @@ show_raw_agent_reasoning = true
     #[tokio::test]
     async fn persist_model_selection_switches_runtime_when_save_fails() {
         let mut app = make_test_app().await;
-        let config_path = app.config.adam_home.join("config.toml");
-        persist_provider_mapping_fixture(&app.config.adam_home);
+        let config_path = app.config.lha_home.join("config.toml");
+        persist_provider_mapping_fixture(&app.config.lha_home);
         write_profile_config(
-            &app.config.adam_home,
+            &app.config.lha_home,
             r#"profile = "saved"
 
 [profiles.saved]
@@ -7548,7 +7541,7 @@ show_raw_agent_reasoning = true
         );
 
         app.config = ConfigBuilder::default()
-            .adam_home(app.config.adam_home.clone())
+            .lha_home(app.config.lha_home.clone())
             .build()
             .await
             .expect("reload config");
@@ -7557,7 +7550,7 @@ show_raw_agent_reasoning = true
         app.chat_widget.sync_provider_config(&app.config, true);
         app.chat_widget.set_model("model-a");
         let provider_id = "provider_b".to_string();
-        app.config.adam_home = config_path;
+        app.config.lha_home = config_path;
 
         let err = app
             .persist_model_selection(

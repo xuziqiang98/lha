@@ -2,11 +2,11 @@
 
 use crate::update_action;
 use crate::update_action::UpdateAction;
-use adam_agent::config::Config;
-use adam_agent::default_client::create_client;
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
+use lha_agent::config::Config;
+use lha_agent::default_client::create_client;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::Path;
@@ -75,7 +75,7 @@ struct ReleaseInfo {
 }
 
 fn version_filepath(config: &Config) -> PathBuf {
-    config.adam_home.join(VERSION_FILENAME)
+    config.lha_home.join(VERSION_FILENAME)
 }
 
 fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
@@ -197,7 +197,7 @@ fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_agent::config::ConfigBuilder;
+    use lha_agent::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
@@ -249,9 +249,9 @@ mod tests {
 
     #[tokio::test]
     async fn update_notifications_are_suppressed_even_when_newer_version_is_cached() {
-        let adam_home = tempdir().expect("tempdir");
+        let lha_home = tempdir().expect("tempdir");
         let config = ConfigBuilder::default()
-            .adam_home(adam_home.path().to_path_buf())
+            .lha_home(lha_home.path().to_path_buf())
             .build()
             .await
             .expect("config");
@@ -261,7 +261,7 @@ mod tests {
             last_checked_at: Utc::now(),
             dismissed_version: None,
         };
-        let version_file = adam_home.path().join(VERSION_FILENAME);
+        let version_file = lha_home.path().join(VERSION_FILENAME);
         std::fs::write(
             &version_file,
             format!(

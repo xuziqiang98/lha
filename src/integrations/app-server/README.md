@@ -1,6 +1,6 @@
-# adam-app-server
+# lha-app-server
 
-`adam app-server` is the interface Adam uses to power rich interfaces such as the [Adam VS Code extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt).
+`lha app-server` is the interface LHA uses to power rich interfaces such as the [LHA VS Code extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt).
 
 ## Table of Contents
 
@@ -17,22 +17,22 @@
 
 ## Protocol
 
-Similar to [MCP](https://modelcontextprotocol.io/), `adam app-server` supports bidirectional communication, streaming JSONL over stdio. The protocol is JSON-RPC 2.0, though the `"jsonrpc":"2.0"` header is omitted.
+Similar to [MCP](https://modelcontextprotocol.io/), `lha app-server` supports bidirectional communication, streaming JSONL over stdio. The protocol is JSON-RPC 2.0, though the `"jsonrpc":"2.0"` header is omitted.
 
 ## Message Schema
 
-Currently, you can dump a TypeScript version of the schema using `adam app-server generate-ts`, or a JSON Schema bundle via `adam app-server generate-json-schema`. Each output is specific to the version of Adam you used to run the command, so the generated artifacts are guaranteed to match that version.
+Currently, you can dump a TypeScript version of the schema using `lha app-server generate-ts`, or a JSON Schema bundle via `lha app-server generate-json-schema`. Each output is specific to the version of LHA you used to run the command, so the generated artifacts are guaranteed to match that version.
 
 ```
-adam app-server generate-ts --out DIR
-adam app-server generate-json-schema --out DIR
+lha app-server generate-ts --out DIR
+lha app-server generate-json-schema --out DIR
 ```
 
 ## Core Primitives
 
-The API exposes three top level primitives representing an interaction between a user and Adam:
+The API exposes three top level primitives representing an interaction between a user and LHA:
 
-- **Thread**: A conversation between a user and the Adam agent. Each thread contains multiple turns.
+- **Thread**: A conversation between a user and the LHA agent. Each thread contains multiple turns.
 - **Turn**: One turn of the conversation, typically starting with a user message and finishing with an agent message. Each turn contains multiple items.
 - **Item**: Represents user inputs and agent outputs as part of the turn, persisted and used as the context for future conversations. Example items include user message, agent reasoning, agent message, shell command, file edit, etc.
 
@@ -40,7 +40,7 @@ Use the thread APIs to create, list, or archive conversations. Drive a conversat
 
 ## Lifecycle Overview
 
-- Initialize once: Immediately after launching the adam app-server process, send an `initialize` request with your client metadata, then emit an `initialized` notification. Any other request before this handshake gets rejected.
+- Initialize once: Immediately after launching the lha app-server process, send an `initialize` request with your client metadata, then emit an `initialized` notification. Any other request before this handshake gets rejected.
 - Start (or resume) a thread: Call `thread/start` to open a fresh conversation. The response returns the thread object and you’ll also get a `thread/started` notification. If you’re continuing an existing conversation, call `thread/resume` with its ID instead. If you want to branch from an existing conversation, call `thread/fork` to create a new thread id with copied history.
 - Begin a turn: To send user input, call `turn/start` with the target `threadId` and the user's input. Optional fields let you override model, cwd, sandbox policy, etc. This immediately returns the new turn object and triggers a `turn/started` notification.
 - Stream events: After `turn/start`, keep reading JSON-RPC notifications on stdout. You’ll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning notes).
@@ -50,11 +50,11 @@ Use the thread APIs to create, list, or archive conversations. Drive a conversat
 
 Clients must send a single `initialize` request before invoking any other method, then acknowledge with an `initialized` notification. The server returns the user agent string it will present to upstream services; subsequent requests issued before initialization receive a `"Not initialized"` error, and repeated `initialize` calls receive an `"Already initialized"` error.
 
-Applications building on top of `adam app-server` should identify themselves via the `clientInfo` parameter.
+Applications building on top of `lha app-server` should identify themselves via the `clientInfo` parameter.
 
 **Important**: `clientInfo.name` is used to identify the client for the OpenAI Compliance Logs Platform. If
-you are developing a new Adam integration that is intended for enterprise use, please contact us to get it
-added to a known clients list. For more context: https://chatgpt.com/admin/api-reference#tag/Logs:-Adam
+you are developing a new LHA integration that is intended for enterprise use, please contact us to get it
+added to a known clients list. For more context: https://chatgpt.com/admin/api-reference#tag/Logs:-LHA
 
 Example (from OpenAI's official VSCode extension):
 
@@ -64,8 +64,8 @@ Example (from OpenAI's official VSCode extension):
   "id": 0,
   "params": {
     "clientInfo": {
-      "name": "adam_vscode",
-      "title": "Adam VS Code Extension",
+      "name": "lha_vscode",
+      "title": "LHA VS Code Extension",
       "version": "0.1.0"
     }
   }
@@ -85,9 +85,9 @@ Example (from OpenAI's official VSCode extension):
 - `thread/name/set` — set or update a thread’s user-facing name; returns `{}` on success. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
-- `turn/start` — add user input to a thread and begin Adam generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
+- `turn/start` — add user input to a thread and begin LHA generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`. This does not terminate background terminals.
-- `review/start` — kick off Adam’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
+- `review/start` — kick off LHA’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `model/list` — list available models (with reasoning effort options).
 - `identity/list` — list available identity presets (experimental, no pagination).
@@ -98,7 +98,7 @@ Example (from OpenAI's official VSCode extension):
 - `tool/requestUserInput` — prompt the user with 1–3 short questions for a tool call and return their answers (experimental).
 - `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools, resources, resource templates, and auth status; supports cursor+limit pagination.
-- `feedback/upload` — persist a feedback bundle under `ADAM_HOME/feedback/` (classification + optional reason/logs and conversation_id); returns the tracking thread id and saved path.
+- `feedback/upload` — persist a feedback bundle under `LHA_HOME/feedback/` (classification + optional reason/logs and conversation_id); returns the tracking thread id and saved path.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `config/read` — fetch the effective config on disk after resolving config layering.
 - `config/value/write` — write a single config key/value to the user's config.toml on disk.
@@ -107,7 +107,7 @@ Example (from OpenAI's official VSCode extension):
 
 ### Example: Start or resume a thread
 
-Start a fresh thread when you need a new Adam conversation.
+Start a fresh thread when you need a new LHA conversation.
 
 ```json
 { "method": "thread/start", "id": 10, "params": {
@@ -238,7 +238,7 @@ Use `thread/unarchive` to move an archived rollout back into the sessions direct
 
 ### Example: Start a turn (send user input)
 
-Turns attach user input (text or images) to a thread and trigger Adam generation. The `input` field is a list of discriminated unions:
+Turns attach user input (text or images) to a thread and trigger LHA generation. The `input` field is a list of discriminated unions:
 
 - `{"type":"text","text":"Explain this diff"}`
 - `{"type":"image","url":"https://…png"}`
@@ -287,7 +287,7 @@ Invoke a skill explicitly by including `$<skill-name>` in the text input and add
     "threadId": "thr_123",
     "input": [
         { "type": "text", "text": "$skill-creator Add a new skill for triaging flaky CI and include step-by-step usage." },
-        { "type": "skill", "name": "skill-creator", "path": "/Users/me/.adam/skills/skill-creator/SKILL.md" }
+        { "type": "skill", "name": "skill-creator", "path": "/Users/me/.lha/skills/skill-creator/SKILL.md" }
     ]
 } }
 { "id": 33, "result": { "turn": {
@@ -342,10 +342,10 @@ Use `thread/backgroundTerminals/clean` to terminate all running background termi
 
 ### Example: Request a code review
 
-Use `review/start` to run Adam’s reviewer on the currently checked-out project. The request takes the thread id plus a `target` describing what should be reviewed:
+Use `review/start` to run LHA’s reviewer on the currently checked-out project. The request takes the thread id plus a `target` describing what should be reviewed:
 
 - `{"type":"uncommittedChanges"}` — staged, unstaged, and untracked files.
-- `{"type":"baseBranch","branch":"main"}` — diff against the provided branch’s upstream (see prompt for the exact `git merge-base`/`git diff` instructions Adam will run).
+- `{"type":"baseBranch","branch":"main"}` — diff against the provided branch’s upstream (see prompt for the exact `git merge-base`/`git diff` instructions LHA will run).
 - `{"type":"commit","sha":"abc1234","title":"Optional subject"}` — review a specific commit.
 - `{"type":"custom","instructions":"Free-form reviewer instructions"}` — fallback prompt equivalent to the legacy manual review request.
 - `delivery` (`"inline"` only, default `"inline"`) — where the review runs. Inline review runs as a new turn on the existing thread. The response’s `reviewThreadId` equals the original `threadId`, and no new `thread/started` notification is emitted. `"detached"` is no longer supported; use cli-backend review for process-isolated review runs.
@@ -371,7 +371,7 @@ Example request/response:
 } }
 ```
 
-Adam streams the usual `turn/started` notification followed by an `item/started`
+LHA streams the usual `turn/started` notification followed by an `item/started`
 with an `enteredReviewMode` item so clients can show progress:
 
 ```json
@@ -419,7 +419,7 @@ Run a standalone command (argv vector) in the server’s sandbox without creatin
 { "id": 32, "result": { "exitCode": 0, "stdout": "...", "stderr": "" } }
 ```
 
-- For clients that are already sandboxed externally, set `sandboxPolicy` to `{"type":"externalSandbox","networkAccess":"enabled"}` (or omit `networkAccess` to keep it restricted). Adam will not enforce its own sandbox in this mode; it tells the model it has full file-system access and passes the `networkAccess` state through `environment_context`.
+- For clients that are already sandboxed externally, set `sandboxPolicy` to `{"type":"externalSandbox","networkAccess":"enabled"}` (or omit `networkAccess` to keep it restricted). LHA will not enforce its own sandbox in this mode; it tells the model it has full file-system access and passes the `networkAccess` state through `environment_context`.
 
 Notes:
 
@@ -512,7 +512,7 @@ When an upstream HTTP status is available (for example, from the Responses API o
 
 ## Approvals
 
-Certain actions (shell commands or modifying files) may require explicit user approval depending on the user's config. When `turn/start` is used, the app-server drives an approval flow by sending a server-initiated JSON-RPC request to the client. The client must respond to tell Adam whether to proceed. UIs should present these requests inline with the active turn so users can review the proposed command or diff before choosing.
+Certain actions (shell commands or modifying files) may require explicit user approval depending on the user's config. When `turn/start` is used, the app-server drives an approval flow by sending a server-initiated JSON-RPC request to the client. The client must respond to tell LHA whether to proceed. UIs should present these requests inline with the active turn so users can review the proposed command or diff before choosing.
 
 - Requests include `threadId` and `turnId`—use them to scope UI state to the active conversation.
 - Respond with a single `{ "decision": "accept" | "decline" }` payload (plus optional `acceptSettings` on command executions). The server resumes or declines the work and ends the item with `item/completed`.
@@ -555,7 +555,7 @@ Invoke a skill by including `$<skill-name>` in the text input. Add a `skill` inp
       {
         "type": "skill",
         "name": "skill-creator",
-        "path": "/Users/me/.adam/skills/skill-creator/SKILL.md"
+        "path": "/Users/me/.lha/skills/skill-creator/SKILL.md"
       }
     ]
   }
@@ -583,11 +583,11 @@ Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, wi
         "skills": [
             {
               "name": "skill-creator",
-              "description": "Create or update a Adam skill",
+              "description": "Create or update a LHA skill",
               "enabled": true,
               "interface": {
                 "displayName": "Skill Creator",
-                "shortDescription": "Create or update a Adam skill",
+                "shortDescription": "Create or update a LHA skill",
                 "iconSmall": "icon.svg",
                 "iconLarge": "icon-large.svg",
                 "brandColor": "#111111",
@@ -607,7 +607,7 @@ To enable or disable a skill by path:
   "method": "skills/config/write",
   "id": 26,
   "params": {
-    "path": "/Users/me/.adam/skills/skill-creator/SKILL.md",
+    "path": "/Users/me/.lha/skills/skill-creator/SKILL.md",
     "enabled": false
   }
 }

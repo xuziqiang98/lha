@@ -39,16 +39,16 @@ use crate::state::RunningTask;
 use crate::state::SessionServices;
 use crate::state::TaskKind;
 use crate::state::TaskUsageSnapshot;
-use adam_llm::TurnEvent;
-use adam_llm::TurnRequest;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::models::BaseInstructions;
-use adam_protocol::models::ContentItem;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::protocol::RolloutItem;
-use adam_protocol::user_input::UserInput;
-use adam_state::GoalAccountingOutcome;
-use adam_state::PlanRunAccountingOutcome;
+use lha_llm::TurnEvent;
+use lha_llm::TurnRequest;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::models::BaseInstructions;
+use lha_protocol::models::ContentItem;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::protocol::RolloutItem;
+use lha_protocol::user_input::UserInput;
+use lha_state::GoalAccountingOutcome;
+use lha_state::PlanRunAccountingOutcome;
 use tracing::warn;
 
 pub(crate) use compact::CompactTask;
@@ -79,7 +79,7 @@ impl SessionTaskContext {
 
 /// Async task that drives a [`Session`] turn.
 ///
-/// Implementations encapsulate a specific Adam workflow (regular chat,
+/// Implementations encapsulate a specific LHA workflow (regular chat,
 /// reviews, ghost snapshots, etc.). Each task instance is owned by a
 /// [`Session`] and executed on a background Tokio task. The trait is
 /// intentionally small: implementers identify themselves via
@@ -308,7 +308,7 @@ impl Session {
     async fn emit_thread_goal_updated(
         &self,
         turn_context: &TurnContext,
-        goal: adam_state::ThreadGoal,
+        goal: lha_state::ThreadGoal,
     ) {
         self.send_event(
             turn_context,
@@ -335,7 +335,7 @@ impl Session {
     async fn emit_thread_plan_run_updated(
         &self,
         turn_context: &TurnContext,
-        plan_run: adam_state::ThreadPlanRun,
+        plan_run: lha_state::ThreadPlanRun,
     ) {
         self.send_event(
             turn_context,
@@ -351,7 +351,7 @@ impl Session {
     async fn pause_active_goal_for_interrupt(
         &self,
         turn_context: &TurnContext,
-    ) -> Option<adam_state::ThreadGoal> {
+    ) -> Option<lha_state::ThreadGoal> {
         if !self.enabled(Feature::Goals) || turn_context.identity.kind != IdentityKind::Programmer {
             return None;
         }
@@ -375,7 +375,7 @@ impl Session {
     async fn pause_active_plan_run_for_interrupt(
         &self,
         turn_context: &TurnContext,
-    ) -> Option<adam_state::ThreadPlanRun> {
+    ) -> Option<lha_state::ThreadPlanRun> {
         if !self.enabled(Feature::PlanCompletion)
             || turn_context.identity.kind != IdentityKind::Programmer
         {

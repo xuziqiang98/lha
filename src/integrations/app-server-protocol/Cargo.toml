@@ -1,11 +1,11 @@
 [package]
-name = "adam-app-server-protocol"
+name = "lha-app-server-protocol"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "adam_app_server_protocol"
+name = "lha_app_server_protocol"
 path = "src/lib.rs"
 
 [lints]
@@ -14,8 +14,8 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-adam-protocol = { workspace = true }
-adam-utils-absolute-path = { workspace = true }
+lha-protocol = { workspace = true }
+lha-utils-absolute-path = { workspace = true }
 mcp-types = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -27,7 +27,7 @@ uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]
 anyhow = { workspace = true }
-adam-utils-cargo-bin = { workspace = true }
+lha-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 similar = { workspace = true }
 tempfile = { workspace = true }

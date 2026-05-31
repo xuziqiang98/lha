@@ -1,13 +1,13 @@
-use adam_app_server_protocol::FeedbackUploadParams;
-use adam_app_server_protocol::FeedbackUploadResponse;
-use adam_app_server_protocol::JSONRPCError;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::ThreadResumeParams;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
+use lha_app_server_protocol::FeedbackUploadParams;
+use lha_app_server_protocol::FeedbackUploadResponse;
+use lha_app_server_protocol::JSONRPCError;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::ThreadResumeParams;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -18,10 +18,10 @@ const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn feedback_upload_persists_local_bundle() -> Result<()> {
-    let adam_home = TempDir::new()?;
-    let adam_home_path = adam_home.path().canonicalize()?;
+    let lha_home = TempDir::new()?;
+    let lha_home_path = lha_home.path().canonicalize()?;
     let thread_id = create_fake_rollout(
-        adam_home.path(),
+        lha_home.path(),
         "2025-02-01T10-00-00",
         "2025-02-01T10:00:00Z",
         "hello",
@@ -29,7 +29,7 @@ async fn feedback_upload_persists_local_bundle() -> Result<()> {
         None,
     )?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
@@ -63,13 +63,13 @@ async fn feedback_upload_persists_local_bundle() -> Result<()> {
     assert!(
         response
             .saved_path
-            .starts_with(adam_home_path.join("feedback"))
+            .starts_with(lha_home_path.join("feedback"))
     );
     assert!(response.saved_path.exists());
     assert!(response.saved_path.join("metadata.json").exists());
-    assert!(response.saved_path.join("adam-logs.log").exists());
+    assert!(response.saved_path.join("lha-logs.log").exists());
 
-    let rollout_file = rollout_path(adam_home.path(), "2025-02-01T10-00-00", &response.thread_id);
+    let rollout_file = rollout_path(lha_home.path(), "2025-02-01T10-00-00", &response.thread_id);
     let rollout_name = rollout_file
         .file_name()
         .expect("rollout file name should exist");
@@ -81,7 +81,7 @@ async fn feedback_upload_persists_local_bundle() -> Result<()> {
     assert_eq!(metadata["classification"], "bug");
     assert_eq!(metadata["reason"], "details");
     assert_eq!(metadata["includeLogs"], true);
-    assert_eq!(metadata["files"]["logs"], "adam-logs.log");
+    assert_eq!(metadata["files"]["logs"], "lha-logs.log");
     assert_eq!(
         metadata["files"]["rollout"],
         rollout_name.to_string_lossy().to_string()
@@ -92,13 +92,13 @@ async fn feedback_upload_persists_local_bundle() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn feedback_upload_respects_disabled_config() -> Result<()> {
-    let adam_home = TempDir::new()?;
+    let lha_home = TempDir::new()?;
     std::fs::write(
-        adam_home.path().join("config.toml"),
+        lha_home.path().join("config.toml"),
         "[feedback]\nenabled = false\n",
     )?;
 
-    let mut mcp = McpProcess::new(adam_home.path()).await?;
+    let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp

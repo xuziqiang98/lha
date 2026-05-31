@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use adam_utils_image::load_and_resize_to_fit;
+use lha_utils_image::load_and_resize_to_fit;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
 use serde::Deserialize;
@@ -16,16 +16,16 @@ use crate::protocol::NetworkAccess;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
 use crate::user_input::UserInput;
-use adam_execpolicy::Policy;
-pub use adam_llm_types::BASE_INSTRUCTIONS_DEFAULT;
-pub use adam_llm_types::BaseInstructions;
-pub use adam_llm_types::ContentItem;
-pub use adam_llm_types::ReasoningItemContent;
-pub use adam_llm_types::ReasoningItemReasoningSummary;
-pub use adam_llm_types::ToolResultContentItem;
-pub use adam_llm_types::ToolResultPayload;
-pub use adam_llm_types::TranscriptItem;
-use adam_utils_image::error::ImageProcessingError;
+use lha_execpolicy::Policy;
+pub use lha_llm_types::BASE_INSTRUCTIONS_DEFAULT;
+pub use lha_llm_types::BaseInstructions;
+pub use lha_llm_types::ContentItem;
+pub use lha_llm_types::ReasoningItemContent;
+pub use lha_llm_types::ReasoningItemReasoningSummary;
+pub use lha_llm_types::ToolResultContentItem;
+pub use lha_llm_types::ToolResultPayload;
+pub use lha_llm_types::TranscriptItem;
+use lha_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 
 /// Controls whether a command should use the session sandbox or bypass it.
@@ -344,7 +344,7 @@ fn local_image_error_placeholder(
 ) -> ContentItem {
     ContentItem::InputText {
         text: format!(
-            "Adam could not read the local image at `{}`: {}",
+            "LHA could not read the local image at `{}`: {}",
             path.display(),
             error
         ),
@@ -409,7 +409,7 @@ fn invalid_image_error_placeholder(
 fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> ContentItem {
     ContentItem::InputText {
         text: format!(
-            "Adam cannot attach image at `{}`: unsupported image format `{}`.",
+            "LHA cannot attach image at `{}`: unsupported image format `{}`.",
             path.display(),
             mime
         ),
@@ -610,16 +610,16 @@ pub struct ShellCommandToolCallParams {
     pub justification: Option<String>,
 }
 
-// (Moved event mapping logic into adam-agent to avoid coupling protocol to UI-facing events.)
+// (Moved event mapping logic into lha-agent to avoid coupling protocol to UI-facing events.)
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config_types::SandboxMode;
     use crate::protocol::AskForApproval;
-    use adam_execpolicy::Policy;
-    use adam_llm_types::TranscriptItem;
     use anyhow::Result;
+    use lha_execpolicy::Policy;
+    use lha_llm_types::TranscriptItem;
     use mcp_types::ImageContent;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
@@ -694,7 +694,7 @@ mod tests {
         exec_policy
             .add_prefix_rule(
                 &["git".to_string(), "pull".to_string()],
-                adam_execpolicy::Decision::Allow,
+                lha_execpolicy::Decision::Allow,
             )
             .expect("add rule");
         let instructions = DeveloperInstructions::from_permissions_with_network(
@@ -755,7 +755,7 @@ mod tests {
             exec_policy
                 .add_prefix_rule(
                     &[format!("tool-{i:03}"), "x".repeat(500)],
-                    adam_execpolicy::Decision::Allow,
+                    lha_execpolicy::Decision::Allow,
                 )
                 .expect("add rule");
         }
@@ -1011,7 +1011,7 @@ mod tests {
             TranscriptItem::Message { content, .. } => {
                 assert_eq!(content.len(), 1);
                 let expected = format!(
-                    "Adam cannot attach image at `{}`: unsupported image format `image/svg+xml`.",
+                    "LHA cannot attach image at `{}`: unsupported image format `image/svg+xml`.",
                     svg_path.display()
                 );
                 match &content[0] {

@@ -1,7 +1,7 @@
-use adam_protocol::config_types::IdentityMask;
+use lha_protocol::config_types::IdentityMask;
 
 pub(super) fn builtin_identity_presets() -> Vec<IdentityMask> {
-    adam_identity::builtin_identity_presets()
+    lha_identity::builtin_identity_presets()
 }
 
 #[cfg(any(test, feature = "test-support"))]

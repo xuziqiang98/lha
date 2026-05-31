@@ -843,7 +843,7 @@ mod tests {
             context_window_used_tokens: None,
             model_name: "gpt-5.4".to_string(),
             reasoning_effort: Some("high".to_string()),
-            cwd: "~/Workspace/adam".to_string(),
+            cwd: "~/Workspace/lha".to_string(),
         }
     }
 
@@ -1069,7 +1069,7 @@ mod tests {
         let model_style = span_style(&line, "gpt-5.4");
         let effort_style = span_style(&line, "high");
         let context_style = span_style(&line, "84% left");
-        let cwd_style = span_style(&line, "~/Workspace/adam");
+        let cwd_style = span_style(&line, "~/Workspace/lha");
 
         assert!(context_style.add_modifier.contains(Modifier::DIM));
         assert_eq!(model_style, context_style);

@@ -1,7 +1,7 @@
-use adam_protocol::config_types::SandboxMode;
-use adam_protocol::protocol::AskForApproval;
-use adam_protocol::protocol::SandboxPolicy;
-use adam_utils_absolute_path::AbsolutePathBuf;
+use lha_protocol::config_types::SandboxMode;
+use lha_protocol::protocol::AskForApproval;
+use lha_protocol::protocol::SandboxPolicy;
+use lha_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -79,7 +79,7 @@ pub struct McpServerRequirement {
     pub identity: McpServerIdentity,
 }
 
-/// Base config deserialized from /etc/adam/requirements.toml or MDM.
+/// Base config deserialized from /etc/lha/requirements.toml or MDM.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsToml {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
@@ -347,12 +347,12 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_execpolicy::Decision;
-    use adam_execpolicy::Evaluation;
-    use adam_execpolicy::RuleMatch;
-    use adam_protocol::protocol::NetworkAccess;
-    use adam_utils_absolute_path::AbsolutePathBuf;
     use anyhow::Result;
+    use lha_execpolicy::Decision;
+    use lha_execpolicy::Evaluation;
+    use lha_execpolicy::RuleMatch;
+    use lha_protocol::protocol::NetworkAccess;
+    use lha_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use toml::from_str;
 
@@ -499,9 +499,9 @@ mod tests {
         )?;
 
         let requirements_toml_file = if cfg!(windows) {
-            "C:\\etc\\adam\\requirements.toml"
+            "C:\\etc\\lha\\requirements.toml"
         } else {
-            "/etc/adam/requirements.toml"
+            "/etc/lha/requirements.toml"
         };
         let requirements_toml_file = AbsolutePathBuf::from_absolute_path(requirements_toml_file)?;
         let source_location = RequirementSource::SystemRequirementsToml {
@@ -750,7 +750,7 @@ mod tests {
         "#;
         let config: ConfigRequirementsToml = from_str(toml_str)?;
         let requirements_toml_file =
-            AbsolutePathBuf::from_absolute_path("/etc/adam/requirements.toml")?;
+            AbsolutePathBuf::from_absolute_path("/etc/lha/requirements.toml")?;
         let source_location = RequirementSource::SystemRequirementsToml {
             file: requirements_toml_file,
         };

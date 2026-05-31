@@ -50,14 +50,14 @@ pub(crate) struct ProviderConfigView {
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
     complete: bool,
-    adam_home: PathBuf,
+    lha_home: PathBuf,
     app_event_tx: AppEventSender,
     request_frame: FrameRequester,
 }
 
 impl ProviderConfigView {
     pub(crate) fn new(
-        adam_home: PathBuf,
+        lha_home: PathBuf,
         app_event_tx: AppEventSender,
         request_frame: FrameRequester,
     ) -> Self {
@@ -68,7 +68,7 @@ impl ProviderConfigView {
             textarea,
             textarea_state: RefCell::new(TextAreaState::default()),
             complete: false,
-            adam_home,
+            lha_home,
             app_event_tx,
             request_frame,
         }
@@ -103,11 +103,11 @@ impl ProviderConfigView {
         }
 
         let state = Arc::clone(&self.state);
-        let adam_home = self.adam_home.clone();
+        let lha_home = self.lha_home.clone();
         let app_event_tx = self.app_event_tx.clone();
         let request_frame = self.request_frame.clone();
         tokio::spawn(async move {
-            match persist_custom_provider_config(&adam_home, &config).await {
+            match persist_custom_provider_config(&lha_home, &config).await {
                 Ok(()) => {
                     app_event_tx.send(AppEvent::CustomProviderConfigured(config));
                 }
@@ -164,7 +164,7 @@ struct ProviderConfigLayout {
 
 const FOOTER_MIN_HEIGHT: u16 = 4;
 const INTRO_COPY: &str =
-    "This saves the provider to ~/.adam/models.json and selects the model for future sessions.";
+    "This saves the provider to ~/.lha/models.json and selects the model for future sessions.";
 
 fn read_state(state: &RwLock<ApiKeyInputState>) -> RwLockReadGuard<'_, ApiKeyInputState> {
     state.read().unwrap_or_else(PoisonError::into_inner)

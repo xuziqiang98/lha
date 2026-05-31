@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
-use adam_llm::ToolCallPayload;
-use adam_llm::ToolResultPayload;
-use adam_protocol::models::TranscriptItem;
+use lha_llm::ToolCallPayload;
+use lha_llm::ToolResultPayload;
+use lha_protocol::models::TranscriptItem;
 
 use crate::util::error_or_panic;
 use tracing::info;

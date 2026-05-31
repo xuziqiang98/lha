@@ -3,9 +3,9 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
 use crate::path_utils::resolve_symlink_write_paths;
 use crate::path_utils::write_atomically;
-use adam_protocol::config_types::Personality;
-use adam_protocol::config_types::TrustLevel;
 use anyhow::Context;
+use lha_protocol::config_types::Personality;
+use lha_protocol::config_types::TrustLevel;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -604,7 +604,7 @@ fn normalize_skill_config_path(path: &Path) -> String {
 
 /// Persist edits using a blocking strategy.
 pub fn apply_blocking(
-    adam_home: &Path,
+    lha_home: &Path,
     profile: Option<&str>,
     edits: &[ConfigEdit],
 ) -> anyhow::Result<()> {
@@ -612,7 +612,7 @@ pub fn apply_blocking(
         return Ok(());
     }
 
-    let config_path = adam_home.join(CONFIG_TOML_FILE);
+    let config_path = lha_home.join(CONFIG_TOML_FILE);
     let write_paths = resolve_symlink_write_paths(&config_path)?;
     let serialized = match write_paths.read_path {
         Some(path) => match std::fs::read_to_string(&path) {
@@ -658,13 +658,13 @@ pub fn apply_blocking(
 
 /// Persist edits asynchronously by offloading the blocking writer.
 pub async fn apply(
-    adam_home: &Path,
+    lha_home: &Path,
     profile: Option<&str>,
     edits: Vec<ConfigEdit>,
 ) -> anyhow::Result<()> {
-    let adam_home = adam_home.to_path_buf();
+    let lha_home = lha_home.to_path_buf();
     let profile = profile.map(ToOwned::to_owned);
-    task::spawn_blocking(move || apply_blocking(&adam_home, profile.as_deref(), &edits))
+    task::spawn_blocking(move || apply_blocking(&lha_home, profile.as_deref(), &edits))
         .await
         .context("config persistence task panicked")?
 }
@@ -672,15 +672,15 @@ pub async fn apply(
 /// Fluent builder to batch config edits and apply them atomically.
 #[derive(Default)]
 pub struct ConfigEditsBuilder {
-    adam_home: PathBuf,
+    lha_home: PathBuf,
     profile: Option<String>,
     edits: Vec<ConfigEdit>,
 }
 
 impl ConfigEditsBuilder {
-    pub fn new(adam_home: &Path) -> Self {
+    pub fn new(lha_home: &Path) -> Self {
         Self {
-            adam_home: adam_home.to_path_buf(),
+            lha_home: lha_home.to_path_buf(),
             profile: None,
             edits: Vec::new(),
         }
@@ -769,13 +769,13 @@ impl ConfigEditsBuilder {
 
     /// Apply edits on a blocking thread.
     pub fn apply_blocking(self) -> anyhow::Result<()> {
-        apply_blocking(&self.adam_home, self.profile.as_deref(), &self.edits)
+        apply_blocking(&self.lha_home, self.profile.as_deref(), &self.edits)
     }
 
     /// Apply edits asynchronously via a blocking offload.
     pub async fn apply(self) -> anyhow::Result<()> {
         task::spawn_blocking(move || {
-            apply_blocking(&self.adam_home, self.profile.as_deref(), &self.edits)
+            apply_blocking(&self.lha_home, self.profile.as_deref(), &self.edits)
         })
         .await
         .context("config persistence task panicked")?
@@ -793,9 +793,9 @@ mod tests {
     #[test]
     fn builder_with_edits_applies_custom_paths() {
         let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
+        let lha_home = tmp.path();
 
-        ConfigEditsBuilder::new(adam_home)
+        ConfigEditsBuilder::new(lha_home)
             .with_edits(vec![ConfigEdit::SetPath {
                 segments: vec!["enabled".to_string()],
                 value: value(true),
@@ -804,16 +804,16 @@ mod tests {
             .expect("persist");
 
         let contents =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
+            std::fs::read_to_string(lha_home.join(CONFIG_TOML_FILE)).expect("read config");
         assert_eq!(contents, "enabled = true\n");
     }
 
     #[test]
     fn set_skill_config_writes_disabled_entry() {
         let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
+        let lha_home = tmp.path();
 
-        ConfigEditsBuilder::new(adam_home)
+        ConfigEditsBuilder::new(lha_home)
             .with_edits([ConfigEdit::SetSkillConfig {
                 path: PathBuf::from("/tmp/skills/demo/SKILL.md"),
                 enabled: false,
@@ -822,7 +822,7 @@ mod tests {
             .expect("persist");
 
         let contents =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
+            std::fs::read_to_string(lha_home.join(CONFIG_TOML_FILE)).expect("read config");
         let expected = r#"[[skills.config]]
 path = "/tmp/skills/demo/SKILL.md"
 enabled = false
@@ -833,9 +833,9 @@ enabled = false
     #[test]
     fn set_skill_config_removes_entry_when_enabled() {
         let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
+        let lha_home = tmp.path();
         std::fs::write(
-            adam_home.join(CONFIG_TOML_FILE),
+            lha_home.join(CONFIG_TOML_FILE),
             r#"[[skills.config]]
 path = "/tmp/skills/demo/SKILL.md"
 enabled = false
@@ -843,7 +843,7 @@ enabled = false
         )
         .expect("seed config");
 
-        ConfigEditsBuilder::new(adam_home)
+        ConfigEditsBuilder::new(lha_home)
             .with_edits([ConfigEdit::SetSkillConfig {
                 path: PathBuf::from("/tmp/skills/demo/SKILL.md"),
                 enabled: true,
@@ -852,14 +852,14 @@ enabled = false
             .expect("persist");
 
         let contents =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
+            std::fs::read_to_string(lha_home.join(CONFIG_TOML_FILE)).expect("read config");
         assert_eq!(contents, "");
     }
 
     #[test]
     fn batch_write_table_upsert_preserves_inline_comments() {
         let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
+        let lha_home = tmp.path();
         let original = r#"approval_policy = "never"
 
 [mcp_servers.linear]
@@ -874,10 +874,10 @@ foo = "bar"
 # ok 3
 network_access = false
 "#;
-        std::fs::write(adam_home.join(CONFIG_TOML_FILE), original).expect("seed config");
+        std::fs::write(lha_home.join(CONFIG_TOML_FILE), original).expect("seed config");
 
         apply_blocking(
-            adam_home,
+            lha_home,
             None,
             &[
                 ConfigEdit::SetPath {
@@ -900,7 +900,7 @@ network_access = false
         .expect("apply");
 
         let updated =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
+            std::fs::read_to_string(lha_home.join(CONFIG_TOML_FILE)).expect("read config");
         let expected = r#"approval_policy = "never"
 
 [mcp_servers.linear]
@@ -921,9 +921,9 @@ network_access = true
     #[test]
     fn blocking_set_hide_full_access_warning_preserves_table() {
         let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
+        let lha_home = tmp.path();
         std::fs::write(
-            adam_home.join(CONFIG_TOML_FILE),
+            lha_home.join(CONFIG_TOML_FILE),
             r#"# Global comment
 
 [notice]
@@ -934,14 +934,14 @@ existing = "value"
         .expect("seed");
 
         apply_blocking(
-            adam_home,
+            lha_home,
             None,
             &[ConfigEdit::SetNoticeHideFullAccessWarning(true)],
         )
         .expect("persist");
 
         let contents =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
+            std::fs::read_to_string(lha_home.join(CONFIG_TOML_FILE)).expect("read config");
         let expected = r#"# Global comment
 
 [notice]
@@ -955,16 +955,16 @@ hide_full_access_warning = true
     #[test]
     fn blocking_set_hide_gpt5_1_migration_prompt_preserves_table() {
         let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
+        let lha_home = tmp.path();
         std::fs::write(
-            adam_home.join(CONFIG_TOML_FILE),
+            lha_home.join(CONFIG_TOML_FILE),
             r#"[notice]
 existing = "value"
 "#,
         )
         .expect("seed");
         apply_blocking(
-            adam_home,
+            lha_home,
             None,
             &[ConfigEdit::SetNoticeHideModelMigrationPrompt(
                 "hide_gpt5_1_migration_prompt".to_string(),
@@ -974,7 +974,7 @@ existing = "value"
         .expect("persist");
 
         let contents =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
+            std::fs::read_to_string(lha_home.join(CONFIG_TOML_FILE)).expect("read config");
         let expected = r#"[notice]
 existing = "value"
 hide_gpt5_1_migration_prompt = true
@@ -985,16 +985,16 @@ hide_gpt5_1_migration_prompt = true
     #[test]
     fn blocking_set_hide_gpt_5_1_codex_max_migration_prompt_preserves_table() {
         let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
+        let lha_home = tmp.path();
         std::fs::write(
-            adam_home.join(CONFIG_TOML_FILE),
+            lha_home.join(CONFIG_TOML_FILE),
             r#"[notice]
 existing = "value"
 "#,
         )
         .expect("seed");
         apply_blocking(
-            adam_home,
+            lha_home,
             None,
             &[ConfigEdit::SetNoticeHideModelMigrationPrompt(
                 "hide_gpt-5.1-codex-max_migration_prompt".to_string(),
@@ -1004,7 +1004,7 @@ existing = "value"
         .expect("persist");
 
         let contents =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
+            std::fs::read_to_string(lha_home.join(CONFIG_TOML_FILE)).expect("read config");
         let expected = r#"[notice]
 existing = "value"
 "hide_gpt-5.1-codex-max_migration_prompt" = true
@@ -1015,16 +1015,16 @@ existing = "value"
     #[test]
     fn blocking_record_model_migration_seen_preserves_table() {
         let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
+        let lha_home = tmp.path();
         std::fs::write(
-            adam_home.join(CONFIG_TOML_FILE),
+            lha_home.join(CONFIG_TOML_FILE),
             r#"[notice]
 existing = "value"
 "#,
         )
         .expect("seed");
         apply_blocking(
-            adam_home,
+            lha_home,
             None,
             &[ConfigEdit::RecordModelMigrationSeen {
                 from: "gpt-5".to_string(),
@@ -1034,7 +1034,7 @@ existing = "value"
         .expect("persist");
 
         let contents =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
+            std::fs::read_to_string(lha_home.join(CONFIG_TOML_FILE)).expect("read config");
         let expected = r#"[notice]
 existing = "value"
 
@@ -1047,7 +1047,7 @@ gpt-5 = "gpt-5.1"
     #[test]
     fn blocking_replace_mcp_servers_round_trips() {
         let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
+        let lha_home = tmp.path();
 
         let mut servers = BTreeMap::new();
         servers.insert(
@@ -1101,13 +1101,13 @@ gpt-5 = "gpt-5.1"
         );
 
         apply_blocking(
-            adam_home,
+            lha_home,
             None,
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )
         .expect("persist");
 
-        let raw = std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let raw = std::fs::read_to_string(lha_home.join(CONFIG_TOML_FILE)).expect("read config");
         let expected = "\
 [mcp_servers.http]
 url = \"https://example.com\"
@@ -1135,9 +1135,9 @@ B = \"2\"
     #[test]
     fn blocking_replace_mcp_servers_preserves_inline_comments() {
         let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
+        let lha_home = tmp.path();
         std::fs::write(
-            adam_home.join(CONFIG_TOML_FILE),
+            lha_home.join(CONFIG_TOML_FILE),
             r#"[mcp_servers]
 # keep me
 foo = { command = "cmd" }
@@ -1166,11 +1166,10 @@ foo = { command = "cmd" }
             },
         );
 
-        apply_blocking(adam_home, None, &[ConfigEdit::ReplaceMcpServers(servers)])
-            .expect("persist");
+        apply_blocking(lha_home, None, &[ConfigEdit::ReplaceMcpServers(servers)]).expect("persist");
 
         let contents =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
+            std::fs::read_to_string(lha_home.join(CONFIG_TOML_FILE)).expect("read config");
         let expected = r#"[mcp_servers]
 # keep me
 foo = { command = "cmd" }
@@ -1181,9 +1180,9 @@ foo = { command = "cmd" }
     #[test]
     fn blocking_replace_mcp_servers_preserves_inline_comment_suffix() {
         let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
+        let lha_home = tmp.path();
         std::fs::write(
-            adam_home.join(CONFIG_TOML_FILE),
+            lha_home.join(CONFIG_TOML_FILE),
             r#"[mcp_servers]
 foo = { command = "cmd" } # keep me
 "#,
@@ -1211,11 +1210,10 @@ foo = { command = "cmd" } # keep me
             },
         );
 
-        apply_blocking(adam_home, None, &[ConfigEdit::ReplaceMcpServers(servers)])
-            .expect("persist");
+        apply_blocking(lha_home, None, &[ConfigEdit::ReplaceMcpServers(servers)]).expect("persist");
 
         let contents =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
+            std::fs::read_to_string(lha_home.join(CONFIG_TOML_FILE)).expect("read config");
         let expected = r#"[mcp_servers]
 foo = { command = "cmd" , enabled = false } # keep me
 "#;
@@ -1225,9 +1223,9 @@ foo = { command = "cmd" , enabled = false } # keep me
     #[test]
     fn blocking_replace_mcp_servers_preserves_inline_comment_after_removing_keys() {
         let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
+        let lha_home = tmp.path();
         std::fs::write(
-            adam_home.join(CONFIG_TOML_FILE),
+            lha_home.join(CONFIG_TOML_FILE),
             r#"[mcp_servers]
 foo = { command = "cmd", args = ["--flag"] } # keep me
 "#,
@@ -1255,11 +1253,10 @@ foo = { command = "cmd", args = ["--flag"] } # keep me
             },
         );
 
-        apply_blocking(adam_home, None, &[ConfigEdit::ReplaceMcpServers(servers)])
-            .expect("persist");
+        apply_blocking(lha_home, None, &[ConfigEdit::ReplaceMcpServers(servers)]).expect("persist");
 
         let contents =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
+            std::fs::read_to_string(lha_home.join(CONFIG_TOML_FILE)).expect("read config");
         let expected = r#"[mcp_servers]
 foo = { command = "cmd"} # keep me
 "#;
@@ -1269,9 +1266,9 @@ foo = { command = "cmd"} # keep me
     #[test]
     fn blocking_replace_mcp_servers_preserves_inline_comment_prefix_on_update() {
         let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
+        let lha_home = tmp.path();
         std::fs::write(
-            adam_home.join(CONFIG_TOML_FILE),
+            lha_home.join(CONFIG_TOML_FILE),
             r#"[mcp_servers]
 # keep me
 foo = { command = "cmd" }
@@ -1300,11 +1297,10 @@ foo = { command = "cmd" }
             },
         );
 
-        apply_blocking(adam_home, None, &[ConfigEdit::ReplaceMcpServers(servers)])
-            .expect("persist");
+        apply_blocking(lha_home, None, &[ConfigEdit::ReplaceMcpServers(servers)]).expect("persist");
 
         let contents =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
+            std::fs::read_to_string(lha_home.join(CONFIG_TOML_FILE)).expect("read config");
         let expected = r#"[mcp_servers]
 # keep me
 foo = { command = "cmd" , enabled = false }
@@ -1315,10 +1311,10 @@ foo = { command = "cmd" , enabled = false }
     #[test]
     fn blocking_clear_path_noop_when_missing() {
         let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
+        let lha_home = tmp.path();
 
         apply_blocking(
-            adam_home,
+            lha_home,
             None,
             &[ConfigEdit::ClearPath {
                 segments: vec!["missing".to_string()],
@@ -1327,7 +1323,7 @@ foo = { command = "cmd" , enabled = false }
         .expect("apply");
 
         assert!(
-            !adam_home.join(CONFIG_TOML_FILE).exists(),
+            !lha_home.join(CONFIG_TOML_FILE).exists(),
             "config.toml should not be created on noop"
         );
     }
@@ -1335,11 +1331,11 @@ foo = { command = "cmd" , enabled = false }
     #[test]
     fn blocking_set_path_updates_notifications() {
         let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
+        let lha_home = tmp.path();
 
         let item = value(false);
         apply_blocking(
-            adam_home,
+            lha_home,
             None,
             &[ConfigEdit::SetPath {
                 segments: vec!["tui".to_string(), "notifications".to_string()],
@@ -1348,7 +1344,7 @@ foo = { command = "cmd" , enabled = false }
         )
         .expect("apply");
 
-        let raw = std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let raw = std::fs::read_to_string(lha_home.join(CONFIG_TOML_FILE)).expect("read config");
         let config: TomlValue = toml::from_str(&raw).expect("parse config");
         let notifications = config
             .get("tui")
@@ -1361,15 +1357,15 @@ foo = { command = "cmd" , enabled = false }
     #[tokio::test]
     async fn blocking_set_asynchronous_helpers_available() {
         let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path().to_path_buf();
+        let lha_home = tmp.path().to_path_buf();
 
-        ConfigEditsBuilder::new(&adam_home)
+        ConfigEditsBuilder::new(&lha_home)
             .set_hide_full_access_warning(true)
             .apply()
             .await
             .expect("persist");
 
-        let raw = std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let raw = std::fs::read_to_string(lha_home.join(CONFIG_TOML_FILE)).expect("read config");
         let notice = toml::from_str::<TomlValue>(&raw)
             .expect("parse config")
             .get("notice")
@@ -1382,22 +1378,22 @@ foo = { command = "cmd" , enabled = false }
     #[test]
     fn replace_mcp_servers_blocking_clears_table_when_empty() {
         let tmp = tempdir().expect("tmpdir");
-        let adam_home = tmp.path();
+        let lha_home = tmp.path();
         std::fs::write(
-            adam_home.join(CONFIG_TOML_FILE),
+            lha_home.join(CONFIG_TOML_FILE),
             "[mcp_servers]\nfoo = { command = \"cmd\" }\n",
         )
         .expect("seed");
 
         apply_blocking(
-            adam_home,
+            lha_home,
             None,
             &[ConfigEdit::ReplaceMcpServers(BTreeMap::new())],
         )
         .expect("persist");
 
         let contents =
-            std::fs::read_to_string(adam_home.join(CONFIG_TOML_FILE)).expect("read config");
+            std::fs::read_to_string(lha_home.join(CONFIG_TOML_FILE)).expect("read config");
         assert!(!contents.contains("mcp_servers"));
     }
 }

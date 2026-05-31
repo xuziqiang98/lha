@@ -6,7 +6,7 @@
       "type": "string"
     },
     "AskForApproval": {
-      "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Adam.",
+      "description": "Determines the conditions under which the user is consulted to approve running the command proposed by LHA.",
       "oneOf": [
         {
           "description": "Under this policy, only \"known safe\" commands—as determined by `is_safe_command()`—that **only read files** are auto‑approved. Everything else will ask the user to approve.",

@@ -19,13 +19,13 @@ use crate::config::deserialize_config_toml_with_base;
 use crate::config_loader::config_requirements::ConfigRequirementsWithSources;
 use crate::config_loader::layer_io::LoadedConfigLayers;
 use crate::git_info::resolve_root_git_project_for_trust;
-use adam_app_server_protocol::ConfigLayerSource;
-use adam_protocol::config_types::SandboxMode;
-use adam_protocol::config_types::TrustLevel;
-use adam_protocol::protocol::AskForApproval;
-use adam_utils_absolute_path::AbsolutePathBuf;
-use adam_utils_absolute_path::AbsolutePathBufGuard;
 use dunce::canonicalize as normalize_path;
+use lha_app_server_protocol::ConfigLayerSource;
+use lha_protocol::config_types::SandboxMode;
+use lha_protocol::config_types::TrustLevel;
+use lha_protocol::protocol::AskForApproval;
+use lha_utils_absolute_path::AbsolutePathBuf;
+use lha_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
 use std::io;
 use std::path::Path;
@@ -58,12 +58,12 @@ pub use state::ConfigLayerStackOrdering;
 pub use state::LoaderOverrides;
 
 /// On Unix systems, load requirements from this file path, if present.
-const DEFAULT_REQUIREMENTS_TOML_FILE_UNIX: &str = "/etc/adam/requirements.toml";
+const DEFAULT_REQUIREMENTS_TOML_FILE_UNIX: &str = "/etc/lha/requirements.toml";
 
 /// On Unix systems, load default settings from this file path, if present.
-/// Note that /etc/adam/ is treated as a "config folder," so subfolders such
+/// Note that /etc/lha/ is treated as a "config folder," so subfolders such
 /// as skills/ and rules/ will also be honored.
-pub const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/adam/config.toml";
+pub const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/lha/config.toml";
 
 const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 
@@ -73,20 +73,20 @@ const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 ///
 /// - admin:    managed preferences (*)
 /// - cloud:    managed cloud requirements
-/// - system    `/etc/adam/requirements.toml`
+/// - system    `/etc/lha/requirements.toml`
 ///
 /// For backwards compatibility, we also load from
-/// `/etc/adam/managed_config.toml` and map it to
-/// `/etc/adam/requirements.toml`.
+/// `/etc/lha/managed_config.toml` and map it to
+/// `/etc/lha/requirements.toml`.
 ///
 /// Configuration is built up from multiple layers in the following order:
 ///
 /// - admin:    managed preferences (*)
-/// - system    `/etc/adam/config.toml`
-/// - user      `${ADAM_HOME}/config.toml`
+/// - system    `/etc/lha/config.toml`
+/// - user      `${LHA_HOME}/config.toml`
 /// - cwd       `${PWD}/config.toml` (loaded but disabled when the directory is untrusted)
-/// - tree      parent directories up to root looking for `./.adam/config.toml` (loaded but disabled when untrusted)
-/// - repo      `$(git rev-parse --show-toplevel)/.adam/config.toml` (loaded but disabled when untrusted)
+/// - tree      parent directories up to root looking for `./.lha/config.toml` (loaded but disabled when untrusted)
+/// - repo      `$(git rev-parse --show-toplevel)/.lha/config.toml` (loaded but disabled when untrusted)
 /// - runtime   e.g., --config flags, model selector in UI
 ///
 /// (*) Only available on macOS via managed device profiles.
@@ -98,7 +98,7 @@ const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 /// thread-agnostic config loading (e.g., for the app server's `/config`
 /// endpoint) should `cwd` be `None`.
 pub async fn load_config_layers_state(
-    adam_home: &Path,
+    lha_home: &Path,
     cwd: Option<AbsolutePathBuf>,
     cli_overrides: &[(String, TomlValue)],
     overrides: LoaderOverrides,
@@ -120,7 +120,7 @@ pub async fn load_config_layers_state(
             .merge_unset_fields(RequirementSource::CloudRequirements, requirements);
     }
 
-    // Honor /etc/adam/requirements.toml.
+    // Honor /etc/lha/requirements.toml.
     if cfg!(unix) {
         load_requirements_toml(
             &mut config_requirements_toml,
@@ -131,7 +131,7 @@ pub async fn load_config_layers_state(
 
     // Make a best-effort to support the legacy `managed_config.toml` as a
     // requirements specification.
-    let loaded_config_layers = layer_io::load_config_layers_internal(adam_home, overrides).await?;
+    let loaded_config_layers = layer_io::load_config_layers_internal(lha_home, overrides).await?;
     load_requirements_from_legacy_scheme(
         &mut config_requirements_toml,
         loaded_config_layers.clone(),
@@ -170,10 +170,10 @@ pub async fn load_config_layers_state(
         layers.push(system_layer);
     }
 
-    // Add a layer for $ADAM_HOME/config.toml if it exists. Note if the file
+    // Add a layer for $LHA_HOME/config.toml if it exists. Note if the file
     // exists, but is malformed, then this error should be propagated to the
     // user.
-    let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, adam_home)?;
+    let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, lha_home)?;
     let user_layer = load_config_toml_for_required_layer(&user_file, |config_toml| {
         ConfigLayerEntry::new(
             ConfigLayerSource::User {
@@ -211,7 +211,7 @@ pub async fn load_config_layers_state(
             &merged_so_far,
             &cwd,
             &project_root_markers,
-            adam_home,
+            lha_home,
             &user_file,
         )
         .await
@@ -236,7 +236,7 @@ pub async fn load_config_layers_state(
             &cwd,
             &project_trust_context.project_root,
             &project_trust_context,
-            adam_home,
+            lha_home,
         )
         .await?;
         layers.extend(project_layers);
@@ -334,7 +334,7 @@ async fn load_config_toml_for_required_layer(
     Ok(create_entry(toml_value))
 }
 
-/// If available, apply requirements from `/etc/adam/requirements.toml` to
+/// If available, apply requirements from `/etc/lha/requirements.toml` to
 /// `config_requirements_toml` by filling in any unset fields.
 async fn load_requirements_toml(
     config_requirements_toml: &mut ConfigRequirementsWithSources,
@@ -538,13 +538,13 @@ impl ProjectTrustContext {
 
 fn project_layer_entry(
     trust_context: &ProjectTrustContext,
-    dot_adam_folder: &AbsolutePathBuf,
+    dot_lha_folder: &AbsolutePathBuf,
     layer_dir: &AbsolutePathBuf,
     config: TomlValue,
     config_toml_exists: bool,
 ) -> ConfigLayerEntry {
     let source = ConfigLayerSource::Project {
-        dot_adam_folder: dot_adam_folder.clone(),
+        dot_lha_folder: dot_lha_folder.clone(),
     };
 
     if config_toml_exists && let Some(reason) = trust_context.disabled_reason_for_dir(layer_dir) {
@@ -674,11 +674,11 @@ async fn load_project_layers(
     cwd: &AbsolutePathBuf,
     project_root: &AbsolutePathBuf,
     trust_context: &ProjectTrustContext,
-    adam_home: &Path,
+    lha_home: &Path,
 ) -> io::Result<Vec<ConfigLayerEntry>> {
-    let adam_home_abs = AbsolutePathBuf::from_absolute_path(adam_home)?;
-    let adam_home_normalized =
-        normalize_path(adam_home_abs.as_path()).unwrap_or_else(|_| adam_home_abs.to_path_buf());
+    let lha_home_abs = AbsolutePathBuf::from_absolute_path(lha_home)?;
+    let lha_home_normalized =
+        normalize_path(lha_home_abs.as_path()).unwrap_or_else(|_| lha_home_abs.to_path_buf());
     let mut dirs = cwd
         .as_path()
         .ancestors()
@@ -697,8 +697,8 @@ async fn load_project_layers(
 
     let mut layers = Vec::new();
     for dir in dirs {
-        let dot_adam = dir.join(".adam");
-        if !tokio::fs::metadata(&dot_adam)
+        let dot_lha = dir.join(".lha");
+        if !tokio::fs::metadata(&dot_lha)
             .await
             .map(|meta| meta.is_dir())
             .unwrap_or(false)
@@ -708,13 +708,13 @@ async fn load_project_layers(
 
         let layer_dir = AbsolutePathBuf::from_absolute_path(dir)?;
         let decision = trust_context.decision_for_dir(&layer_dir);
-        let dot_adam_abs = AbsolutePathBuf::from_absolute_path(&dot_adam)?;
-        let dot_adam_normalized =
-            normalize_path(dot_adam_abs.as_path()).unwrap_or_else(|_| dot_adam_abs.to_path_buf());
-        if dot_adam_abs == adam_home_abs || dot_adam_normalized == adam_home_normalized {
+        let dot_lha_abs = AbsolutePathBuf::from_absolute_path(&dot_lha)?;
+        let dot_lha_normalized =
+            normalize_path(dot_lha_abs.as_path()).unwrap_or_else(|_| dot_lha_abs.to_path_buf());
+        if dot_lha_abs == lha_home_abs || dot_lha_normalized == lha_home_normalized {
             continue;
         }
-        let config_file = dot_adam_abs.join(CONFIG_TOML_FILE)?;
+        let config_file = dot_lha_abs.join(CONFIG_TOML_FILE)?;
         match tokio::fs::read_to_string(&config_file).await {
             Ok(contents) => {
                 let config: TomlValue = match toml::from_str(&contents) {
@@ -731,7 +731,7 @@ async fn load_project_layers(
                         }
                         layers.push(project_layer_entry(
                             trust_context,
-                            &dot_adam_abs,
+                            &dot_lha_abs,
                             &layer_dir,
                             TomlValue::Table(toml::map::Map::new()),
                             true,
@@ -739,9 +739,9 @@ async fn load_project_layers(
                         continue;
                     }
                 };
-                let config = resolve_relative_paths_in_config_toml(config, dot_adam_abs.as_path())?;
+                let config = resolve_relative_paths_in_config_toml(config, dot_lha_abs.as_path())?;
                 let entry =
-                    project_layer_entry(trust_context, &dot_adam_abs, &layer_dir, config, true);
+                    project_layer_entry(trust_context, &dot_lha_abs, &layer_dir, config, true);
                 layers.push(entry);
             }
             Err(err) => {
@@ -751,7 +751,7 @@ async fn load_project_layers(
                     // that are significant in the overall ConfigLayerStack.
                     layers.push(project_layer_entry(
                         trust_context,
-                        &dot_adam_abs,
+                        &dot_lha_abs,
                         &layer_dir,
                         TomlValue::Table(toml::map::Map::new()),
                         false,
@@ -771,7 +771,7 @@ async fn load_project_layers(
 }
 
 /// The legacy mechanism for specifying admin-enforced configuration is to read
-/// from a file like `/etc/adam/managed_config.toml` that has the same
+/// from a file like `/etc/lha/managed_config.toml` that has the same
 /// structure as `config.toml` where fields like `approval_policy` can specify
 /// exactly one value rather than a list of allowed values.
 ///
@@ -797,7 +797,7 @@ impl From<LegacyManagedConfigToml> for ConfigRequirementsToml {
         }
         if let Some(sandbox_mode) = sandbox_mode {
             let required_mode: SandboxModeRequirement = sandbox_mode.into();
-            // Allowing read-only is a requirement for Adam to function correctly.
+            // Allowing read-only is a requirement for LHA to function correctly.
             // So in this backfill path, we append read-only if it's not already specified.
             let mut allowed_modes = vec![SandboxModeRequirement::ReadOnly];
             if required_mode != SandboxModeRequirement::ReadOnly {

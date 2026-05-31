@@ -1,9 +1,9 @@
-use adam_client::Request;
-use adam_client::RequestCompression;
-use adam_client::RetryOn;
-use adam_client::RetryPolicy;
 use http::Method;
 use http::header::HeaderMap;
+use lha_client::Request;
+use lha_client::RequestCompression;
+use lha_client::RetryOn;
+use lha_client::RetryPolicy;
 use std::collections::HashMap;
 use std::time::Duration;
 use url::Url;
@@ -19,7 +19,7 @@ pub enum WireApi {
 
 /// High-level retry configuration for a provider.
 ///
-/// This is converted into a `RetryPolicy` used by `adam-client` to drive
+/// This is converted into a `RetryPolicy` used by `lha-client` to drive
 /// transport-level retries for both unary and streaming calls.
 #[derive(Debug, Clone)]
 pub struct RetryConfig {

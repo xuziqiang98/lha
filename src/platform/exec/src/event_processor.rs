@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use adam_agent::config::Config;
-use adam_agent::protocol::Event;
-use adam_agent::protocol::SessionConfiguredEvent;
+use lha_agent::config::Config;
+use lha_agent::protocol::Event;
+use lha_agent::protocol::SessionConfiguredEvent;
 
 pub(crate) enum CodexStatus {
     Running,

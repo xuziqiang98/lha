@@ -1,22 +1,3 @@
-use adam_agent::config::types::Personality;
-use adam_agent::features::Feature;
-use adam_agent::models_manager::manager::ModelsManager;
-use adam_agent::models_manager::manager::RefreshStrategy;
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::SandboxPolicy;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::openai_models::ConfigShellToolType;
-use adam_protocol::openai_models::ModelInfo;
-use adam_protocol::openai_models::ModelInstructionsVariables;
-use adam_protocol::openai_models::ModelMessages;
-use adam_protocol::openai_models::ModelVisibility;
-use adam_protocol::openai_models::ModelsResponse;
-use adam_protocol::openai_models::ReasoningEffort;
-use adam_protocol::openai_models::ReasoningEffortPreset;
-use adam_protocol::openai_models::TruncationPolicyConfig;
-use adam_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -28,6 +9,25 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use lha_agent::config::types::Personality;
+use lha_agent::features::Feature;
+use lha_agent::models_manager::manager::ModelsManager;
+use lha_agent::models_manager::manager::RefreshStrategy;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::SandboxPolicy;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::openai_models::ConfigShellToolType;
+use lha_protocol::openai_models::ModelInfo;
+use lha_protocol::openai_models::ModelInstructionsVariables;
+use lha_protocol::openai_models::ModelMessages;
+use lha_protocol::openai_models::ModelVisibility;
+use lha_protocol::openai_models::ModelsResponse;
+use lha_protocol::openai_models::ReasoningEffort;
+use lha_protocol::openai_models::ReasoningEffortPreset;
+use lha_protocol::openai_models::TruncationPolicyConfig;
+use lha_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -47,8 +47,8 @@ fn sse_completed(id: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn personality_does_not_mutate_base_instructions_without_template() {
-    let adam_home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&adam_home).await;
+    let lha_home = TempDir::new().expect("create temp dir");
+    let mut config = load_default_config_for_test(&lha_home).await;
     config.features.enable(Feature::Personality);
     config.personality = Some(Personality::Friendly);
 
@@ -61,8 +61,8 @@ async fn personality_does_not_mutate_base_instructions_without_template() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn base_instructions_override_disables_personality_template() {
-    let adam_home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&adam_home).await;
+    let lha_home = TempDir::new().expect("create temp dir");
+    let mut config = load_default_config_for_test(&lha_home).await;
     config.features.enable(Feature::Personality);
     config.personality = Some(Personality::Friendly);
     config.base_instructions = Some("override instructions".to_string());
@@ -371,8 +371,8 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn instructions_uses_base_if_feature_disabled() -> anyhow::Result<()> {
-    let adam_home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&adam_home).await;
+    let lha_home = TempDir::new().expect("create temp dir");
+    let mut config = load_default_config_for_test(&lha_home).await;
     config.features.disable(Feature::Personality);
     config.personality = Some(Personality::Friendly);
 
@@ -533,7 +533,7 @@ async fn ignores_remote_personality_if_remote_models_disabled() -> anyhow::Resul
     let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
 
     let mut builder = test_codex()
-        .with_auth(adam_agent::CodexAuth::from_api_key("Test API Key"))
+        .with_auth(lha_agent::CodexAuth::from_api_key("Test API Key"))
         .with_config(|config| {
             config.features.disable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
@@ -574,7 +574,7 @@ async fn ignores_remote_personality_if_remote_models_disabled() -> anyhow::Resul
     let instructions_text = request.instructions_text();
 
     assert!(
-        instructions_text.contains("You are Adam, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals."),
+        instructions_text.contains("You are LHA, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals."),
         "expected instructions to use the template instructions, got: {instructions_text:?}"
     );
     assert!(
@@ -649,7 +649,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
     let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
 
     let mut builder = test_codex()
-        .with_auth(adam_agent::CodexAuth::from_api_key("Test API Key"))
+        .with_auth(lha_agent::CodexAuth::from_api_key("Test API Key"))
         .with_config(|config| {
             config.features.enable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
@@ -764,7 +764,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
     .await;
 
     let mut builder = test_codex()
-        .with_auth(adam_agent::CodexAuth::from_api_key("Test API Key"))
+        .with_auth(lha_agent::CodexAuth::from_api_key("Test API Key"))
         .with_config(|config| {
             config.features.enable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
@@ -861,7 +861,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
 async fn wait_for_model_available(
     manager: &Arc<ModelsManager>,
     slug: &str,
-    config: &adam_agent::config::Config,
+    config: &lha_agent::config::Config,
 ) {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {

@@ -1,22 +1,22 @@
-use adam_arg0::arg0_dispatch_or_else;
-use adam_cli::LandlockCommand;
-use adam_cli::SeatbeltCommand;
-use adam_cli::WindowsCommand;
-use adam_common::CliConfigOverrides;
-use adam_exec::Cli as ExecCli;
-use adam_exec::Command as ExecCommand;
-use adam_exec::ReviewArgs;
-use adam_execpolicy::ExecPolicyCheckCommand;
-use adam_responses_api_proxy::Args as ResponsesApiProxyArgs;
-use adam_tui::AppExitInfo;
-use adam_tui::Cli as TuiCli;
-use adam_tui::ExitReason;
-use adam_tui::update_action::UpdateAction;
 use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
 use clap_complete::generate;
+use lha_arg0::arg0_dispatch_or_else;
+use lha_cli::LandlockCommand;
+use lha_cli::SeatbeltCommand;
+use lha_cli::WindowsCommand;
+use lha_common::CliConfigOverrides;
+use lha_exec::Cli as ExecCli;
+use lha_exec::Command as ExecCommand;
+use lha_exec::ReviewArgs;
+use lha_execpolicy::ExecPolicyCheckCommand;
+use lha_responses_api_proxy::Args as ResponsesApiProxyArgs;
+use lha_tui::AppExitInfo;
+use lha_tui::Cli as TuiCli;
+use lha_tui::ExitReason;
+use lha_tui::update_action::UpdateAction;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -28,15 +28,15 @@ mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
 
-use adam_agent::config::Config;
-use adam_agent::config::ConfigOverrides;
-use adam_agent::config::edit::ConfigEditsBuilder;
-use adam_agent::config::find_adam_home;
-use adam_agent::features::Stage;
-use adam_agent::features::is_known_feature_key;
-use adam_agent::terminal::TerminalName;
+use lha_agent::config::Config;
+use lha_agent::config::ConfigOverrides;
+use lha_agent::config::edit::ConfigEditsBuilder;
+use lha_agent::config::find_lha_home;
+use lha_agent::features::Stage;
+use lha_agent::features::is_known_feature_key;
+use lha_agent::terminal::TerminalName;
 
-/// Adam CLI
+/// LHA CLI
 ///
 /// If no subcommand is specified, options will be forwarded to the interactive CLI.
 #[derive(Debug, Parser)]
@@ -47,9 +47,9 @@ use adam_agent::terminal::TerminalName;
     subcommand_negates_reqs = true,
     // The executable is sometimes invoked via a platform‑specific name like
     // `codex-x86_64-unknown-linux-musl`, but the help output should always use
-    // the generic `adam` command name that users run.
-    bin_name = "adam",
-    override_usage = "adam [OPTIONS] [PROMPT]\n       adam [OPTIONS] <COMMAND> [ARGS]"
+    // the generic `lha` command name that users run.
+    bin_name = "lha",
+    override_usage = "lha [OPTIONS] [PROMPT]\n       lha [OPTIONS] <COMMAND> [ARGS]"
 )]
 struct MultitoolCli {
     #[clap(flatten)]
@@ -67,17 +67,17 @@ struct MultitoolCli {
 
 #[derive(Debug, clap::Subcommand)]
 enum Subcommand {
-    /// Run Adam non-interactively.
+    /// Run LHA non-interactively.
     #[clap(visible_alias = "e")]
     Exec(ExecCli),
 
     /// Run a code review non-interactively.
     Review(ReviewArgs),
 
-    /// [experimental] Run Adam as an MCP server and manage MCP servers.
+    /// [experimental] Run LHA as an MCP server and manage MCP servers.
     Mcp(McpCli),
 
-    /// [experimental] Run the Adam MCP server (stdio transport).
+    /// [experimental] Run the LHA MCP server (stdio transport).
     McpServer,
 
     /// [experimental] Run the app server or related tooling.
@@ -86,7 +86,7 @@ enum Subcommand {
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
 
-    /// Run commands within a Adam-provided sandbox.
+    /// Run commands within a LHA-provided sandbox.
     #[clap(visible_alias = "debug")]
     Sandbox(SandboxArgs),
 
@@ -263,11 +263,11 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
 
     let mut lines = vec![format!(
         "{}",
-        adam_agent::protocol::FinalOutput::from(token_usage)
+        lha_agent::protocol::FinalOutput::from(token_usage)
     )];
 
     if let Some(resume_cmd) =
-        adam_agent::util::resume_command(thread_name.as_deref(), conversation_id)
+        lha_agent::util::resume_command(thread_name.as_deref(), conversation_id)
     {
         let command = if color_enabled {
             resume_cmd.cyan().to_string()
@@ -305,7 +305,7 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
 fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     println!();
     let cmd_str = action.command_str();
-    println!("Updating Adam via `{cmd_str}`...");
+    println!("Updating LHA via `{cmd_str}`...");
 
     let status = {
         #[cfg(windows)]
@@ -331,7 +331,7 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     if !status.success() {
         anyhow::bail!("`{cmd_str}` failed with status {status}");
     }
-    println!("\n🎉 Update ran successfully! Please restart Adam.");
+    println!("\n🎉 Update ran successfully! Please restart LHA.");
     Ok(())
 }
 
@@ -395,8 +395,8 @@ struct FeatureSetArgs {
     feature: String,
 }
 
-fn stage_str(stage: adam_agent::features::Stage) -> &'static str {
-    use adam_agent::features::Stage;
+fn stage_str(stage: lha_agent::features::Stage) -> &'static str {
+    use lha_agent::features::Stage;
     match stage {
         Stage::UnderDevelopment => "under development",
         Stage::Experimental { .. } => "experimental",
@@ -439,19 +439,19 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            adam_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
+            lha_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::Review(review_args)) => {
-            let mut exec_cli = ExecCli::try_parse_from(["adam", "exec"])?;
+            let mut exec_cli = ExecCli::try_parse_from(["lha", "exec"])?;
             exec_cli.command = Some(ExecCommand::Review(review_args));
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            adam_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
+            lha_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::McpServer) => {
-            adam_mcp_server::run_main(codex_linux_sandbox_exe, root_config_overrides).await?;
+            lha_mcp_server::run_main(codex_linux_sandbox_exe, root_config_overrides).await?;
         }
         Some(Subcommand::Mcp(mut mcp_cli)) => {
             // Propagate any root-level config overrides (e.g. `-c key=value`).
@@ -460,22 +460,22 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::AppServer(app_server_cli)) => match app_server_cli.subcommand {
             None => {
-                adam_app_server::run_main(
+                lha_app_server::run_main(
                     codex_linux_sandbox_exe,
                     root_config_overrides,
-                    adam_agent::config_loader::LoaderOverrides::default(),
+                    lha_agent::config_loader::LoaderOverrides::default(),
                     app_server_cli.analytics_default_enabled,
                 )
                 .await?;
             }
             Some(AppServerSubcommand::GenerateTs(gen_cli)) => {
-                adam_app_server_protocol::generate_ts(
+                lha_app_server_protocol::generate_ts(
                     &gen_cli.out_dir,
                     gen_cli.prettier.as_deref(),
                 )?;
             }
             Some(AppServerSubcommand::GenerateJsonSchema(gen_cli)) => {
-                adam_app_server_protocol::generate_json(&gen_cli.out_dir)?;
+                lha_app_server_protocol::generate_json(&gen_cli.out_dir)?;
             }
         },
         Some(Subcommand::Resume(ResumeCommand {
@@ -521,7 +521,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     &mut seatbelt_cli.config_overrides,
                     root_config_overrides.clone(),
                 );
-                adam_cli::debug_sandbox::run_command_under_seatbelt(
+                lha_cli::debug_sandbox::run_command_under_seatbelt(
                     seatbelt_cli,
                     codex_linux_sandbox_exe,
                 )
@@ -532,7 +532,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     &mut landlock_cli.config_overrides,
                     root_config_overrides.clone(),
                 );
-                adam_cli::debug_sandbox::run_command_under_landlock(
+                lha_cli::debug_sandbox::run_command_under_landlock(
                     landlock_cli,
                     codex_linux_sandbox_exe,
                 )
@@ -543,7 +543,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     &mut windows_cli.config_overrides,
                     root_config_overrides.clone(),
                 );
-                adam_cli::debug_sandbox::run_command_under_windows(
+                lha_cli::debug_sandbox::run_command_under_windows(
                     windows_cli,
                     codex_linux_sandbox_exe,
                 )
@@ -554,11 +554,11 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             ExecpolicySubcommand::Check(cmd) => run_execpolicycheck(cmd)?,
         },
         Some(Subcommand::ResponsesApiProxy(args)) => {
-            tokio::task::spawn_blocking(move || adam_responses_api_proxy::run_main(args)).await??;
+            tokio::task::spawn_blocking(move || lha_responses_api_proxy::run_main(args)).await??;
         }
         Some(Subcommand::StdioToUds(cmd)) => {
             let socket_path = cmd.socket_path;
-            tokio::task::spawn_blocking(move || adam_stdio_to_uds::run(socket_path.as_path()))
+            tokio::task::spawn_blocking(move || lha_stdio_to_uds::run(socket_path.as_path()))
                 .await??;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
@@ -587,10 +587,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     overrides,
                 )
                 .await?;
-                let mut rows = Vec::with_capacity(adam_agent::features::FEATURES.len());
+                let mut rows = Vec::with_capacity(lha_agent::features::FEATURES.len());
                 let mut name_width = 0;
                 let mut stage_width = 0;
-                for def in adam_agent::features::FEATURES.iter() {
+                for def in lha_agent::features::FEATURES.iter() {
                     let name = def.key;
                     let stage = stage_str(def.stage);
                     let enabled = config.features.enabled(def.id);
@@ -617,21 +617,21 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
 
 async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
     FeatureToggles::validate_feature(feature)?;
-    let adam_home = find_adam_home()?;
-    ConfigEditsBuilder::new(&adam_home)
+    let lha_home = find_lha_home()?;
+    ConfigEditsBuilder::new(&lha_home)
         .with_profile(interactive.config_profile.as_deref())
         .set_feature_enabled(feature, true)
         .apply()
         .await?;
     println!("Enabled feature `{feature}` in config.toml.");
-    maybe_print_under_development_feature_warning(&adam_home, interactive, feature);
+    maybe_print_under_development_feature_warning(&lha_home, interactive, feature);
     Ok(())
 }
 
 async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
     FeatureToggles::validate_feature(feature)?;
-    let adam_home = find_adam_home()?;
-    ConfigEditsBuilder::new(&adam_home)
+    let lha_home = find_lha_home()?;
+    ConfigEditsBuilder::new(&lha_home)
         .with_profile(interactive.config_profile.as_deref())
         .set_feature_enabled(feature, false)
         .apply()
@@ -641,7 +641,7 @@ async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyho
 }
 
 fn maybe_print_under_development_feature_warning(
-    adam_home: &std::path::Path,
+    lha_home: &std::path::Path,
     interactive: &TuiCli,
     feature: &str,
 ) {
@@ -649,7 +649,7 @@ fn maybe_print_under_development_feature_warning(
         return;
     }
 
-    let Some(spec) = adam_agent::features::FEATURES
+    let Some(spec) = lha_agent::features::FEATURES
         .iter()
         .find(|spec| spec.key == feature)
     else {
@@ -659,7 +659,7 @@ fn maybe_print_under_development_feature_warning(
         return;
     }
 
-    let config_path = adam_home.join(adam_agent::config::CONFIG_TOML_FILE);
+    let config_path = lha_home.join(lha_agent::config::CONFIG_TOML_FILE);
     eprintln!(
         "Under-development features enabled: {feature}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {}.",
         config_path.display()
@@ -686,7 +686,7 @@ async fn run_interactive_tui(
         interactive.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));
     }
 
-    let terminal_info = adam_agent::terminal::terminal_info();
+    let terminal_info = lha_agent::terminal::terminal_info();
     if terminal_info.name == TerminalName::Dumb {
         if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
             return Ok(AppExitInfo::fatal(
@@ -695,7 +695,7 @@ async fn run_interactive_tui(
         }
 
         eprintln!(
-            "WARNING: TERM is set to \"dumb\". Adam's interactive TUI may not work in this terminal."
+            "WARNING: TERM is set to \"dumb\". LHA's interactive TUI may not work in this terminal."
         );
         if !confirm("Continue anyway? [y/N]: ")? {
             return Ok(AppExitInfo::fatal(
@@ -704,7 +704,7 @@ async fn run_interactive_tui(
         }
     }
 
-    adam_tui::run_main(interactive, codex_linux_sandbox_exe).await
+    lha_tui::run_main(interactive, codex_linux_sandbox_exe).await
 }
 
 fn confirm(prompt: &str) -> std::io::Result<bool> {
@@ -823,16 +823,16 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
 
 fn print_completion(cmd: CompletionCommand) {
     let mut app = MultitoolCli::command();
-    let name = "adam";
+    let name = "lha";
     generate(cmd.shell, &mut app, name, &mut std::io::stdout());
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_agent::protocol::TokenUsage;
-    use adam_protocol::ThreadId;
     use assert_matches::assert_matches;
+    use lha_agent::protocol::TokenUsage;
+    use lha_protocol::ThreadId;
     use pretty_assertions::assert_eq;
 
     fn finalize_resume_from_args(args: &[&str]) -> TuiCli {
@@ -889,13 +889,13 @@ mod tests {
     #[test]
     fn exec_resume_last_accepts_prompt_positional() {
         let cli =
-            MultitoolCli::try_parse_from(["adam", "exec", "--json", "resume", "--last", "2+2"])
+            MultitoolCli::try_parse_from(["lha", "exec", "--json", "resume", "--last", "2+2"])
                 .expect("parse should succeed");
 
         let Some(Subcommand::Exec(exec)) = cli.subcommand else {
             panic!("expected exec subcommand");
         };
-        let Some(adam_exec::Command::Resume(args)) = exec.command else {
+        let Some(lha_exec::Command::Resume(args)) = exec.command else {
             panic!("expected exec resume");
         };
 
@@ -950,7 +950,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run adam resume 123e4567-e89b-12d3-a456-426614174000"
+                "To continue this session, run lha resume 123e4567-e89b-12d3-a456-426614174000"
                     .to_string(),
             ]
         );
@@ -975,7 +975,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run adam resume my-thread".to_string(),
+                "To continue this session, run lha resume my-thread".to_string(),
             ]
         );
     }
@@ -983,7 +983,7 @@ mod tests {
     #[test]
     fn resume_model_flag_applies_when_no_root_flags() {
         let interactive =
-            finalize_resume_from_args(["adam", "resume", "-m", "gpt-5.1-test"].as_ref());
+            finalize_resume_from_args(["lha", "resume", "-m", "gpt-5.1-test"].as_ref());
 
         assert_eq!(interactive.model.as_deref(), Some("gpt-5.1-test"));
         assert!(interactive.resume_picker);
@@ -993,7 +993,7 @@ mod tests {
 
     #[test]
     fn resume_picker_logic_none_and_not_last() {
-        let interactive = finalize_resume_from_args(["adam", "resume"].as_ref());
+        let interactive = finalize_resume_from_args(["lha", "resume"].as_ref());
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
@@ -1002,7 +1002,7 @@ mod tests {
 
     #[test]
     fn resume_picker_logic_last() {
-        let interactive = finalize_resume_from_args(["adam", "resume", "--last"].as_ref());
+        let interactive = finalize_resume_from_args(["lha", "resume", "--last"].as_ref());
         assert!(!interactive.resume_picker);
         assert!(interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
@@ -1011,7 +1011,7 @@ mod tests {
 
     #[test]
     fn resume_picker_logic_with_session_id() {
-        let interactive = finalize_resume_from_args(["adam", "resume", "1234"].as_ref());
+        let interactive = finalize_resume_from_args(["lha", "resume", "1234"].as_ref());
         assert!(!interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id.as_deref(), Some("1234"));
@@ -1020,7 +1020,7 @@ mod tests {
 
     #[test]
     fn resume_all_flag_sets_show_all() {
-        let interactive = finalize_resume_from_args(["adam", "resume", "--all"].as_ref());
+        let interactive = finalize_resume_from_args(["lha", "resume", "--all"].as_ref());
         assert!(interactive.resume_picker);
         assert!(interactive.resume_show_all);
     }
@@ -1029,7 +1029,7 @@ mod tests {
     fn resume_merges_option_flags_and_full_auto() {
         let interactive = finalize_resume_from_args(
             [
-                "adam",
+                "lha",
                 "resume",
                 "sid",
                 "--full-auto",
@@ -1054,11 +1054,11 @@ mod tests {
         assert_eq!(interactive.config_profile.as_deref(), Some("my-profile"));
         assert_matches!(
             interactive.sandbox_mode,
-            Some(adam_common::SandboxModeCliArg::WorkspaceWrite)
+            Some(lha_common::SandboxModeCliArg::WorkspaceWrite)
         );
         assert_matches!(
             interactive.approval_policy,
-            Some(adam_common::ApprovalModeCliArg::OnRequest)
+            Some(lha_common::ApprovalModeCliArg::OnRequest)
         );
         assert!(interactive.full_auto);
         assert_eq!(
@@ -1084,7 +1084,7 @@ mod tests {
     fn resume_merges_dangerously_bypass_flag() {
         let interactive = finalize_resume_from_args(
             [
-                "adam",
+                "lha",
                 "resume",
                 "--dangerously-bypass-approvals-and-sandbox",
             ]
@@ -1099,7 +1099,7 @@ mod tests {
     #[test]
     fn resume_merges_no_mouse_capture_flag() {
         let interactive =
-            finalize_resume_from_args(["adam", "resume", "--no-mouse-capture"].as_ref());
+            finalize_resume_from_args(["lha", "resume", "--no-mouse-capture"].as_ref());
 
         assert!(interactive.no_mouse_capture);
         assert!(!interactive.mouse_capture);
@@ -1109,7 +1109,7 @@ mod tests {
     #[test]
     fn resume_mouse_capture_flag_overrides_root_no_mouse_capture() {
         let interactive = finalize_resume_from_args(
-            ["adam", "--no-mouse-capture", "resume", "--mouse-capture"].as_ref(),
+            ["lha", "--no-mouse-capture", "resume", "--mouse-capture"].as_ref(),
         );
 
         assert!(interactive.mouse_capture);
@@ -1119,7 +1119,7 @@ mod tests {
 
     #[test]
     fn fork_picker_logic_none_and_not_last() {
-        let interactive = finalize_fork_from_args(["adam", "fork"].as_ref());
+        let interactive = finalize_fork_from_args(["lha", "fork"].as_ref());
         assert!(interactive.fork_picker);
         assert!(!interactive.fork_last);
         assert_eq!(interactive.fork_session_id, None);
@@ -1128,7 +1128,7 @@ mod tests {
 
     #[test]
     fn fork_picker_logic_last() {
-        let interactive = finalize_fork_from_args(["adam", "fork", "--last"].as_ref());
+        let interactive = finalize_fork_from_args(["lha", "fork", "--last"].as_ref());
         assert!(!interactive.fork_picker);
         assert!(interactive.fork_last);
         assert_eq!(interactive.fork_session_id, None);
@@ -1137,7 +1137,7 @@ mod tests {
 
     #[test]
     fn fork_picker_logic_with_session_id() {
-        let interactive = finalize_fork_from_args(["adam", "fork", "1234"].as_ref());
+        let interactive = finalize_fork_from_args(["lha", "fork", "1234"].as_ref());
         assert!(!interactive.fork_picker);
         assert!(!interactive.fork_last);
         assert_eq!(interactive.fork_session_id.as_deref(), Some("1234"));
@@ -1146,14 +1146,14 @@ mod tests {
 
     #[test]
     fn fork_all_flag_sets_show_all() {
-        let interactive = finalize_fork_from_args(["adam", "fork", "--all"].as_ref());
+        let interactive = finalize_fork_from_args(["lha", "fork", "--all"].as_ref());
         assert!(interactive.fork_picker);
         assert!(interactive.fork_show_all);
     }
 
     #[test]
     fn fork_merges_mouse_capture_flag() {
-        let interactive = finalize_fork_from_args(["adam", "fork", "--mouse-capture"].as_ref());
+        let interactive = finalize_fork_from_args(["lha", "fork", "--mouse-capture"].as_ref());
 
         assert!(interactive.mouse_capture);
         assert!(!interactive.no_mouse_capture);
@@ -1163,7 +1163,7 @@ mod tests {
     #[test]
     fn fork_no_mouse_capture_flag_overrides_root_mouse_capture() {
         let interactive = finalize_fork_from_args(
-            ["adam", "--mouse-capture", "fork", "--no-mouse-capture"].as_ref(),
+            ["lha", "--mouse-capture", "fork", "--no-mouse-capture"].as_ref(),
         );
 
         assert!(interactive.no_mouse_capture);
@@ -1173,20 +1173,20 @@ mod tests {
 
     #[test]
     fn app_server_analytics_default_disabled_without_flag() {
-        let app_server = app_server_from_args(["adam", "app-server"].as_ref());
+        let app_server = app_server_from_args(["lha", "app-server"].as_ref());
         assert!(!app_server.analytics_default_enabled);
     }
 
     #[test]
     fn app_server_analytics_default_enabled_with_flag() {
         let app_server =
-            app_server_from_args(["adam", "app-server", "--analytics-default-enabled"].as_ref());
+            app_server_from_args(["lha", "app-server", "--analytics-default-enabled"].as_ref());
         assert!(app_server.analytics_default_enabled);
     }
 
     #[test]
     fn features_enable_parses_feature_name() {
-        let cli = MultitoolCli::try_parse_from(["adam", "features", "enable", "unified_exec"])
+        let cli = MultitoolCli::try_parse_from(["lha", "features", "enable", "unified_exec"])
             .expect("parse should succeed");
         let Some(Subcommand::Features(FeaturesCli { sub })) = cli.subcommand else {
             panic!("expected features subcommand");
@@ -1199,7 +1199,7 @@ mod tests {
 
     #[test]
     fn features_disable_parses_feature_name() {
-        let cli = MultitoolCli::try_parse_from(["adam", "features", "disable", "shell_tool"])
+        let cli = MultitoolCli::try_parse_from(["lha", "features", "disable", "shell_tool"])
             .expect("parse should succeed");
         let Some(Subcommand::Features(FeaturesCli { sub })) = cli.subcommand else {
             panic!("expected features subcommand");

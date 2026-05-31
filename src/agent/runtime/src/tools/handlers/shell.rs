@@ -1,6 +1,6 @@
-use adam_protocol::models::ShellCommandToolCallParams;
-use adam_protocol::models::ShellToolCallParams;
 use async_trait::async_trait;
+use lha_protocol::models::ShellCommandToolCallParams;
+use lha_protocol::models::ShellToolCallParams;
 use std::sync::Arc;
 
 use crate::codex::TurnContext;
@@ -268,7 +268,7 @@ impl ShellHandler {
             .requires_escalated_permissions()
             && !matches!(
                 turn.approval_policy,
-                adam_protocol::protocol::AskForApproval::OnRequest
+                lha_protocol::protocol::AskForApproval::OnRequest
             )
         {
             let approval_policy = turn.approval_policy;
@@ -351,8 +351,8 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use adam_protocol::models::ShellCommandToolCallParams;
-    use adam_protocol::models::ShellToolCallParams;
+    use lha_protocol::models::ShellCommandToolCallParams;
+    use lha_protocol::models::ShellToolCallParams;
     use pretty_assertions::assert_eq;
 
     use super::validate_argv_command;

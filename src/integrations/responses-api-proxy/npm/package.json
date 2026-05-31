@@ -3,7 +3,7 @@
   "version": "0.0.0-dev",
   "license": "Apache-2.0",
   "bin": {
-    "adam-responses-api-proxy": "bin/adam-responses-api-proxy.js"
+    "lha-responses-api-proxy": "bin/lha-responses-api-proxy.js"
   },
   "type": "module",
   "engines": {

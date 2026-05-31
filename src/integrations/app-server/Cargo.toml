@@ -1,15 +1,15 @@
 [package]
-name = "adam-app-server"
+name = "lha-app-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "adam-app-server"
+name = "lha-app-server"
 path = "src/main.rs"
 
 [lib]
-name = "adam_app_server"
+name = "lha_app_server"
 path = "src/lib.rs"
 
 [lints]
@@ -18,17 +18,17 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-adam-arg0 = { workspace = true }
-adam-common = { workspace = true, features = ["cli"] }
-adam-agent = { workspace = true }
-adam-llm = { workspace = true }
-adam-file-search = { workspace = true }
-adam-protocol = { workspace = true }
-adam-app-server-protocol = { workspace = true }
-adam-feedback = { workspace = true }
-adam-rmcp-client = { workspace = true }
-adam-utils-absolute-path = { workspace = true }
-adam-utils-json-to-toml = { workspace = true }
+lha-arg0 = { workspace = true }
+lha-common = { workspace = true, features = ["cli"] }
+lha-agent = { workspace = true }
+lha-llm = { workspace = true }
+lha-file-search = { workspace = true }
+lha-protocol = { workspace = true }
+lha-app-server-protocol = { workspace = true }
+lha-feedback = { workspace = true }
+lha-rmcp-client = { workspace = true }
+lha-utils-absolute-path = { workspace = true }
+lha-utils-json-to-toml = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -55,7 +55,7 @@ axum = { workspace = true, default-features = false, features = [
     "tokio",
 ] }
 base64 = { workspace = true }
-adam-execpolicy = { workspace = true }
+lha-execpolicy = { workspace = true }
 core_test_support = { workspace = true }
 mcp-types = { workspace = true }
 os_info = { workspace = true }

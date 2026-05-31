@@ -1,6 +1,6 @@
-use adam_agent::ThreadManager;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::config_types::IdentityMask;
+use lha_agent::ThreadManager;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::config_types::IdentityMask;
 
 fn is_tui_identity(kind: IdentityKind) -> bool {
     matches!(

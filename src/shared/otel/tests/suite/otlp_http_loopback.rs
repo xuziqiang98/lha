@@ -1,8 +1,8 @@
-use adam_otel::config::OtelExporter;
-use adam_otel::config::OtelHttpProtocol;
-use adam_otel::metrics::MetricsClient;
-use adam_otel::metrics::MetricsConfig;
-use adam_otel::metrics::Result;
+use lha_otel::config::OtelExporter;
+use lha_otel::config::OtelHttpProtocol;
+use lha_otel::metrics::MetricsClient;
+use lha_otel::metrics::MetricsConfig;
+use lha_otel::metrics::Result;
 use std::collections::HashMap;
 use std::io::Read as _;
 use std::io::Write as _;
@@ -164,7 +164,7 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
 
     let metrics = MetricsClient::new(MetricsConfig::otlp(
         "test",
-        "adam-cli",
+        "lha-cli",
         env!("CARGO_PKG_VERSION"),
         OtelExporter::OtlpHttp {
             endpoint: format!("http://{addr}/v1/metrics"),

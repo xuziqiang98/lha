@@ -3,13 +3,13 @@ use crate::auth::add_auth_headers;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::telemetry::run_with_request_telemetry;
-use adam_client::HttpTransport;
-use adam_client::RequestTelemetry;
-use adam_llm_types::ModelInfo;
-use adam_llm_types::ModelsResponse;
 use http::HeaderMap;
 use http::Method;
 use http::header::ETAG;
+use lha_client::HttpTransport;
+use lha_client::RequestTelemetry;
+use lha_llm_types::ModelInfo;
+use lha_llm_types::ModelsResponse;
 use std::sync::Arc;
 
 pub struct ModelsClient<T: HttpTransport, A: AuthProvider> {
@@ -84,13 +84,13 @@ mod tests {
     use super::*;
     use crate::provider::RetryConfig;
     use crate::provider::WireApi;
-    use adam_client::Request;
-    use adam_client::Response;
-    use adam_client::StreamResponse;
-    use adam_client::TransportError;
     use async_trait::async_trait;
     use http::HeaderMap;
     use http::StatusCode;
+    use lha_client::Request;
+    use lha_client::Response;
+    use lha_client::StreamResponse;
+    use lha_client::TransportError;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::sync::Arc;

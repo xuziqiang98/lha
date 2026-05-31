@@ -12,7 +12,7 @@ pub struct LandlockCommand {
     pub sandbox_policy_cwd: PathBuf,
 
     #[arg(long = "sandbox-policy")]
-    pub sandbox_policy: adam_agent::protocol::SandboxPolicy,
+    pub sandbox_policy: lha_agent::protocol::SandboxPolicy,
 
     /// Full command args to run under landlock.
     #[arg(trailing_var_arg = true)]

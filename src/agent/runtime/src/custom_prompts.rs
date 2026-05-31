@@ -1,13 +1,13 @@
-use adam_protocol::custom_prompts::CustomPrompt;
+use lha_protocol::custom_prompts::CustomPrompt;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::fs;
 
-/// Return the default prompts directory: `$ADAM_HOME/prompts`.
-/// If `ADAM_HOME` cannot be resolved, returns `None`.
+/// Return the default prompts directory: `$LHA_HOME/prompts`.
+/// If `LHA_HOME` cannot be resolved, returns `None`.
 pub fn default_prompts_dir() -> Option<PathBuf> {
-    crate::config::find_adam_home()
+    crate::config::find_lha_home()
         .ok()
         .map(|home| home.join("prompts"))
 }

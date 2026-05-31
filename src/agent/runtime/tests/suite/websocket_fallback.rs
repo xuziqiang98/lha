@@ -1,4 +1,3 @@
-use adam_agent::features::Feature;
 use anyhow::Result;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
@@ -8,6 +7,7 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
+use lha_agent::features::Feature;
 use pretty_assertions::assert_eq;
 use wiremock::http::Method;
 

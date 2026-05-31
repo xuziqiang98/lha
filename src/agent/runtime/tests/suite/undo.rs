@@ -5,11 +5,6 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
-use adam_agent::CodexThread;
-use adam_agent::features::Feature;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::UndoCompletedEvent;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
@@ -23,6 +18,11 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_match;
+use lha_agent::CodexThread;
+use lha_agent::features::Feature;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::UndoCompletedEvent;
 use pretty_assertions::assert_eq;
 
 #[allow(clippy::expect_used)]
@@ -65,12 +65,12 @@ fn init_git_repo(path: &Path) -> Result<()> {
     // CI variance (default-branch hints, line ending differences, etc.).
     git(path, &["init", "--initial-branch=main"])?;
     git(path, &["config", "core.autocrlf", "false"])?;
-    git(path, &["config", "user.name", "Adam Tests"])?;
+    git(path, &["config", "user.name", "LHA Tests"])?;
     git(path, &["config", "user.email", "codex-tests@example.com"])?;
 
     // Create README.txt
     let readme_path = path.join("README.txt");
-    fs::write(&readme_path, "Test repository initialized by Adam.\n")?;
+    fs::write(&readme_path, "Test repository initialized by LHA.\n")?;
 
     // Stage and commit
     git(path, &["add", "README.txt"])?;

@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use adam_agent::CodexThread;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::ReviewDecision;
-use adam_protocol::ThreadId;
-use adam_protocol::parse_command::ParsedCommand;
+use lha_agent::CodexThread;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::ReviewDecision;
+use lha_protocol::ThreadId;
+use lha_protocol::parse_command::ParsedCommand;
 use mcp_types::ElicitRequest;
 use mcp_types::ElicitRequestParamsRequestedSchema;
 use mcp_types::JSONRPCErrorError;
@@ -67,7 +67,7 @@ pub(crate) async fn handle_exec_approval_request(
     let escaped_command =
         shlex::try_join(command.iter().map(String::as_str)).unwrap_or_else(|_| command.join(" "));
     let message = format!(
-        "Allow Adam to run `{escaped_command}` in `{cwd}`?",
+        "Allow LHA to run `{escaped_command}` in `{cwd}`?",
         cwd = cwd.to_string_lossy()
     );
 

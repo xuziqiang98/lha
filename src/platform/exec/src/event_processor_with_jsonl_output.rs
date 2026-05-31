@@ -33,11 +33,11 @@ use crate::exec_events::TurnFailedEvent;
 use crate::exec_events::TurnStartedEvent;
 use crate::exec_events::Usage;
 use crate::exec_events::WebSearchItem;
-use adam_agent::config::Config;
-use adam_agent::protocol;
-use adam_protocol::models::WebSearchAction;
-use adam_protocol::plan_tool::StepStatus;
-use adam_protocol::plan_tool::UpdatePlanArgs;
+use lha_agent::config::Config;
+use lha_agent::protocol;
+use lha_protocol::models::WebSearchAction;
+use lha_protocol::plan_tool::StepStatus;
+use lha_protocol::plan_tool::UpdatePlanArgs;
 use serde_json::Value as JsonValue;
 use tracing::error;
 use tracing::warn;
@@ -51,7 +51,7 @@ pub struct EventProcessorWithJsonOutput {
     running_patch_applies: HashMap<String, protocol::PatchApplyBeginEvent>,
     // Tracks the todo list for the current turn (at most one per turn).
     running_todo_list: Option<RunningTodoList>,
-    last_total_token_usage: Option<adam_agent::protocol::TokenUsage>,
+    last_total_token_usage: Option<lha_agent::protocol::TokenUsage>,
     running_mcp_tool_calls: HashMap<String, RunningMcpToolCall>,
     running_web_search_calls: HashMap<String, String>,
     last_critical_error: Option<ThreadErrorEvent>,
@@ -100,7 +100,7 @@ impl EventProcessorWithJsonOutput {
             protocol::EventMsg::ThreadNameUpdated(_) => Vec::new(),
             protocol::EventMsg::AgentMessage(ev) => self.handle_agent_message(ev),
             protocol::EventMsg::ItemCompleted(protocol::ItemCompletedEvent {
-                item: adam_protocol::items::TurnItem::Plan(item),
+                item: lha_protocol::items::TurnItem::Plan(item),
                 ..
             }) => {
                 self.last_proposed_plan = Some(item.text.clone());

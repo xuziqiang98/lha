@@ -1,24 +1,24 @@
 use std::sync::Arc;
 
-use adam_agent::AuthManager;
-use adam_agent::CodexAuth;
-use adam_agent::ContentItem;
-use adam_agent::WEB_SEARCH_ELIGIBLE_HEADER;
-use adam_agent::models_manager::manager::ModelsManager;
-use adam_llm::RuntimeEndpoint;
-use adam_llm::TurnEvent;
-use adam_llm::TurnRequest;
-use adam_otel::OtelManager;
-use adam_protocol::ThreadId;
-use adam_protocol::config_types::ReasoningSummary;
-use adam_protocol::config_types::WebSearchMode;
-use adam_protocol::models::TranscriptItem;
-use adam_protocol::protocol::SessionSource;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
 use core_test_support::runtime_client::TestRuntimeClient;
 use core_test_support::test_codex::test_codex;
 use futures::StreamExt;
+use lha_agent::AuthManager;
+use lha_agent::CodexAuth;
+use lha_agent::ContentItem;
+use lha_agent::WEB_SEARCH_ELIGIBLE_HEADER;
+use lha_agent::models_manager::manager::ModelsManager;
+use lha_llm::RuntimeEndpoint;
+use lha_llm::TurnEvent;
+use lha_llm::TurnRequest;
+use lha_otel::OtelManager;
+use lha_protocol::ThreadId;
+use lha_protocol::config_types::ReasoningSummary;
+use lha_protocol::config_types::WebSearchMode;
+use lha_protocol::models::TranscriptItem;
+use lha_protocol::protocol::SessionSource;
 use tempfile::TempDir;
 use wiremock::matchers::header;
 
@@ -100,8 +100,8 @@ async fn responses_respects_model_info_overrides_from_config() {
             .with_stream_max_retries(Some(0))
             .with_stream_idle_timeout_ms(Some(5_000));
 
-    let adam_home = TempDir::new().expect("failed to create TempDir");
-    let mut config = load_default_config_for_test(&adam_home).await;
+    let lha_home = TempDir::new().expect("failed to create TempDir");
+    let mut config = load_default_config_for_test(&lha_home).await;
     config.model = Some("gpt-3.5-turbo".to_string());
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();

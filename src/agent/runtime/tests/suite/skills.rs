@@ -1,10 +1,6 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::Op;
-use adam_agent::protocol::SandboxPolicy;
-use adam_protocol::user_input::UserInput;
 use anyhow::Result;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -14,6 +10,10 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::Op;
+use lha_agent::protocol::SandboxPolicy;
+use lha_protocol::user_input::UserInput;
 use std::fs;
 use std::path::Path;
 
@@ -45,7 +45,7 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
     });
     let test = builder.build(&server).await?;
 
-    let skill_path = test.adam_home_path().join("skills/demo/SKILL.md");
+    let skill_path = test.lha_home_path().join("skills/demo/SKILL.md");
     let skill_path = std::fs::canonicalize(skill_path)?;
 
     let mock = mount_sse_once(
@@ -77,7 +77,7 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: adam_protocol::config_types::ReasoningSummary::Auto,
+            summary: lha_protocol::config_types::ReasoningSummary::Auto,
             identity: None,
             personality: None,
             tui_buddy: None,
@@ -85,7 +85,7 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
         .await?;
 
     core_test_support::wait_for_event(test.codex.as_ref(), |event| {
-        matches!(event, adam_agent::protocol::EventMsg::TurnComplete(_))
+        matches!(event, lha_agent::protocol::EventMsg::TurnComplete(_))
     })
     .await;
 
@@ -125,7 +125,7 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
         .await?;
     let response =
         core_test_support::wait_for_event_match(test.codex.as_ref(), |event| match event {
-            adam_agent::protocol::EventMsg::ListSkillsResponse(response) => Some(response.clone()),
+            lha_agent::protocol::EventMsg::ListSkillsResponse(response) => Some(response.clone()),
             _ => None,
         })
         .await;
@@ -173,7 +173,7 @@ async fn list_skills_includes_system_cache_entries() -> Result<()> {
     });
     let test = builder.build(&server).await?;
 
-    let system_skill_path = system_skill_md_path(test.adam_home_path(), SYSTEM_SKILL_NAME);
+    let system_skill_path = system_skill_md_path(test.lha_home_path(), SYSTEM_SKILL_NAME);
     assert!(
         system_skill_path.exists(),
         "expected embedded system skills installed to {system_skill_path:?}"
@@ -193,7 +193,7 @@ async fn list_skills_includes_system_cache_entries() -> Result<()> {
         .await?;
     let response =
         core_test_support::wait_for_event_match(test.codex.as_ref(), |event| match event {
-            adam_agent::protocol::EventMsg::ListSkillsResponse(response) => Some(response.clone()),
+            lha_agent::protocol::EventMsg::ListSkillsResponse(response) => Some(response.clone()),
             _ => None,
         })
         .await;
@@ -210,7 +210,7 @@ async fn list_skills_includes_system_cache_entries() -> Result<()> {
         .iter()
         .find(|skill| skill.name == SYSTEM_SKILL_NAME)
         .expect("expected system skill to be present");
-    assert_eq!(skill.scope, adam_protocol::protocol::SkillScope::System);
+    assert_eq!(skill.scope, lha_protocol::protocol::SkillScope::System);
     let path_str = skill.path.to_string_lossy().replace('\\', "/");
     let expected_path_suffix = format!("/skills/.system/{SYSTEM_SKILL_NAME}/SKILL.md");
     assert!(

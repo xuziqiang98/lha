@@ -2,15 +2,15 @@ use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
-use adam_apply_patch::ApplyPatchAction;
-use adam_apply_patch::ApplyPatchFileChange;
+use lha_apply_patch::ApplyPatchAction;
+use lha_apply_patch::ApplyPatchFileChange;
 
 use crate::exec::SandboxType;
 use crate::util::resolve_path;
 
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
-use adam_protocol::config_types::WindowsSandboxLevel;
+use lha_protocol::config_types::WindowsSandboxLevel;
 
 #[derive(Debug, PartialEq)]
 pub enum SafetyCheck {
@@ -174,7 +174,7 @@ fn is_write_patch_constrained_to_writable_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_utils_absolute_path::AbsolutePathBuf;
+    use lha_utils_absolute_path::AbsolutePathBuf;
     use tempfile::TempDir;
 
     #[test]
@@ -234,7 +234,7 @@ mod tests {
         let add_inside = ApplyPatchAction::new_add_for_test(&cwd.join("inner.txt"), "".to_string());
 
         let policy = SandboxPolicy::ExternalSandbox {
-            network_access: adam_protocol::protocol::NetworkAccess::Enabled,
+            network_access: lha_protocol::protocol::NetworkAccess::Enabled,
         };
 
         assert_eq!(

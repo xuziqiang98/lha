@@ -1,8 +1,8 @@
-use adam_agent::config::Config;
-use adam_agent::git_info::get_git_repo_root;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use lha_agent::config::Config;
+use lha_agent::git_info::get_git_repo_root;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
@@ -65,7 +65,7 @@ impl OnboardingScreen {
             config,
         } = args;
         let cwd = config.cwd.clone();
-        let adam_home = config.adam_home;
+        let lha_home = config.lha_home;
         let mut steps: Vec<Step> = Vec::new();
         steps.push(Step::Welcome(WelcomeWidget::new(
             false,
@@ -82,7 +82,7 @@ impl OnboardingScreen {
         if show_trust_screen {
             steps.push(Step::TrustDirectory(TrustDirectoryWidget {
                 cwd,
-                adam_home,
+                lha_home,
                 is_git_repo,
                 selection: None,
                 highlighted,

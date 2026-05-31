@@ -1,10 +1,10 @@
-# adam-otel
+# lha-otel
 
-`adam-otel` is the OpenTelemetry integration crate for Adam. It provides:
+`lha-otel` is the OpenTelemetry integration crate for LHA. It provides:
 
-- Trace/log/metrics exporters and tracing subscriber layers (`adam_otel::otel_provider`).
-- A structured event helper (`adam_otel::OtelManager`).
-- OpenTelemetry metrics support via OTLP exporters (`adam_otel::metrics`).
+- Trace/log/metrics exporters and tracing subscriber layers (`lha_otel::otel_provider`).
+- A structured event helper (`lha_otel::OtelManager`).
+- OpenTelemetry metrics support via OTLP exporters (`lha_otel::metrics`).
 - A metrics facade on `OtelManager` so tracing + metrics share metadata.
 
 ## Tracing and logs
@@ -14,17 +14,17 @@ metrics (when enabled), then attach its layers to your `tracing_subscriber`
 registry:
 
 ```rust
-use adam_otel::config::OtelExporter;
-use adam_otel::config::OtelHttpProtocol;
-use adam_otel::config::OtelSettings;
-use adam_otel::otel_provider::OtelProvider;
+use lha_otel::config::OtelExporter;
+use lha_otel::config::OtelHttpProtocol;
+use lha_otel::config::OtelSettings;
+use lha_otel::otel_provider::OtelProvider;
 use tracing_subscriber::prelude::*;
 
 let settings = OtelSettings {
     environment: "dev".to_string(),
-    service_name: "adam-cli".to_string(),
+    service_name: "lha-cli".to_string(),
     service_version: env!("CARGO_PKG_VERSION").to_string(),
-    adam_home: std::path::PathBuf::from("/tmp"),
+    lha_home: std::path::PathBuf::from("/tmp"),
     exporter: OtelExporter::OtlpHttp {
         endpoint: "https://otlp.example.com".to_string(),
         headers: std::collections::HashMap::new(),
@@ -51,10 +51,10 @@ if let Some(provider) = OtelProvider::from(&settings)? {
 ## OtelManager (events)
 
 `OtelManager` adds consistent metadata to tracing events and helps record
-Adam-specific events.
+LHA-specific events.
 
 ```rust
-use adam_otel::OtelManager;
+use lha_otel::OtelManager;
 
 let manager = OtelManager::new(
     conversation_id,
@@ -78,17 +78,17 @@ Modes:
 - OTLP: exports metrics via the OpenTelemetry OTLP exporter (HTTP or gRPC).
 - In-memory: records via `opentelemetry_sdk::metrics::InMemoryMetricExporter` for tests/assertions; call `shutdown()` to flush.
 
-`adam-otel` also provides `OtelExporter::Statsig`, a shorthand for exporting OTLP/HTTP JSON metrics
-to Statsig using Adam-internal defaults.
+`lha-otel` also provides `OtelExporter::Statsig`, a shorthand for exporting OTLP/HTTP JSON metrics
+to Statsig using LHA-internal defaults.
 
 Statsig ingestion (OTLP/HTTP JSON) example:
 
 ```rust
-use adam_otel::config::{OtelExporter, OtelHttpProtocol};
+use lha_otel::config::{OtelExporter, OtelHttpProtocol};
 
 let metrics = MetricsClient::new(MetricsConfig::otlp(
     "dev",
-    "adam-cli",
+    "lha-cli",
     env!("CARGO_PKG_VERSION"),
     OtelExporter::OtlpHttp {
         endpoint: "https://api.statsig.com/otlp".to_string(),
@@ -111,7 +111,7 @@ In-memory (tests):
 let exporter = InMemoryMetricExporter::default();
 let metrics = MetricsClient::new(MetricsConfig::in_memory(
     "test",
-    "adam-cli",
+    "lha-cli",
     env!("CARGO_PKG_VERSION"),
     exporter.clone(),
 ))?;

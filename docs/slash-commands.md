@@ -1,6 +1,6 @@
 # Slash Commands
 
-Slash commands are built-in TUI shortcuts that run local Adam actions without
+Slash commands are built-in TUI shortcuts that run local LHA actions without
 asking the model to interpret the request.
 
 ## Using Slash Commands
@@ -33,7 +33,7 @@ asking the model to interpret the request.
 | `/new` | None | No | Start a new chat session. |
 | `/resume` | None | No | Open the saved chat resume picker. |
 | `/fork` | None | No | Fork the current chat. |
-| `/init` | None | No | Ask Adam to create an `AGENTS.md` instruction file unless one already exists in the current directory. |
+| `/init` | None | No | Ask LHA to create an `AGENTS.md` instruction file unless one already exists in the current directory. |
 | `/compact` | None | No | Summarize the conversation to reduce context usage. |
 | `/identity` | None | No | Open the identity selector when identities are enabled. |
 | `/changelog` | None | Yes | Show added, modified, and deleted files. |
@@ -44,9 +44,9 @@ asking the model to interpret the request.
 | `/goal` | Optional objective or subcommand | Yes | Set, view, edit, pause, resume, or clear the current programmer goal. |
 | `/bottom` | None | Yes | Scroll the transcript to the bottom. |
 | `/mcp` | None | Yes | List configured MCP tools. |
-| `/logout` | None | No | Log out of Adam and exit the session. |
-| `/exit` | None | Yes | Exit Adam. |
-| `/quit` | None | Yes | Alias for exiting Adam. This command is hidden from the default popup list. |
+| `/logout` | None | No | Log out of LHA and exit the session. |
+| `/exit` | None | Yes | Exit LHA. |
+| `/quit` | None | Yes | Alias for exiting LHA. This command is hidden from the default popup list. |
 | `/feedback` | None | Yes | Open the local feedback flow when feedback is enabled, otherwise show disabled feedback details. |
 | `/ps` | None | Yes | List background terminals. |
 | `/stop` | None | Yes | Stop all background terminals. |
@@ -72,7 +72,7 @@ informational messages because buddy generation and naming are automatic.
 ## Goal Commands
 
 `/goal` is only available in the `programmer` identity. In any other identity,
-Adam shows a prompt to switch with `/identity` and does not mutate goal state.
+LHA shows a prompt to switch with `/identity` and does not mutate goal state.
 
 | Command | Usage |
 | --- | --- |
@@ -88,7 +88,7 @@ Adam shows a prompt to switch with `/identity` and does not mutate goal state.
 `/plan` with no arguments still jumps to the latest proposed plan in the
 transcript.
 
-When `[features].plan_completion = true`, Adam can start YOLO plan completion
+When `[features].plan_completion = true`, LHA can start YOLO plan completion
 from the planner implementation prompt. YOLO plan completion is independent
 from `/goal`; it stores the planner plan and continues in `programmer` until the
 plan is marked complete or blocked.
@@ -102,7 +102,7 @@ plan is marked complete or blocked.
 
 ## Aliases And Hidden Popup Entries
 
-- `/exit` and `/quit` both exit Adam. `/quit` is hidden from the default popup
+- `/exit` and `/quit` both exit LHA. `/quit` is hidden from the default popup
   list so the popup shows one entry for the action.
 - `/stop` and `/clean` both stop all background terminals.
 - `/permissions` and `/approvals` open related permission/approval controls.
@@ -123,11 +123,11 @@ Some commands are visible only when the current session supports them:
 Custom prompt commands use the `/prompts:<name>` form. They expand a saved
 Markdown prompt into the composer submission.
 
-Adam discovers custom prompts from `$ADAM_HOME/prompts`:
+LHA discovers custom prompts from `$LHA_HOME/prompts`:
 
 - Only `.md` files are discovered.
 - The file stem becomes the prompt name. For example,
-  `$ADAM_HOME/prompts/review-api.md` becomes `/prompts:review-api`.
+  `$LHA_HOME/prompts/review-api.md` becomes `/prompts:review-api`.
 - Prompt names that collide with built-in slash commands are excluded from the
   popup.
 - Prompt files can include optional frontmatter keys:
@@ -161,8 +161,8 @@ Example:
 
 - If a command is disabled while a task is running, wait for the task to finish
   or use a command marked available during task.
-- If `/diff` says the directory is not a git repository, run Adam from a git
+- If `/diff` says the directory is not a git repository, run LHA from a git
   worktree.
 - If `/prompts:<name>` is not listed, verify the file exists under
-  `$ADAM_HOME/prompts` and has a `.md` extension.
+  `$LHA_HOME/prompts` and has a `.md` extension.
 - If prompt args fail, use `KEY=value` and quote values containing spaces.

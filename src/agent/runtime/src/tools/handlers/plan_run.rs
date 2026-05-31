@@ -9,12 +9,12 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use adam_protocol::config_types::IdentityKind;
-use adam_protocol::protocol::EventMsg;
-use adam_protocol::protocol::ThreadPlanRun;
-use adam_protocol::protocol::ThreadPlanRunStatus;
-use adam_protocol::protocol::ThreadPlanRunUpdatedEvent;
 use async_trait::async_trait;
+use lha_protocol::config_types::IdentityKind;
+use lha_protocol::protocol::EventMsg;
+use lha_protocol::protocol::ThreadPlanRun;
+use lha_protocol::protocol::ThreadPlanRunStatus;
+use lha_protocol::protocol::ThreadPlanRunUpdatedEvent;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -109,8 +109,8 @@ async fn update_plan_run(
     ensure_plan_run_tool_allowed(session, turn_context).await?;
     let args: UpdatePlanRunArgs = parse_arguments(&arguments)?;
     let status = match args.status.as_str() {
-        "complete" => adam_state::ThreadPlanRunStatus::Complete,
-        "blocked" => adam_state::ThreadPlanRunStatus::Blocked,
+        "complete" => lha_state::ThreadPlanRunStatus::Complete,
+        "blocked" => lha_state::ThreadPlanRunStatus::Blocked,
         _ => {
             return Err(FunctionCallError::RespondToModel(
                 "update_plan_run status must be `complete` or `blocked`".to_string(),
@@ -140,7 +140,7 @@ async fn update_plan_run(
     let plan_run = state_db
         .update_thread_plan_run(
             session.conversation_id,
-            adam_state::PlanRunUpdate {
+            lha_state::PlanRunUpdate {
                 plan_text: None,
                 status: Some(status),
                 token_budget: None,
@@ -196,7 +196,7 @@ fn tool_error(err: anyhow::Error) -> FunctionCallError {
 async fn emit_plan_run_updated(
     session: &Session,
     turn_context: &TurnContext,
-    plan_run: &adam_state::ThreadPlanRun,
+    plan_run: &lha_state::ThreadPlanRun,
 ) {
     session
         .send_event(
@@ -210,7 +210,7 @@ async fn emit_plan_run_updated(
         .await;
 }
 
-fn protocol_plan_run_from_state(plan_run: adam_state::ThreadPlanRun) -> ThreadPlanRun {
+fn protocol_plan_run_from_state(plan_run: lha_state::ThreadPlanRun) -> ThreadPlanRun {
     ThreadPlanRun {
         thread_id: plan_run.thread_id,
         plan_run_id: plan_run.plan_run_id,
@@ -225,15 +225,15 @@ fn protocol_plan_run_from_state(plan_run: adam_state::ThreadPlanRun) -> ThreadPl
 }
 
 fn protocol_plan_run_status_from_state(
-    status: adam_state::ThreadPlanRunStatus,
+    status: lha_state::ThreadPlanRunStatus,
 ) -> ThreadPlanRunStatus {
     match status {
-        adam_state::ThreadPlanRunStatus::Active => ThreadPlanRunStatus::Active,
-        adam_state::ThreadPlanRunStatus::Paused => ThreadPlanRunStatus::Paused,
-        adam_state::ThreadPlanRunStatus::Blocked => ThreadPlanRunStatus::Blocked,
-        adam_state::ThreadPlanRunStatus::UsageLimited => ThreadPlanRunStatus::UsageLimited,
-        adam_state::ThreadPlanRunStatus::BudgetLimited => ThreadPlanRunStatus::BudgetLimited,
-        adam_state::ThreadPlanRunStatus::Complete => ThreadPlanRunStatus::Complete,
+        lha_state::ThreadPlanRunStatus::Active => ThreadPlanRunStatus::Active,
+        lha_state::ThreadPlanRunStatus::Paused => ThreadPlanRunStatus::Paused,
+        lha_state::ThreadPlanRunStatus::Blocked => ThreadPlanRunStatus::Blocked,
+        lha_state::ThreadPlanRunStatus::UsageLimited => ThreadPlanRunStatus::UsageLimited,
+        lha_state::ThreadPlanRunStatus::BudgetLimited => ThreadPlanRunStatus::BudgetLimited,
+        lha_state::ThreadPlanRunStatus::Complete => ThreadPlanRunStatus::Complete,
     }
 }
 
@@ -254,7 +254,7 @@ mod tests {
     ) {
         let (mut session, mut turn_context) = make_session_and_context_with_plan_completion().await;
         let state_home = tempfile::tempdir().expect("create state temp dir");
-        let state_db = adam_state::StateRuntime::init(
+        let state_db = lha_state::StateRuntime::init(
             state_home.path().to_path_buf(),
             "test".to_string(),
             None,
@@ -286,12 +286,12 @@ mod tests {
         session: &Session,
         turn_context: &TurnContext,
         state_db: &crate::state_db::StateDbHandle,
-    ) -> adam_state::ThreadPlanRun {
+    ) -> lha_state::ThreadPlanRun {
         let plan_run = state_db
             .replace_thread_plan_run(
                 session.conversation_id,
                 "# Plan\n- keep working",
-                adam_state::ThreadPlanRunStatus::Active,
+                lha_state::ThreadPlanRunStatus::Active,
                 None,
             )
             .await

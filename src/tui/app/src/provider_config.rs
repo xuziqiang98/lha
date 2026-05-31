@@ -1,21 +1,21 @@
 use std::path::Path;
 use std::time::Duration;
 
-use adam_agent::config::model_ref::ModelRef;
-use adam_agent::config::models_json::ModelsDialect;
-use adam_agent::config::models_json::ModelsEndpoint;
-use adam_agent::config::models_json::ModelsJson;
-use adam_agent::config::models_json::ModelsProvider;
-use adam_agent::config::state_json::AdamStateStore;
-use adam_agent::default_client::build_reqwest_client;
-use adam_api::ApiError;
-use adam_api::AuthProvider;
-use adam_api::ModelsClient;
-use adam_api::Provider;
-use adam_api::ReqwestTransport;
-use adam_api::TransportError;
-use adam_api::WireApi as ApiConversationDialect;
-use adam_api::provider::RetryConfig;
+use lha_agent::config::model_ref::ModelRef;
+use lha_agent::config::models_json::ModelsDialect;
+use lha_agent::config::models_json::ModelsEndpoint;
+use lha_agent::config::models_json::ModelsJson;
+use lha_agent::config::models_json::ModelsProvider;
+use lha_agent::config::state_json::LHAStateStore;
+use lha_agent::default_client::build_reqwest_client;
+use lha_api::ApiError;
+use lha_api::AuthProvider;
+use lha_api::ModelsClient;
+use lha_api::Provider;
+use lha_api::ReqwestTransport;
+use lha_api::TransportError;
+use lha_api::WireApi as ApiConversationDialect;
+use lha_api::provider::RetryConfig;
 use reqwest::StatusCode;
 use reqwest::header::HeaderMap;
 
@@ -312,20 +312,20 @@ pub(crate) fn snapshot_custom_provider_config(
 }
 
 pub(crate) async fn persist_custom_provider_config(
-    adam_home: &Path,
+    lha_home: &Path,
     config: &CustomProviderConfig,
 ) -> Result<(), String> {
     validate_custom_provider_config(config).await?;
 
-    persist_custom_provider_files(adam_home, config)
+    persist_custom_provider_files(lha_home, config)
 }
 
 pub(crate) fn persist_custom_provider_files(
-    adam_home: &Path,
+    lha_home: &Path,
     config: &CustomProviderConfig,
 ) -> Result<(), String> {
     let provider_ref = custom_provider_ref(config);
-    let mut models_json = ModelsJson::load_from_adam_home(adam_home)
+    let mut models_json = ModelsJson::load_from_lha_home(lha_home)
         .map_err(|err| format!("Failed to read models.json: {err}"))?;
     let provider = models_json
         .providers
@@ -364,11 +364,11 @@ pub(crate) fn persist_custom_provider_files(
     model_metadata.context_window = config.model_context_window;
 
     models_json
-        .save_to_adam_home(adam_home)
+        .save_to_lha_home(lha_home)
         .map_err(|err| format!("Failed to write models.json: {err}"))?;
     let model_ref = ModelRef::parse(&format!("{provider_ref}:{}", config.model))
         .map_err(|err| format!("Invalid model selection: {err}"))?;
-    AdamStateStore::new(adam_home)
+    LHAStateStore::new(lha_home)
         .set_last_selected_model(&model_ref, None, None)
         .map_err(|err| format!("Failed to write state.json: {err}"))
 }
@@ -499,10 +499,10 @@ mod tests {
 
     #[test]
     fn custom_provider_edits_write_context_window_when_set() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
 
         persist_custom_provider_files(
-            adam_home.path(),
+            lha_home.path(),
             &CustomProviderConfig {
                 provider_id: "custom_1".to_string(),
                 dialect: ApiProviderDialect::Responses,
@@ -514,7 +514,7 @@ mod tests {
         )
         .expect("write provider files");
 
-        let models_raw = std::fs::read_to_string(adam_home.path().join("models.json")).unwrap();
+        let models_raw = std::fs::read_to_string(lha_home.path().join("models.json")).unwrap();
         let models: serde_json::Value = serde_json::from_str(&models_raw).unwrap();
         assert_eq!(
             models["providers"]["custom_1"]["endpoints"]["responses"]["models"]["gpt-test"]
@@ -522,7 +522,7 @@ mod tests {
                 .as_i64(),
             Some(128_000)
         );
-        let state_raw = std::fs::read_to_string(adam_home.path().join("state.json")).unwrap();
+        let state_raw = std::fs::read_to_string(lha_home.path().join("state.json")).unwrap();
         let state: serde_json::Value = serde_json::from_str(&state_raw).unwrap();
         assert_eq!(
             state["last_selected_model"]["model_ref"].as_str(),
@@ -532,10 +532,10 @@ mod tests {
 
     #[test]
     fn resaving_same_provider_model_with_blank_context_window_clears_metadata() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
 
         persist_custom_provider_files(
-            adam_home.path(),
+            lha_home.path(),
             &CustomProviderConfig {
                 provider_id: "custom_1".to_string(),
                 dialect: ApiProviderDialect::Responses,
@@ -548,7 +548,7 @@ mod tests {
         .expect("write initial provider files");
 
         persist_custom_provider_files(
-            adam_home.path(),
+            lha_home.path(),
             &CustomProviderConfig {
                 provider_id: "custom_1".to_string(),
                 dialect: ApiProviderDialect::Responses,
@@ -560,7 +560,7 @@ mod tests {
         )
         .expect("rewrite provider files");
 
-        let models_raw = std::fs::read_to_string(adam_home.path().join("models.json")).unwrap();
+        let models_raw = std::fs::read_to_string(lha_home.path().join("models.json")).unwrap();
         let models: serde_json::Value = serde_json::from_str(&models_raw).unwrap();
         let metadata =
             models["providers"]["custom_1"]["endpoints"]["responses"]["models"]["gpt-test"]
@@ -571,10 +571,10 @@ mod tests {
 
     #[test]
     fn saving_different_model_with_blank_context_window_omits_empty_values() {
-        let adam_home = tempdir().expect("temp dir");
+        let lha_home = tempdir().expect("temp dir");
 
         persist_custom_provider_files(
-            adam_home.path(),
+            lha_home.path(),
             &CustomProviderConfig {
                 provider_id: "custom_1".to_string(),
                 dialect: ApiProviderDialect::Responses,
@@ -587,7 +587,7 @@ mod tests {
         .expect("write initial provider files");
 
         persist_custom_provider_files(
-            adam_home.path(),
+            lha_home.path(),
             &CustomProviderConfig {
                 provider_id: "custom_2".to_string(),
                 dialect: ApiProviderDialect::Chat,
@@ -599,7 +599,7 @@ mod tests {
         )
         .expect("rewrite provider files");
 
-        let models_raw = std::fs::read_to_string(adam_home.path().join("models.json")).unwrap();
+        let models_raw = std::fs::read_to_string(lha_home.path().join("models.json")).unwrap();
         let models: serde_json::Value = serde_json::from_str(&models_raw).unwrap();
         assert_eq!(
             models["providers"]["custom_1"]["endpoints"]["responses"]["models"]["gpt-test"]

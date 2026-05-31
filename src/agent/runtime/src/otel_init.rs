@@ -3,11 +3,11 @@ use crate::config::types::OtelExporterKind as Kind;
 use crate::config::types::OtelHttpProtocol as Protocol;
 use crate::default_client::originator;
 use crate::features::Feature;
-use adam_otel::config::OtelExporter;
-use adam_otel::config::OtelHttpProtocol;
-use adam_otel::config::OtelSettings;
-use adam_otel::config::OtelTlsConfig as OtelTlsSettings;
-use adam_otel::otel_provider::OtelProvider;
+use lha_otel::config::OtelExporter;
+use lha_otel::config::OtelHttpProtocol;
+use lha_otel::config::OtelSettings;
+use lha_otel::config::OtelTlsConfig as OtelTlsSettings;
+use lha_otel::otel_provider::OtelProvider;
 use std::error::Error;
 
 /// Build an OpenTelemetry provider from the app Config.
@@ -83,7 +83,7 @@ pub fn build_provider(
     OtelProvider::from(&OtelSettings {
         service_name: service_name.to_string(),
         service_version: service_version.to_string(),
-        adam_home: config.adam_home.clone(),
+        lha_home: config.lha_home.clone(),
         environment: config.otel.environment.to_string(),
         exporter,
         trace_exporter,
@@ -92,8 +92,8 @@ pub fn build_provider(
     })
 }
 
-/// Filter predicate for exporting only Adam-owned events via OTEL.
-/// Keeps events that originated from adam_otel module
+/// Filter predicate for exporting only LHA-owned events via OTEL.
+/// Keeps events that originated from lha_otel module
 pub fn codex_export_filter(meta: &tracing::Metadata<'_>) -> bool {
-    meta.target().starts_with("adam_otel")
+    meta.target().starts_with("lha_otel")
 }

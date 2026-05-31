@@ -1,5 +1,5 @@
 [package]
-name = "adam-common"
+name = "lha-common"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,9 +9,9 @@ workspace = true
 
 [dependencies]
 clap = { workspace = true, features = ["derive", "wrap_help"], optional = true }
-adam-agent = { workspace = true }
-adam-llm = { workspace = true }
-adam-protocol = { workspace = true }
+lha-agent = { workspace = true }
+lha-llm = { workspace = true }
+lha-protocol = { workspace = true }
 serde = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
 
@@ -23,7 +23,7 @@ sandbox_summary = []
 
 [dev-dependencies]
 clap = { workspace = true, features = ["derive", "wrap_help"] }
-adam-utils-absolute-path = { workspace = true }
+lha-utils-absolute-path = { workspace = true }
 pretty_assertions = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }

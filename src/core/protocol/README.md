@@ -1,6 +1,6 @@
-# adam-protocol
+# lha-protocol
 
-This crate defines the "types" for the protocol used by Adam CLI, which includes both "internal types" for communication between `adam-agent` and `adam-tui`, as well as "external types" used with `adam app-server`.
+This crate defines the "types" for the protocol used by LHA CLI, which includes both "internal types" for communication between `lha-agent` and `lha-tui`, as well as "external types" used with `lha app-server`.
 
 This crate should have minimal dependencies.
 

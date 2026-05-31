@@ -1,15 +1,15 @@
 [package]
-name = "adam-tui"
+name = "lha-tui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "adam-tui"
+name = "lha-tui"
 path = "src/main.rs"
 
 [lib]
-name = "adam_tui"
+name = "lha_tui"
 path = "src/lib.rs"
 
 [features]
@@ -26,24 +26,24 @@ anyhow = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
-adam-ansi-escape = { workspace = true }
-adam-api = { workspace = true }
-adam-app-server-protocol = { workspace = true }
-adam-arg0 = { workspace = true }
-adam-common = { workspace = true, features = [
+lha-ansi-escape = { workspace = true }
+lha-api = { workspace = true }
+lha-app-server-protocol = { workspace = true }
+lha-arg0 = { workspace = true }
+lha-common = { workspace = true, features = [
     "cli",
     "elapsed",
     "sandbox_summary",
 ] }
-adam-agent = { workspace = true }
-adam-llm = { workspace = true }
-adam-feedback = { workspace = true }
-adam-file-search = { workspace = true }
-adam-otel = { workspace = true }
-adam-protocol = { workspace = true }
-adam-state = { workspace = true }
-adam-utils-absolute-path = { workspace = true }
-adam-utils-sleep-inhibitor = { workspace = true }
+lha-agent = { workspace = true }
+lha-llm = { workspace = true }
+lha-feedback = { workspace = true }
+lha-file-search = { workspace = true }
+lha-otel = { workspace = true }
+lha-protocol = { workspace = true }
+lha-state = { workspace = true }
+lha-utils-absolute-path = { workspace = true }
+lha-utils-sleep-inhibitor = { workspace = true }
 color-eyre = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
 derive_more = { workspace = true, features = ["is_variant"] }
@@ -99,7 +99,7 @@ url = { workspace = true }
 uuid = { workspace = true }
 walkdir = { workspace = true }
 
-adam-windows-sandbox = { workspace = true }
+lha-windows-sandbox = { workspace = true }
 tokio-util = { workspace = true, features = ["time"] }
 
 [target.'cfg(unix)'.dependencies]
@@ -120,10 +120,10 @@ arboard = { workspace = true }
 
 
 [dev-dependencies]
-adam-cli = { workspace = true }
-adam-agent = { workspace = true, features = ["test-support"] }
-adam-utils-cargo-bin = { workspace = true }
-adam-utils-pty = { workspace = true }
+lha-cli = { workspace = true }
+lha-agent = { workspace = true, features = ["test-support"] }
+lha-utils-cargo-bin = { workspace = true }
+lha-utils-pty = { workspace = true }
 assert_matches = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 insta = { workspace = true }

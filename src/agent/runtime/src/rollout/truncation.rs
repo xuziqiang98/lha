@@ -4,8 +4,8 @@
 //! filtering them through ContextManager's real user-turn boundary helper.
 
 use crate::context_manager::is_user_turn_boundary;
-use adam_protocol::protocol::EventMsg;
-use adam_protocol::protocol::RolloutItem;
+use lha_protocol::protocol::EventMsg;
+use lha_protocol::protocol::RolloutItem;
 
 /// Return the indices of user message boundaries in a rollout.
 ///
@@ -68,11 +68,11 @@ mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
     use crate::compact::proposed_plan_backfill_items;
-    use adam_protocol::models::ContentItem;
-    use adam_protocol::models::ReasoningItemReasoningSummary;
-    use adam_protocol::models::TranscriptItem;
-    use adam_protocol::protocol::ThreadRolledBackEvent;
     use assert_matches::assert_matches;
+    use lha_protocol::models::ContentItem;
+    use lha_protocol::models::ReasoningItemReasoningSummary;
+    use lha_protocol::models::TranscriptItem;
+    use lha_protocol::protocol::ThreadRolledBackEvent;
     use pretty_assertions::assert_eq;
 
     fn user_msg(text: &str) -> TranscriptItem {
@@ -117,7 +117,7 @@ mod tests {
                 id: None,
                 call_id: "c1".to_string(),
                 tool_name: "tool".to_string(),
-                payload: adam_llm::ToolCallPayload::JsonArguments {
+                payload: lha_llm::ToolCallPayload::JsonArguments {
                     arguments: "{}".to_string(),
                 },
             },

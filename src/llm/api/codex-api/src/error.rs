@@ -1,5 +1,5 @@
-use adam_client::TransportError;
 use http::StatusCode;
+use lha_client::TransportError;
 use std::time::Duration;
 use thiserror::Error;
 

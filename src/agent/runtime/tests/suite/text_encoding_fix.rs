@@ -1,9 +1,9 @@
 //! Integration test for the text encoding fix for issue #6178.
 //!
 //! These tests simulate VSCode's shell preview on Windows/WSL where the output
-//! may be encoded with a legacy code page before it reaches Adam.
+//! may be encoded with a legacy code page before it reaches LHA.
 
-use adam_agent::exec::StreamOutput;
+use lha_agent::exec::StreamOutput;
 use pretty_assertions::assert_eq;
 
 #[test]

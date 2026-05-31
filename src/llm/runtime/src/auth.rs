@@ -1,4 +1,4 @@
-use adam_api::AuthProvider as ApiAuthProvider;
+use lha_api::AuthProvider as ApiAuthProvider;
 
 use crate::Result;
 use crate::provider::RuntimeEndpoint;

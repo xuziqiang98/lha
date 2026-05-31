@@ -1,22 +1,22 @@
 #![cfg(unix)]
 
-use adam_app_server_protocol::JSONRPCNotification;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::ThreadStartParams;
-use adam_app_server_protocol::ThreadStartResponse;
-use adam_app_server_protocol::TurnCompletedNotification;
-use adam_app_server_protocol::TurnInterruptParams;
-use adam_app_server_protocol::TurnInterruptResponse;
-use adam_app_server_protocol::TurnStartParams;
-use adam_app_server_protocol::TurnStartResponse;
-use adam_app_server_protocol::TurnStatus;
-use adam_app_server_protocol::UserInput as V2UserInput;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
+use lha_app_server_protocol::JSONRPCNotification;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::ThreadStartParams;
+use lha_app_server_protocol::ThreadStartResponse;
+use lha_app_server_protocol::TurnCompletedNotification;
+use lha_app_server_protocol::TurnInterruptParams;
+use lha_app_server_protocol::TurnInterruptResponse;
+use lha_app_server_protocol::TurnStartParams;
+use lha_app_server_protocol::TurnStartResponse;
+use lha_app_server_protocol::TurnStatus;
+use lha_app_server_protocol::UserInput as V2UserInput;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -35,8 +35,8 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     let shell_command = vec!["sleep".to_string(), "10".to_string()];
 
     let tmp = TempDir::new()?;
-    let adam_home = tmp.path().join("adam_home");
-    std::fs::create_dir(&adam_home)?;
+    let lha_home = tmp.path().join("lha_home");
+    std::fs::create_dir(&lha_home)?;
     let working_directory = tmp.path().join("workdir");
     std::fs::create_dir(&working_directory)?;
 
@@ -48,9 +48,9 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
         "call_sleep",
     )?])
     .await;
-    create_config_toml(&adam_home, &server.uri())?;
+    create_config_toml(&lha_home, &server.uri())?;
 
-    let mut mcp = McpProcess::new(&adam_home).await?;
+    let mut mcp = McpProcess::new(&lha_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Start a v2 thread and capture its id.
@@ -121,9 +121,9 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
 }
 
 // Helper to create a config.toml pointing at the mock model server.
-fn create_config_toml(adam_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
+fn create_config_toml(lha_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
     app_test_support::write_mock_responses_config_toml_with_options(
-        adam_home,
+        lha_home,
         server_uri,
         &std::collections::BTreeMap::new(),
         20_000,

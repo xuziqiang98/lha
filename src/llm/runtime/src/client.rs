@@ -2,41 +2,41 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use adam_api::AggregateStreamExt;
-use adam_api::ChatClient as ApiChatClient;
-use adam_api::ChatRequestBuilder as ApiChatRequestBuilder;
-use adam_api::CompactClient as ApiCompactClient;
-use adam_api::CompactionInput as ApiCompactionInput;
-use adam_api::DeveloperRoleHandling;
-use adam_api::MessagesClient as ApiMessagesClient;
-use adam_api::MessagesRequestBuilder as ApiMessagesRequestBuilder;
-use adam_api::Prompt as ApiPrompt;
-use adam_api::RequestTelemetry;
-use adam_api::ReqwestTransport;
-use adam_api::ResponseAppendWsRequest;
-use adam_api::ResponseCreateWsRequest;
-use adam_api::ResponseStream as ApiResponseStream;
-use adam_api::ResponsesClient as ApiResponsesClient;
-use adam_api::ResponsesOptions as ApiResponsesOptions;
-use adam_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
-use adam_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
-use adam_api::SseTelemetry;
-use adam_api::TransportError;
-use adam_api::WebsocketTelemetry;
-use adam_api::build_conversation_headers;
-use adam_api::common::Reasoning;
-use adam_api::common::ResponsesWsRequest;
-use adam_api::create_text_param_for_request;
-use adam_api::error::ApiError;
-use adam_api::requests::responses::Compression;
-use adam_llm_types::ContentItem;
-use adam_otel::OtelManager;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
 use futures::StreamExt;
 use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
 use http::StatusCode as HttpStatusCode;
+use lha_api::AggregateStreamExt;
+use lha_api::ChatClient as ApiChatClient;
+use lha_api::ChatRequestBuilder as ApiChatRequestBuilder;
+use lha_api::CompactClient as ApiCompactClient;
+use lha_api::CompactionInput as ApiCompactionInput;
+use lha_api::DeveloperRoleHandling;
+use lha_api::MessagesClient as ApiMessagesClient;
+use lha_api::MessagesRequestBuilder as ApiMessagesRequestBuilder;
+use lha_api::Prompt as ApiPrompt;
+use lha_api::RequestTelemetry;
+use lha_api::ReqwestTransport;
+use lha_api::ResponseAppendWsRequest;
+use lha_api::ResponseCreateWsRequest;
+use lha_api::ResponseStream as ApiResponseStream;
+use lha_api::ResponsesClient as ApiResponsesClient;
+use lha_api::ResponsesOptions as ApiResponsesOptions;
+use lha_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
+use lha_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
+use lha_api::SseTelemetry;
+use lha_api::TransportError;
+use lha_api::WebsocketTelemetry;
+use lha_api::build_conversation_headers;
+use lha_api::common::Reasoning;
+use lha_api::common::ResponsesWsRequest;
+use lha_api::create_text_param_for_request;
+use lha_api::error::ApiError;
+use lha_api::requests::responses::Compression;
+use lha_llm_types::ContentItem;
+use lha_otel::OtelManager;
 use reqwest::Client as HttpClient;
 use reqwest::StatusCode;
 use serde_json::Value;
@@ -456,7 +456,7 @@ impl LlmClientSession {
 
     async fn websocket_connection(
         &mut self,
-        api_provider: adam_api::Provider,
+        api_provider: lha_api::Provider,
         api_auth: crate::auth::LlmAuthProvider,
         options: &ApiResponsesOptions,
     ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
@@ -611,7 +611,7 @@ impl LlmClientSession {
         if let Some(path) = &self.state.runtime_config.sse_fixture_path {
             warn!(path, "Streaming from fixture");
             let stream =
-                adam_api::stream_from_fixture(path, self.state.endpoint.stream_idle_timeout())?;
+                lha_api::stream_from_fixture(path, self.state.endpoint.stream_idle_timeout())?;
             return Ok(map_response_stream(stream, self.state.otel_manager.clone()));
         }
 
@@ -738,8 +738,8 @@ fn build_chat_request(
     conversation_id: &str,
     origin_tag: Option<&str>,
     developer_role_handling: DeveloperRoleHandling,
-    provider: &adam_api::Provider,
-) -> std::result::Result<adam_api::ChatRequest, Error> {
+    provider: &lha_api::Provider,
+) -> std::result::Result<lha_api::ChatRequest, Error> {
     ApiChatRequestBuilder::new(model, &prompt.instructions, &prompt.input, &prompt.tools)
         .conversation_id(Some(conversation_id.to_string()))
         .origin_tag(origin_tag.map(ToOwned::to_owned))
@@ -1182,7 +1182,7 @@ impl WebsocketTelemetry for ApiTelemetry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adam_llm_types::ReasoningItemContent;
+    use lha_llm_types::ReasoningItemContent;
     use serde_json::json;
 
     #[test]

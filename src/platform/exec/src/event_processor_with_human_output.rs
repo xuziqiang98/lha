@@ -1,32 +1,32 @@
-use adam_agent::config::Config;
-use adam_agent::protocol::AgentMessageEvent;
-use adam_agent::protocol::AgentReasoningRawContentEvent;
-use adam_agent::protocol::BackgroundEventEvent;
-use adam_agent::protocol::DeprecationNoticeEvent;
-use adam_agent::protocol::ErrorEvent;
-use adam_agent::protocol::Event;
-use adam_agent::protocol::EventMsg;
-use adam_agent::protocol::ExecCommandBeginEvent;
-use adam_agent::protocol::ExecCommandEndEvent;
-use adam_agent::protocol::FileChange;
-use adam_agent::protocol::ItemCompletedEvent;
-use adam_agent::protocol::McpInvocation;
-use adam_agent::protocol::McpToolCallBeginEvent;
-use adam_agent::protocol::McpToolCallEndEvent;
-use adam_agent::protocol::PatchApplyBeginEvent;
-use adam_agent::protocol::PatchApplyEndEvent;
-use adam_agent::protocol::SessionConfiguredEvent;
-use adam_agent::protocol::StreamErrorEvent;
-use adam_agent::protocol::TurnAbortReason;
-use adam_agent::protocol::TurnCompleteEvent;
-use adam_agent::protocol::TurnDiffEvent;
-use adam_agent::protocol::WarningEvent;
-use adam_agent::protocol::WebSearchEndEvent;
-use adam_agent::web_search::web_search_detail;
-use adam_common::elapsed::format_duration;
-use adam_common::elapsed::format_elapsed;
-use adam_protocol::items::TurnItem;
-use adam_protocol::num_format::format_with_separators;
+use lha_agent::config::Config;
+use lha_agent::protocol::AgentMessageEvent;
+use lha_agent::protocol::AgentReasoningRawContentEvent;
+use lha_agent::protocol::BackgroundEventEvent;
+use lha_agent::protocol::DeprecationNoticeEvent;
+use lha_agent::protocol::ErrorEvent;
+use lha_agent::protocol::Event;
+use lha_agent::protocol::EventMsg;
+use lha_agent::protocol::ExecCommandBeginEvent;
+use lha_agent::protocol::ExecCommandEndEvent;
+use lha_agent::protocol::FileChange;
+use lha_agent::protocol::ItemCompletedEvent;
+use lha_agent::protocol::McpInvocation;
+use lha_agent::protocol::McpToolCallBeginEvent;
+use lha_agent::protocol::McpToolCallEndEvent;
+use lha_agent::protocol::PatchApplyBeginEvent;
+use lha_agent::protocol::PatchApplyEndEvent;
+use lha_agent::protocol::SessionConfiguredEvent;
+use lha_agent::protocol::StreamErrorEvent;
+use lha_agent::protocol::TurnAbortReason;
+use lha_agent::protocol::TurnCompleteEvent;
+use lha_agent::protocol::TurnDiffEvent;
+use lha_agent::protocol::WarningEvent;
+use lha_agent::protocol::WebSearchEndEvent;
+use lha_agent::web_search::web_search_detail;
+use lha_common::elapsed::format_duration;
+use lha_common::elapsed::format_elapsed;
+use lha_protocol::items::TurnItem;
+use lha_protocol::num_format::format_with_separators;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
@@ -37,9 +37,9 @@ use std::time::Instant;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::handle_last_message;
-use adam_common::create_config_summary_entries;
-use adam_protocol::plan_tool::StepStatus;
-use adam_protocol::plan_tool::UpdatePlanArgs;
+use lha_common::create_config_summary_entries;
+use lha_protocol::plan_tool::StepStatus;
+use lha_protocol::plan_tool::UpdatePlanArgs;
 
 /// This should be configurable. When used in CI, users may not want to impose
 /// a limit so they can see the full transcript.
@@ -64,7 +64,7 @@ pub(crate) struct EventProcessorWithHumanOutput {
     show_agent_reasoning: bool,
     show_raw_agent_reasoning: bool,
     last_message_path: Option<PathBuf>,
-    last_total_token_usage: Option<adam_agent::protocol::TokenUsageInfo>,
+    last_total_token_usage: Option<lha_agent::protocol::TokenUsageInfo>,
     final_message: Option<String>,
     last_proposed_plan: Option<String>,
 }
@@ -140,7 +140,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         session_configured_event: &SessionConfiguredEvent,
     ) {
         const VERSION: &str = env!("CARGO_PKG_VERSION");
-        ts_msg!(self, "Adam v{} (research preview)\n--------", VERSION);
+        ts_msg!(self, "LHA v{} (research preview)\n--------", VERSION);
 
         let mut entries = create_config_summary_entries(
             config,
@@ -190,10 +190,10 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             EventMsg::McpStartupUpdate(update) => {
                 let status_text = match update.status {
-                    adam_agent::protocol::McpStartupStatus::Starting => "starting".to_string(),
-                    adam_agent::protocol::McpStartupStatus::Ready => "ready".to_string(),
-                    adam_agent::protocol::McpStartupStatus::Cancelled => "cancelled".to_string(),
-                    adam_agent::protocol::McpStartupStatus::Failed { ref error } => {
+                    lha_agent::protocol::McpStartupStatus::Starting => "starting".to_string(),
+                    lha_agent::protocol::McpStartupStatus::Ready => "ready".to_string(),
+                    lha_agent::protocol::McpStartupStatus::Cancelled => "cancelled".to_string(),
+                    lha_agent::protocol::McpStartupStatus::Failed { ref error } => {
                         format!("failed: {error}")
                     }
                 };
@@ -290,7 +290,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 ts_msg!(
                     self,
                     "{}\n{}",
-                    "adam".style(self.italic).style(self.magenta),
+                    "lha".style(self.italic).style(self.magenta),
                     message,
                 );
             }
@@ -534,7 +534,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 ts_msg!(
                     self,
                     "{} {}",
-                    "adam session".style(self.magenta).style(self.bold),
+                    "lha session".style(self.magenta).style(self.bold),
                     conversation_id.to_string().style(self.dimmed)
                 );
 

@@ -15,7 +15,7 @@
       "type": "object"
     },
     "IdentityKind": {
-      "description": "Built-in Adam identity kind.",
+      "description": "Built-in LHA identity kind.",
       "enum": [
         "nobody",
         "planner",

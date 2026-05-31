@@ -1,5 +1,5 @@
-use adam_agent::features::FEATURES;
 use lazy_static::lazy_static;
+use lha_agent::features::FEATURES;
 use rand::Rng;
 
 const RAW_TOOLTIPS: &str = include_str!("../tooltips.txt");
@@ -25,7 +25,7 @@ fn experimental_tooltips() -> Vec<&'static str> {
         .collect()
 }
 
-/// Pick a random tooltip to show to the user when starting Adam.
+/// Pick a random tooltip to show to the user when starting LHA.
 pub(crate) fn random_tooltip() -> Option<String> {
     let mut rng = rand::rng();
     pick_tooltip(&mut rng).map(str::to_string)

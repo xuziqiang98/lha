@@ -3,15 +3,15 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::with_border_with_inner_width;
 use crate::version::CODEX_CLI_VERSION;
-use adam_agent::config::Config;
-use adam_agent::config::display_model_provider_ref;
-use adam_agent::protocol::NetworkAccess;
-use adam_agent::protocol::SandboxPolicy;
-use adam_agent::protocol::TokenUsage;
-use adam_agent::protocol::TokenUsageInfo;
-use adam_common::summarize_sandbox_policy;
-use adam_protocol::ThreadId;
-use adam_protocol::openai_models::ReasoningEffort;
+use lha_agent::config::Config;
+use lha_agent::config::display_model_provider_ref;
+use lha_agent::protocol::NetworkAccess;
+use lha_agent::protocol::SandboxPolicy;
+use lha_agent::protocol::TokenUsage;
+use lha_agent::protocol::TokenUsageInfo;
+use lha_common::summarize_sandbox_policy;
+use lha_protocol::ThreadId;
+use lha_protocol::openai_models::ReasoningEffort;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use std::collections::BTreeSet;
@@ -27,7 +27,7 @@ use super::helpers::compose_agents_summary;
 use super::helpers::compose_model_display;
 use super::helpers::format_directory_display;
 use super::helpers::format_tokens_compact;
-use adam_agent::AuthManager;
+use lha_agent::AuthManager;
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
@@ -245,7 +245,7 @@ impl HistoryCell for StatusHistoryCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from(vec![
             Span::from(format!("{}>_ ", FieldFormatter::INDENT)).dim(),
-            Span::from("Adam").bold(),
+            Span::from("LHA").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{CODEX_CLI_VERSION})")).dim(),
         ]));

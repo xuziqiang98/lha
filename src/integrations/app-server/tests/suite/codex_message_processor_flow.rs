@@ -1,28 +1,3 @@
-use adam_agent::protocol::AskForApproval;
-use adam_agent::protocol::SandboxPolicy;
-use adam_agent::protocol_config_types::ReasoningSummary;
-use adam_agent::spawn::ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use adam_app_server_protocol::AddConversationListenerParams;
-use adam_app_server_protocol::AddConversationSubscriptionResponse;
-use adam_app_server_protocol::ExecCommandApprovalParams;
-use adam_app_server_protocol::InputItem;
-use adam_app_server_protocol::JSONRPCNotification;
-use adam_app_server_protocol::JSONRPCResponse;
-use adam_app_server_protocol::NewConversationParams;
-use adam_app_server_protocol::NewConversationResponse;
-use adam_app_server_protocol::RemoveConversationListenerParams;
-use adam_app_server_protocol::RemoveConversationSubscriptionResponse;
-use adam_app_server_protocol::RequestId;
-use adam_app_server_protocol::SendUserMessageParams;
-use adam_app_server_protocol::SendUserMessageResponse;
-use adam_app_server_protocol::SendUserTurnParams;
-use adam_app_server_protocol::SendUserTurnResponse;
-use adam_app_server_protocol::ServerRequest;
-use adam_protocol::config_types::SandboxMode;
-use adam_protocol::openai_models::ReasoningEffort;
-use adam_protocol::parse_command::ParsedCommand;
-use adam_protocol::protocol::Event;
-use adam_protocol::protocol::EventMsg;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
@@ -30,6 +5,31 @@ use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell;
 use app_test_support::to_response;
+use lha_agent::protocol::AskForApproval;
+use lha_agent::protocol::SandboxPolicy;
+use lha_agent::protocol_config_types::ReasoningSummary;
+use lha_agent::spawn::LHA_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use lha_app_server_protocol::AddConversationListenerParams;
+use lha_app_server_protocol::AddConversationSubscriptionResponse;
+use lha_app_server_protocol::ExecCommandApprovalParams;
+use lha_app_server_protocol::InputItem;
+use lha_app_server_protocol::JSONRPCNotification;
+use lha_app_server_protocol::JSONRPCResponse;
+use lha_app_server_protocol::NewConversationParams;
+use lha_app_server_protocol::NewConversationResponse;
+use lha_app_server_protocol::RemoveConversationListenerParams;
+use lha_app_server_protocol::RemoveConversationSubscriptionResponse;
+use lha_app_server_protocol::RequestId;
+use lha_app_server_protocol::SendUserMessageParams;
+use lha_app_server_protocol::SendUserMessageResponse;
+use lha_app_server_protocol::SendUserTurnParams;
+use lha_app_server_protocol::SendUserTurnResponse;
+use lha_app_server_protocol::ServerRequest;
+use lha_protocol::config_types::SandboxMode;
+use lha_protocol::openai_models::ReasoningEffort;
+use lha_protocol::parse_command::ParsedCommand;
+use lha_protocol::protocol::Event;
+use lha_protocol::protocol::EventMsg;
 use pretty_assertions::assert_eq;
 use std::env;
 use std::path::Path;
@@ -40,17 +40,17 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
-    if env::var(ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+    if env::var(LHA_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
-            "Skipping test because it cannot execute when network is disabled in a Adam sandbox."
+            "Skipping test because it cannot execute when network is disabled in a LHA sandbox."
         );
         return Ok(());
     }
 
     let tmp = TempDir::new()?;
-    // Temporary Adam home with config pointing at the mock server.
-    let adam_home = tmp.path().join("adam_home");
-    std::fs::create_dir(&adam_home)?;
+    // Temporary LHA home with config pointing at the mock server.
+    let lha_home = tmp.path().join("lha_home");
+    std::fs::create_dir(&lha_home)?;
     let working_directory = tmp.path().join("workdir");
     std::fs::create_dir(&working_directory)?;
 
@@ -66,10 +66,10 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
         create_final_assistant_message_sse_response("Enjoy your new git repo!")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(&adam_home, &server.uri())?;
+    create_config_toml(&lha_home, &server.uri())?;
 
     // Start MCP server and initialize.
-    let mut mcp = McpProcess::new(&adam_home).await?;
+    let mut mcp = McpProcess::new(&lha_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // 1) newConversation
@@ -113,7 +113,7 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
     let send_user_id = mcp
         .send_send_user_message_request(SendUserMessageParams {
             conversation_id,
-            items: vec![adam_app_server_protocol::InputItem::Text {
+            items: vec![lha_app_server_protocol::InputItem::Text {
                 text: "text".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -128,7 +128,7 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
 
     let task_started_notification: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/task_started"),
+        mcp.read_stream_until_notification_message("lha/event/task_started"),
     )
     .await??;
     let task_started_event: Event = serde_json::from_value(
@@ -144,7 +144,7 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
     let task_finished_notification: JSONRPCNotification = loop {
         let notification: JSONRPCNotification = timeout(
             DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("adam/event/task_complete"),
+            mcp.read_stream_until_notification_message("lha/event/task_complete"),
         )
         .await??;
         let event: Event = serde_json::from_value(
@@ -186,16 +186,16 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
-    if env::var(ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+    if env::var(LHA_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
-            "Skipping test because it cannot execute when network is disabled in a Adam sandbox."
+            "Skipping test because it cannot execute when network is disabled in a LHA sandbox."
         );
         return Ok(());
     }
 
     let tmp = TempDir::new()?;
-    let adam_home = tmp.path().join("adam_home");
-    std::fs::create_dir(&adam_home)?;
+    let lha_home = tmp.path().join("lha_home");
+    std::fs::create_dir(&lha_home)?;
     let working_directory = tmp.path().join("workdir");
     std::fs::create_dir(&working_directory)?;
 
@@ -225,10 +225,10 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
         create_final_assistant_message_sse_response("done 2")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(&adam_home, &server.uri())?;
+    create_config_toml(&lha_home, &server.uri())?;
 
     // Start MCP server and initialize.
-    let mut mcp = McpProcess::new(&adam_home).await?;
+    let mut mcp = McpProcess::new(&lha_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // 1) Start conversation with approval_policy=untrusted
@@ -263,7 +263,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     let send_user_id = mcp
         .send_send_user_message_request(SendUserMessageParams {
             conversation_id,
-            items: vec![adam_app_server_protocol::InputItem::Text {
+            items: vec![lha_app_server_protocol::InputItem::Text {
                 text: "run python".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -304,14 +304,14 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     // Approve so the first turn can complete
     mcp.send_response(
         request_id,
-        serde_json::json!({ "decision": adam_agent::protocol::ReviewDecision::Approved }),
+        serde_json::json!({ "decision": lha_agent::protocol::ReviewDecision::Approved }),
     )
     .await?;
 
     // Wait for first TurnComplete
     let _ = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/task_complete"),
+        mcp.read_stream_until_notification_message("lha/event/task_complete"),
     )
     .await??;
 
@@ -319,7 +319,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     let send_turn_id = mcp
         .send_send_user_turn_request(SendUserTurnParams {
             conversation_id,
-            items: vec![adam_app_server_protocol::InputItem::Text {
+            items: vec![lha_app_server_protocol::InputItem::Text {
                 text: "run python again".to_string(),
                 text_elements: Vec::new(),
             }],
@@ -345,7 +345,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     // If any Request is seen while waiting for task_complete, the helper will error and the test fails.
     let _ = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/task_complete"),
+        mcp.read_stream_until_notification_message("lha/event/task_complete"),
     )
     .await??;
 
@@ -356,16 +356,16 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<()> {
-    if env::var(ADAM_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+    if env::var(LHA_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
-            "Skipping test because it cannot execute when network is disabled in a Adam sandbox."
+            "Skipping test because it cannot execute when network is disabled in a LHA sandbox."
         );
         return Ok(());
     }
 
     let tmp = TempDir::new()?;
-    let adam_home = tmp.path().join("adam_home");
-    std::fs::create_dir(&adam_home)?;
+    let lha_home = tmp.path().join("lha_home");
+    std::fs::create_dir(&lha_home)?;
     let workspace_root = tmp.path().join("workspace");
     std::fs::create_dir(&workspace_root)?;
     let first_cwd = workspace_root.join("turn1");
@@ -390,9 +390,9 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
         create_final_assistant_message_sse_response("done second")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(&adam_home, &server.uri())?;
+    create_config_toml(&lha_home, &server.uri())?;
 
-    let mut mcp = McpProcess::new(&adam_home).await?;
+    let mut mcp = McpProcess::new(&lha_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let new_conv_id = mcp
@@ -451,7 +451,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
     .await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/task_complete"),
+        mcp.read_stream_until_notification_message("lha/event/task_complete"),
     )
     .await??;
     mcp.clear_message_buffer();
@@ -480,7 +480,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
 
     let exec_begin_notification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/exec_command_begin"),
+        mcp.read_stream_until_notification_message("lha/event/exec_command_begin"),
     )
     .await??;
     let params = exec_begin_notification
@@ -504,16 +504,16 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("adam/event/task_complete"),
+        mcp.read_stream_until_notification_message("lha/event/task_complete"),
     )
     .await??;
 
     Ok(())
 }
 
-fn create_config_toml(adam_home: &Path, server_uri: &str) -> std::io::Result<()> {
+fn create_config_toml(lha_home: &Path, server_uri: &str) -> std::io::Result<()> {
     app_test_support::write_mock_responses_config_toml_with_options(
-        adam_home,
+        lha_home,
         server_uri,
         &std::collections::BTreeMap::new(),
         20_000,
