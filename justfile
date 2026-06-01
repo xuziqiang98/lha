@@ -7,11 +7,11 @@ help:
 # `codex`
 alias c := codex
 codex *args:
-    cargo run --bin codex -- "$@"
+    cargo run --bin lha -- "$@"
 
 # `codex exec`
 exec *args:
-    cargo run --bin codex -- exec "$@"
+    cargo run --bin lha -- exec "$@"
 
 # Run the CLI version of the file-search crate.
 file-search *args:
