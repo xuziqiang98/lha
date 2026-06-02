@@ -2255,6 +2255,16 @@
         {
           "description": "Agent text output message",
           "properties": {
+            "memory_citation": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/v2/MemoryCitation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "message": {
               "type": "string"
             },

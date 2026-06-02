@@ -3,6 +3,7 @@ use crate::protocol::v2::Turn;
 use crate::protocol::v2::TurnError;
 use crate::protocol::v2::TurnStatus;
 use crate::protocol::v2::UserInput;
+use lha_protocol::protocol::AgentMessageEvent;
 use lha_protocol::protocol::AgentReasoningEvent;
 use lha_protocol::protocol::AgentReasoningRawContentEvent;
 use lha_protocol::protocol::EventMsg;
@@ -51,7 +52,7 @@ impl ThreadHistoryBuilder {
     fn handle_event(&mut self, event: &EventMsg) {
         match event {
             EventMsg::UserMessage(payload) => self.handle_user_message(payload),
-            EventMsg::AgentMessage(payload) => self.handle_agent_message(payload.message.clone()),
+            EventMsg::AgentMessage(payload) => self.handle_agent_message(payload),
             EventMsg::AgentReasoning(payload) => self.handle_agent_reasoning(payload),
             EventMsg::AgentReasoningRawContent(payload) => {
                 self.handle_agent_reasoning_raw_content(payload)
@@ -76,16 +77,16 @@ impl ThreadHistoryBuilder {
         self.current_turn = Some(turn);
     }
 
-    fn handle_agent_message(&mut self, text: String) {
-        if text.is_empty() {
+    fn handle_agent_message(&mut self, payload: &AgentMessageEvent) {
+        if payload.message.is_empty() {
             return;
         }
 
         let id = self.next_item_id();
         self.ensure_turn().items.push(ThreadItem::AgentMessage {
             id,
-            text,
-            memory_citation: None,
+            text: payload.message.clone(),
+            memory_citation: payload.memory_citation.clone(),
         });
     }
 
@@ -255,6 +256,8 @@ impl From<PendingTurn> for Turn {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lha_protocol::memory_citation::MemoryCitation;
+    use lha_protocol::memory_citation::MemoryCitationEntry;
     use lha_protocol::protocol::AgentMessageEvent;
     use lha_protocol::protocol::AgentReasoningEvent;
     use lha_protocol::protocol::AgentReasoningRawContentEvent;
@@ -275,6 +278,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "Hi there".into(),
+                memory_citation: None,
             }),
             EventMsg::AgentReasoning(AgentReasoningEvent {
                 text: "thinking".into(),
@@ -290,6 +294,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "Reply two".into(),
+                memory_citation: None,
             }),
         ];
 
@@ -356,6 +361,56 @@ mod tests {
     }
 
     #[test]
+    fn agent_message_history_preserves_memory_citation() {
+        let memory_citation = MemoryCitation {
+            entries: vec![MemoryCitationEntry {
+                path: "MEMORY.md".into(),
+                line_start: 1,
+                line_end: 2,
+                note: "used preference".into(),
+            }],
+            rollout_ids: vec!["00000000-0000-0000-0000-000000000001".into()],
+        };
+        let events = vec![
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "Question".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+            EventMsg::AgentMessage(AgentMessageEvent {
+                message: "Answer".into(),
+                memory_citation: Some(memory_citation.clone()),
+            }),
+        ];
+
+        let turns = build_turns_from_event_msgs(&events);
+
+        assert_eq!(
+            turns,
+            vec![Turn {
+                id: "turn-1".into(),
+                status: TurnStatus::Completed,
+                error: None,
+                items: vec![
+                    ThreadItem::UserMessage {
+                        id: "item-1".into(),
+                        content: vec![UserInput::Text {
+                            text: "Question".into(),
+                            text_elements: Vec::new(),
+                        }],
+                    },
+                    ThreadItem::AgentMessage {
+                        id: "item-2".into(),
+                        text: "Answer".into(),
+                        memory_citation: Some(memory_citation),
+                    },
+                ],
+            }]
+        );
+    }
+
+    #[test]
     fn splits_reasoning_when_interleaved() {
         let events = vec![
             EventMsg::UserMessage(UserMessageEvent {
@@ -372,6 +427,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "interlude".into(),
+                memory_citation: None,
             }),
             EventMsg::AgentReasoning(AgentReasoningEvent {
                 text: "second summary".into(),
@@ -412,6 +468,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "Working...".into(),
+                memory_citation: None,
             }),
             EventMsg::TurnAborted(TurnAbortedEvent {
                 reason: TurnAbortReason::Replaced,
@@ -424,6 +481,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "Second attempt complete.".into(),
+                memory_citation: None,
             }),
         ];
 
@@ -486,6 +544,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A1".into(),
+                memory_citation: None,
             }),
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Second".into(),
@@ -495,6 +554,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A2".into(),
+                memory_citation: None,
             }),
             EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
             EventMsg::UserMessage(UserMessageEvent {
@@ -505,6 +565,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A3".into(),
+                memory_citation: None,
             }),
         ];
 
@@ -563,6 +624,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A1".into(),
+                memory_citation: None,
             }),
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Two".into(),
@@ -572,6 +634,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A2".into(),
+                memory_citation: None,
             }),
             EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 99 }),
         ];

@@ -78,12 +78,15 @@ async fn claim_startup_jobs(context: &MemoryStartupContext) -> Option<Vec<Stage1
         warn!("state db unavailable while claiming memory phase-1 jobs");
         return None;
     };
+    let Some(memories) = state_db.memories() else {
+        warn!("memory store unavailable while claiming memory phase-1 jobs");
+        return None;
+    };
     let allowed_sources = [
         SessionSource::Cli.to_string(),
         SessionSource::VSCode.to_string(),
     ];
-    match state_db
-        .memories()
+    match memories
         .claim_stage1_jobs_for_startup(
             context.thread_id(),
             Stage1StartupClaimParams {
@@ -135,8 +138,10 @@ async fn run_job(context: &MemoryStartupContext, claim: Stage1JobClaim) -> JobOu
     let Some(state_db) = context.state_db() else {
         return JobOutcome::Failed;
     };
-    match state_db
-        .memories()
+    let Some(memories) = state_db.memories() else {
+        return JobOutcome::Failed;
+    };
+    match memories
         .mark_stage1_job_succeeded(
             thread.id,
             &claim.ownership_token,
@@ -406,8 +411,10 @@ async fn mark_no_output(
     let Some(state_db) = context.state_db() else {
         return JobOutcome::Failed;
     };
-    match state_db
-        .memories()
+    let Some(memories) = state_db.memories() else {
+        return JobOutcome::Failed;
+    };
+    match memories
         .mark_stage1_job_succeeded_no_output(thread_id, ownership_token)
         .await
     {
@@ -441,8 +448,10 @@ async fn mark_failed(
     let Some(state_db) = context.state_db() else {
         return;
     };
-    if let Err(err) = state_db
-        .memories()
+    let Some(memories) = state_db.memories() else {
+        return;
+    };
+    if let Err(err) = memories
         .mark_stage1_job_failed(
             thread_id,
             ownership_token,

@@ -7,6 +7,7 @@ use clap::Parser;
 use dirs::home_dir;
 use lha_state::LogQuery;
 use lha_state::LogRow;
+use lha_state::MemoryStoreMode;
 use lha_state::STATE_DB_FILENAME;
 use lha_state::StateRuntime;
 use owo_colors::OwoColorize;
@@ -80,7 +81,13 @@ async fn main() -> anyhow::Result<()> {
         .parent()
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| PathBuf::from("."));
-    let runtime = StateRuntime::init(lha_home, "logs-client".to_string(), None).await?;
+    let runtime = StateRuntime::init_with_memory_store(
+        lha_home,
+        "logs-client".to_string(),
+        None,
+        MemoryStoreMode::Disabled,
+    )
+    .await?;
 
     let mut last_id = print_backfill(runtime.as_ref(), &filter, args.backfill).await?;
     if last_id == 0 {

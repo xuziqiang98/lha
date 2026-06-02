@@ -26,13 +26,14 @@ Memory files live under `$LHA_HOME/memories`:
 - `phase2_workspace_diff.md` is a generated diff for consolidation.
 
 Memory state lives in `$LHA_HOME/memories_1.sqlite`, separate from `$LHA_HOME/state.sqlite`.
+When the memory feature is disabled, non-memory state features such as logs, goals, and plan completion do not open or require `memories_1.sqlite`.
 
 ## Config
 
 `[memories]` supports:
 
 - `use_memories`: inject memory read instructions when `memory_summary.md` exists.
-- `generate_memories`: mark new threads as eligible for memory generation.
+- `generate_memories`: mark new threads as eligible for memory generation. Setting this to `false` writes a disabled marker on new threads even when the memory feature is currently off, so later backfills do not treat those threads as eligible by default.
 - `dedicated_tools`: expose `memories__list`, `memories__read`, `memories__search`, and `memories__add_ad_hoc_note`.
 - `disable_on_external_context`: mark threads polluted when external context should prevent memory generation.
 - `max_raw_memories_for_consolidation`, `max_unused_days`, `max_rollout_age_days`, `max_rollouts_per_startup`, `min_rollout_idle_hours`, and `min_rate_limit_remaining_percent`: retention/startup tuning values.
@@ -52,7 +53,7 @@ LHA currently has no rate-limit status API, so the rate-limit guard is best-effo
 
 When `use_memories` is true, new sessions inject developer instructions built from `memory_summary.md` if the file exists and is non-empty. The model can inspect the memory workspace with normal filesystem access or the dedicated tools when enabled. If the model uses memory, it appends a hidden `<oai-mem-citation>` block; LHA suppresses that block from streaming and final UI text, parses it, and records usage for cited rollout IDs. Malformed citation blocks are stripped and ignored.
 
-Parsed citations are available to app-server v2 clients as optional `memoryCitation` data on agent-message thread items.
+Parsed citations are available to app-server v2 clients as optional `memoryCitation` data on agent-message thread items. LHA persists this data in rollout history, so historical reads, resume, and reconnect flows preserve memory citations rather than limiting them to the live stream.
 
 ## Dedicated Tools
 
@@ -76,4 +77,4 @@ Use `/memories` in the TUI to toggle:
 - `Generate memories`
 - `Dedicated tools`
 
-The read path is initial-context-only, so changing `Use memories` affects new threads. Changing `Generate memories` affects whether new threads are eligible for future extraction.
+The read path is initial-context-only, so changing `Use memories` affects new threads. Changing `Generate memories` affects whether new threads are eligible for future extraction; turning it off records `memory_mode = "disabled"` for new threads even if the experimental memory feature is not enabled yet.

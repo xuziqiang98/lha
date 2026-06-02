@@ -4464,7 +4464,9 @@ impl ChatWidget {
             EventMsg::ThreadPlanRunUpdated(e) => self.on_thread_plan_run_updated(e),
             EventMsg::ThreadPlanRunCleared(e) => self.on_thread_plan_run_cleared(e),
             EventMsg::ThreadPlanRunSnapshot(e) => self.on_thread_plan_run_snapshot(e),
-            EventMsg::AgentMessage(AgentMessageEvent { message }) => self.on_agent_message(message),
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
+                self.on_agent_message(message)
+            }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)
             }

@@ -66,8 +66,8 @@ pub(crate) fn start_memories_startup_task(
             return;
         }
         if let Some(state_db) = context.state_db()
-            && let Err(err) = state_db
-                .memories()
+            && let Some(memories) = state_db.memories()
+            && let Err(err) = memories
                 .prune_stage1_outputs_for_retention(
                     context.config().memories.max_unused_days,
                     lha_memories_write::STAGE_ONE_PRUNE_BATCH_SIZE,

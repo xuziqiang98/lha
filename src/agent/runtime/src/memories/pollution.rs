@@ -20,8 +20,10 @@ pub(crate) async fn maybe_mark_memory_polluted(
     let Some(state_db) = sess.state_db() else {
         return;
     };
-    match state_db
-        .memories()
+    let Some(memories) = state_db.memories() else {
+        return;
+    };
+    match memories
         .mark_thread_memory_mode_polluted(sess.conversation_id)
         .await
     {

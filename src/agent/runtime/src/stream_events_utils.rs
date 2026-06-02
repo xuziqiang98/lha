@@ -89,14 +89,11 @@ pub(crate) async fn handle_output_item_done(
         .await;
     if let Some(memory_citation) = memory_citation.as_ref()
         && let Some(state_db) = ctx.sess.state_db()
+        && let Some(memories) = state_db.memories()
     {
         let thread_ids =
             lha_memories_read::citations::thread_ids_from_memory_citation(memory_citation);
-        if let Err(err) = state_db
-            .memories()
-            .record_stage1_output_usage(&thread_ids)
-            .await
-        {
+        if let Err(err) = memories.record_stage1_output_usage(&thread_ids).await {
             warn!("failed to record memory citation usage: {err}");
         }
     }

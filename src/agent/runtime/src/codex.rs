@@ -1484,13 +1484,7 @@ impl Session {
         }
 
         let forked_from_id = initial_history.forked_from_id();
-        let memory_mode = config.features.enabled(Feature::MemoryTool).then(|| {
-            if config.memories.generate_memories {
-                lha_protocol::protocol::MEMORY_MODE_ENABLED.to_string()
-            } else {
-                lha_protocol::protocol::MEMORY_MODE_DISABLED.to_string()
-            }
-        });
+        let memory_mode = initial_memory_mode(&config);
 
         let (conversation_id, rollout_params) = match &initial_history {
             InitialHistory::New | InitialHistory::Forked(_) => {
@@ -4472,6 +4466,16 @@ impl Session {
             .lock()
             .await
             .cancel();
+    }
+}
+
+fn initial_memory_mode(config: &Config) -> Option<String> {
+    if !config.memories.generate_memories {
+        Some(lha_protocol::protocol::MEMORY_MODE_DISABLED.to_string())
+    } else if config.features.enabled(Feature::MemoryTool) {
+        Some(lha_protocol::protocol::MEMORY_MODE_ENABLED.to_string())
+    } else {
+        None
     }
 }
 

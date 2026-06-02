@@ -6,9 +6,9 @@ use lha_protocol::config_types::WebSearchMode;
 use lha_protocol::protocol::AskForApproval;
 use lha_protocol::protocol::EventMsg;
 use lha_protocol::protocol::SandboxPolicy;
+use lha_state::MemoryStore;
 use lha_state::Phase2JobClaimOutcome;
 use lha_state::Stage1Output;
-use lha_state::StateRuntime;
 use lha_utils_absolute_path::AbsolutePathBuf;
 use tokio::time::MissedTickBehavior;
 use tracing::debug;
@@ -31,7 +31,15 @@ pub(crate) async fn run(context: Arc<MemoryStartupContext>) {
     let Some(state_db) = context.state_db() else {
         return;
     };
-    let claim = match claim_global_job(context.as_ref(), state_db.as_ref()).await {
+    let Some(memories) = state_db.memories().cloned() else {
+        metrics::counter(
+            metrics::PHASE2_JOBS,
+            1,
+            &[("status", "skipped_memory_store_unavailable")],
+        );
+        return;
+    };
+    let claim = match claim_global_job(context.as_ref(), &memories).await {
         Ok(claim) => {
             metrics::counter(metrics::PHASE2_JOBS, 1, &[("status", "claimed")]);
             claim
@@ -48,7 +56,7 @@ pub(crate) async fn run(context: Arc<MemoryStartupContext>) {
         warn!("failed to prepare memory workspace: {err}");
         mark_failed(
             context.as_ref(),
-            state_db.as_ref(),
+            &memories,
             &claim,
             "failed_prepare_workspace",
         )
@@ -56,8 +64,7 @@ pub(crate) async fn run(context: Arc<MemoryStartupContext>) {
         return;
     }
 
-    let selected_outputs = match state_db
-        .memories()
+    let selected_outputs = match memories
         .get_phase2_input_selection(
             context.config().memories.max_raw_memories_for_consolidation,
             context.config().memories.max_unused_days,
@@ -69,7 +76,7 @@ pub(crate) async fn run(context: Arc<MemoryStartupContext>) {
             warn!("failed to select memory phase-2 inputs: {err}");
             mark_failed(
                 context.as_ref(),
-                state_db.as_ref(),
+                &memories,
                 &claim,
                 "failed_load_stage1_outputs",
             )
@@ -89,7 +96,7 @@ pub(crate) async fn run(context: Arc<MemoryStartupContext>) {
         warn!("failed syncing memory phase-2 workspace inputs: {err}");
         mark_failed(
             context.as_ref(),
-            state_db.as_ref(),
+            &memories,
             &claim,
             "failed_sync_workspace_inputs",
         )
@@ -104,7 +111,7 @@ pub(crate) async fn run(context: Arc<MemoryStartupContext>) {
                 warn!("failed checking memory workspace diff: {err}");
                 mark_failed(
                     context.as_ref(),
-                    state_db.as_ref(),
+                    &memories,
                     &claim,
                     "failed_workspace_status",
                 )
@@ -115,7 +122,7 @@ pub(crate) async fn run(context: Arc<MemoryStartupContext>) {
 
     if !workspace_diff.has_changes() {
         mark_succeeded(
-            state_db.as_ref(),
+            &memories,
             &claim,
             completion_watermark,
             &selected_outputs,
@@ -131,7 +138,7 @@ pub(crate) async fn run(context: Arc<MemoryStartupContext>) {
         warn!("failed writing memory workspace diff: {err}");
         mark_failed(
             context.as_ref(),
-            state_db.as_ref(),
+            &memories,
             &claim,
             "failed_workspace_diff_file",
         )
@@ -147,13 +154,7 @@ pub(crate) async fn run(context: Arc<MemoryStartupContext>) {
         Ok(config) => config,
         Err(err) => {
             warn!("failed building memory consolidation config: {err}");
-            mark_failed(
-                context.as_ref(),
-                state_db.as_ref(),
-                &claim,
-                "failed_sandbox_policy",
-            )
-            .await;
+            mark_failed(context.as_ref(), &memories, &claim, "failed_sandbox_policy").await;
             return;
         }
     };
@@ -165,21 +166,14 @@ pub(crate) async fn run(context: Arc<MemoryStartupContext>) {
         Ok(agent) => agent,
         Err(err) => {
             warn!("failed spawning memory consolidation agent: {err}");
-            mark_failed(
-                context.as_ref(),
-                state_db.as_ref(),
-                &claim,
-                "failed_spawn_agent",
-            )
-            .await;
+            mark_failed(context.as_ref(), &memories, &claim, "failed_spawn_agent").await;
             return;
         }
     };
 
-    let success = run_consolidation_agent(state_db.clone(), &claim, &agent).await;
+    let success = run_consolidation_agent(memories.clone(), &claim, &agent).await;
     if success {
-        match state_db
-            .memories()
+        match memories
             .heartbeat_global_phase2_job(
                 &claim.token,
                 lha_memories_write::STAGE_TWO_JOB_LEASE_SECONDS,
@@ -193,14 +187,14 @@ pub(crate) async fn run(context: Arc<MemoryStartupContext>) {
                     warn!("failed resetting memory workspace baseline: {err}");
                     mark_failed(
                         context.as_ref(),
-                        state_db.as_ref(),
+                        &memories,
                         &claim,
                         "failed_workspace_commit",
                     )
                     .await;
                 } else {
                     mark_succeeded(
-                        state_db.as_ref(),
+                        &memories,
                         &claim,
                         completion_watermark,
                         &selected_outputs,
@@ -212,7 +206,7 @@ pub(crate) async fn run(context: Arc<MemoryStartupContext>) {
             Ok(false) => {
                 mark_failed(
                     context.as_ref(),
-                    state_db.as_ref(),
+                    &memories,
                     &claim,
                     "failed_confirm_ownership",
                 )
@@ -222,7 +216,7 @@ pub(crate) async fn run(context: Arc<MemoryStartupContext>) {
                 warn!("failed confirming memory phase-2 ownership: {err}");
                 mark_failed(
                     context.as_ref(),
-                    state_db.as_ref(),
+                    &memories,
                     &claim,
                     "failed_confirm_ownership",
                 )
@@ -230,7 +224,7 @@ pub(crate) async fn run(context: Arc<MemoryStartupContext>) {
             }
         }
     } else {
-        mark_failed(context.as_ref(), state_db.as_ref(), &claim, "failed_agent").await;
+        mark_failed(context.as_ref(), &memories, &claim, "failed_agent").await;
     }
 
     if let Err(err) = context.shutdown_consolidation_agent(agent).await {
@@ -240,10 +234,9 @@ pub(crate) async fn run(context: Arc<MemoryStartupContext>) {
 
 async fn claim_global_job(
     context: &MemoryStartupContext,
-    state_db: &StateRuntime,
+    memories: &MemoryStore,
 ) -> Result<Claim, &'static str> {
-    match state_db
-        .memories()
+    match memories
         .try_claim_global_phase2_job(
             context.thread_id(),
             lha_memories_write::STAGE_TWO_JOB_LEASE_SECONDS,
@@ -310,7 +303,7 @@ fn consolidation_config(
 }
 
 async fn run_consolidation_agent(
-    state_db: Arc<StateRuntime>,
+    memories: MemoryStore,
     claim: &Claim,
     agent: &SpawnedConsolidationAgent,
 ) -> bool {
@@ -347,8 +340,7 @@ async fn run_consolidation_agent(
                 }
             }
             _ = heartbeat_interval.tick() => {
-                match state_db
-                    .memories()
+                match memories
                     .heartbeat_global_phase2_job(
                         &claim.token,
                         lha_memories_write::STAGE_TWO_JOB_LEASE_SECONDS,
@@ -389,13 +381,12 @@ fn emit_phase2_token_usage(total_tokens: Option<i64>) {
 
 async fn mark_failed(
     _context: &MemoryStartupContext,
-    state_db: &StateRuntime,
+    memories: &MemoryStore,
     claim: &Claim,
     reason: &str,
 ) {
     metrics::counter(metrics::PHASE2_JOBS, 1, &[("status", reason)]);
-    match state_db
-        .memories()
+    match memories
         .mark_global_phase2_job_failed(
             &claim.token,
             reason,
@@ -405,8 +396,7 @@ async fn mark_failed(
     {
         Ok(true) => {}
         Ok(false) => {
-            let _ = state_db
-                .memories()
+            let _ = memories
                 .mark_global_phase2_job_failed_if_unowned(
                     &claim.token,
                     reason,
@@ -419,15 +409,14 @@ async fn mark_failed(
 }
 
 async fn mark_succeeded(
-    state_db: &StateRuntime,
+    memories: &MemoryStore,
     claim: &Claim,
     completion_watermark: i64,
     selected_outputs: &[Stage1Output],
     status: &'static str,
 ) {
     metrics::counter(metrics::PHASE2_JOBS, 1, &[("status", status)]);
-    if let Err(err) = state_db
-        .memories()
+    if let Err(err) = memories
         .mark_global_phase2_job_succeeded(&claim.token, completion_watermark, selected_outputs)
         .await
     {

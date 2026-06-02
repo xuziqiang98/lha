@@ -1011,12 +1011,18 @@ ON CONFLICT(kind, job_key) DO UPDATE SET
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryStoreMode {
+    Required,
+    Disabled,
+}
+
 #[derive(Clone)]
 pub struct StateRuntime {
     lha_home: PathBuf,
     default_provider: String,
     pool: Arc<sqlx::SqlitePool>,
-    memories: MemoryStore,
+    memories: Option<MemoryStore>,
 }
 
 impl StateRuntime {
@@ -1027,6 +1033,16 @@ impl StateRuntime {
         lha_home: PathBuf,
         default_provider: String,
         otel: Option<OtelManager>,
+    ) -> anyhow::Result<Arc<Self>> {
+        Self::init_with_memory_store(lha_home, default_provider, otel, MemoryStoreMode::Required)
+            .await
+    }
+
+    pub async fn init_with_memory_store(
+        lha_home: PathBuf,
+        default_provider: String,
+        otel: Option<OtelManager>,
+        memory_store_mode: MemoryStoreMode,
     ) -> anyhow::Result<Arc<Self>> {
         tokio::fs::create_dir_all(&lha_home).await?;
         let state_path = lha_home.join(STATE_DB_FILENAME);
@@ -1042,24 +1058,33 @@ impl StateRuntime {
                 return Err(err);
             }
         };
-        let memories_pool = match open_memories_sqlite(&memories_path).await {
-            Ok(db) => Arc::new(db),
-            Err(err) => {
-                warn!(
-                    "failed to open memories db at {}: {err}",
-                    memories_path.display()
-                );
-                if let Some(otel) = otel.as_ref() {
-                    otel.counter(METRIC_DB_INIT, 1, &[("status", "memories_open_error")]);
+        let memories = match memory_store_mode {
+            MemoryStoreMode::Required => match open_memories_sqlite(&memories_path).await {
+                Ok(db) => {
+                    let memories_pool = Arc::new(db);
+                    Some(MemoryStore::new(
+                        Arc::clone(&memories_pool),
+                        Arc::clone(&pool),
+                    ))
                 }
-                return Err(err);
-            }
+                Err(err) => {
+                    warn!(
+                        "failed to open memories db at {}: {err}",
+                        memories_path.display()
+                    );
+                    if let Some(otel) = otel.as_ref() {
+                        otel.counter(METRIC_DB_INIT, 1, &[("status", "memories_open_error")]);
+                    }
+                    return Err(err);
+                }
+            },
+            MemoryStoreMode::Disabled => None,
         };
         if let Some(otel) = otel.as_ref() {
             otel.counter(METRIC_DB_INIT, 1, &[("status", "opened")]);
         }
         let runtime = Arc::new(Self {
-            memories: MemoryStore::new(Arc::clone(&memories_pool), Arc::clone(&pool)),
+            memories,
             pool,
             lha_home,
             default_provider,
@@ -1075,8 +1100,8 @@ impl StateRuntime {
         self.lha_home.as_path()
     }
 
-    pub fn memories(&self) -> &MemoryStore {
-        &self.memories
+    pub fn memories(&self) -> Option<&MemoryStore> {
+        self.memories.as_ref()
     }
 
     pub async fn get_thread_goal(
@@ -3017,7 +3042,7 @@ INSERT INTO stage1_outputs (
         .bind(last_usage.map(datetime_to_epoch_seconds))
         .bind(selected_for_phase2)
         .bind(selected_for_phase2.then_some(datetime_to_epoch_seconds(source_updated_at)))
-        .execute(runtime.memories.pool.as_ref())
+        .execute(runtime.memories().expect("memories").pool.as_ref())
         .await
         .expect("insert stage1 output");
     }
@@ -3040,13 +3065,13 @@ INSERT INTO stage1_outputs (
         let stage1_table: String = sqlx::query_scalar(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'stage1_outputs'",
         )
-        .fetch_one(runtime.memories.pool.as_ref())
+        .fetch_one(runtime.memories().expect("memories").pool.as_ref())
         .await
         .expect("stage1 table");
         let jobs_table: String = sqlx::query_scalar(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'jobs'",
         )
-        .fetch_one(runtime.memories.pool.as_ref())
+        .fetch_one(runtime.memories().expect("memories").pool.as_ref())
         .await
         .expect("jobs table");
         let memory_mode_column: String = sqlx::query_scalar(
@@ -3059,6 +3084,45 @@ INSERT INTO stage1_outputs (
         assert_eq!(stage1_table, "stage1_outputs");
         assert_eq!(jobs_table, "jobs");
         assert_eq!(memory_mode_column, "memory_mode");
+    }
+
+    #[tokio::test]
+    async fn state_runtime_without_memories_ignores_corrupt_memory_db() {
+        let path = std::env::temp_dir().join(format!("lha-state-test-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&path).await.expect("mkdir");
+        tokio::fs::write(path.join(MEMORIES_DB_FILENAME), "not sqlite")
+            .await
+            .expect("write corrupt memories db");
+
+        let runtime = StateRuntime::init_with_memory_store(
+            path,
+            "test-provider".to_string(),
+            None,
+            MemoryStoreMode::Disabled,
+        )
+        .await
+        .expect("state runtime should initialize without memories");
+
+        assert!(runtime.memories().is_none());
+    }
+
+    #[tokio::test]
+    async fn state_runtime_requires_memories_when_mode_required() {
+        let path = std::env::temp_dir().join(format!("lha-state-test-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&path).await.expect("mkdir");
+        tokio::fs::write(path.join(MEMORIES_DB_FILENAME), "not sqlite")
+            .await
+            .expect("write corrupt memories db");
+
+        let result = StateRuntime::init_with_memory_store(
+            path,
+            "test-provider".to_string(),
+            None,
+            MemoryStoreMode::Required,
+        )
+        .await;
+
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -3085,6 +3149,54 @@ INSERT INTO stage1_outputs (
                 .await
                 .expect("memory mode"),
             Some("disabled".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn rollout_disabled_memory_mode_remains_disabled_after_apply() {
+        let runtime = test_runtime().await;
+        let id = test_thread_id();
+        let created_at = Utc::now() - chrono::Duration::hours(1);
+        let rollout_path = runtime
+            .lha_home()
+            .join("sessions/2026/06/01/rollout-disabled.jsonl");
+        let builder = ThreadMetadataBuilder::new(
+            id,
+            rollout_path.clone(),
+            created_at,
+            lha_protocol::protocol::SessionSource::Cli,
+        );
+        let items = vec![RolloutItem::SessionMeta(
+            lha_protocol::protocol::SessionMetaLine {
+                meta: lha_protocol::protocol::SessionMeta {
+                    id,
+                    forked_from_id: None,
+                    timestamp: created_at.to_rfc3339(),
+                    cwd: runtime.lha_home().to_path_buf(),
+                    originator: "test".to_string(),
+                    cli_version: "test".to_string(),
+                    rollout_schema_version: lha_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+                    source: lha_protocol::protocol::SessionSource::Cli,
+                    model_provider: Some("test-provider".to_string()),
+                    base_instructions: None,
+                    dynamic_tools: None,
+                    memory_mode: Some(lha_protocol::protocol::MEMORY_MODE_DISABLED.to_string()),
+                },
+                git: None,
+            },
+        )];
+
+        runtime
+            .apply_rollout_items(&builder, &items, None)
+            .await
+            .expect("apply rollout items");
+
+        assert_eq!(
+            runtime
+                .get_thread_memory_mode(id)
+                .await
+                .expect("memory mode"),
+            Some(lha_protocol::protocol::MEMORY_MODE_DISABLED.to_string())
         );
     }
 
@@ -3174,6 +3286,7 @@ INSERT INTO stage1_outputs (
 
         let claims = runtime
             .memories()
+            .expect("memories")
             .claim_stage1_jobs_for_startup(thread_id(9), memory_claim_params(&allowed))
             .await
             .expect("claims");
@@ -3206,6 +3319,7 @@ INSERT INTO stage1_outputs (
 
         let claims = runtime
             .memories()
+            .expect("memories")
             .claim_stage1_jobs_for_startup(thread_id(99), memory_claim_params(&allowed))
             .await
             .expect("claims");
@@ -3213,6 +3327,7 @@ INSERT INTO stage1_outputs (
         let mut ownership_token = claims[0].ownership_token.clone();
         let second_claims = runtime
             .memories()
+            .expect("memories")
             .claim_stage1_jobs_for_startup(thread_id(98), memory_claim_params(&allowed))
             .await
             .expect("second claims");
@@ -3221,6 +3336,7 @@ INSERT INTO stage1_outputs (
         for _ in 0..3 {
             runtime
                 .memories()
+                .expect("memories")
                 .mark_stage1_job_failed(id, &ownership_token, "boom", 3_600)
                 .await
                 .expect("mark failed");
@@ -3229,20 +3345,21 @@ INSERT INTO stage1_outputs (
             )
             .bind(JOB_KIND_MEMORY_STAGE1)
             .bind(id.to_string())
-            .execute(runtime.memories.pool.as_ref())
+            .execute(runtime.memories().expect("memories").pool.as_ref())
             .await
             .expect("reset retry");
             let row =
                 sqlx::query("SELECT retry_remaining FROM jobs WHERE kind = ? AND job_key = ?")
                     .bind(JOB_KIND_MEMORY_STAGE1)
                     .bind(id.to_string())
-                    .fetch_one(runtime.memories.pool.as_ref())
+                    .fetch_one(runtime.memories().expect("memories").pool.as_ref())
                     .await
                     .expect("job row");
             let retry_remaining: i64 = row.try_get("retry_remaining").expect("retry remaining");
             if retry_remaining > 0 {
                 let claims = runtime
                     .memories()
+                    .expect("memories")
                     .claim_stage1_jobs_for_startup(thread_id(97), memory_claim_params(&allowed))
                     .await
                     .expect("retry claims");
@@ -3253,6 +3370,7 @@ INSERT INTO stage1_outputs (
 
         let exhausted = runtime
             .memories()
+            .expect("memories")
             .claim_stage1_jobs_for_startup(thread_id(96), memory_claim_params(&allowed))
             .await
             .expect("exhausted claims");
@@ -3264,6 +3382,7 @@ INSERT INTO stage1_outputs (
         let runtime = test_runtime().await;
         let first = runtime
             .memories()
+            .expect("memories")
             .try_claim_global_phase2_job(test_thread_id(), 3_600)
             .await
             .expect("first claim");
@@ -3275,6 +3394,7 @@ INSERT INTO stage1_outputs (
         };
         let second = runtime
             .memories()
+            .expect("memories")
             .try_claim_global_phase2_job(other_thread_id(), 3_600)
             .await
             .expect("second claim");
@@ -3283,6 +3403,7 @@ INSERT INTO stage1_outputs (
         assert!(
             runtime
                 .memories()
+                .expect("memories")
                 .mark_global_phase2_job_succeeded(&ownership_token, 1, &[])
                 .await
                 .expect("succeed")
@@ -3290,6 +3411,7 @@ INSERT INTO stage1_outputs (
 
         let cooldown = runtime
             .memories()
+            .expect("memories")
             .try_claim_global_phase2_job(other_thread_id(), 3_600)
             .await
             .expect("cooldown claim");
@@ -3351,6 +3473,7 @@ INSERT INTO stage1_outputs (
 
         let selected = runtime
             .memories()
+            .expect("memories")
             .get_phase2_input_selection(2, 30)
             .await
             .expect("selection");
@@ -3365,6 +3488,7 @@ INSERT INTO stage1_outputs (
         assert_eq!(
             runtime
                 .memories()
+                .expect("memories")
                 .record_stage1_output_usage(&[recent_low_usage.id])
                 .await
                 .expect("usage"),
@@ -3373,7 +3497,7 @@ INSERT INTO stage1_outputs (
         let usage_count: i64 =
             sqlx::query_scalar("SELECT usage_count FROM stage1_outputs WHERE thread_id = ?")
                 .bind(recent_low_usage.id.to_string())
-                .fetch_one(runtime.memories.pool.as_ref())
+                .fetch_one(runtime.memories().expect("memories").pool.as_ref())
                 .await
                 .expect("usage count");
         assert_eq!(usage_count, 1);
@@ -3381,6 +3505,7 @@ INSERT INTO stage1_outputs (
         assert!(
             runtime
                 .memories()
+                .expect("memories")
                 .mark_thread_memory_mode_polluted(selected_polluted.id)
                 .await
                 .expect("polluted")
@@ -3396,7 +3521,7 @@ INSERT INTO stage1_outputs (
             sqlx::query_scalar("SELECT input_watermark FROM jobs WHERE kind = ? AND job_key = ?")
                 .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
                 .bind(MEMORY_CONSOLIDATION_JOB_KEY)
-                .fetch_one(runtime.memories.pool.as_ref())
+                .fetch_one(runtime.memories().expect("memories").pool.as_ref())
                 .await
                 .expect("watermark");
         assert!(watermark.is_some_and(|value| value > 0));

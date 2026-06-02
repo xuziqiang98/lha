@@ -186,6 +186,7 @@ impl AgentMessageItem {
             .map(|c| match c {
                 AgentMessageContent::Text { text } => EventMsg::AgentMessage(AgentMessageEvent {
                     message: text.clone(),
+                    memory_citation: self.memory_citation.clone(),
                 }),
             })
             .collect()

@@ -8,16 +8,25 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use lha_agent::features::Feature;
 use lha_protocol::ThreadId;
+use lha_protocol::items::TurnItem;
+use lha_protocol::memory_citation::MemoryCitation;
+use lha_protocol::memory_citation::MemoryCitationEntry;
 use lha_protocol::models::ContentItem;
 use lha_protocol::models::TranscriptItem;
+use lha_protocol::protocol::EventMsg;
+use lha_protocol::protocol::ItemCompletedEvent;
+use lha_protocol::protocol::Op;
 use lha_protocol::protocol::RolloutItem;
 use lha_protocol::protocol::RolloutLine;
 use lha_protocol::protocol::SessionMeta;
 use lha_protocol::protocol::SessionMetaLine;
 use lha_protocol::protocol::SessionSource;
 use lha_protocol::protocol::USER_MESSAGE_BEGIN;
+use lha_protocol::user_input::UserInput;
 use lha_state::Phase2JobClaimOutcome;
 use lha_state::Stage1StartupClaimParams;
 use lha_state::StateRuntime;
@@ -40,6 +49,153 @@ const TEST_SECRET: &str = "sk-abcdefghijklmnopqrstuvwx";
 const JOB_KIND_STAGE1: &str = "memory_stage1";
 const JOB_KIND_PHASE2: &str = "memory_consolidate_global";
 const PHASE2_JOB_KEY: &str = "global";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn new_thread_persists_disabled_memory_mode_when_generation_disabled() -> Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.features.disable(Feature::MemoryTool);
+        config.memories.generate_memories = false;
+    });
+    let test = builder.build(&server).await?;
+
+    test.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
+    let items = read_rollout_items(rollout_path.as_path()).await?;
+    let Some(RolloutItem::SessionMeta(SessionMetaLine { meta, .. })) = items.first() else {
+        anyhow::bail!("first rollout item should be SessionMeta");
+    };
+
+    assert_eq!(
+        meta.memory_mode.as_deref(),
+        Some(lha_protocol::protocol::MEMORY_MODE_DISABLED)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn assistant_memory_citation_is_persisted_and_replayed() -> Result<()> {
+    let server = start_mock_server().await;
+    let expected_citation = MemoryCitation {
+        entries: vec![MemoryCitationEntry {
+            path: "MEMORY.md".into(),
+            line_start: 1,
+            line_end: 2,
+            note: "used preference".into(),
+        }],
+        rollout_ids: vec!["00000000-0000-0000-0000-000000000001".into()],
+    };
+    let assistant_message = "answer\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[used preference]\n</citation_entries>\n<rollout_ids>\n00000000-0000-0000-0000-000000000001\n</rollout_ids>\n</oai-mem-citation>";
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            ev_response_created("resp-memory-citation"),
+            ev_assistant_message("msg-memory-citation", assistant_message),
+            ev_completed("resp-memory-citation"),
+        ]),
+    )
+    .await;
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::MemoryTool);
+    });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "answer with memory".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let completed = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::AgentMessage(item),
+            ..
+        }) => Some(item.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(completed.memory_citation, Some(expected_citation.clone()));
+    let text = completed
+        .content
+        .iter()
+        .map(|entry| match entry {
+            lha_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+        })
+        .collect::<String>();
+    assert_eq!(text, "answer");
+
+    test.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
+    let items = read_rollout_items(rollout_path.as_path()).await?;
+    let persisted = items.iter().find_map(|item| match item {
+        RolloutItem::EventMsg(EventMsg::AgentMessage(payload)) => Some(payload.clone()),
+        RolloutItem::SessionMeta(_)
+        | RolloutItem::TranscriptItem(_)
+        | RolloutItem::GhostSnapshot(_)
+        | RolloutItem::Compacted(_)
+        | RolloutItem::TurnContext(_)
+        | RolloutItem::Workflow(_)
+        | RolloutItem::EventMsg(_) => None,
+    });
+    let persisted = persisted.expect("persisted agent message event");
+    assert_eq!(persisted.message, "answer");
+    assert_eq!(persisted.memory_citation, Some(expected_citation.clone()));
+
+    let event_msgs = items
+        .into_iter()
+        .filter_map(|item| match item {
+            RolloutItem::EventMsg(event) => Some(event),
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::TranscriptItem(_)
+            | RolloutItem::GhostSnapshot(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::Workflow(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let turns = lha_app_server_protocol::build_turns_from_event_msgs(&event_msgs);
+    let replayed_citation = turns.iter().find_map(|turn| {
+        turn.items.iter().find_map(|item| match item {
+            lha_app_server_protocol::ThreadItem::AgentMessage {
+                memory_citation, ..
+            } => memory_citation.clone(),
+            lha_app_server_protocol::ThreadItem::UserMessage { .. }
+            | lha_app_server_protocol::ThreadItem::Reasoning { .. }
+            | lha_app_server_protocol::ThreadItem::Plan { .. }
+            | lha_app_server_protocol::ThreadItem::WebSearch { .. }
+            | lha_app_server_protocol::ThreadItem::McpToolCall { .. }
+            | lha_app_server_protocol::ThreadItem::CommandExecution { .. }
+            | lha_app_server_protocol::ThreadItem::FileChange { .. }
+            | lha_app_server_protocol::ThreadItem::ImageView { .. }
+            | lha_app_server_protocol::ThreadItem::EnteredReviewMode { .. }
+            | lha_app_server_protocol::ThreadItem::ExitedReviewMode { .. }
+            | lha_app_server_protocol::ThreadItem::ContextCompaction { .. } => None,
+        })
+    });
+    assert_eq!(replayed_citation, Some(expected_citation));
+
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn memory_phase1_mock_response_creates_redacted_stage1_output() -> Result<()> {
@@ -416,8 +572,7 @@ async fn seed_stage1_output(
     let claim = claim_one_stage1_job(state_db, thread_id).await?;
     let source_updated_at = claim.thread.updated_at.timestamp();
     assert!(
-        state_db
-            .memories()
+        memory_store(state_db)?
             .mark_stage1_job_succeeded(
                 thread_id,
                 &claim.ownership_token,
@@ -436,8 +591,7 @@ async fn claim_one_stage1_job(
     thread_id: ThreadId,
 ) -> Result<lha_state::Stage1JobClaim> {
     let allowed_sources = vec![SessionSource::VSCode.to_string()];
-    let claims = state_db
-        .memories()
+    let claims = memory_store(state_db)?
         .claim_stage1_jobs_for_startup(
             test_thread_id(9_999)?,
             Stage1StartupClaimParams {
@@ -457,8 +611,7 @@ async fn claim_one_stage1_job(
 }
 
 async fn put_phase2_in_cooldown(state_db: &StateRuntime, thread_id: ThreadId) -> Result<()> {
-    match state_db
-        .memories()
+    match memory_store(state_db)?
         .try_claim_global_phase2_job(thread_id, lha_memories_write::STAGE_TWO_JOB_LEASE_SECONDS)
         .await?
     {
@@ -466,8 +619,7 @@ async fn put_phase2_in_cooldown(state_db: &StateRuntime, thread_id: ThreadId) ->
             ownership_token, ..
         } => {
             assert!(
-                state_db
-                    .memories()
+                memory_store(state_db)?
                     .mark_global_phase2_job_succeeded(&ownership_token, 0, &[])
                     .await?
             );
@@ -484,8 +636,7 @@ async fn wait_for_stage1_outputs(
     expected: usize,
 ) -> Result<Vec<lha_state::Stage1Output>> {
     wait_for_condition(|| async {
-        let outputs = state_db
-            .memories()
+        let outputs = memory_store(state_db)?
             .list_stage1_outputs_for_global(10)
             .await?;
         Ok((outputs.len() >= expected).then_some(outputs))
@@ -495,8 +646,7 @@ async fn wait_for_stage1_outputs(
 
 async fn wait_for_no_stage1_outputs(state_db: &StateRuntime) -> Result<()> {
     wait_for_condition(|| async {
-        let outputs = state_db
-            .memories()
+        let outputs = memory_store(state_db)?
             .list_stage1_outputs_for_global(10)
             .await?;
         Ok(outputs.is_empty().then_some(()))
@@ -531,8 +681,7 @@ async fn wait_for_clean_memory_workspace(memory_root: &Path) -> Result<()> {
 
 async fn prepare_clean_phase2_workspace(lha_home: &Path, state_db: &StateRuntime) -> Result<()> {
     let memory_root = lha_home.join("memories");
-    let selected = state_db
-        .memories()
+    let selected = memory_store(state_db)?
         .get_phase2_input_selection(10, 30)
         .await?;
     lha_memories_write::prepare_memory_workspace(&memory_root).await?;
@@ -541,6 +690,12 @@ async fn prepare_clean_phase2_workspace(lha_home: &Path, state_db: &StateRuntime
         .await?;
     lha_memories_write::reset_memory_workspace_baseline(&memory_root).await?;
     Ok(())
+}
+
+fn memory_store(state_db: &StateRuntime) -> Result<&lha_state::MemoryStore> {
+    state_db
+        .memories()
+        .ok_or_else(|| anyhow::anyhow!("memory store unavailable"))
 }
 
 #[derive(Debug)]
@@ -649,4 +804,17 @@ fn developer_message(text: &str) -> TranscriptItem {
         }],
         end_turn: None,
     }
+}
+
+async fn read_rollout_items(path: &Path) -> Result<Vec<RolloutItem>> {
+    let contents = tokio::fs::read_to_string(path).await?;
+    contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str::<RolloutLine>(line)
+                .map(|rollout_line| rollout_line.item)
+                .map_err(Into::into)
+        })
+        .collect()
 }

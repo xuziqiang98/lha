@@ -177,6 +177,7 @@ async fn resumed_initial_messages_render_history() {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "assistant reply".to_string(),
+                memory_citation: None,
             }),
         ]),
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -4946,6 +4947,7 @@ async fn unified_exec_wait_after_final_agent_message_snapshot() {
         id: "turn-1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Final response.".into(),
+            memory_citation: None,
         }),
     });
     chat.handle_codex_event(Event {
@@ -9085,6 +9087,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "First message".into(),
+            memory_citation: None,
         }),
     });
 
@@ -9093,6 +9096,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Second message".into(),
+            memory_citation: None,
         }),
     });
 
@@ -9137,6 +9141,7 @@ async fn final_reasoning_then_message_without_deltas_are_rendered() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Here is the result.".into(),
+            memory_citation: None,
         }),
     });
 
@@ -9197,6 +9202,7 @@ async fn deltas_then_same_final_message_are_rendered_snapshot() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Here is the result.".into(),
+            memory_citation: None,
         }),
     });
 
@@ -9266,6 +9272,7 @@ async fn direct_agent_message_uses_reflowable_answer_cell() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: source.into(),
+            memory_citation: None,
         }),
     });
 
@@ -9316,6 +9323,7 @@ async fn late_reasoning_summary_after_answer_delta_is_not_visible() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Final answer.".into(),
+            memory_citation: None,
         }),
     });
 
@@ -9349,6 +9357,7 @@ async fn late_reasoning_summary_after_final_message_is_not_visible() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Final answer.".into(),
+            memory_citation: None,
         }),
     });
     chat.handle_codex_event(Event {
@@ -9406,6 +9415,7 @@ async fn reasoning_summary_before_answer_remains_visible() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Final answer.".into(),
+            memory_citation: None,
         }),
     });
 
@@ -9432,7 +9442,10 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     apply_stable_snapshot_cwd(&mut chat);
     chat.handle_codex_event(Event {
         id: "t1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into(),
+            memory_citation: None,
+        }),
     });
 
     let command = vec!["bash".into(), "-lc".into(), "rg \"Change Approved\"".into()];

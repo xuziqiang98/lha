@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,12 +108,40 @@ fn remove_git_dir_or_file(root: &Path) -> std::io::Result<()> {
 }
 
 fn is_valid_git_repository(root: &Path) -> bool {
-    run_git(root, ["rev-parse", "--is-inside-work-tree"])
+    let Ok(canonical_root) = canonical_root(root) else {
+        return false;
+    };
+    let inside_work_tree = run_git(root, ["rev-parse", "--is-inside-work-tree"])
         .map(|output| output.stdout.trim() == "true")
+        .unwrap_or(false);
+    if !inside_work_tree {
+        return false;
+    }
+    let Ok(Some(top_level)) = git_top_level(root) else {
+        return false;
+    };
+    if top_level != canonical_root {
+        return false;
+    }
+    run_git(root, ["rev-parse", "--verify", "HEAD"])
+        .map(|output| !output.stdout.trim().is_empty())
         .unwrap_or(false)
-        && run_git(root, ["rev-parse", "--verify", "HEAD"])
-            .map(|output| !output.stdout.trim().is_empty())
-            .unwrap_or(false)
+}
+
+fn canonical_root(root: &Path) -> anyhow::Result<PathBuf> {
+    Ok(root.canonicalize()?)
+}
+
+fn git_top_level(root: &Path) -> anyhow::Result<Option<PathBuf>> {
+    let output = match run_git(root, ["rev-parse", "--show-toplevel"]) {
+        Ok(output) => output,
+        Err(_) => return Ok(None),
+    };
+    let top_level = output.stdout.trim();
+    if top_level.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(PathBuf::from(top_level).canonicalize()?))
 }
 
 struct GitOutput {
@@ -284,6 +313,55 @@ mod tests {
         ensure_git_baseline_repository(tmp.path()).expect("baseline");
 
         assert!(is_valid_git_repository(tmp.path()));
+    }
+
+    #[test]
+    fn nested_memory_root_gets_own_git_repo() {
+        let tmp = TempDir::new().expect("tempdir");
+        let parent = tmp.path();
+        std::fs::write(parent.join(".gitignore"), "memories/\n").expect("write gitignore");
+        init_and_commit(parent).expect("parent baseline");
+        let memories = parent.join("memories");
+        std::fs::create_dir_all(&memories).expect("mkdir memories");
+
+        ensure_git_baseline_repository(&memories).expect("memory baseline");
+
+        let top_level = git_top_level(&memories)
+            .expect("top level")
+            .expect("top level should exist");
+        assert_eq!(
+            top_level,
+            memories.canonicalize().expect("canonical memories")
+        );
+        let parent_status = run_git(parent, ["status", "--porcelain=v1"])
+            .expect("parent status")
+            .stdout;
+        assert_eq!(parent_status, "");
+    }
+
+    #[test]
+    fn diff_inside_nested_memory_root_does_not_touch_parent_index() {
+        let tmp = TempDir::new().expect("tempdir");
+        let parent = tmp.path();
+        std::fs::write(parent.join(".gitignore"), "memories/\n").expect("write gitignore");
+        init_and_commit(parent).expect("parent baseline");
+        let memories = parent.join("memories");
+        ensure_git_baseline_repository(&memories).expect("memory baseline");
+        std::fs::write(memories.join("memory.md"), "remember this").expect("write memory");
+
+        let diff = diff_since_latest_init(&memories).expect("diff");
+
+        assert_eq!(
+            diff.changes,
+            vec![GitBaselineChange {
+                status: GitBaselineChangeStatus::Added,
+                path: "memory.md".to_string(),
+            }]
+        );
+        let parent_cached_diff = run_git(parent, ["diff", "--cached", "--name-only"])
+            .expect("parent cached diff")
+            .stdout;
+        assert_eq!(parent_cached_diff, "");
     }
 
     fn assert_change(diff: &GitBaselineDiff, status: GitBaselineChangeStatus, path: &'static str) {

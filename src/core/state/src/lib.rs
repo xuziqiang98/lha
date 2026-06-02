@@ -23,6 +23,7 @@ pub use runtime::GoalAccountingMode;
 pub use runtime::GoalAccountingOutcome;
 pub use runtime::GoalUpdate;
 pub use runtime::MemoryStore;
+pub use runtime::MemoryStoreMode;
 pub use runtime::PlanRunAccountingMode;
 pub use runtime::PlanRunAccountingOutcome;
 pub use runtime::PlanRunUpdate;

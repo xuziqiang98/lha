@@ -15,6 +15,7 @@ use lha_protocol::protocol::RolloutItem;
 use lha_protocol::protocol::SessionSource;
 use lha_state::DB_METRIC_COMPARE_ERROR;
 pub use lha_state::LogEntry;
+use lha_state::MemoryStoreMode;
 use lha_state::STATE_DB_FILENAME;
 use lha_state::ThreadMetadataBuilder;
 use serde_json::Value;
@@ -38,10 +39,16 @@ pub(crate) async fn init_if_enabled(
         return None;
     }
     let existed = tokio::fs::try_exists(&state_path).await.unwrap_or(false);
-    let runtime = match lha_state::StateRuntime::init(
+    let memory_store_mode = if config.features.enabled(Feature::MemoryTool) {
+        MemoryStoreMode::Required
+    } else {
+        MemoryStoreMode::Disabled
+    };
+    let runtime = match lha_state::StateRuntime::init_with_memory_store(
         config.lha_home.clone(),
         config.model_provider_id.clone(),
         otel.cloned(),
+        memory_store_mode,
     )
     .await
     {
@@ -81,10 +88,11 @@ pub async fn get_state_db(config: &Config, otel: Option<&OtelManager>) -> Option
     {
         return None;
     }
-    lha_state::StateRuntime::init(
+    lha_state::StateRuntime::init_with_memory_store(
         config.lha_home.clone(),
         config.model_provider_id.clone(),
         otel.cloned(),
+        MemoryStoreMode::Disabled,
     )
     .await
     .ok()
@@ -105,10 +113,14 @@ pub async fn open_if_present(lha_home: &Path, default_provider: &str) -> Option<
     if !tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
         return None;
     }
-    let runtime =
-        lha_state::StateRuntime::init(lha_home.to_path_buf(), default_provider.to_string(), None)
-            .await
-            .ok()?;
+    let runtime = lha_state::StateRuntime::init_with_memory_store(
+        lha_home.to_path_buf(),
+        default_provider.to_string(),
+        None,
+        MemoryStoreMode::Disabled,
+    )
+    .await
+    .ok()?;
     Some(runtime)
 }
 
@@ -377,6 +389,43 @@ mod tests {
     use super::*;
     use crate::rollout::list::parse_cursor;
     use pretty_assertions::assert_eq;
+
+    #[tokio::test]
+    async fn init_if_enabled_without_memory_feature_ignores_corrupt_memory_db() {
+        let home = tempfile::tempdir().expect("tempdir");
+        tokio::fs::write(
+            home.path().join(lha_state::MEMORIES_DB_FILENAME),
+            "not sqlite",
+        )
+        .await
+        .expect("write corrupt memories db");
+        let mut config = crate::config::test_config();
+        config.lha_home = home.path().to_path_buf();
+        config.features.enable(Feature::Goals);
+        config.features.disable(Feature::MemoryTool);
+
+        let runtime = init_if_enabled(&config, None)
+            .await
+            .expect("state runtime should initialize");
+
+        assert!(runtime.memories().is_none());
+    }
+
+    #[tokio::test]
+    async fn init_if_enabled_with_memory_feature_rejects_corrupt_memory_db() {
+        let home = tempfile::tempdir().expect("tempdir");
+        tokio::fs::write(
+            home.path().join(lha_state::MEMORIES_DB_FILENAME),
+            "not sqlite",
+        )
+        .await
+        .expect("write corrupt memories db");
+        let mut config = crate::config::test_config();
+        config.lha_home = home.path().to_path_buf();
+        config.features.enable(Feature::MemoryTool);
+
+        assert!(init_if_enabled(&config, None).await.is_none());
+    }
 
     #[test]
     fn cursor_to_anchor_normalizes_timestamp_format() {
