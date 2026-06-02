@@ -36,6 +36,8 @@ pub(crate) struct SessionState {
     pub(crate) initial_context_seeded: bool,
     /// Last turn settings that have been reflected in prompt history.
     pub(crate) prompt_settings_snapshot: Option<PromptSettingsSnapshot>,
+    /// Whether current prompt history includes memory citation instructions.
+    pub(crate) memory_citations_enabled: bool,
     /// Whether reconstructed history may need an explicit identity clear when the
     /// next seeded context has no preset identity.
     pub(crate) pending_identity_clear_from_history: bool,
@@ -56,6 +58,7 @@ impl SessionState {
             workflow: None,
             initial_context_seeded: false,
             prompt_settings_snapshot: None,
+            memory_citations_enabled: false,
             pending_identity_clear_from_history: false,
         }
     }

@@ -54,7 +54,11 @@ pub(crate) async fn handle_output_item_done(
 ) -> Result<OutputItemResult> {
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.turn_context.identity.kind == IdentityKind::Planner;
-    let (item, memory_citation) = strip_memory_citation_from_item(item);
+    let (item, memory_citation) = if ctx.sess.memory_citations_enabled().await {
+        strip_memory_citation_from_item(item)
+    } else {
+        (item, None)
+    };
     if matches!(
         &item,
         TranscriptItem::HostedActivity { activity_type, .. } if activity_type == "web_search"

@@ -3,6 +3,8 @@ use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_message_item_added;
+use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
@@ -37,6 +39,7 @@ use sqlx::Row;
 use sqlx::SqlitePool;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::sqlite::SqlitePoolOptions;
+use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
@@ -101,9 +104,19 @@ async fn assistant_memory_citation_is_persisted_and_replayed() -> Result<()> {
         ]),
     )
     .await;
-    let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::MemoryTool);
-    });
+    let mut builder = test_codex()
+        .with_pre_build_hook(|lha_home| {
+            let memory_root = lha_home.join("memories");
+            fs::create_dir_all(&memory_root).expect("memory dir");
+            fs::write(
+                memory_root.join("memory_summary.md"),
+                "Memory citations are available.",
+            )
+            .expect("memory summary");
+        })
+        .with_config(|config| {
+            config.features.enable(Feature::MemoryTool);
+        });
     let test = builder.build(&server).await?;
 
     test.codex
@@ -193,6 +206,68 @@ async fn assistant_memory_citation_is_persisted_and_replayed() -> Result<()> {
         })
     });
     assert_eq!(replayed_citation, Some(expected_citation));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn assistant_memory_citation_text_is_preserved_without_memory_injection() -> Result<()> {
+    let server = start_mock_server().await;
+    let assistant_message = "answer\n<oai-mem-citation>\nhidden literal\n</oai-mem-citation>";
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            ev_response_created("resp-literal-memory-citation"),
+            ev_message_item_added("msg-literal-memory-citation", ""),
+            ev_output_text_delta(assistant_message),
+            ev_assistant_message("msg-literal-memory-citation", assistant_message),
+            ev_completed("resp-literal-memory-citation"),
+        ]),
+    )
+    .await;
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::MemoryTool);
+    });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "echo literal memory citation text".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let delta = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::AgentMessageContentDelta(event) => Some(event.delta.clone()),
+        _ => None,
+    })
+    .await;
+    let completed = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::AgentMessage(item),
+            ..
+        }) => Some(item.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let text = completed
+        .content
+        .iter()
+        .map(|entry| match entry {
+            lha_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+        })
+        .collect::<String>();
+    assert_eq!(delta, assistant_message);
+    assert_eq!(text, assistant_message);
+    assert_eq!(completed.memory_citation, None);
 
     Ok(())
 }

@@ -179,7 +179,11 @@ async fn run_compact_task_inner(
     let summary_suffix = get_last_assistant_message_from_turn(history_items).unwrap_or_default();
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
     let user_messages = collect_user_messages(history_items);
-    let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+    let built_initial_context = sess
+        .build_initial_context_with_metadata(turn_context.as_ref())
+        .await;
+    let memory_citations_enabled = built_initial_context.memory_citations_enabled;
+    let initial_context = built_initial_context.items;
     let initial_context_len = initial_context.len();
     let new_history = build_compacted_history(
         initial_context,
@@ -192,6 +196,8 @@ async fn run_compact_task_inner(
     let replacement_history =
         replacement_history_without_initial_context(&new_history, initial_context_len);
     sess.replace_history(new_history).await;
+    sess.set_memory_citations_enabled(memory_citations_enabled)
+        .await;
     sess.recompute_token_usage(&turn_context).await;
 
     let rollout_item = RolloutItem::Compacted(CompactedItem {

@@ -161,10 +161,7 @@ async fn read_memory(root: &Path, args: ReadArgs) -> Result<serde_json::Value, F
     } else {
         String::new()
     };
-    if selected.len() > READ_MAX_BYTES {
-        selected.truncate(READ_MAX_BYTES);
-        truncated = true;
-    }
+    truncated |= truncate_at_char_boundary(&mut selected, READ_MAX_BYTES);
     truncated |= end < lines.len();
     Ok(json!({
         "path": args.path,
@@ -173,6 +170,19 @@ async fn read_memory(root: &Path, args: ReadArgs) -> Result<serde_json::Value, F
         "content": selected,
         "truncated": truncated
     }))
+}
+
+fn truncate_at_char_boundary(text: &mut String, max_bytes: usize) -> bool {
+    if text.len() <= max_bytes {
+        return false;
+    }
+
+    let mut end = max_bytes;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    true
 }
 
 async fn search_memories(
@@ -434,6 +444,33 @@ mod tests {
         .expect("search");
         assert_eq!(searched["entries"][0]["path"], "nested/note.md");
         assert_eq!(searched["entries"][0]["line"], 1);
+    }
+
+    #[tokio::test]
+    async fn read_memory_truncates_at_utf8_boundary() {
+        let tmp = TempDir::new().expect("tempdir");
+        let root = tmp.path().join("memories");
+        tokio::fs::create_dir_all(&root).await.expect("mkdir");
+        let content = format!("{}é", "a".repeat(READ_MAX_BYTES - 1));
+        tokio::fs::write(root.join("large.md"), content)
+            .await
+            .expect("write");
+
+        let read = read_memory(
+            root.as_path(),
+            ReadArgs {
+                path: "large.md".to_string(),
+                offset: None,
+                limit: None,
+            },
+        )
+        .await
+        .expect("read");
+        let content = read["content"].as_str().expect("content");
+
+        assert_eq!(content.len(), READ_MAX_BYTES - 1);
+        assert_eq!(content, "a".repeat(READ_MAX_BYTES - 1));
+        assert_eq!(read["truncated"], true);
     }
 
     #[tokio::test]

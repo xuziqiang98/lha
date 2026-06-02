@@ -726,6 +726,11 @@ impl TurnContext {
     }
 }
 
+pub(crate) struct BuiltInitialContext {
+    pub(crate) items: Vec<TranscriptItem>,
+    pub(crate) memory_citations_enabled: bool,
+}
+
 /// Turn settings that have already been reflected in prompt history.
 #[derive(Clone, Debug)]
 pub(crate) struct PromptSettingsSnapshot {
@@ -2880,13 +2885,17 @@ impl Session {
         match conversation_history {
             InitialHistory::New => {
                 // Build and record initial items (user instructions + environment context)
-                let items = self.build_initial_context(&turn_context).await;
-                self.record_conversation_items(&turn_context, &items).await;
+                let built_context = self
+                    .build_initial_context_with_metadata(&turn_context)
+                    .await;
+                self.record_conversation_items(&turn_context, &built_context.items)
+                    .await;
                 {
                     let mut state = self.state.lock().await;
                     state.initial_context_seeded = true;
                     state.prompt_settings_snapshot =
                         Some(PromptSettingsSnapshot::from(turn_context.as_ref()));
+                    state.memory_citations_enabled = built_context.memory_citations_enabled;
                     state.pending_identity_clear_from_history = false;
                 }
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
@@ -2900,6 +2909,7 @@ impl Session {
                     let mut state = self.state.lock().await;
                     state.initial_context_seeded = false;
                     state.prompt_settings_snapshot = None;
+                    state.memory_citations_enabled = false;
                     state.pending_identity_clear_from_history = pending_identity_clear_from_history;
                 }
 
@@ -2983,7 +2993,10 @@ impl Session {
                     .await;
 
                 // Append the current session's initial context after the reconstructed history.
-                let mut initial_context = self.build_initial_context(&turn_context).await;
+                let built_context = self
+                    .build_initial_context_with_metadata(&turn_context)
+                    .await;
+                let mut initial_context = built_context.items;
                 append_identity_clear_from_history_if_needed(
                     &mut initial_context,
                     &turn_context.identity,
@@ -2996,6 +3009,7 @@ impl Session {
                     state.initial_context_seeded = true;
                     state.prompt_settings_snapshot =
                         Some(PromptSettingsSnapshot::from(turn_context.as_ref()));
+                    state.memory_citations_enabled = built_context.memory_citations_enabled;
                     state.pending_identity_clear_from_history = false;
                 }
                 // Flush after seeding history and any persisted rollout copy.
@@ -3841,7 +3855,8 @@ impl Session {
             std::mem::take(&mut state.pending_identity_clear_from_history)
         };
 
-        let mut initial_context = self.build_initial_context(turn_context).await;
+        let built_context = self.build_initial_context_with_metadata(turn_context).await;
+        let mut initial_context = built_context.items;
         append_identity_clear_from_history_if_needed(
             &mut initial_context,
             &turn_context.identity,
@@ -3849,7 +3864,11 @@ impl Session {
         );
         self.record_conversation_items(turn_context, &initial_context)
             .await;
-        self.set_prompt_settings_snapshot(turn_context).await;
+        {
+            let mut state = self.state.lock().await;
+            state.prompt_settings_snapshot = Some(PromptSettingsSnapshot::from(turn_context));
+            state.memory_citations_enabled = built_context.memory_citations_enabled;
+        }
         self.flush_rollout().await;
         true
     }
@@ -3899,6 +3918,16 @@ impl Session {
         state.session_configuration.identity.clone()
     }
 
+    pub(crate) async fn memory_citations_enabled(&self) -> bool {
+        let state = self.state.lock().await;
+        state.memory_citations_enabled
+    }
+
+    pub(crate) async fn set_memory_citations_enabled(&self, enabled: bool) {
+        let mut state = self.state.lock().await;
+        state.memory_citations_enabled = enabled;
+    }
+
     async fn send_raw_transcript_items(
         &self,
         turn_context: &TurnContext,
@@ -3917,7 +3946,17 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Vec<TranscriptItem> {
+        self.build_initial_context_with_metadata(turn_context)
+            .await
+            .items
+    }
+
+    pub(crate) async fn build_initial_context_with_metadata(
+        &self,
+        turn_context: &TurnContext,
+    ) -> BuiltInitialContext {
         let mut items = Vec::<TranscriptItem>::with_capacity(4);
+        let mut memory_citations_enabled = false;
         let shell = self.user_shell();
         items.push(
             DeveloperInstructions::from_policy(
@@ -3973,6 +4012,7 @@ impl Session {
                 lha_memories_read::build_memory_developer_instructions(lha_home.as_path()).await
         {
             items.push(DeveloperInstructions::new(memory_instructions).into());
+            memory_citations_enabled = true;
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             items.push(TranscriptItem::from(UserInstructions {
@@ -3984,7 +4024,10 @@ impl Session {
             Some(turn_context.cwd.clone()),
             shell.as_ref().clone(),
         )));
-        items
+        BuiltInitialContext {
+            items,
+            memory_citations_enabled,
+        }
     }
 
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
@@ -6600,6 +6643,7 @@ struct CodexTurnStreamProcessor {
     pending_input_epoch: u64,
     active_item: Option<TurnItem>,
     plan_mode_state: Option<PlanModeStreamState>,
+    memory_citations_enabled: bool,
     memory_citation_delta_filter: MemoryCitationDeltaFilter,
     response_total_tokens: Option<i64>,
     tool_output_tokens: i64,
@@ -6721,6 +6765,7 @@ impl CodexTurnStreamProcessor {
         tool_runtime: ToolCallRuntime,
         turn_diff_tracker: SharedTurnDiffTracker,
         cancellation_token: CancellationToken,
+        memory_citations_enabled: bool,
     ) -> Self {
         let plan_mode = turn_context.identity.kind == IdentityKind::Planner;
         let plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
@@ -6733,6 +6778,7 @@ impl CodexTurnStreamProcessor {
             pending_input_epoch: 0,
             active_item: None,
             plan_mode_state,
+            memory_citations_enabled,
             memory_citation_delta_filter: MemoryCitationDeltaFilter::default(),
             response_total_tokens: None,
             tool_output_tokens: 0,
@@ -6745,6 +6791,9 @@ impl CodexTurnStreamProcessor {
     }
 
     async fn flush_memory_citation_delta_filter(&mut self, active: &TurnItem) {
+        if !self.memory_citations_enabled {
+            return;
+        }
         if !matches!(active, TurnItem::AgentMessage(_)) {
             self.memory_citation_delta_filter.reset();
             return;
@@ -6880,7 +6929,9 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
                 if let Some(turn_item) =
                     handle_non_tool_response_item(&item, self.plan_mode()).await
                 {
-                    if matches!(turn_item, TurnItem::AgentMessage(_)) {
+                    if self.memory_citations_enabled
+                        && matches!(turn_item, TurnItem::AgentMessage(_))
+                    {
                         self.memory_citation_delta_filter.reset();
                     }
                     if let Some(state) = self.plan_mode_state.as_mut()
@@ -6938,7 +6989,9 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
             }
             TurnEvent::OutputTextDelta { delta, .. } => {
                 if let Some(active) = self.active_item.as_ref() {
-                    let delta = if matches!(active, TurnItem::AgentMessage(_)) {
+                    let delta = if self.memory_citations_enabled
+                        && matches!(active, TurnItem::AgentMessage(_))
+                    {
                         self.memory_citation_delta_filter.push(&delta)
                     } else {
                         delta
@@ -7172,12 +7225,14 @@ async fn try_run_sampling_request(
         Arc::clone(&turn_context),
         Arc::clone(&turn_diff_tracker),
     );
+    let memory_citations_enabled = sess.memory_citations_enabled().await;
     let mut processor = CodexTurnStreamProcessor::new(
         Arc::clone(&sess),
         Arc::clone(&turn_context),
         tool_runtime,
         Arc::clone(&turn_diff_tracker),
         cancellation_token.child_token(),
+        memory_citations_enabled,
     );
     processor.pending_input_epoch = sess.pending_input_epoch.load(Ordering::SeqCst);
     let outcome = AgentKernel::new()
