@@ -2408,6 +2408,21 @@ WHERE id = ?
         Ok(result.rows_affected() > 0)
     }
 
+    async fn set_thread_memory_mode_from_rollout(
+        &self,
+        id: ThreadId,
+        memory_mode: &str,
+    ) -> anyhow::Result<bool> {
+        let result =
+            sqlx::query("UPDATE threads SET memory_mode = ? WHERE id = ? AND memory_mode != ?")
+                .bind(memory_mode)
+                .bind(id.to_string())
+                .bind(lha_protocol::protocol::MEMORY_MODE_POLLUTED)
+                .execute(self.pool.as_ref())
+                .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Find a rollout path by thread id using the underlying database.
     pub async fn find_rollout_path_by_id(
         &self,
@@ -2691,7 +2706,7 @@ ON CONFLICT(id) DO UPDATE SET
             return Err(err);
         }
         if let Some(memory_mode) = extract_memory_mode(items) {
-            self.set_thread_memory_mode(builder.id, memory_mode.as_str())
+            self.set_thread_memory_mode_from_rollout(builder.id, memory_mode.as_str())
                 .await?;
         }
         Ok(())
@@ -3015,6 +3030,31 @@ mod tests {
         }
     }
 
+    fn session_meta_item(
+        id: ThreadId,
+        created_at: DateTime<Utc>,
+        cwd: PathBuf,
+        memory_mode: &str,
+    ) -> RolloutItem {
+        RolloutItem::SessionMeta(lha_protocol::protocol::SessionMetaLine {
+            meta: lha_protocol::protocol::SessionMeta {
+                id,
+                forked_from_id: None,
+                timestamp: created_at.to_rfc3339(),
+                cwd,
+                originator: "test".to_string(),
+                cli_version: "test".to_string(),
+                rollout_schema_version: lha_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
+                source: lha_protocol::protocol::SessionSource::Cli,
+                model_provider: Some("test-provider".to_string()),
+                base_instructions: None,
+                dynamic_tools: None,
+                memory_mode: Some(memory_mode.to_string()),
+            },
+            git: None,
+        })
+    }
+
     async fn insert_memory_output(
         runtime: &StateRuntime,
         thread: ThreadMetadata,
@@ -3166,24 +3206,11 @@ INSERT INTO stage1_outputs (
             created_at,
             lha_protocol::protocol::SessionSource::Cli,
         );
-        let items = vec![RolloutItem::SessionMeta(
-            lha_protocol::protocol::SessionMetaLine {
-                meta: lha_protocol::protocol::SessionMeta {
-                    id,
-                    forked_from_id: None,
-                    timestamp: created_at.to_rfc3339(),
-                    cwd: runtime.lha_home().to_path_buf(),
-                    originator: "test".to_string(),
-                    cli_version: "test".to_string(),
-                    rollout_schema_version: lha_protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3,
-                    source: lha_protocol::protocol::SessionSource::Cli,
-                    model_provider: Some("test-provider".to_string()),
-                    base_instructions: None,
-                    dynamic_tools: None,
-                    memory_mode: Some(lha_protocol::protocol::MEMORY_MODE_DISABLED.to_string()),
-                },
-                git: None,
-            },
+        let items = vec![session_meta_item(
+            id,
+            created_at,
+            runtime.lha_home().to_path_buf(),
+            lha_protocol::protocol::MEMORY_MODE_DISABLED,
         )];
 
         runtime
@@ -3197,6 +3224,102 @@ INSERT INTO stage1_outputs (
                 .await
                 .expect("memory mode"),
             Some(lha_protocol::protocol::MEMORY_MODE_DISABLED.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn rollout_apply_updates_existing_non_polluted_memory_mode() {
+        let runtime = test_runtime().await;
+        let id = test_thread_id();
+        let created_at = Utc::now() - chrono::Duration::hours(1);
+        let rollout_path = runtime
+            .lha_home()
+            .join("sessions/2026/06/01/rollout-existing-disabled.jsonl");
+        let builder = ThreadMetadataBuilder::new(
+            id,
+            rollout_path.clone(),
+            created_at,
+            lha_protocol::protocol::SessionSource::Cli,
+        );
+        runtime
+            .upsert_thread(&memory_thread(
+                id,
+                "cli",
+                created_at,
+                lha_protocol::protocol::MEMORY_MODE_ENABLED,
+                true,
+            ))
+            .await
+            .expect("insert thread");
+        let items = vec![session_meta_item(
+            id,
+            created_at,
+            runtime.lha_home().to_path_buf(),
+            lha_protocol::protocol::MEMORY_MODE_DISABLED,
+        )];
+
+        runtime
+            .apply_rollout_items(&builder, &items, None)
+            .await
+            .expect("apply rollout items");
+
+        assert_eq!(
+            runtime
+                .get_thread_memory_mode(id)
+                .await
+                .expect("memory mode"),
+            Some(lha_protocol::protocol::MEMORY_MODE_DISABLED.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn rollout_apply_preserves_polluted_memory_mode() {
+        let runtime = test_runtime().await;
+        let id = test_thread_id();
+        let created_at = Utc::now() - chrono::Duration::hours(1);
+        let rollout_path = runtime
+            .lha_home()
+            .join("sessions/2026/06/01/rollout-polluted.jsonl");
+        let builder = ThreadMetadataBuilder::new(
+            id,
+            rollout_path.clone(),
+            created_at,
+            lha_protocol::protocol::SessionSource::Cli,
+        );
+        runtime
+            .upsert_thread(&memory_thread(
+                id,
+                "cli",
+                created_at,
+                lha_protocol::protocol::MEMORY_MODE_ENABLED,
+                true,
+            ))
+            .await
+            .expect("insert thread");
+        runtime
+            .memories()
+            .expect("memories")
+            .mark_thread_memory_mode_polluted(id)
+            .await
+            .expect("mark polluted");
+        let items = vec![session_meta_item(
+            id,
+            created_at,
+            runtime.lha_home().to_path_buf(),
+            lha_protocol::protocol::MEMORY_MODE_ENABLED,
+        )];
+
+        runtime
+            .apply_rollout_items(&builder, &items, None)
+            .await
+            .expect("apply rollout items");
+
+        assert_eq!(
+            runtime
+                .get_thread_memory_mode(id)
+                .await
+                .expect("memory mode"),
+            Some(lha_protocol::protocol::MEMORY_MODE_POLLUTED.to_string())
         );
     }
 
