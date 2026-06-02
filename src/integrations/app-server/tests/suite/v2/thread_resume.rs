@@ -47,7 +47,7 @@ async fn thread_resume_returns_original_thread() -> Result<()> {
     // Start a thread.
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1-codex-max".to_string()),
+            model: Some("gpt-5.2-codex".to_string()),
             ..Default::default()
         })
         .await?;
@@ -299,7 +299,7 @@ async fn thread_resume_with_overrides_defers_updated_at_until_turn_start() -> Re
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: rollout.conversation_id.clone(),
-            model: Some("mock-model".to_string()),
+            model: Some("gpt-5.2-codex".to_string()),
             ..Default::default()
         })
         .await?;
@@ -353,7 +353,7 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1-codex-max".to_string()),
+            model: Some("gpt-5.2-codex".to_string()),
             ..Default::default()
         })
         .await?;
@@ -400,7 +400,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     // Start a thread.
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1-codex-max".to_string()),
+            model: Some("gpt-5.2-codex".to_string()),
             ..Default::default()
         })
         .await?;
@@ -426,7 +426,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id,
             history: Some(history.into_iter().collect()),
-            model: Some("mock-model".to_string()),
+            model: Some("gpt-5.2-codex".to_string()),
             model_provider: Some("mock_provider".to_string()),
             ..Default::default()
         })

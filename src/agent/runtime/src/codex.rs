@@ -1415,6 +1415,9 @@ impl Session {
             declared_tool_contract: session_configuration.provider.enforce_declared_tool_names(),
             features: &per_turn_config.features,
             web_search_mode: per_turn_config.web_search_mode,
+            memory_tools: per_turn_config.features.enabled(Feature::MemoryTool)
+                && per_turn_config.memories.use_memories
+                && per_turn_config.memories.dedicated_tools,
             session_source: session_configuration.session_source.clone(),
         })
         .with_identity_kind(session_configuration.identity.kind);
@@ -1481,6 +1484,13 @@ impl Session {
         }
 
         let forked_from_id = initial_history.forked_from_id();
+        let memory_mode = config.features.enabled(Feature::MemoryTool).then(|| {
+            if config.memories.generate_memories {
+                lha_protocol::protocol::MEMORY_MODE_ENABLED.to_string()
+            } else {
+                lha_protocol::protocol::MEMORY_MODE_DISABLED.to_string()
+            }
+        });
 
         let (conversation_id, rollout_params) = match &initial_history {
             InitialHistory::New | InitialHistory::Forked(_) => {
@@ -1495,6 +1505,7 @@ impl Session {
                             text: session_configuration.base_instructions.clone(),
                         },
                         session_configuration.dynamic_tools.clone(),
+                        memory_mode,
                     ),
                 )
             }
@@ -3928,11 +3939,17 @@ impl Session {
             items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
         }
         // Add developer instructions from identity if they exist and are non-empty
-        let (identity, base_instructions) = {
+        let (identity, base_instructions, lha_home, memories_config) = {
             let state = self.state.lock().await;
             (
                 state.session_configuration.identity.clone(),
                 state.session_configuration.base_instructions.clone(),
+                state.session_configuration.lha_home.clone(),
+                state
+                    .session_configuration
+                    .original_config_do_not_use
+                    .memories
+                    .clone(),
             )
         };
         if let Some(identity_instructions) = DeveloperInstructions::from_identity(&identity) {
@@ -3955,6 +3972,13 @@ impl Session {
         }
         if let Some(instructions) = buddy_model_instructions(&turn_context.tui_buddy) {
             items.push(DeveloperInstructions::new(instructions).into());
+        }
+        if self.features.enabled(Feature::MemoryTool)
+            && memories_config.use_memories
+            && let Ok(Some(memory_instructions)) =
+                lha_memories_read::build_memory_developer_instructions(lha_home.as_path()).await
+        {
+            items.push(DeveloperInstructions::new(memory_instructions).into());
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             items.push(TranscriptItem::from(UserInstructions {
@@ -5320,6 +5344,7 @@ async fn start_cli_backed_review_turn(
         declared_tool_contract: endpoint.enforce_declared_tool_names(),
         features: &review_features,
         web_search_mode: Some(review_web_search_mode),
+        memory_tools: false,
         session_source: parent_turn_context.runtime.get_session_source(),
     })
     .with_identity_kind(IdentityKind::Reviewer);
@@ -6492,6 +6517,7 @@ async fn emit_agent_message_in_plan_mode(
                 TurnItem::AgentMessage(lha_protocol::items::AgentMessageItem {
                     id: agent_message_id.clone(),
                     content: Vec::new(),
+                    memory_citation: None,
                 })
             });
         sess.emit_turn_item_started(turn_context, &start_item).await;
@@ -6570,9 +6596,118 @@ struct CodexTurnStreamProcessor {
     pending_input_epoch: u64,
     active_item: Option<TurnItem>,
     plan_mode_state: Option<PlanModeStreamState>,
+    memory_citation_delta_filter: MemoryCitationDeltaFilter,
     response_total_tokens: Option<i64>,
     tool_output_tokens: i64,
     should_emit_turn_diff: bool,
+}
+
+#[derive(Debug, Default)]
+struct MemoryCitationDeltaFilter {
+    pending: String,
+    suppressing: bool,
+}
+
+impl MemoryCitationDeltaFilter {
+    const OPEN_TAG: &'static str = "<oai-mem-citation>";
+    const CLOSE_TAG: &'static str = "</oai-mem-citation>";
+
+    fn reset(&mut self) {
+        self.pending.clear();
+        self.suppressing = false;
+    }
+
+    fn push(&mut self, delta: &str) -> String {
+        let mut input = String::with_capacity(self.pending.len() + delta.len());
+        input.push_str(&self.pending);
+        input.push_str(delta);
+        self.pending.clear();
+
+        let mut output = String::new();
+        let mut rest = input.as_str();
+
+        loop {
+            if self.suppressing {
+                if let Some(close_idx) = rest.find(Self::CLOSE_TAG) {
+                    rest = &rest[close_idx + Self::CLOSE_TAG.len()..];
+                    self.suppressing = false;
+                    continue;
+                }
+
+                let keep = longest_suffix_matching_prefix(rest, Self::CLOSE_TAG);
+                if keep > 0 {
+                    self.pending.push_str(&rest[rest.len() - keep..]);
+                }
+                return output;
+            }
+
+            if let Some(open_idx) = rest.find(Self::OPEN_TAG) {
+                output.push_str(&rest[..open_idx]);
+                rest = &rest[open_idx + Self::OPEN_TAG.len()..];
+                self.suppressing = true;
+                continue;
+            }
+
+            let keep = longest_suffix_matching_prefix(rest, Self::OPEN_TAG);
+            output.push_str(&rest[..rest.len() - keep]);
+            if keep > 0 {
+                self.pending.push_str(&rest[rest.len() - keep..]);
+            }
+            return output;
+        }
+    }
+
+    fn finish(&mut self) -> String {
+        if self.suppressing {
+            self.reset();
+            String::new()
+        } else {
+            std::mem::take(&mut self.pending)
+        }
+    }
+}
+
+fn longest_suffix_matching_prefix(input: &str, pattern: &str) -> usize {
+    let max_len = input.len().min(pattern.len().saturating_sub(1));
+    (1..=max_len)
+        .rev()
+        .find(|&len| input.ends_with(&pattern[..len]))
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod memory_citation_delta_filter_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn suppresses_complete_citation_block() {
+        let mut filter = MemoryCitationDeltaFilter::default();
+
+        assert_eq!(
+            filter.push("answer<oai-mem-citation>hidden</oai-mem-citation>"),
+            "answer"
+        );
+        assert_eq!(filter.finish(), "");
+    }
+
+    #[test]
+    fn suppresses_citation_block_split_across_deltas() {
+        let mut filter = MemoryCitationDeltaFilter::default();
+
+        assert_eq!(filter.push("answer<oai"), "answer");
+        assert_eq!(filter.push("-mem-citation>hidden</oai"), "");
+        assert_eq!(filter.push("-mem-citation>tail"), "tail");
+        assert_eq!(filter.finish(), "");
+    }
+
+    #[test]
+    fn flushes_partial_tag_when_no_citation_arrives() {
+        let mut filter = MemoryCitationDeltaFilter::default();
+
+        assert_eq!(filter.push("literal <oai"), "literal ");
+        assert_eq!(filter.finish(), "<oai");
+    }
 }
 
 impl CodexTurnStreamProcessor {
@@ -6594,6 +6729,7 @@ impl CodexTurnStreamProcessor {
             pending_input_epoch: 0,
             active_item: None,
             plan_mode_state,
+            memory_citation_delta_filter: MemoryCitationDeltaFilter::default(),
             response_total_tokens: None,
             tool_output_tokens: 0,
             should_emit_turn_diff: false,
@@ -6602,6 +6738,40 @@ impl CodexTurnStreamProcessor {
 
     fn plan_mode(&self) -> bool {
         self.plan_mode_state.is_some()
+    }
+
+    async fn flush_memory_citation_delta_filter(&mut self, active: &TurnItem) {
+        if !matches!(active, TurnItem::AgentMessage(_)) {
+            self.memory_citation_delta_filter.reset();
+            return;
+        }
+
+        let delta = self.memory_citation_delta_filter.finish();
+        if delta.is_empty() {
+            return;
+        }
+
+        let item_id = active.id();
+        if let Some(state) = self.plan_mode_state.as_mut() {
+            let segments = state
+                .plan_parsers
+                .assistant_parser_mut(&item_id)
+                .parse(&delta);
+            handle_plan_segments(&self.sess, &self.turn_context, state, &item_id, segments).await;
+        } else {
+            let event = AgentMessageContentDeltaEvent {
+                thread_id: self.sess.conversation_id.to_string(),
+                turn_id: self.turn_context.sub_id.clone(),
+                item_id,
+                delta,
+            };
+            self.sess
+                .send_event(
+                    &self.turn_context,
+                    EventMsg::AgentMessageContentDelta(event),
+                )
+                .await;
+        }
     }
 }
 
@@ -6639,6 +6809,9 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
             TurnEvent::ItemCompleted { item, .. } => {
                 let item = item.into_item();
                 let previously_active_item = self.active_item.take();
+                if let Some(previous) = previously_active_item.as_ref() {
+                    self.flush_memory_citation_delta_filter(previous).await;
+                }
                 let mut update = TurnEventUpdate::default();
 
                 if let Some(state) = self.plan_mode_state.as_mut() {
@@ -6703,6 +6876,9 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
                 if let Some(turn_item) =
                     handle_non_tool_response_item(&item, self.plan_mode()).await
                 {
+                    if matches!(turn_item, TurnItem::AgentMessage(_)) {
+                        self.memory_citation_delta_filter.reset();
+                    }
                     if let Some(state) = self.plan_mode_state.as_mut()
                         && matches!(turn_item, TurnItem::AgentMessage(_))
                     {
@@ -6758,6 +6934,14 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
             }
             TurnEvent::OutputTextDelta { delta, .. } => {
                 if let Some(active) = self.active_item.as_ref() {
+                    let delta = if matches!(active, TurnItem::AgentMessage(_)) {
+                        self.memory_citation_delta_filter.push(&delta)
+                    } else {
+                        delta
+                    };
+                    if delta.is_empty() {
+                        return Ok(TurnEventUpdate::default());
+                    }
                     let item_id = active.id();
                     if let Some(state) = self.plan_mode_state.as_mut()
                         && matches!(active, TurnItem::AgentMessage(_))

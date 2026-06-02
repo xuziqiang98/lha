@@ -54,6 +54,16 @@ pub struct ThreadManager {
     _test_lha_home_guard: Option<TempDir>,
 }
 
+impl Clone for ThreadManager {
+    fn clone(&self) -> Self {
+        Self {
+            state: Arc::clone(&self.state),
+            #[cfg(any(test, feature = "test-support"))]
+            _test_lha_home_guard: None,
+        }
+    }
+}
+
 /// Shared, `Arc`-owned state for [`ThreadManager`].
 pub(crate) struct ThreadManagerState {
     threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
@@ -432,6 +442,8 @@ impl ThreadManagerState {
         session_source: SessionSource,
         dynamic_tools: Vec<lha_protocol::dynamic_tools::DynamicToolSpec>,
     ) -> CodexResult<NewThread> {
+        let startup_config = config.clone();
+        let startup_source = session_source.clone();
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(
@@ -444,7 +456,17 @@ impl ThreadManagerState {
             dynamic_tools,
         )
         .await?;
-        self.finalize_thread_spawn(codex, thread_id).await
+        let new_thread = self.finalize_thread_spawn(codex, thread_id).await?;
+        crate::memories::startup::start_memories_startup_task(
+            Arc::clone(&self.auth_manager),
+            Arc::clone(&self.models_manager),
+            Arc::clone(&self.skills_manager),
+            startup_config,
+            new_thread.thread_id,
+            Arc::clone(&new_thread.thread),
+            startup_source,
+        );
+        Ok(new_thread)
     }
 
     async fn finalize_thread_spawn(

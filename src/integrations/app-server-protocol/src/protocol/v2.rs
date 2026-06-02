@@ -11,6 +11,7 @@ use lha_protocol::config_types::Verbosity;
 use lha_protocol::config_types::WebSearchMode;
 use lha_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use lha_protocol::items::TurnItem as CoreTurnItem;
+use lha_protocol::memory_citation::MemoryCitation;
 use lha_protocol::models::TranscriptItem;
 use lha_protocol::openai_models::ReasoningEffort;
 use lha_protocol::parse_command::ParsedCommand as CoreParsedCommand;
@@ -728,6 +729,7 @@ impl From<CoreSessionSource> for SessionSource {
             CoreSessionSource::VSCode => SessionSource::VsCode,
             CoreSessionSource::Exec => SessionSource::Exec,
             CoreSessionSource::Mcp => SessionSource::AppServer,
+            CoreSessionSource::Agent => SessionSource::Unknown,
             CoreSessionSource::Unknown => SessionSource::Unknown,
         }
     }
@@ -1864,7 +1866,13 @@ pub enum ThreadItem {
     UserMessage { id: String, content: Vec<UserInput> },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    AgentMessage { id: String, text: String },
+    AgentMessage {
+        id: String,
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        memory_citation: Option<MemoryCitation>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     /// EXPERIMENTAL - proposed plan item content. The completed plan item is
@@ -1995,7 +2003,11 @@ impl From<CoreTurnItem> for ThreadItem {
                         CoreAgentMessageContent::Text { text } => text,
                     })
                     .collect::<String>();
-                ThreadItem::AgentMessage { id: agent.id, text }
+                ThreadItem::AgentMessage {
+                    id: agent.id,
+                    text,
+                    memory_citation: agent.memory_citation,
+                }
             }
             CoreTurnItem::Plan(plan) => ThreadItem::Plan {
                 id: plan.id,
@@ -2514,6 +2526,8 @@ mod tests {
     use lha_protocol::items::TurnItem;
     use lha_protocol::items::UserMessageItem;
     use lha_protocol::items::WebSearchItem;
+    use lha_protocol::memory_citation::MemoryCitation;
+    use lha_protocol::memory_citation::MemoryCitationEntry;
     use lha_protocol::models::WebSearchAction as CoreWebSearchAction;
     use lha_protocol::protocol::NetworkAccess as CoreNetworkAccess;
     use lha_protocol::user_input::UserInput as CoreUserInput;
@@ -2618,6 +2632,7 @@ mod tests {
                     text: "world".to_string(),
                 },
             ],
+            memory_citation: None,
         });
 
         assert_eq!(
@@ -2625,6 +2640,33 @@ mod tests {
             ThreadItem::AgentMessage {
                 id: "agent-1".to_string(),
                 text: "Hello world".to_string(),
+                memory_citation: None,
+            }
+        );
+
+        let memory_citation = MemoryCitation {
+            entries: vec![MemoryCitationEntry {
+                path: "MEMORY.md".to_string(),
+                line_start: 1,
+                line_end: 2,
+                note: "used preference".to_string(),
+            }],
+            rollout_ids: vec!["00000000-0000-0000-0000-000000000001".to_string()],
+        };
+        let cited_agent_item = TurnItem::AgentMessage(AgentMessageItem {
+            id: "agent-2".to_string(),
+            content: vec![AgentMessageContent::Text {
+                text: "Remembered".to_string(),
+            }],
+            memory_citation: Some(memory_citation.clone()),
+        });
+
+        assert_eq!(
+            ThreadItem::from(cited_agent_item),
+            ThreadItem::AgentMessage {
+                id: "agent-2".to_string(),
+                text: "Remembered".to_string(),
+                memory_citation: Some(memory_citation),
             }
         );
 

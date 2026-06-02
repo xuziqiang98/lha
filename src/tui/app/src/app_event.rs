@@ -155,6 +155,9 @@ pub(crate) enum AppEvent {
     /// Open the centered experimental features modal.
     OpenExperimentalFeaturesModal,
 
+    /// Open memories settings in the bottom pane.
+    OpenMemoriesSettingsView,
+
     /// Open the centered personality selection modal.
     OpenPersonalitySelectionModal {
         current_personality: Personality,
@@ -254,6 +257,14 @@ pub(crate) enum AppEvent {
     /// Update feature flags and persist them to the top-level config.
     UpdateFeatureFlags {
         updates: Vec<(Feature, bool)>,
+    },
+
+    /// Persist memories settings and update in-memory config.
+    UpdateMemorySettings {
+        feature_enabled: bool,
+        use_memories: bool,
+        generate_memories: bool,
+        dedicated_tools: bool,
     },
 
     /// Update whether the full access warning prompt has been acknowledged.

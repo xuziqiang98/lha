@@ -26,6 +26,7 @@ asking the model to interpret the request.
 | `/approvals` | None | No | Open the approval policy selector. This command is hidden from the default popup list. |
 | `/setup-elevated-sandbox` | None | No | Start elevated sandbox setup on supported Windows degraded-sandbox sessions. |
 | `/experimental` | None | No | Open experimental feature toggles. |
+| `/memories` | None | No | Open local memory settings. |
 | `/buddy` | Optional buddy subcommand | Yes | Show current TUI buddy details, or run a buddy subcommand. |
 | `/skills` | None | Yes | Open the skills modal. |
 | `/review` | Optional instructions | No | Review current changes. With args, run a custom review request using the provided instructions. |

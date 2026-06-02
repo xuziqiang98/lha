@@ -143,6 +143,7 @@ fn write_fake_rollout(
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
         dynamic_tools: None,
+        memory_mode: None,
     };
     let lines = [
         json!({

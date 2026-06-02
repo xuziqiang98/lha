@@ -475,6 +475,137 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_rpc_reads_and_writes_memory_settings() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let lha_home = tmp_dir.path().canonicalize()?;
+    write_config(
+        &tmp_dir,
+        r#"
+[features]
+memories = true
+
+[memories]
+use_memories = false
+generate_memories = true
+dedicated_tools = false
+"#,
+    )?;
+
+    let mut mcp = McpProcess::new(&lha_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let read_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let read: ConfigReadResponse = to_response(read_resp)?;
+    assert_eq!(config_bool(&read, &["features", "memories"]), Some(true));
+    assert_eq!(
+        config_bool(&read, &["memories", "use_memories"]),
+        Some(false)
+    );
+    assert_eq!(
+        config_bool(&read, &["memories", "generate_memories"]),
+        Some(true)
+    );
+    assert_eq!(
+        config_bool(&read, &["memories", "dedicated_tools"]),
+        Some(false)
+    );
+
+    let feature_write_id = mcp
+        .send_config_value_write_request(ConfigValueWriteParams {
+            file_path: None,
+            key_path: "features.memories".to_string(),
+            value: json!(false),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await?;
+    let feature_write_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(feature_write_id)),
+    )
+    .await??;
+    let feature_write: ConfigWriteResponse = to_response(feature_write_resp)?;
+    assert_eq!(feature_write.status, WriteStatus::Ok);
+
+    let batch_id = mcp
+        .send_config_batch_write_request(ConfigBatchWriteParams {
+            file_path: None,
+            edits: vec![
+                ConfigEdit {
+                    key_path: "memories.use_memories".to_string(),
+                    value: json!(true),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                ConfigEdit {
+                    key_path: "memories.generate_memories".to_string(),
+                    value: json!(false),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+                ConfigEdit {
+                    key_path: "memories.dedicated_tools".to_string(),
+                    value: json!(true),
+                    merge_strategy: MergeStrategy::Replace,
+                },
+            ],
+            expected_version: None,
+        })
+        .await?;
+    let batch_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(batch_id)),
+    )
+    .await??;
+    let batch_write: ConfigWriteResponse = to_response(batch_resp)?;
+    assert_eq!(batch_write.status, WriteStatus::Ok);
+
+    let verify_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let verify_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(verify_id)),
+    )
+    .await??;
+    let verify: ConfigReadResponse = to_response(verify_resp)?;
+    assert_eq!(config_bool(&verify, &["features", "memories"]), Some(false));
+    assert_eq!(
+        config_bool(&verify, &["memories", "use_memories"]),
+        Some(true)
+    );
+    assert_eq!(
+        config_bool(&verify, &["memories", "generate_memories"]),
+        Some(false)
+    );
+    assert_eq!(
+        config_bool(&verify, &["memories", "dedicated_tools"]),
+        Some(true)
+    );
+
+    Ok(())
+}
+
+fn config_bool(read: &ConfigReadResponse, path: &[&str]) -> Option<bool> {
+    let mut value = read.config.additional.get(*path.first()?)?;
+    for segment in &path[1..] {
+        value = value.get(*segment)?;
+    }
+    value.as_bool()
+}
+
 fn assert_layers_user_then_optional_system(
     layers: &[lha_app_server_protocol::ConfigLayer],
     user_file: AbsolutePathBuf,

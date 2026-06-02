@@ -158,6 +158,7 @@ pub enum RolloutRecorderParams {
         source: SessionSource,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
+        memory_mode: Option<String>,
     },
     Resume {
         path: PathBuf,
@@ -182,6 +183,7 @@ impl RolloutRecorderParams {
         source: SessionSource,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
+        memory_mode: Option<String>,
     ) -> Self {
         Self::Create {
             conversation_id,
@@ -189,6 +191,7 @@ impl RolloutRecorderParams {
             source,
             base_instructions,
             dynamic_tools,
+            memory_mode,
         }
     }
 
@@ -361,6 +364,7 @@ impl RolloutRecorder {
                 source,
                 base_instructions,
                 dynamic_tools,
+                memory_mode,
             } => {
                 let LogFileInfo {
                     file,
@@ -396,6 +400,7 @@ impl RolloutRecorder {
                         } else {
                             Some(dynamic_tools)
                         },
+                        memory_mode,
                     }),
                 )
             }

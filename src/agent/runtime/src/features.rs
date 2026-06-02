@@ -80,6 +80,8 @@ pub enum Feature {
     Goals,
     /// Enable YOLO completion of planner-proposed plans.
     PlanCompletion,
+    /// Allow LHA to create and use local memories from prior conversations.
+    MemoryTool,
 
     // Experimental
     /// Use the single unified PTY-backed exec tool.
@@ -440,6 +442,16 @@ pub const FEATURES: &[FeatureSpec] = &[
             name: "YOLO plan completion",
             menu_description: "Keep implementing the latest planner plan until it is marked complete or blocked.",
             announcement: "NEW: YOLO plan completion can keep executing planner plans until done.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::MemoryTool,
+        key: "memories",
+        stage: Stage::Experimental {
+            name: "Memories",
+            menu_description: "Allow LHA to create new memories from conversations and bring relevant memories into new conversations.",
+            announcement: "NEW: LHA can now generate and use memories. Try it now with `/memories`.",
         },
         default_enabled: false,
     },

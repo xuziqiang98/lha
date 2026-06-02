@@ -14,6 +14,9 @@ members = [
     "src/shared/common",
     "src/agent/runtime",
     "src/agent/identity",
+    "src/agent/memories/read",
+    "src/agent/memories/write",
+    "src/shared/secrets",
     "src/platform/exec",
     "src/llm/types",
     "src/llm/runtime",
@@ -73,6 +76,9 @@ lha-exec = { path = "src/platform/exec" }
 lha-execpolicy = { path = "src/platform/sandbox/execpolicy" }
 lha-feedback = { path = "src/agent/feedback" }
 lha-identity = { path = "src/agent/identity" }
+lha-memories-read = { path = "src/agent/memories/read" }
+lha-memories-write = { path = "src/agent/memories/write" }
+lha-secrets = { path = "src/shared/secrets" }
 lha-file-search = { path = "src/resources/file-search" }
 lha-git = { path = "src/shared/utils/git" }
 lha-keyring-store = { path = "src/resources/keyring-store" }

@@ -73,7 +73,26 @@ pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
 fn ensure_models_json(lha_home: &Path) -> std::io::Result<()> {
     let models_json = lha_home.join("models.json");
     if !models_json.exists() {
-        std::fs::write(models_json, r#"{"providers":{}}"#)?;
+        std::fs::write(
+            models_json,
+            r#"{
+  "providers": {
+    "openai": {
+      "name": "OpenAI",
+      "endpoints": {
+        "main": {
+          "name": "OpenAI",
+          "dialect": "responses",
+          "models": {
+            "gpt-4.1": {}
+          }
+        }
+      }
+    }
+  }
+}
+"#,
+        )?;
     }
     Ok(())
 }

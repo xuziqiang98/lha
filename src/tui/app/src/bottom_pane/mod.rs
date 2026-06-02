@@ -61,6 +61,7 @@ pub mod custom_prompt_view;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;
+mod memories_settings_view;
 mod prompt_args;
 pub(crate) mod provider_config_view;
 mod skill_popup;
@@ -79,6 +80,7 @@ mod selection_popup_common;
 mod textarea;
 mod unified_exec_footer;
 pub(crate) use feedback_view::FeedbackNoteView;
+pub(crate) use memories_settings_view::memories_settings_params;
 pub(crate) use textarea::TextArea;
 pub(crate) use textarea::TextAreaState;
 

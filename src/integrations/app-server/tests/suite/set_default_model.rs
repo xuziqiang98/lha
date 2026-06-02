@@ -188,7 +188,10 @@ async fn set_default_model_rejects_ambiguous_provider_mapping() -> Result<()> {
     );
     assert!(error.error.message.contains("chatanywhere"));
     assert!(error.error.message.contains("iie"));
-    assert!(!tokio::fs::try_exists(codex_home.path().join("state.json")).await?);
+    assert_eq!(
+        state_model_ref(codex_home.path()).await?,
+        "iie.main:fallback-model"
+    );
 
     Ok(())
 }
@@ -288,6 +291,8 @@ async fn set_default_model_switches_loaded_implicit_default_thread_to_messages_r
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_thread(&mut mcp, ThreadStartParams::default()).await?;
+    write_variant_switching_models_json(codex_home.path(), &server.uri())?;
+    app_test_support::write_state_json(codex_home.path(), "i9vc.responses:gpt-5.4")?;
 
     let request_id = mcp
         .send_set_default_model_request(SetDefaultModelParams {
@@ -500,6 +505,7 @@ fn create_models_json_mapped_config_toml(codex_home: &Path) -> std::io::Result<(
 }
 "#,
     )?;
+    app_test_support::write_state_json(codex_home, "provider_a.main:glm-5")?;
     std::fs::write(codex_home.join("config.toml"), "")
 }
 
@@ -521,12 +527,13 @@ fn create_ambiguous_models_json_config_toml(codex_home: &Path) -> std::io::Resul
         codex_home.join("models.json"),
         r#"{
   "providers": {
-    "iie": { "endpoints": { "main": { "base_url": "https://example.com/iie", "dialect": "responses", "bearer_token": "sk-iie", "models": { "deepseek-v3": {} } } } },
+    "iie": { "endpoints": { "main": { "base_url": "https://example.com/iie", "dialect": "responses", "bearer_token": "sk-iie", "models": { "fallback-model": {}, "deepseek-v3": {} } } } },
     "chatanywhere": { "endpoints": { "main": { "base_url": "https://example.com/chatanywhere", "dialect": "responses", "bearer_token": "sk-chatanywhere", "models": { "deepseek-v3": {} } } } }
   }
 }
 "#,
     )?;
+    app_test_support::write_state_json(codex_home, "iie.main:fallback-model")?;
     std::fs::write(codex_home.join("config.toml"), "")
 }
 
@@ -620,6 +627,40 @@ fn create_implicit_default_variant_switching_config_toml(
           "request_max_retries": 0,
           "stream_max_retries": 0,
           "models": {{ "gpt-5.4": {{}} }}
+        }}
+      }}
+    }}
+  }}
+}}
+"#,
+        ),
+    )?;
+    std::fs::write(
+        codex_home.join("config.toml"),
+        r#"
+approval_policy = "never"
+sandbox_mode = "read-only"
+"#,
+    )
+}
+
+fn write_variant_switching_models_json(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
+    std::fs::write(
+        codex_home.join("models.json"),
+        format!(
+            r#"{{
+  "providers": {{
+    "i9vc": {{
+      "name": "i9vc",
+      "endpoints": {{
+        "responses": {{
+          "name": "i9vc",
+          "base_url": "{server_uri}/v1",
+          "dialect": "responses",
+          "bearer_token": "sk-responses",
+          "request_max_retries": 0,
+          "stream_max_retries": 0,
+          "models": {{ "gpt-5.4": {{}} }}
         }},
         "messages": {{
           "name": "i9vc",
@@ -636,13 +677,6 @@ fn create_implicit_default_variant_switching_config_toml(
 }}
 "#,
         ),
-    )?;
-    std::fs::write(
-        codex_home.join("config.toml"),
-        r#"
-approval_policy = "never"
-sandbox_mode = "read-only"
-"#,
     )
 }
 

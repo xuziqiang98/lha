@@ -58,6 +58,7 @@ fn write_rollout_with_schema_version(
             model_provider: None,
             base_instructions: None,
             dynamic_tools: None,
+            memory_mode: None,
         },
         git: None,
     })?;
@@ -161,6 +162,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                     model_provider: None,
                     base_instructions: None,
                     dynamic_tools: None,
+                    memory_mode: None,
                 },
                 git: None,
             };

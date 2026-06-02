@@ -3609,6 +3609,10 @@ impl ChatWidget {
                     .send(AppEvent::OpenExperimentalFeaturesModal);
                 self.request_redraw();
             }
+            SlashCommand::Memories => {
+                self.app_event_tx.send(AppEvent::OpenMemoriesSettingsView);
+                self.request_redraw();
+            }
             SlashCommand::Buddy => {
                 self.prepare_slash_command_transcript_output();
                 self.show_buddy_status();
@@ -6185,6 +6189,20 @@ impl ChatWidget {
                     ),
             );
         }
+    }
+
+    pub(crate) fn set_memories_config(
+        &mut self,
+        memories: lha_agent::config::types::MemoriesConfig,
+    ) {
+        self.config.memories = memories;
+    }
+
+    pub(crate) fn open_memories_settings_view(&mut self) {
+        self.dismiss_active_view();
+        let params = crate::bottom_pane::memories_settings_params(&self.config);
+        self.bottom_pane.show_selection_view(params);
+        self.request_redraw();
     }
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {

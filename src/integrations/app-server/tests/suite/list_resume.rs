@@ -16,6 +16,7 @@ use lha_app_server_protocol::SessionConfiguredNotification;
 use lha_protocol::models::ContentItem;
 use lha_protocol::models::TranscriptItem;
 use pretty_assertions::assert_eq;
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -49,6 +50,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
         None,
         None,
     )?;
+    write_o3_models_json(lha_home.path())?;
 
     let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -404,6 +406,7 @@ async fn list_conversations_fetches_through_filtered_pages() -> Result<()> {
             None,
         )?;
     }
+    write_o3_models_json(lha_home.path())?;
 
     let mut mcp = McpProcess::new(lha_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -436,4 +439,27 @@ async fn list_conversations_fetches_through_filtered_pages() -> Result<()> {
     assert_eq!(next_cursor, None);
 
     Ok(())
+}
+
+fn write_o3_models_json(lha_home: &Path) -> std::io::Result<()> {
+    std::fs::write(
+        lha_home.join("models.json"),
+        r#"{
+  "providers": {
+    "openai": {
+      "name": "OpenAI",
+      "endpoints": {
+        "main": {
+          "name": "OpenAI",
+          "dialect": "responses",
+          "models": {
+            "o3": {}
+          }
+        }
+      }
+    }
+  }
+}
+"#,
+    )
 }

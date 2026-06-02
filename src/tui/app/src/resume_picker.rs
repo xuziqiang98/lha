@@ -1170,6 +1170,7 @@ mod tests {
                         model_provider: Some(provider.to_string()),
                         base_instructions: None,
                         dynamic_tools: None,
+                        memory_mode: None,
                     },
                     git: Some(GitInfo {
                         commit_hash: None,

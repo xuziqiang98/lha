@@ -66,6 +66,12 @@ pub(crate) async fn handle_mcp_tool_call(
     {
         let result = match decision {
             McpToolApprovalDecision::Accept => {
+                crate::memories::pollution::maybe_mark_memory_polluted(
+                    &sess,
+                    turn_context,
+                    "mcp_tool_call",
+                )
+                .await;
                 let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                     call_id: call_id.clone(),
                     invocation: invocation.clone(),
@@ -144,6 +150,8 @@ pub(crate) async fn handle_mcp_tool_call(
         call_id: call_id.clone(),
         invocation: invocation.clone(),
     });
+    crate::memories::pollution::maybe_mark_memory_polluted(&sess, turn_context, "mcp_tool_call")
+        .await;
     notify_mcp_tool_call_event(sess.as_ref(), turn_context, tool_call_begin_event).await;
 
     let start = Instant::now();

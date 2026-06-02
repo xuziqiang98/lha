@@ -5230,6 +5230,16 @@ async fn experimental_command_opens_experimental_features_modal() {
 }
 
 #[tokio::test]
+async fn memories_command_opens_memories_settings_view() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Memories);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenMemoriesSettingsView));
+    assert!(!render_bottom_popup(&chat, 80).contains("Memories"));
+}
+
+#[tokio::test]
 async fn skills_command_opens_centered_skills_modal() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 

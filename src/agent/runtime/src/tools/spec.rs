@@ -42,6 +42,7 @@ pub(crate) struct ToolsConfig {
     pub identity_tools: bool,
     pub goal_tools: bool,
     pub plan_run_tools: bool,
+    pub memory_tools: bool,
     pub request_rule_enabled: bool,
     pub experimental_supported_tools: Vec<String>,
     pub workflow_tools: bool,
@@ -54,6 +55,7 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) declared_tool_contract: bool,
     pub(crate) features: &'a Features,
     pub(crate) web_search_mode: Option<WebSearchMode>,
+    pub(crate) memory_tools: bool,
     #[allow(dead_code)]
     pub(crate) session_source: SessionSource,
 }
@@ -65,6 +67,7 @@ impl ToolsConfig {
             declared_tool_contract,
             features,
             web_search_mode,
+            memory_tools,
             session_source: _,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
@@ -108,6 +111,7 @@ impl ToolsConfig {
             identity_tools: include_identity_tools,
             goal_tools: include_goal_tools,
             plan_run_tools: include_plan_run_tools,
+            memory_tools: *memory_tools,
             request_rule_enabled,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             workflow_tools: false,
@@ -151,7 +155,15 @@ fn tool_name_is_allowed_by_identity(config: &ToolsConfig, name: &str) -> bool {
         return false;
     }
     match config.identity_kind {
-        IdentityKind::Explorer => matches!(name, "read_file" | "list_dir" | "grep_files"),
+        IdentityKind::Explorer => matches!(
+            name,
+            "read_file"
+                | "list_dir"
+                | "grep_files"
+                | "memories__list"
+                | "memories__read"
+                | "memories__search"
+        ),
         IdentityKind::Reviewer => matches!(
             name,
             "read_file"
@@ -165,6 +177,9 @@ fn tool_name_is_allowed_by_identity(config: &ToolsConfig, name: &str) -> bool {
                 | "spawn_agent"
                 | "wait"
                 | "close_agent"
+                | "memories__list"
+                | "memories__read"
+                | "memories__search"
         ),
         IdentityKind::Nobody | IdentityKind::Planner | IdentityKind::Programmer => true,
     }
@@ -1044,6 +1059,136 @@ fn create_list_dir_tool() -> ToolDescriptor {
     })
 }
 
+fn create_memory_tools() -> Vec<ToolDescriptor> {
+    vec![
+        ToolDescriptor::Function(ResponsesApiTool {
+            name: "memories__list".to_string(),
+            description: "List files and directories under the local LHA memory folder.".to_string(),
+            strict: false,
+            parameters: JsonSchema::Object {
+                properties: BTreeMap::from([
+                    (
+                        "path".to_string(),
+                        JsonSchema::String {
+                            description: Some(
+                                "Relative directory under the memory root; defaults to root."
+                                    .to_string(),
+                            ),
+                        },
+                    ),
+                    (
+                        "cursor".to_string(),
+                        JsonSchema::Number {
+                            description: Some("Pagination cursor returned by the previous call.".to_string()),
+                        },
+                    ),
+                    (
+                        "limit".to_string(),
+                        JsonSchema::Number {
+                            description: Some("Maximum number of entries to return.".to_string()),
+                        },
+                    ),
+                ]),
+                required: None,
+                additional_properties: Some(false.into()),
+            },
+        }),
+        ToolDescriptor::Function(ResponsesApiTool {
+            name: "memories__read".to_string(),
+            description: "Read a file under the local LHA memory folder by relative path."
+                .to_string(),
+            strict: false,
+            parameters: JsonSchema::Object {
+                properties: BTreeMap::from([
+                    (
+                        "path".to_string(),
+                        JsonSchema::String {
+                            description: Some("Relative file path under the memory root.".to_string()),
+                        },
+                    ),
+                    (
+                        "offset".to_string(),
+                        JsonSchema::Number {
+                            description: Some("1-indexed starting line; defaults to 1.".to_string()),
+                        },
+                    ),
+                    (
+                        "limit".to_string(),
+                        JsonSchema::Number {
+                            description: Some("Maximum number of lines to return.".to_string()),
+                        },
+                    ),
+                ]),
+                required: Some(vec!["path".to_string()]),
+                additional_properties: Some(false.into()),
+            },
+        }),
+        ToolDescriptor::Function(ResponsesApiTool {
+            name: "memories__search".to_string(),
+            description: "Search text files under the local LHA memory folder.".to_string(),
+            strict: false,
+            parameters: JsonSchema::Object {
+                properties: BTreeMap::from([
+                    (
+                        "query".to_string(),
+                        JsonSchema::String {
+                            description: Some("Case-insensitive substring to search for.".to_string()),
+                        },
+                    ),
+                    (
+                        "path".to_string(),
+                        JsonSchema::String {
+                            description: Some(
+                                "Relative file or directory under the memory root; defaults to root."
+                                    .to_string(),
+                            ),
+                        },
+                    ),
+                    (
+                        "cursor".to_string(),
+                        JsonSchema::Number {
+                            description: Some("Pagination cursor returned by the previous call.".to_string()),
+                        },
+                    ),
+                    (
+                        "limit".to_string(),
+                        JsonSchema::Number {
+                            description: Some("Maximum number of matches to return.".to_string()),
+                        },
+                    ),
+                ]),
+                required: Some(vec!["query".to_string()]),
+                additional_properties: Some(false.into()),
+            },
+        }),
+        ToolDescriptor::Function(ResponsesApiTool {
+            name: "memories__add_ad_hoc_note".to_string(),
+            description:
+                "Add a small ad-hoc memory note when the user explicitly asks to remember something."
+                    .to_string(),
+            strict: false,
+            parameters: JsonSchema::Object {
+                properties: BTreeMap::from([
+                    (
+                        "content".to_string(),
+                        JsonSchema::String {
+                            description: Some("Markdown note content to add.".to_string()),
+                        },
+                    ),
+                    (
+                        "slug".to_string(),
+                        JsonSchema::String {
+                            description: Some("Short filename slug; sanitized to lowercase ASCII.".to_string()),
+                        },
+                    ),
+                ]),
+                required: Some(vec!["content".to_string()]),
+                additional_properties: Some(false.into()),
+            },
+        }),
+    ]
+}
+
 fn create_list_mcp_resources_tool() -> ToolDescriptor {
     let properties = BTreeMap::from([
         (
@@ -1408,6 +1553,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
+    use crate::tools::handlers::MemoriesHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::PlanRunHandler;
     use crate::tools::handlers::ReadFileHandler;
@@ -1433,6 +1579,7 @@ pub(crate) fn build_specs(
     let workflow_handler = Arc::new(WorkflowHandler);
     let goal_handler = Arc::new(GoalHandler);
     let plan_run_handler = Arc::new(PlanRunHandler);
+    let memories_handler = Arc::new(MemoriesHandler);
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
@@ -1587,6 +1734,19 @@ pub(crate) fn build_specs(
                 spec,
                 name,
                 plan_run_handler.clone(),
+            );
+        }
+    }
+
+    if config.memory_tools {
+        for spec in create_memory_tools() {
+            let name = spec.name().to_string();
+            maybe_push_spec_and_register_handler(
+                &mut builder,
+                config,
+                spec,
+                name,
+                memories_handler.clone(),
             );
         }
     }
@@ -1886,6 +2046,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&config, None, &[]).build();
@@ -1959,6 +2120,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
@@ -1979,6 +2141,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         })
         .with_identity_kind(IdentityKind::Explorer);
@@ -2016,6 +2179,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         })
         .with_identity_kind(IdentityKind::Reviewer);
@@ -2066,6 +2230,7 @@ mod tests {
             declared_tool_contract: true,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
@@ -2094,6 +2259,7 @@ mod tests {
             declared_tool_contract: true,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
         let (tools, registry) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
@@ -2125,6 +2291,7 @@ mod tests {
             declared_tool_contract: true,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
         let (tools, registry) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
@@ -2146,6 +2313,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
@@ -2160,6 +2328,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
@@ -2176,6 +2345,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         })
         .with_identity_kind(IdentityKind::Programmer);
@@ -2211,6 +2381,7 @@ mod tests {
                 declared_tool_contract: false,
                 features: &features,
                 web_search_mode: Some(WebSearchMode::Cached),
+                memory_tools: false,
                 session_source: SessionSource::Cli,
             })
             .with_identity_kind(identity_kind);
@@ -2247,6 +2418,7 @@ mod tests {
             declared_tool_contract: false,
             features,
             web_search_mode,
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
@@ -2281,6 +2453,81 @@ mod tests {
     }
 
     #[test]
+    fn memory_tools_are_hidden_unless_enabled_by_runtime_config() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+
+        let hidden_when_feature_disabled = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            declared_tool_contract: false,
+            features: &features,
+            web_search_mode: None,
+            memory_tools: features.enabled(Feature::MemoryTool),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, registry) =
+            build_specs(&hidden_when_feature_disabled, Some(HashMap::new()), &[]).build();
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.spec.name().starts_with("memories__"))
+        );
+        assert!(registry.handler("memories__list").is_none());
+
+        features.enable(Feature::MemoryTool);
+        let hidden_when_dedicated_tools_false = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            declared_tool_contract: false,
+            features: &features,
+            web_search_mode: None,
+            memory_tools: false,
+            session_source: SessionSource::Cli,
+        });
+        let (tools, registry) = build_specs(
+            &hidden_when_dedicated_tools_false,
+            Some(HashMap::new()),
+            &[],
+        )
+        .build();
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.spec.name().starts_with("memories__"))
+        );
+        assert!(registry.handler("memories__list").is_none());
+    }
+
+    #[test]
+    fn memory_tools_are_registered_when_enabled() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::MemoryTool);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            declared_tool_contract: false,
+            features: &features,
+            web_search_mode: None,
+            memory_tools: true,
+            session_source: SessionSource::Cli,
+        });
+
+        let (tools, registry) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
+        let tool_names = tools
+            .iter()
+            .map(|tool| tool.spec.name())
+            .collect::<Vec<_>>();
+
+        assert!(tool_names.contains(&"memories__list"));
+        assert!(tool_names.contains(&"memories__read"));
+        assert!(tool_names.contains(&"memories__search"));
+        assert!(tool_names.contains(&"memories__add_ad_hoc_note"));
+        assert!(registry.handler("memories__list").is_some());
+        assert!(registry.handler("memories__add_ad_hoc_note").is_some());
+    }
+
+    #[test]
     fn web_search_mode_cached_sets_external_web_access_false() {
         let config = test_config();
         let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
@@ -2291,6 +2538,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
@@ -2315,6 +2563,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
@@ -2563,6 +2812,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
@@ -2587,6 +2837,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
@@ -2608,6 +2859,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
@@ -2641,6 +2893,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(
@@ -2739,6 +2992,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
 
@@ -2818,6 +3072,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
 
@@ -2878,6 +3133,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
 
@@ -2935,6 +3191,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
 
@@ -2994,6 +3251,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
 
@@ -3109,6 +3367,7 @@ Examples of valid command strings:
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            memory_tools: false,
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(

@@ -94,6 +94,7 @@ fn state_db_feature_enabled(config: &Config) -> bool {
     config.features.enabled(Feature::Sqlite)
         || config.features.enabled(Feature::Goals)
         || config.features.enabled(Feature::PlanCompletion)
+        || config.features.enabled(Feature::MemoryTool)
 }
 
 /// Open the state runtime when the SQLite file exists, without feature gating.

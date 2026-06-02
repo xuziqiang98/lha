@@ -19,6 +19,7 @@ pub enum SlashCommand {
     #[strum(serialize = "setup-elevated-sandbox")]
     ElevateSandbox,
     Experimental,
+    Memories,
     Buddy,
     Skills,
     Review,
@@ -82,6 +83,7 @@ impl SlashCommand {
             SlashCommand::Permissions => "choose what LHA is allowed to do",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
             SlashCommand::Experimental => "toggle experimental features",
+            SlashCommand::Memories => "configure local memories",
             SlashCommand::Buddy => "manage your TUI buddy companion",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of LHA",
@@ -112,6 +114,7 @@ impl SlashCommand {
             | SlashCommand::Permissions
             | SlashCommand::ElevateSandbox
             | SlashCommand::Experimental
+            | SlashCommand::Memories
             | SlashCommand::Review
             | SlashCommand::Logout => false,
             SlashCommand::Diff
@@ -206,6 +209,27 @@ mod tests {
                 .into_iter()
                 .any(|(command, slash_command)| {
                     command == "plan" && slash_command == SlashCommand::Plan
+                })
+        );
+    }
+
+    #[test]
+    fn memories_command_is_not_available_during_task() {
+        assert_eq!(
+            SlashCommand::from_str("memories"),
+            Ok(SlashCommand::Memories)
+        );
+        assert_eq!(SlashCommand::Memories.command(), "memories");
+        assert!(!SlashCommand::Memories.available_during_task());
+    }
+
+    #[test]
+    fn built_in_commands_include_memories() {
+        assert!(
+            built_in_slash_commands()
+                .into_iter()
+                .any(|(command, slash_command)| {
+                    command == "memories" && slash_command == SlashCommand::Memories
                 })
         );
     }

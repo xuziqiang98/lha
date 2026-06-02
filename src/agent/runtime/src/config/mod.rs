@@ -7,6 +7,8 @@ use crate::config::types::History;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerDisabledReason;
 use crate::config::types::McpServerTransportConfig;
+use crate::config::types::MemoriesConfig;
+use crate::config::types::MemoriesToml;
 use crate::config::types::Notice;
 use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
@@ -408,6 +410,9 @@ pub struct Config {
     pub agent_job_max_concurrency: Option<usize>,
     /// Maximum runtime in seconds for agent job workers before they are failed.
     pub agent_job_max_runtime_seconds: Option<u64>,
+
+    /// Settings for the local file-backed memories pipeline.
+    pub memories: MemoriesConfig,
 
     /// Directory containing all LHA state (defaults to `~/.lha` but can be
     /// overridden by the `LHA_HOME` environment variable).
@@ -1051,6 +1056,9 @@ pub struct ConfigToml {
     /// Agent-related settings (thread limits, etc.).
     pub agents: Option<AgentsToml>,
 
+    /// Settings for local memories.
+    pub memories: Option<MemoriesToml>,
+
     /// User-level skill config entries keyed by SKILL.md path.
     pub skills: Option<SkillsConfig>,
 
@@ -1641,6 +1649,7 @@ impl Config {
                 "agents.job_max_runtime_seconds must fit within a 64-bit signed integer",
             ));
         }
+        let memories = cfg.memories.clone().unwrap_or_default().into();
 
         let ghost_snapshot = {
             let mut config = GhostSnapshotConfig::default();
@@ -1780,6 +1789,7 @@ impl Config {
             tool_output_token_limit: cfg.tool_output_token_limit,
             agent_job_max_concurrency,
             agent_job_max_runtime_seconds,
+            memories,
             lha_home,
             config_layer_stack,
             history,

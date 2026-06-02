@@ -7,13 +7,20 @@ use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
 use crate::ThreadsPage;
 use crate::apply_rollout_item;
+use crate::migrations::MEMORIES_MIGRATOR;
 use crate::migrations::MIGRATOR;
+use crate::model::Phase2JobClaimOutcome;
+use crate::model::Stage1JobClaim;
+use crate::model::Stage1JobClaimOutcome;
+use crate::model::Stage1Output;
+use crate::model::Stage1StartupClaimParams;
 use crate::model::ThreadGoalRow;
 use crate::model::ThreadPlanRunRow;
 use crate::model::ThreadRow;
 use crate::model::anchor_from_item;
 use crate::model::datetime_to_epoch_millis;
 use crate::model::datetime_to_epoch_seconds;
+use crate::model::epoch_seconds_to_datetime;
 use crate::paths::file_modified_time_utc;
 use chrono::DateTime;
 use chrono::Utc;
@@ -36,6 +43,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 pub const STATE_DB_FILENAME: &str = "state.sqlite";
+pub const MEMORIES_DB_FILENAME: &str = "memories_1.sqlite";
 
 const METRIC_DB_INIT: &str = "lha.db.init";
 
@@ -101,11 +109,914 @@ pub enum PlanRunAccountingMode {
     ActiveOrStopped,
 }
 
+const JOB_KIND_MEMORY_STAGE1: &str = "memory_stage1";
+const JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL: &str = "memory_consolidate_global";
+const MEMORY_CONSOLIDATION_JOB_KEY: &str = "global";
+const PHASE2_SUCCESS_COOLDOWN_SECONDS: i64 = 6 * 60 * 60;
+const PHASE2_INPUT_SELECTION_PAGE_SIZE: usize = 512;
+const DEFAULT_RETRY_REMAINING: i64 = 3;
+
+/// Store for generated memory state and memory extraction/consolidation jobs.
+#[derive(Clone)]
+pub struct MemoryStore {
+    pool: Arc<SqlitePool>,
+    state_pool: Arc<SqlitePool>,
+}
+
+impl MemoryStore {
+    fn new(pool: Arc<SqlitePool>, state_pool: Arc<SqlitePool>) -> Self {
+        Self { pool, state_pool }
+    }
+
+    pub async fn clear_memory_data(&self) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM stage1_outputs")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM jobs WHERE kind IN (?, ?)")
+            .bind(JOB_KIND_MEMORY_STAGE1)
+            .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn record_stage1_output_usage(
+        &self,
+        thread_ids: &[ThreadId],
+    ) -> anyhow::Result<usize> {
+        if thread_ids.is_empty() {
+            return Ok(0);
+        }
+        let now = Utc::now().timestamp();
+        let mut tx = self.pool.begin().await?;
+        let mut updated_rows = 0;
+        for thread_id in thread_ids {
+            updated_rows += sqlx::query(
+                r#"
+UPDATE stage1_outputs
+SET usage_count = COALESCE(usage_count, 0) + 1,
+    last_usage = ?
+WHERE thread_id = ?
+                "#,
+            )
+            .bind(now)
+            .bind(thread_id.to_string())
+            .execute(&mut *tx)
+            .await?
+            .rows_affected() as usize;
+        }
+        tx.commit().await?;
+        Ok(updated_rows)
+    }
+
+    pub async fn claim_stage1_jobs_for_startup(
+        &self,
+        current_thread_id: ThreadId,
+        params: Stage1StartupClaimParams<'_>,
+    ) -> anyhow::Result<Vec<Stage1JobClaim>> {
+        let Stage1StartupClaimParams {
+            scan_limit,
+            max_claimed,
+            max_age_days,
+            min_rollout_idle_hours,
+            allowed_sources,
+            lease_seconds,
+        } = params;
+        if scan_limit == 0 || max_claimed == 0 {
+            return Ok(Vec::new());
+        }
+
+        let max_age_cutoff = (Utc::now() - chrono::Duration::days(max_age_days.max(0))).timestamp();
+        let idle_cutoff =
+            (Utc::now() - chrono::Duration::hours(min_rollout_idle_hours.max(0))).timestamp();
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            r#"
+SELECT
+    id,
+    rollout_path,
+    created_at,
+    updated_at,
+    source,
+    model_provider,
+    cwd,
+    title,
+    sandbox_policy,
+    approval_mode,
+    tokens_used,
+    has_user_event,
+    archived_at,
+    git_sha,
+    git_branch,
+    git_origin_url,
+    memory_mode
+FROM threads
+WHERE archived = 0
+  AND has_user_event = 1
+  AND memory_mode = 'enabled'
+  AND id !=
+            "#,
+        );
+        builder.push_bind(current_thread_id.to_string());
+        builder
+            .push(" AND updated_at >= ")
+            .push_bind(max_age_cutoff);
+        builder.push(" AND updated_at <= ").push_bind(idle_cutoff);
+        if !allowed_sources.is_empty() {
+            builder.push(" AND source IN (");
+            let mut separated = builder.separated(", ");
+            for source in allowed_sources {
+                separated.push_bind(source);
+            }
+            separated.push_unseparated(")");
+        }
+        builder.push(" ORDER BY updated_at DESC, id DESC LIMIT ");
+        builder.push_bind(scan_limit as i64);
+
+        let rows = builder.build().fetch_all(self.state_pool.as_ref()).await?;
+        let mut claims = Vec::new();
+        for row in rows {
+            if claims.len() >= max_claimed {
+                break;
+            }
+            let thread = ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from)?;
+            let source_updated_at = datetime_to_epoch_seconds(thread.updated_at);
+            match self
+                .try_claim_stage1_job(
+                    thread.id,
+                    current_thread_id,
+                    source_updated_at,
+                    lease_seconds,
+                )
+                .await?
+            {
+                Stage1JobClaimOutcome::Claimed { ownership_token } => {
+                    claims.push(Stage1JobClaim {
+                        thread,
+                        ownership_token,
+                    });
+                }
+                Stage1JobClaimOutcome::SkippedUpToDate
+                | Stage1JobClaimOutcome::SkippedRunning
+                | Stage1JobClaimOutcome::SkippedRetryBackoff
+                | Stage1JobClaimOutcome::SkippedRetryExhausted => {}
+            }
+        }
+        Ok(claims)
+    }
+
+    async fn try_claim_stage1_job(
+        &self,
+        thread_id: ThreadId,
+        worker_id: ThreadId,
+        source_updated_at: i64,
+        lease_seconds: i64,
+    ) -> anyhow::Result<Stage1JobClaimOutcome> {
+        if !self
+            .stage1_source_needs_update(thread_id, source_updated_at)
+            .await?
+        {
+            return Ok(Stage1JobClaimOutcome::SkippedUpToDate);
+        }
+        let now = Utc::now().timestamp();
+        let lease_until = now.saturating_add(lease_seconds.max(0));
+        let ownership_token = uuid::Uuid::new_v4().to_string();
+        let thread_key = thread_id.to_string();
+
+        let row = sqlx::query(
+            r#"
+SELECT status, lease_until, retry_at, retry_remaining
+FROM jobs
+WHERE kind = ? AND job_key = ?
+            "#,
+        )
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(thread_key.as_str())
+        .fetch_optional(self.pool.as_ref())
+        .await?;
+        if let Some(row) = row {
+            let status: String = row.try_get("status")?;
+            let existing_lease_until: Option<i64> = row.try_get("lease_until")?;
+            let retry_at: Option<i64> = row.try_get("retry_at")?;
+            let retry_remaining: i64 = row.try_get("retry_remaining")?;
+            if retry_remaining <= 0 {
+                return Ok(Stage1JobClaimOutcome::SkippedRetryExhausted);
+            }
+            if retry_at.is_some_and(|retry_at| retry_at > now) {
+                return Ok(Stage1JobClaimOutcome::SkippedRetryBackoff);
+            }
+            if status == "running" && existing_lease_until.is_some_and(|value| value > now) {
+                return Ok(Stage1JobClaimOutcome::SkippedRunning);
+            }
+        }
+
+        let result = sqlx::query(
+            r#"
+INSERT INTO jobs (
+    kind, job_key, status, worker_id, ownership_token, started_at, lease_until, retry_remaining, input_watermark
+) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?)
+ON CONFLICT(kind, job_key) DO UPDATE SET
+    status = 'running',
+    worker_id = excluded.worker_id,
+    ownership_token = excluded.ownership_token,
+    started_at = excluded.started_at,
+    finished_at = NULL,
+    lease_until = excluded.lease_until,
+    input_watermark = excluded.input_watermark,
+    last_error = NULL
+WHERE jobs.retry_remaining > 0
+  AND (jobs.retry_at IS NULL OR jobs.retry_at <= excluded.started_at)
+  AND (jobs.status != 'running' OR jobs.lease_until IS NULL OR jobs.lease_until <= excluded.started_at)
+            "#,
+        )
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(thread_key.as_str())
+        .bind(worker_id.to_string())
+        .bind(ownership_token.as_str())
+        .bind(now)
+        .bind(lease_until)
+        .bind(DEFAULT_RETRY_REMAINING)
+        .bind(source_updated_at)
+        .execute(self.pool.as_ref())
+        .await?;
+        if result.rows_affected() == 0 {
+            return Ok(Stage1JobClaimOutcome::SkippedRunning);
+        }
+        Ok(Stage1JobClaimOutcome::Claimed { ownership_token })
+    }
+
+    async fn stage1_source_needs_update(
+        &self,
+        thread_id: ThreadId,
+        source_updated_at: i64,
+    ) -> anyhow::Result<bool> {
+        let thread_id = thread_id.to_string();
+        if let Some(row) =
+            sqlx::query("SELECT source_updated_at FROM stage1_outputs WHERE thread_id = ?")
+                .bind(thread_id.as_str())
+                .fetch_optional(self.pool.as_ref())
+                .await?
+        {
+            let existing_source_updated_at: i64 = row.try_get("source_updated_at")?;
+            if existing_source_updated_at >= source_updated_at {
+                return Ok(false);
+            }
+        }
+        if let Some(row) =
+            sqlx::query("SELECT last_success_watermark FROM jobs WHERE kind = ? AND job_key = ?")
+                .bind(JOB_KIND_MEMORY_STAGE1)
+                .bind(thread_id.as_str())
+                .fetch_optional(self.pool.as_ref())
+                .await?
+        {
+            let last_success_watermark: Option<i64> = row.try_get("last_success_watermark")?;
+            if last_success_watermark.is_some_and(|watermark| watermark >= source_updated_at) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    pub async fn mark_stage1_job_succeeded(
+        &self,
+        thread_id: ThreadId,
+        ownership_token: &str,
+        source_updated_at: i64,
+        raw_memory: &str,
+        rollout_summary: &str,
+        rollout_slug: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        let now = Utc::now().timestamp();
+        let mut tx = self.pool.begin().await?;
+        let result = sqlx::query(
+            r#"
+UPDATE jobs
+SET status = 'done',
+    finished_at = ?,
+    lease_until = NULL,
+    retry_at = NULL,
+    last_success_watermark = ?,
+    last_error = NULL
+WHERE kind = ? AND job_key = ? AND status = 'running' AND ownership_token = ?
+            "#,
+        )
+        .bind(now)
+        .bind(source_updated_at)
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(thread_id.to_string())
+        .bind(ownership_token)
+        .execute(&mut *tx)
+        .await?;
+        if result.rows_affected() == 0 {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        sqlx::query(
+            r#"
+INSERT INTO stage1_outputs (
+    thread_id, source_updated_at, raw_memory, rollout_summary, rollout_slug, generated_at
+) VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(thread_id) DO UPDATE SET
+    source_updated_at = excluded.source_updated_at,
+    raw_memory = excluded.raw_memory,
+    rollout_summary = excluded.rollout_summary,
+    rollout_slug = excluded.rollout_slug,
+    generated_at = excluded.generated_at
+WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
+            "#,
+        )
+        .bind(thread_id.to_string())
+        .bind(source_updated_at)
+        .bind(raw_memory)
+        .bind(rollout_summary)
+        .bind(rollout_slug)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+        self.bump_phase2_input_watermark_tx(&mut tx, source_updated_at)
+            .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn mark_stage1_job_succeeded_no_output(
+        &self,
+        thread_id: ThreadId,
+        ownership_token: &str,
+    ) -> anyhow::Result<bool> {
+        let now = Utc::now().timestamp();
+        let mut tx = self.pool.begin().await?;
+        let result = sqlx::query(
+            r#"
+UPDATE jobs
+SET status = 'done',
+    finished_at = ?,
+    lease_until = NULL,
+    retry_at = NULL,
+    last_success_watermark = input_watermark,
+    last_error = NULL
+WHERE kind = ? AND job_key = ? AND status = 'running' AND ownership_token = ?
+            "#,
+        )
+        .bind(now)
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(thread_id.to_string())
+        .bind(ownership_token)
+        .execute(&mut *tx)
+        .await?;
+        if result.rows_affected() == 0 {
+            tx.commit().await?;
+            return Ok(false);
+        }
+
+        let source_updated_at = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT input_watermark FROM jobs WHERE kind = ? AND job_key = ? AND ownership_token = ?",
+        )
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(thread_id.to_string())
+        .bind(ownership_token)
+        .fetch_one(&mut *tx)
+        .await?
+        .unwrap_or(now);
+
+        let deleted_rows = sqlx::query("DELETE FROM stage1_outputs WHERE thread_id = ?")
+            .bind(thread_id.to_string())
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        if deleted_rows > 0 {
+            self.bump_phase2_input_watermark_tx(&mut tx, source_updated_at)
+                .await?;
+        }
+
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn mark_stage1_job_failed(
+        &self,
+        thread_id: ThreadId,
+        ownership_token: &str,
+        reason: &str,
+        retry_delay_seconds: i64,
+    ) -> anyhow::Result<bool> {
+        let now = Utc::now().timestamp();
+        let retry_at = now.saturating_add(retry_delay_seconds.max(0));
+        let result = sqlx::query(
+            r#"
+UPDATE jobs
+SET status = 'error',
+    finished_at = ?,
+    lease_until = NULL,
+    retry_at = ?,
+    retry_remaining = max(retry_remaining - 1, 0),
+    last_error = ?
+WHERE kind = ? AND job_key = ? AND status = 'running' AND ownership_token = ?
+            "#,
+        )
+        .bind(now)
+        .bind(retry_at)
+        .bind(reason)
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(thread_id.to_string())
+        .bind(ownership_token)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn get_phase2_input_selection(
+        &self,
+        limit: usize,
+        max_unused_days: i64,
+    ) -> anyhow::Result<Vec<Stage1Output>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let cutoff = (Utc::now() - chrono::Duration::days(max_unused_days.max(0))).timestamp();
+
+        let page_size = limit.clamp(1, PHASE2_INPUT_SELECTION_PAGE_SIZE);
+        let mut offset = 0_i64;
+        let mut selected_keys = Vec::with_capacity(limit);
+
+        while selected_keys.len() < limit {
+            let candidate_rows = sqlx::query(
+                r#"
+SELECT thread_id, source_updated_at
+FROM stage1_outputs
+WHERE (length(trim(raw_memory)) > 0 OR length(trim(rollout_summary)) > 0)
+  AND (
+        (last_usage IS NOT NULL AND last_usage >= ?)
+        OR (last_usage IS NULL AND source_updated_at >= ?)
+  )
+ORDER BY
+    COALESCE(usage_count, 0) DESC,
+    COALESCE(last_usage, source_updated_at) DESC,
+    source_updated_at DESC,
+    thread_id DESC
+LIMIT ? OFFSET ?
+                "#,
+            )
+            .bind(cutoff)
+            .bind(cutoff)
+            .bind(page_size as i64)
+            .bind(offset)
+            .fetch_all(self.pool.as_ref())
+            .await?;
+            if candidate_rows.is_empty() {
+                break;
+            }
+
+            let candidate_count = i64::try_from(candidate_rows.len()).unwrap_or(i64::MAX);
+            for row in candidate_rows {
+                let thread_id: String = row.try_get("thread_id")?;
+                let source_updated_at: i64 = row.try_get("source_updated_at")?;
+                if self
+                    .enabled_thread_metadata(ThreadId::try_from(thread_id.as_str())?)
+                    .await?
+                    .is_some()
+                {
+                    selected_keys.push((thread_id, source_updated_at));
+                    if selected_keys.len() >= limit {
+                        break;
+                    }
+                }
+            }
+
+            offset = offset.saturating_add(candidate_count);
+        }
+
+        let mut selected = Vec::with_capacity(selected_keys.len());
+        for (thread_id, source_updated_at) in selected_keys {
+            let Some(row) = sqlx::query(
+                r#"
+SELECT
+    thread_id,
+    source_updated_at,
+    raw_memory,
+    rollout_summary,
+    rollout_slug,
+    generated_at
+FROM stage1_outputs
+WHERE thread_id = ? AND source_updated_at = ?
+                "#,
+            )
+            .bind(thread_id.as_str())
+            .bind(source_updated_at)
+            .fetch_optional(self.pool.as_ref())
+            .await?
+            else {
+                continue;
+            };
+            if let Some(output) = self.stage1_output_from_row_if_thread_enabled(row).await? {
+                selected.push(output);
+            }
+        }
+        selected.sort_by_key(|output| output.thread_id.to_string());
+        Ok(selected)
+    }
+
+    pub async fn list_stage1_outputs_for_global(
+        &self,
+        limit: usize,
+    ) -> anyhow::Result<Vec<Stage1Output>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            r#"
+SELECT
+    thread_id,
+    source_updated_at,
+    raw_memory,
+    rollout_summary,
+    rollout_slug,
+    generated_at
+FROM stage1_outputs
+WHERE length(trim(raw_memory)) > 0 OR length(trim(rollout_summary)) > 0
+ORDER BY source_updated_at DESC, thread_id DESC
+            "#,
+        )
+        .fetch_all(self.pool.as_ref())
+        .await?;
+
+        let mut outputs = Vec::new();
+        for row in rows {
+            if let Some(output) = self.stage1_output_from_row_if_thread_enabled(row).await? {
+                outputs.push(output);
+                if outputs.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Ok(outputs)
+    }
+
+    pub async fn prune_stage1_outputs_for_retention(
+        &self,
+        max_unused_days: i64,
+        limit: usize,
+    ) -> anyhow::Result<usize> {
+        if limit == 0 {
+            return Ok(0);
+        }
+        let cutoff = (Utc::now() - chrono::Duration::days(max_unused_days.max(0))).timestamp();
+        let rows_affected = sqlx::query(
+            r#"
+DELETE FROM stage1_outputs
+WHERE thread_id IN (
+    SELECT thread_id
+    FROM stage1_outputs
+    WHERE selected_for_phase2 = 0
+      AND COALESCE(last_usage, source_updated_at) < ?
+    ORDER BY
+      COALESCE(last_usage, source_updated_at) ASC,
+      source_updated_at ASC,
+      thread_id ASC
+    LIMIT ?
+)
+            "#,
+        )
+        .bind(cutoff)
+        .bind(limit as i64)
+        .execute(self.pool.as_ref())
+        .await?
+        .rows_affected();
+        Ok(rows_affected as usize)
+    }
+
+    async fn stage1_output_from_row_if_thread_enabled(
+        &self,
+        row: sqlx::sqlite::SqliteRow,
+    ) -> anyhow::Result<Option<Stage1Output>> {
+        let thread_id: String = row.try_get("thread_id")?;
+        let Some(thread) = self
+            .enabled_thread_metadata(ThreadId::try_from(thread_id.as_str())?)
+            .await?
+        else {
+            return Ok(None);
+        };
+        stage1_output_from_row_and_thread(row, thread).map(Some)
+    }
+
+    async fn enabled_thread_metadata(
+        &self,
+        thread_id: ThreadId,
+    ) -> anyhow::Result<Option<ThreadMetadata>> {
+        let row = sqlx::query(
+            r#"
+SELECT
+    id,
+    rollout_path,
+    created_at,
+    updated_at,
+    source,
+    model_provider,
+    cwd,
+    title,
+    sandbox_policy,
+    approval_mode,
+    tokens_used,
+    has_user_event,
+    archived_at,
+    git_sha,
+    git_branch,
+    git_origin_url,
+    memory_mode
+FROM threads
+WHERE id = ? AND memory_mode = 'enabled'
+            "#,
+        )
+        .bind(thread_id.to_string())
+        .fetch_optional(self.state_pool.as_ref())
+        .await?;
+        row.map(|row| ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from))
+            .transpose()
+    }
+
+    pub async fn try_claim_global_phase2_job(
+        &self,
+        worker_id: ThreadId,
+        lease_seconds: i64,
+    ) -> anyhow::Result<Phase2JobClaimOutcome> {
+        let now = Utc::now().timestamp();
+        let lease_until = now.saturating_add(lease_seconds.max(0));
+        if let Some(row) =
+            sqlx::query("SELECT status, lease_until, retry_at, input_watermark, finished_at FROM jobs WHERE kind = ? AND job_key = ?")
+                .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+                .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+                .fetch_optional(self.pool.as_ref())
+                .await?
+        {
+            let status: String = row.try_get("status")?;
+            let existing_lease_until: Option<i64> = row.try_get("lease_until")?;
+            let retry_at: Option<i64> = row.try_get("retry_at")?;
+            let finished_at: Option<i64> = row.try_get("finished_at")?;
+            if retry_at.is_some_and(|value| value > now) {
+                return Ok(Phase2JobClaimOutcome::SkippedRetryUnavailable);
+            }
+            if status == "running" && existing_lease_until.is_some_and(|value| value > now) {
+                return Ok(Phase2JobClaimOutcome::SkippedRunning);
+            }
+            if status == "done"
+                && finished_at.is_some_and(|value| now.saturating_sub(value) < PHASE2_SUCCESS_COOLDOWN_SECONDS)
+            {
+                return Ok(Phase2JobClaimOutcome::SkippedCooldown);
+            }
+        }
+        let token = uuid::Uuid::new_v4().to_string();
+        let result = sqlx::query(
+            r#"
+INSERT INTO jobs (
+    kind, job_key, status, worker_id, ownership_token, started_at, lease_until, retry_remaining, input_watermark
+) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, 0)
+ON CONFLICT(kind, job_key) DO UPDATE SET
+    status = 'running',
+    worker_id = excluded.worker_id,
+    ownership_token = excluded.ownership_token,
+    started_at = excluded.started_at,
+    finished_at = NULL,
+    lease_until = excluded.lease_until,
+    last_error = NULL
+WHERE jobs.retry_remaining > 0
+  AND (jobs.retry_at IS NULL OR jobs.retry_at <= excluded.started_at)
+  AND (jobs.status != 'running' OR jobs.lease_until IS NULL OR jobs.lease_until <= excluded.started_at)
+            "#,
+        )
+        .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+        .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+        .bind(worker_id.to_string())
+        .bind(token.as_str())
+        .bind(now)
+        .bind(lease_until)
+        .bind(DEFAULT_RETRY_REMAINING)
+        .execute(self.pool.as_ref())
+        .await?;
+        if result.rows_affected() == 0 {
+            return Ok(Phase2JobClaimOutcome::SkippedRunning);
+        }
+        let watermark = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT input_watermark FROM jobs WHERE kind = ? AND job_key = ?",
+        )
+        .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+        .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+        .fetch_one(self.pool.as_ref())
+        .await?
+        .unwrap_or(0);
+        Ok(Phase2JobClaimOutcome::Claimed {
+            ownership_token: token,
+            input_watermark: watermark,
+        })
+    }
+
+    pub async fn heartbeat_global_phase2_job(
+        &self,
+        ownership_token: &str,
+        lease_seconds: i64,
+    ) -> anyhow::Result<bool> {
+        let lease_until = Utc::now().timestamp().saturating_add(lease_seconds.max(0));
+        let result = sqlx::query(
+            "UPDATE jobs SET lease_until = ? WHERE kind = ? AND job_key = ? AND status = 'running' AND ownership_token = ?",
+        )
+        .bind(lease_until)
+        .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+        .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+        .bind(ownership_token)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn mark_global_phase2_job_failed(
+        &self,
+        ownership_token: &str,
+        reason: &str,
+        retry_delay_seconds: i64,
+    ) -> anyhow::Result<bool> {
+        let now = Utc::now().timestamp();
+        let retry_at = now.saturating_add(retry_delay_seconds.max(0));
+        let result = sqlx::query(
+            r#"
+UPDATE jobs
+SET status = 'error',
+    finished_at = ?,
+    lease_until = NULL,
+    retry_at = ?,
+    retry_remaining = max(retry_remaining - 1, 0),
+    last_error = ?
+WHERE kind = ? AND job_key = ? AND status = 'running' AND ownership_token = ?
+            "#,
+        )
+        .bind(now)
+        .bind(retry_at)
+        .bind(reason)
+        .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+        .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+        .bind(ownership_token)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn mark_global_phase2_job_failed_if_unowned(
+        &self,
+        ownership_token: &str,
+        reason: &str,
+        retry_delay_seconds: i64,
+    ) -> anyhow::Result<bool> {
+        let now = Utc::now().timestamp();
+        let retry_at = now.saturating_add(retry_delay_seconds.max(0));
+        let result = sqlx::query(
+            r#"
+UPDATE jobs
+SET status = 'error',
+    finished_at = ?,
+    lease_until = NULL,
+    retry_at = ?,
+    retry_remaining = max(retry_remaining - 1, 0),
+    last_error = ?
+WHERE kind = ? AND job_key = ? AND status = 'running'
+  AND (ownership_token = ? OR ownership_token IS NULL)
+            "#,
+        )
+        .bind(now)
+        .bind(retry_at)
+        .bind(reason)
+        .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+        .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+        .bind(ownership_token)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn mark_global_phase2_job_succeeded(
+        &self,
+        ownership_token: &str,
+        completion_watermark: i64,
+        selected_outputs: &[Stage1Output],
+    ) -> anyhow::Result<bool> {
+        let now = Utc::now().timestamp();
+        let mut tx = self.pool.begin().await?;
+        let result = sqlx::query(
+            r#"
+UPDATE jobs
+SET status = 'done',
+    finished_at = ?,
+    lease_until = NULL,
+    retry_at = NULL,
+    last_error = NULL,
+    last_success_watermark = ?,
+    input_watermark = max(COALESCE(input_watermark, 0), ?)
+WHERE kind = ? AND job_key = ? AND status = 'running' AND ownership_token = ?
+            "#,
+        )
+        .bind(now)
+        .bind(completion_watermark)
+        .bind(completion_watermark)
+        .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+        .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+        .bind(ownership_token)
+        .execute(&mut *tx)
+        .await?;
+        if result.rows_affected() == 0 {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        sqlx::query(
+            "UPDATE stage1_outputs SET selected_for_phase2 = 0, selected_for_phase2_source_updated_at = NULL",
+        )
+        .execute(&mut *tx)
+        .await?;
+        for output in selected_outputs {
+            sqlx::query(
+                "UPDATE stage1_outputs SET selected_for_phase2 = 1, selected_for_phase2_source_updated_at = ? WHERE thread_id = ? AND source_updated_at = ?",
+            )
+            .bind(output.source_updated_at.timestamp())
+            .bind(output.thread_id.to_string())
+            .bind(output.source_updated_at.timestamp())
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn mark_thread_memory_mode_polluted(
+        &self,
+        thread_id: ThreadId,
+    ) -> anyhow::Result<bool> {
+        let selected_for_phase2 = sqlx::query_scalar::<_, i64>(
+            "SELECT selected_for_phase2 FROM stage1_outputs WHERE thread_id = ?",
+        )
+        .bind(thread_id.to_string())
+        .fetch_optional(self.pool.as_ref())
+        .await?
+        .unwrap_or(0);
+        let result = sqlx::query(
+            "UPDATE threads SET memory_mode = 'polluted' WHERE id = ? AND memory_mode != 'polluted'",
+        )
+        .bind(thread_id.to_string())
+        .execute(self.state_pool.as_ref())
+        .await?;
+        if selected_for_phase2 != 0 {
+            self.bump_phase2_input_watermark(Utc::now().timestamp())
+                .await?;
+        }
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn bump_phase2_input_watermark(&self, watermark: i64) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        self.bump_phase2_input_watermark_tx(&mut tx, watermark)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn bump_phase2_input_watermark_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, Sqlite>,
+        watermark: i64,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+INSERT INTO jobs (kind, job_key, status, retry_remaining, input_watermark, last_success_watermark)
+VALUES (?, ?, 'pending', ?, ?, 0)
+ON CONFLICT(kind, job_key) DO UPDATE SET
+    status = CASE
+        WHEN jobs.status = 'running' THEN 'running'
+        ELSE 'pending'
+    END,
+    retry_at = CASE
+        WHEN jobs.status = 'running' THEN jobs.retry_at
+        ELSE NULL
+    END,
+    input_watermark = CASE
+        WHEN excluded.input_watermark > COALESCE(jobs.input_watermark, 0)
+            THEN excluded.input_watermark
+        ELSE COALESCE(jobs.input_watermark, 0) + 1
+    END,
+    retry_remaining = max(jobs.retry_remaining, excluded.retry_remaining)
+            "#,
+        )
+        .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+        .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+        .bind(DEFAULT_RETRY_REMAINING)
+        .bind(watermark)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 pub struct StateRuntime {
     lha_home: PathBuf,
     default_provider: String,
     pool: Arc<sqlx::SqlitePool>,
+    memories: MemoryStore,
 }
 
 impl StateRuntime {
@@ -119,6 +1030,7 @@ impl StateRuntime {
     ) -> anyhow::Result<Arc<Self>> {
         tokio::fs::create_dir_all(&lha_home).await?;
         let state_path = lha_home.join(STATE_DB_FILENAME);
+        let memories_path = lha_home.join(MEMORIES_DB_FILENAME);
         let existed = tokio::fs::try_exists(&state_path).await.unwrap_or(false);
         let pool = match open_sqlite(&state_path).await {
             Ok(db) => Arc::new(db),
@@ -130,10 +1042,24 @@ impl StateRuntime {
                 return Err(err);
             }
         };
+        let memories_pool = match open_memories_sqlite(&memories_path).await {
+            Ok(db) => Arc::new(db),
+            Err(err) => {
+                warn!(
+                    "failed to open memories db at {}: {err}",
+                    memories_path.display()
+                );
+                if let Some(otel) = otel.as_ref() {
+                    otel.counter(METRIC_DB_INIT, 1, &[("status", "memories_open_error")]);
+                }
+                return Err(err);
+            }
+        };
         if let Some(otel) = otel.as_ref() {
             otel.counter(METRIC_DB_INIT, 1, &[("status", "opened")]);
         }
         let runtime = Arc::new(Self {
+            memories: MemoryStore::new(Arc::clone(&memories_pool), Arc::clone(&pool)),
             pool,
             lha_home,
             default_provider,
@@ -147,6 +1073,10 @@ impl StateRuntime {
     /// Return the configured LHA home directory for this runtime.
     pub fn lha_home(&self) -> &Path {
         self.lha_home.as_path()
+    }
+
+    pub fn memories(&self) -> &MemoryStore {
+        &self.memories
     }
 
     pub async fn get_thread_goal(
@@ -1419,7 +2349,8 @@ SELECT
     archived_at,
     git_sha,
     git_branch,
-    git_origin_url
+    git_origin_url,
+    memory_mode
 FROM threads
 WHERE id = ?
             "#,
@@ -1429,6 +2360,27 @@ WHERE id = ?
         .await?;
         row.map(|row| ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from))
             .transpose()
+    }
+
+    pub async fn get_thread_memory_mode(&self, id: ThreadId) -> anyhow::Result<Option<String>> {
+        let row = sqlx::query("SELECT memory_mode FROM threads WHERE id = ?")
+            .bind(id.to_string())
+            .fetch_optional(self.pool.as_ref())
+            .await?;
+        Ok(row.and_then(|row| row.try_get("memory_mode").ok()))
+    }
+
+    pub async fn set_thread_memory_mode(
+        &self,
+        id: ThreadId,
+        memory_mode: &str,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query("UPDATE threads SET memory_mode = ? WHERE id = ?")
+            .bind(memory_mode)
+            .bind(id.to_string())
+            .execute(self.pool.as_ref())
+            .await?;
+        Ok(result.rows_affected() > 0)
     }
 
     /// Find a rollout path by thread id using the underlying database.
@@ -1485,7 +2437,8 @@ SELECT
     archived_at,
     git_sha,
     git_branch,
-    git_origin_url
+    git_origin_url,
+    memory_mode
 FROM threads
             "#,
         );
@@ -1640,8 +2593,9 @@ INSERT INTO threads (
     archived_at,
     git_sha,
     git_branch,
-    git_origin_url
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    git_origin_url,
+    memory_mode
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -1678,6 +2632,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
+        .bind(metadata.memory_mode.as_str())
         .execute(self.pool.as_ref())
         .await?;
         Ok(())
@@ -1709,6 +2664,10 @@ ON CONFLICT(id) DO UPDATE SET
                 otel.counter(DB_ERROR_METRIC, 1, &[("stage", "apply_rollout_items")]);
             }
             return Err(err);
+        }
+        if let Some(memory_mode) = extract_memory_mode(items) {
+            self.set_thread_memory_mode(builder.id, memory_mode.as_str())
+                .await?;
         }
         Ok(())
     }
@@ -1836,6 +2795,52 @@ async fn open_sqlite(path: &Path) -> anyhow::Result<SqlitePool> {
     Ok(pool)
 }
 
+async fn open_memories_sqlite(path: &Path) -> anyhow::Result<SqlitePool> {
+    let options = SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
+        .busy_timeout(Duration::from_secs(5));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(options)
+        .await?;
+    MEMORIES_MIGRATOR.run(&pool).await?;
+    Ok(pool)
+}
+
+fn stage1_output_from_row_and_thread(
+    row: sqlx::sqlite::SqliteRow,
+    thread: ThreadMetadata,
+) -> anyhow::Result<Stage1Output> {
+    let source_updated_at: i64 = row.try_get("source_updated_at")?;
+    let generated_at: i64 = row.try_get("generated_at")?;
+    Ok(Stage1Output {
+        thread_id: thread.id,
+        rollout_path: thread.rollout_path,
+        source_updated_at: epoch_seconds_to_datetime(source_updated_at)?,
+        raw_memory: row.try_get("raw_memory")?,
+        rollout_summary: row.try_get("rollout_summary")?,
+        rollout_slug: row.try_get("rollout_slug")?,
+        cwd: thread.cwd,
+        git_branch: thread.git_branch,
+        generated_at: epoch_seconds_to_datetime(generated_at)?,
+    })
+}
+
+fn extract_memory_mode(items: &[RolloutItem]) -> Option<String> {
+    items.iter().find_map(|item| match item {
+        RolloutItem::SessionMeta(meta_line) => meta_line.meta.memory_mode.clone(),
+        RolloutItem::TranscriptItem(_)
+        | RolloutItem::GhostSnapshot(_)
+        | RolloutItem::Compacted(_)
+        | RolloutItem::TurnContext(_)
+        | RolloutItem::Workflow(_)
+        | RolloutItem::EventMsg(_) => None,
+    })
+}
+
 fn status_after_budget_limit(
     status: crate::ThreadGoalStatus,
     tokens_used: i64,
@@ -1951,6 +2956,450 @@ mod tests {
 
     fn other_thread_id() -> ThreadId {
         ThreadId::from_string("00000000-0000-0000-0000-000000000124").expect("valid thread id")
+    }
+
+    fn thread_id(n: u128) -> ThreadId {
+        ThreadId::from_string(&Uuid::from_u128(n).to_string()).expect("valid thread id")
+    }
+
+    fn memory_thread(
+        id: ThreadId,
+        source: &str,
+        updated_at: DateTime<Utc>,
+        memory_mode: &str,
+        has_user_event: bool,
+    ) -> ThreadMetadata {
+        ThreadMetadata {
+            id,
+            rollout_path: PathBuf::from(format!("/tmp/{id}.jsonl")),
+            created_at: updated_at - chrono::Duration::hours(1),
+            updated_at,
+            source: source.to_string(),
+            model_provider: "test-provider".to_string(),
+            cwd: PathBuf::from("/tmp/project"),
+            title: format!("thread {id}"),
+            sandbox_policy: "read-only".to_string(),
+            approval_mode: "on-request".to_string(),
+            tokens_used: 0,
+            has_user_event,
+            archived_at: None,
+            git_sha: None,
+            git_branch: Some("main".to_string()),
+            git_origin_url: None,
+            memory_mode: memory_mode.to_string(),
+        }
+    }
+
+    async fn insert_memory_output(
+        runtime: &StateRuntime,
+        thread: ThreadMetadata,
+        source_updated_at: DateTime<Utc>,
+        usage_count: i64,
+        last_usage: Option<DateTime<Utc>>,
+        selected_for_phase2: bool,
+    ) {
+        runtime.upsert_thread(&thread).await.expect("upsert thread");
+        sqlx::query(
+            r#"
+INSERT INTO stage1_outputs (
+    thread_id, source_updated_at, raw_memory, rollout_summary, rollout_slug, generated_at,
+    usage_count, last_usage, selected_for_phase2, selected_for_phase2_source_updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(thread.id.to_string())
+        .bind(datetime_to_epoch_seconds(source_updated_at))
+        .bind(format!("raw {}", thread.id))
+        .bind(format!("summary {}", thread.id))
+        .bind(None::<String>)
+        .bind(datetime_to_epoch_seconds(source_updated_at))
+        .bind(usage_count)
+        .bind(last_usage.map(datetime_to_epoch_seconds))
+        .bind(selected_for_phase2)
+        .bind(selected_for_phase2.then_some(datetime_to_epoch_seconds(source_updated_at)))
+        .execute(runtime.memories.pool.as_ref())
+        .await
+        .expect("insert stage1 output");
+    }
+
+    fn memory_claim_params<'a>(allowed_sources: &'a [String]) -> Stage1StartupClaimParams<'a> {
+        Stage1StartupClaimParams {
+            scan_limit: 100,
+            max_claimed: 10,
+            max_age_days: 10,
+            min_rollout_idle_hours: 6,
+            allowed_sources,
+            lease_seconds: 3_600,
+        }
+    }
+
+    #[tokio::test]
+    async fn memories_migrations_create_tables_and_memory_mode_column() {
+        let runtime = test_runtime().await;
+
+        let stage1_table: String = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'stage1_outputs'",
+        )
+        .fetch_one(runtime.memories.pool.as_ref())
+        .await
+        .expect("stage1 table");
+        let jobs_table: String = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'jobs'",
+        )
+        .fetch_one(runtime.memories.pool.as_ref())
+        .await
+        .expect("jobs table");
+        let memory_mode_column: String = sqlx::query_scalar(
+            "SELECT name FROM pragma_table_info('threads') WHERE name = 'memory_mode'",
+        )
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("memory_mode column");
+
+        assert_eq!(stage1_table, "stage1_outputs");
+        assert_eq!(jobs_table, "jobs");
+        assert_eq!(memory_mode_column, "memory_mode");
+    }
+
+    #[tokio::test]
+    async fn thread_upsert_preserves_existing_memory_mode() {
+        let runtime = test_runtime().await;
+        let id = test_thread_id();
+        let updated_at = Utc::now() - chrono::Duration::hours(8);
+        let mut metadata = memory_thread(id, "cli", updated_at, "disabled", true);
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("insert thread");
+
+        metadata.title = "updated".to_string();
+        metadata.memory_mode = "enabled".to_string();
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("refresh thread");
+
+        assert_eq!(
+            runtime
+                .get_thread_memory_mode(id)
+                .await
+                .expect("memory mode"),
+            Some("disabled".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn stage1_claim_skips_ineligible_threads() {
+        let runtime = test_runtime().await;
+        let now = Utc::now();
+        let eligible = thread_id(1);
+        let cases = [
+            (
+                eligible,
+                "cli",
+                now - chrono::Duration::hours(8),
+                "enabled",
+                true,
+            ),
+            (
+                thread_id(2),
+                "cli",
+                now - chrono::Duration::hours(8),
+                "disabled",
+                true,
+            ),
+            (
+                thread_id(3),
+                "cli",
+                now - chrono::Duration::hours(8),
+                "polluted",
+                true,
+            ),
+            (
+                thread_id(4),
+                "cli",
+                now - chrono::Duration::hours(1),
+                "enabled",
+                true,
+            ),
+            (
+                thread_id(5),
+                "cli",
+                now - chrono::Duration::days(20),
+                "enabled",
+                true,
+            ),
+            (
+                thread_id(6),
+                "exec",
+                now - chrono::Duration::hours(8),
+                "enabled",
+                true,
+            ),
+            (
+                thread_id(7),
+                "cli",
+                now - chrono::Duration::hours(8),
+                "enabled",
+                false,
+            ),
+            (
+                thread_id(8),
+                "vscode",
+                now - chrono::Duration::hours(8),
+                "enabled",
+                true,
+            ),
+            (
+                thread_id(9),
+                "cli",
+                now - chrono::Duration::hours(8),
+                "enabled",
+                true,
+            ),
+        ];
+        for (id, source, updated_at, memory_mode, has_user_event) in cases {
+            runtime
+                .upsert_thread(&memory_thread(
+                    id,
+                    source,
+                    updated_at,
+                    memory_mode,
+                    has_user_event,
+                ))
+                .await
+                .expect("upsert thread");
+        }
+        let allowed = vec!["cli".to_string()];
+
+        let claims = runtime
+            .memories()
+            .claim_stage1_jobs_for_startup(thread_id(9), memory_claim_params(&allowed))
+            .await
+            .expect("claims");
+
+        assert_eq!(
+            claims
+                .into_iter()
+                .map(|claim| claim.thread.id)
+                .collect::<Vec<_>>(),
+            vec![eligible]
+        );
+    }
+
+    #[tokio::test]
+    async fn stage1_jobs_lease_retry_and_exhaust() {
+        let runtime = test_runtime().await;
+        let id = test_thread_id();
+        let now = Utc::now();
+        runtime
+            .upsert_thread(&memory_thread(
+                id,
+                "cli",
+                now - chrono::Duration::hours(8),
+                "enabled",
+                true,
+            ))
+            .await
+            .expect("upsert thread");
+        let allowed = vec!["cli".to_string()];
+
+        let claims = runtime
+            .memories()
+            .claim_stage1_jobs_for_startup(thread_id(99), memory_claim_params(&allowed))
+            .await
+            .expect("claims");
+        assert_eq!(claims.len(), 1);
+        let mut ownership_token = claims[0].ownership_token.clone();
+        let second_claims = runtime
+            .memories()
+            .claim_stage1_jobs_for_startup(thread_id(98), memory_claim_params(&allowed))
+            .await
+            .expect("second claims");
+        assert!(second_claims.is_empty());
+
+        for _ in 0..3 {
+            runtime
+                .memories()
+                .mark_stage1_job_failed(id, &ownership_token, "boom", 3_600)
+                .await
+                .expect("mark failed");
+            sqlx::query(
+                "UPDATE jobs SET retry_at = 0, status = 'error', lease_until = NULL WHERE kind = ? AND job_key = ?",
+            )
+            .bind(JOB_KIND_MEMORY_STAGE1)
+            .bind(id.to_string())
+            .execute(runtime.memories.pool.as_ref())
+            .await
+            .expect("reset retry");
+            let row =
+                sqlx::query("SELECT retry_remaining FROM jobs WHERE kind = ? AND job_key = ?")
+                    .bind(JOB_KIND_MEMORY_STAGE1)
+                    .bind(id.to_string())
+                    .fetch_one(runtime.memories.pool.as_ref())
+                    .await
+                    .expect("job row");
+            let retry_remaining: i64 = row.try_get("retry_remaining").expect("retry remaining");
+            if retry_remaining > 0 {
+                let claims = runtime
+                    .memories()
+                    .claim_stage1_jobs_for_startup(thread_id(97), memory_claim_params(&allowed))
+                    .await
+                    .expect("retry claims");
+                assert_eq!(claims.len(), 1);
+                ownership_token = claims[0].ownership_token.clone();
+            }
+        }
+
+        let exhausted = runtime
+            .memories()
+            .claim_stage1_jobs_for_startup(thread_id(96), memory_claim_params(&allowed))
+            .await
+            .expect("exhausted claims");
+        assert!(exhausted.is_empty());
+    }
+
+    #[tokio::test]
+    async fn phase2_global_lock_and_cooldown() {
+        let runtime = test_runtime().await;
+        let first = runtime
+            .memories()
+            .try_claim_global_phase2_job(test_thread_id(), 3_600)
+            .await
+            .expect("first claim");
+        let Phase2JobClaimOutcome::Claimed {
+            ownership_token, ..
+        } = first
+        else {
+            panic!("expected claim");
+        };
+        let second = runtime
+            .memories()
+            .try_claim_global_phase2_job(other_thread_id(), 3_600)
+            .await
+            .expect("second claim");
+        assert_eq!(second, Phase2JobClaimOutcome::SkippedRunning);
+
+        assert!(
+            runtime
+                .memories()
+                .mark_global_phase2_job_succeeded(&ownership_token, 1, &[])
+                .await
+                .expect("succeed")
+        );
+
+        let cooldown = runtime
+            .memories()
+            .try_claim_global_phase2_job(other_thread_id(), 3_600)
+            .await
+            .expect("cooldown claim");
+        assert_eq!(cooldown, Phase2JobClaimOutcome::SkippedCooldown);
+    }
+
+    #[tokio::test]
+    async fn phase2_selection_usage_recording_and_pollution() {
+        let runtime = test_runtime().await;
+        let now = Utc::now();
+        let old_high_usage = memory_thread(
+            thread_id(1),
+            "cli",
+            now - chrono::Duration::days(2),
+            "enabled",
+            true,
+        );
+        let recent_low_usage = memory_thread(
+            thread_id(2),
+            "cli",
+            now - chrono::Duration::hours(8),
+            "enabled",
+            true,
+        );
+        let selected_polluted = memory_thread(
+            thread_id(3),
+            "cli",
+            now - chrono::Duration::hours(9),
+            "enabled",
+            true,
+        );
+        insert_memory_output(
+            runtime.as_ref(),
+            old_high_usage.clone(),
+            old_high_usage.updated_at,
+            5,
+            Some(now - chrono::Duration::hours(1)),
+            false,
+        )
+        .await;
+        insert_memory_output(
+            runtime.as_ref(),
+            recent_low_usage.clone(),
+            recent_low_usage.updated_at,
+            0,
+            None,
+            false,
+        )
+        .await;
+        insert_memory_output(
+            runtime.as_ref(),
+            selected_polluted.clone(),
+            selected_polluted.updated_at,
+            0,
+            None,
+            true,
+        )
+        .await;
+
+        let selected = runtime
+            .memories()
+            .get_phase2_input_selection(2, 30)
+            .await
+            .expect("selection");
+        assert_eq!(
+            selected
+                .iter()
+                .map(|output| output.thread_id)
+                .collect::<Vec<_>>(),
+            vec![old_high_usage.id, recent_low_usage.id]
+        );
+
+        assert_eq!(
+            runtime
+                .memories()
+                .record_stage1_output_usage(&[recent_low_usage.id])
+                .await
+                .expect("usage"),
+            1
+        );
+        let usage_count: i64 =
+            sqlx::query_scalar("SELECT usage_count FROM stage1_outputs WHERE thread_id = ?")
+                .bind(recent_low_usage.id.to_string())
+                .fetch_one(runtime.memories.pool.as_ref())
+                .await
+                .expect("usage count");
+        assert_eq!(usage_count, 1);
+
+        assert!(
+            runtime
+                .memories()
+                .mark_thread_memory_mode_polluted(selected_polluted.id)
+                .await
+                .expect("polluted")
+        );
+        assert_eq!(
+            runtime
+                .get_thread_memory_mode(selected_polluted.id)
+                .await
+                .expect("memory mode"),
+            Some("polluted".to_string())
+        );
+        let watermark: Option<i64> =
+            sqlx::query_scalar("SELECT input_watermark FROM jobs WHERE kind = ? AND job_key = ?")
+                .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+                .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+                .fetch_one(runtime.memories.pool.as_ref())
+                .await
+                .expect("watermark");
+        assert!(watermark.is_some_and(|value| value > 0));
     }
 
     #[tokio::test]

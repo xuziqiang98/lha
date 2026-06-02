@@ -87,6 +87,7 @@
         "vscode",
         "exec",
         "mcp",
+        "agent",
         "unknown"
       ],
       "type": "string"

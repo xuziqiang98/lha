@@ -117,7 +117,7 @@ fn create_config_toml(lha_home: &Path, server_uri: &str) -> std::io::Result<()> 
 async fn start_thread(mcp: &mut McpProcess) -> Result<String> {
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1".to_string()),
+            model: Some("mock-model".to_string()),
             ..Default::default()
         })
         .await?;

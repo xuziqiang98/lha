@@ -143,7 +143,8 @@ async fn fork_conversation_creates_new_rollout() -> Result<()> {
 
 fn create_config_toml(lha_home: &Path) -> std::io::Result<()> {
     let config_toml = lha_home.join("config.toml");
-    std::fs::write(config_toml, config_contents())
+    std::fs::write(config_toml, config_contents())?;
+    write_o3_models_json(lha_home)
 }
 
 fn config_contents() -> &'static str {
@@ -153,4 +154,27 @@ sandbox_mode = "read-only"
 [features]
 remote_models = false
 "#
+}
+
+fn write_o3_models_json(lha_home: &Path) -> std::io::Result<()> {
+    std::fs::write(
+        lha_home.join("models.json"),
+        r#"{
+  "providers": {
+    "openai": {
+      "name": "OpenAI",
+      "endpoints": {
+        "main": {
+          "name": "OpenAI",
+          "dialect": "responses",
+          "models": {
+            "o3": {}
+          }
+        }
+      }
+    }
+  }
+}
+"#,
+    )
 }

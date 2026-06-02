@@ -43,6 +43,7 @@ pub(crate) fn builder_from_session_meta(
     );
     builder.model_provider = session_meta.meta.model_provider.clone();
     builder.cwd = session_meta.meta.cwd.clone();
+    builder.memory_mode = session_meta.meta.memory_mode.clone();
     builder.sandbox_policy = SandboxPolicy::ReadOnly;
     builder.approval_mode = AskForApproval::OnRequest;
     if let Some(git) = session_meta.git.as_ref() {
@@ -324,6 +325,7 @@ mod tests {
             model_provider: Some("openai".to_string()),
             base_instructions: None,
             dynamic_tools: None,
+            memory_mode: None,
         };
         let session_meta_line = SessionMetaLine {
             meta: session_meta,

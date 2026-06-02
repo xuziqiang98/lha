@@ -1690,6 +1690,7 @@ pub enum SessionSource {
     VSCode,
     Exec,
     Mcp,
+    Agent,
     #[serde(other)]
     Unknown,
 }
@@ -1701,10 +1702,21 @@ impl fmt::Display for SessionSource {
             SessionSource::VSCode => f.write_str("vscode"),
             SessionSource::Exec => f.write_str("exec"),
             SessionSource::Mcp => f.write_str("mcp"),
+            SessionSource::Agent => f.write_str("agent"),
             SessionSource::Unknown => f.write_str("unknown"),
         }
     }
 }
+
+impl SessionSource {
+    pub fn is_non_root_agent(&self) -> bool {
+        matches!(self, SessionSource::Agent)
+    }
+}
+
+pub const MEMORY_MODE_ENABLED: &str = "enabled";
+pub const MEMORY_MODE_DISABLED: &str = "disabled";
+pub const MEMORY_MODE_POLLUTED: &str = "polluted";
 
 /// SessionMeta contains session-level data that doesn't correspond to a specific turn.
 ///
@@ -1730,6 +1742,8 @@ pub struct SessionMeta {
     pub base_instructions: Option<BaseInstructions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_mode: Option<String>,
 }
 
 impl Default for SessionMeta {
@@ -1746,6 +1760,7 @@ impl Default for SessionMeta {
             model_provider: None,
             base_instructions: None,
             dynamic_tools: None,
+            memory_mode: None,
         }
     }
 }

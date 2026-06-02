@@ -85,7 +85,11 @@ fn parse_agent_message(id: Option<&String>, message: &[ContentItem]) -> AgentMes
         }
     }
     let id = id.cloned().unwrap_or_else(|| Uuid::new_v4().to_string());
-    AgentMessageItem { id, content }
+    AgentMessageItem {
+        id,
+        content,
+        memory_citation: None,
+    }
 }
 
 pub fn parse_turn_item<T>(item: &T) -> Option<TurnItem>

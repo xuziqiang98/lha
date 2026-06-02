@@ -355,6 +355,7 @@ fn session_source_to_origin_tag(session_source: &SessionSource) -> String {
         SessionSource::VSCode => "vscode".to_string(),
         SessionSource::Exec => "exec".to_string(),
         SessionSource::Mcp => "mcp".to_string(),
+        SessionSource::Agent => "agent".to_string(),
         SessionSource::Unknown => "unknown".to_string(),
     }
 }

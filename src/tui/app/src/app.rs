@@ -83,6 +83,7 @@ use lha_agent::config::model_ref::ModelRef;
 use lha_agent::config::models_json::ModelsJson;
 use lha_agent::config::set_project_trust_level;
 use lha_agent::config::state_json::LHAStateStore;
+use lha_agent::config::types::MemoriesConfig;
 use lha_agent::config::types::TuiBuddy;
 use lha_agent::config_loader::ConfigLayerStackOrdering;
 use lha_agent::features::FEATURES;
@@ -2936,6 +2937,9 @@ impl App {
             AppEvent::OpenExperimentalFeaturesModal => {
                 self.open_experimental_features_modal();
             }
+            AppEvent::OpenMemoriesSettingsView => {
+                self.open_memories_settings_view();
+            }
             AppEvent::OpenPersonalitySelectionModal {
                 current_personality,
             } => {
@@ -3348,6 +3352,20 @@ impl App {
                 }
                 self.update_feature_flags(updates).await;
             }
+            AppEvent::UpdateMemorySettings {
+                feature_enabled,
+                use_memories,
+                generate_memories,
+                dedicated_tools,
+            } => {
+                self.update_memory_settings(
+                    feature_enabled,
+                    use_memories,
+                    generate_memories,
+                    dedicated_tools,
+                )
+                .await;
+            }
             AppEvent::SkipNextWorldWritableScan => {
                 self.windows_sandbox.skip_world_writable_scan_once = true;
             }
@@ -3696,6 +3714,10 @@ impl App {
         self.chat_widget.request_redraw_for_ui();
     }
 
+    fn open_memories_settings_view(&mut self) {
+        self.chat_widget.open_memories_settings_view();
+    }
+
     fn open_personality_selection_modal(&mut self, current_personality: Personality) {
         self.chat_widget.dismiss_active_view();
         self.personality_selection_modal =
@@ -3883,6 +3905,64 @@ impl App {
                 self.chat_widget
                     .add_error_message(format!("Failed to update experimental features: {err}"));
             }
+        }
+    }
+
+    async fn update_memory_settings(
+        &mut self,
+        feature_enabled: bool,
+        use_memories: bool,
+        generate_memories: bool,
+        dedicated_tools: bool,
+    ) {
+        if feature_enabled {
+            self.config.features.enable(Feature::MemoryTool);
+            self.chat_widget
+                .set_feature_enabled(Feature::MemoryTool, true);
+        } else {
+            self.config.features.disable(Feature::MemoryTool);
+            self.chat_widget
+                .set_feature_enabled(Feature::MemoryTool, false);
+        }
+
+        let next_memories = MemoriesConfig {
+            use_memories,
+            generate_memories,
+            dedicated_tools,
+            ..self.config.memories.clone()
+        };
+        self.config.memories = next_memories.clone();
+        self.chat_widget.set_memories_config(next_memories);
+
+        let feature_key = Feature::MemoryTool.key();
+        let edits = vec![
+            ConfigEdit::SetPath {
+                segments: vec!["features".to_string(), feature_key.to_string()],
+                value: toml_edit::value(feature_enabled),
+            },
+            ConfigEdit::SetPath {
+                segments: vec!["memories".to_string(), "use_memories".to_string()],
+                value: toml_edit::value(use_memories),
+            },
+            ConfigEdit::SetPath {
+                segments: vec!["memories".to_string(), "generate_memories".to_string()],
+                value: toml_edit::value(generate_memories),
+            },
+            ConfigEdit::SetPath {
+                segments: vec!["memories".to_string(), "dedicated_tools".to_string()],
+                value: toml_edit::value(dedicated_tools),
+            },
+        ];
+
+        if let Err(err) = ConfigEditsBuilder::new(&self.config.lha_home)
+            .with_profile(self.active_profile.as_deref())
+            .with_edits(edits)
+            .apply()
+            .await
+        {
+            tracing::error!(error = %err, "failed to persist memory settings");
+            self.chat_widget
+                .add_error_message(format!("Failed to update memory settings: {err}"));
         }
     }
 
@@ -6003,6 +6083,81 @@ show_raw_agent_reasoning = true
             !history
                 .contains("Restart LHA TUI for this change to take effect in the current session.")
         );
+    }
+
+    #[tokio::test]
+    async fn update_memory_settings_persists_toml_and_updates_in_memory() -> Result<()> {
+        let mut app = make_test_app().await;
+
+        app.update_memory_settings(true, false, false, true).await;
+
+        assert!(app.config.features.enabled(Feature::MemoryTool));
+        assert!(!app.config.memories.use_memories);
+        assert!(!app.config.memories.generate_memories);
+        assert!(app.config.memories.dedicated_tools);
+        assert!(
+            app.chat_widget
+                .config_ref()
+                .features
+                .enabled(Feature::MemoryTool)
+        );
+        assert!(!app.chat_widget.config_ref().memories.use_memories);
+        assert!(!app.chat_widget.config_ref().memories.generate_memories);
+        assert!(app.chat_widget.config_ref().memories.dedicated_tools);
+        assert_memory_config_toml(&app, true, false, false, true)?;
+
+        app.update_memory_settings(false, true, true, false).await;
+
+        assert!(!app.config.features.enabled(Feature::MemoryTool));
+        assert!(app.config.memories.use_memories);
+        assert!(app.config.memories.generate_memories);
+        assert!(!app.config.memories.dedicated_tools);
+        assert!(
+            !app.chat_widget
+                .config_ref()
+                .features
+                .enabled(Feature::MemoryTool)
+        );
+        assert!(app.chat_widget.config_ref().memories.use_memories);
+        assert!(app.chat_widget.config_ref().memories.generate_memories);
+        assert!(!app.chat_widget.config_ref().memories.dedicated_tools);
+        assert_memory_config_toml(&app, false, true, true, false)?;
+
+        Ok(())
+    }
+
+    fn assert_memory_config_toml(
+        app: &App,
+        feature_enabled: bool,
+        use_memories: bool,
+        generate_memories: bool,
+        dedicated_tools: bool,
+    ) -> Result<()> {
+        let contents = std::fs::read_to_string(app.config.lha_home.join(CONFIG_TOML_FILE))?;
+        let parsed: toml::Table = toml::from_str(&contents)?;
+        assert_eq!(
+            parsed
+                .get("features")
+                .and_then(|features| features.get("memories"))
+                .and_then(TomlValue::as_bool),
+            Some(feature_enabled)
+        );
+        let memories = parsed.get("memories").expect("memories table");
+        assert_eq!(
+            memories.get("use_memories").and_then(TomlValue::as_bool),
+            Some(use_memories)
+        );
+        assert_eq!(
+            memories
+                .get("generate_memories")
+                .and_then(TomlValue::as_bool),
+            Some(generate_memories)
+        );
+        assert_eq!(
+            memories.get("dedicated_tools").and_then(TomlValue::as_bool),
+            Some(dedicated_tools)
+        );
+        Ok(())
     }
 
     #[tokio::test]

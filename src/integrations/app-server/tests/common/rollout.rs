@@ -90,6 +90,7 @@ pub fn create_fake_rollout_with_cwds(
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
         dynamic_tools: None,
+        memory_mode: None,
     };
     let payload = serde_json::to_value(SessionMetaLine {
         meta,
@@ -188,6 +189,7 @@ pub fn create_fake_rollout_with_source(
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
         dynamic_tools: None,
+        memory_mode: None,
     };
     let payload = serde_json::to_value(SessionMetaLine {
         meta,
@@ -263,6 +265,7 @@ pub fn create_fake_rollout_with_schema_version(
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
         dynamic_tools: None,
+        memory_mode: None,
     };
     let mut payload = serde_json::to_value(SessionMetaLine { meta, git: None })?;
     if schema_version.is_none()
@@ -345,6 +348,7 @@ pub fn create_fake_rollout_with_text_elements(
         model_provider: model_provider.map(str::to_string),
         base_instructions: None,
         dynamic_tools: None,
+        memory_mode: None,
     };
     let payload = serde_json::to_value(SessionMetaLine {
         meta,

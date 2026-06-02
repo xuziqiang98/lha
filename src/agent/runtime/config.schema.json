@@ -235,6 +235,9 @@
             "include_apply_patch_tool": {
               "type": "boolean"
             },
+            "memories": {
+              "type": "boolean"
+            },
             "personality": {
               "type": "boolean"
             },
@@ -404,6 +407,73 @@
           "type": "string"
         }
       ]
+    },
+    "MemoriesToml": {
+      "additionalProperties": false,
+      "description": "Memories settings loaded from config.toml.",
+      "properties": {
+        "consolidation_model": {
+          "description": "Model used for memory consolidation.",
+          "type": "string"
+        },
+        "dedicated_tools": {
+          "description": "When `true`, expose dedicated memory tools.",
+          "type": "boolean"
+        },
+        "disable_on_external_context": {
+          "description": "When `true`, external context sources mark the thread memory mode as `polluted`.",
+          "type": "boolean"
+        },
+        "extract_model": {
+          "description": "Model used for per-thread memory extraction.",
+          "type": "string"
+        },
+        "generate_memories": {
+          "description": "When `false`, newly created threads are stored with `memory_mode = \"disabled\"`.",
+          "type": "boolean"
+        },
+        "max_raw_memories_for_consolidation": {
+          "description": "Maximum number of raw memories retained for global consolidation.",
+          "format": "uint",
+          "maximum": 4096.0,
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "max_rollout_age_days": {
+          "description": "Maximum age of threads used for memories.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "max_rollouts_per_startup": {
+          "description": "Maximum number of rollout candidates processed per startup pass.",
+          "format": "uint",
+          "maximum": 128.0,
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "max_unused_days": {
+          "description": "Maximum days since last memory usage before phase-2 selection skips it.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "min_rate_limit_remaining_percent": {
+          "description": "Minimum remaining percentage required in rate-limit windows before memory startup runs.",
+          "format": "int64",
+          "maximum": 100.0,
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "min_rollout_idle_hours": {
+          "description": "Minimum idle time between last thread activity and memory creation, in hours.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "use_memories": {
+          "description": "When `false`, skip injecting memory usage instructions into developer prompts.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
     },
     "Notice": {
       "description": "Settings for notices we display to users via the tui and app-server clients (primarily the LHA IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
@@ -1228,6 +1298,9 @@
         "include_apply_patch_tool": {
           "type": "boolean"
         },
+        "memories": {
+          "type": "boolean"
+        },
         "personality": {
           "type": "boolean"
         },
@@ -1355,6 +1428,14 @@
       "default": {},
       "description": "Definition for MCP servers that LHA can reach out to for tool calls.",
       "type": "object"
+    },
+    "memories": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/MemoriesToml"
+        }
+      ],
+      "description": "Settings for local memories."
     },
     "model_instructions_file": {
       "allOf": [

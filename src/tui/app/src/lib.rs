@@ -937,6 +937,7 @@ mod tests {
                     model_provider: Some(provider.to_string()),
                     base_instructions: None,
                     dynamic_tools: None,
+                    memory_mode: None,
                     forked_from_id: None,
                 },
                 git: None,

@@ -21,8 +21,10 @@ use lha_llm::ToolCallRequest;
 use lha_llm::ToolResultItem;
 use lha_llm::ToolResultPayload;
 use lha_llm::TranscriptItem;
+use lha_protocol::memory_citation::MemoryCitation;
 use tracing::debug;
 use tracing::instrument;
+use tracing::warn;
 
 /// Handle a completed output item from the model stream, recording it and
 /// queuing any tool execution futures. This records items immediately so
@@ -52,8 +54,25 @@ pub(crate) async fn handle_output_item_done(
 ) -> Result<OutputItemResult> {
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.turn_context.identity.kind == IdentityKind::Planner;
+    let (item, memory_citation) = strip_memory_citation_from_item(item);
+    if matches!(
+        &item,
+        TranscriptItem::HostedActivity { activity_type, .. } if activity_type == "web_search"
+    ) {
+        crate::memories::pollution::maybe_mark_memory_polluted(
+            &ctx.sess,
+            &ctx.turn_context,
+            "web_search",
+        )
+        .await;
+    }
 
-    if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode).await {
+    if let Some(mut turn_item) = handle_non_tool_response_item(&item, plan_mode).await {
+        if let (Some(citation), TurnItem::AgentMessage(agent_message)) =
+            (memory_citation.clone(), &mut turn_item)
+        {
+            agent_message.memory_citation = Some(citation);
+        }
         if previously_active_item.is_none() {
             ctx.sess
                 .emit_turn_item_started(&ctx.turn_context, &turn_item)
@@ -68,9 +87,80 @@ pub(crate) async fn handle_output_item_done(
     ctx.sess
         .record_conversation_items(&ctx.turn_context, std::slice::from_ref(&item))
         .await;
+    if let Some(memory_citation) = memory_citation.as_ref()
+        && let Some(state_db) = ctx.sess.state_db()
+    {
+        let thread_ids =
+            lha_memories_read::citations::thread_ids_from_memory_citation(memory_citation);
+        if let Err(err) = state_db
+            .memories()
+            .record_stage1_output_usage(&thread_ids)
+            .await
+        {
+            warn!("failed to record memory citation usage: {err}");
+        }
+    }
     output.last_agent_message = last_assistant_message_from_item(&item, plan_mode);
 
     Ok(output)
+}
+
+fn strip_memory_citation_from_item(
+    item: TranscriptItem,
+) -> (TranscriptItem, Option<MemoryCitation>) {
+    let TranscriptItem::Message {
+        id,
+        role,
+        content,
+        end_turn,
+    } = item
+    else {
+        return (item, None);
+    };
+    if role != "assistant" {
+        return (
+            TranscriptItem::Message {
+                id,
+                role,
+                content,
+                end_turn,
+            },
+            None,
+        );
+    }
+
+    let mut combined = String::new();
+    let mut has_output_text = false;
+    for item in &content {
+        if let lha_protocol::models::ContentItem::OutputText { text } = item {
+            has_output_text = true;
+            combined.push_str(text);
+        }
+    }
+    if !has_output_text {
+        return (
+            TranscriptItem::Message {
+                id,
+                role,
+                content,
+                end_turn,
+            },
+            None,
+        );
+    }
+
+    let (stripped, blocks) = lha_memories_read::citations::strip_memory_citation_block(&combined);
+    let citation = lha_memories_read::citations::parse_memory_citation(blocks);
+    let content = vec![lha_protocol::models::ContentItem::OutputText { text: stripped }];
+    (
+        TranscriptItem::Message {
+            id,
+            role,
+            content,
+            end_turn,
+        },
+        citation,
+    )
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -310,5 +400,52 @@ mod tests {
                 },
             }
         );
+    }
+
+    #[test]
+    fn strip_memory_citation_from_assistant_item_attaches_citation() {
+        let item = assistant_message(
+            "answer\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[used]\n</citation_entries>\n<rollout_ids>\n00000000-0000-0000-0000-000000000001\n</rollout_ids>\n</oai-mem-citation>",
+        );
+
+        let (item, citation) = strip_memory_citation_from_item(item);
+
+        assert_eq!(assistant_text(&item), Some("answer"));
+        assert_eq!(
+            citation.expect("citation").rollout_ids,
+            vec!["00000000-0000-0000-0000-000000000001"]
+        );
+    }
+
+    #[test]
+    fn strip_memory_citation_from_assistant_item_hides_malformed_tail() {
+        let item = assistant_message("answer\n<oai-mem-citation>\nhidden");
+
+        let (item, citation) = strip_memory_citation_from_item(item);
+
+        assert_eq!(assistant_text(&item), Some("answer"));
+        assert_eq!(citation, None);
+    }
+
+    fn assistant_message(text: &str) -> TranscriptItem {
+        TranscriptItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![lha_protocol::models::ContentItem::OutputText {
+                text: text.to_string(),
+            }],
+            end_turn: None,
+        }
+    }
+
+    fn assistant_text(item: &TranscriptItem) -> Option<&str> {
+        let TranscriptItem::Message { content, .. } = item else {
+            return None;
+        };
+        content.iter().find_map(|content_item| match content_item {
+            lha_protocol::models::ContentItem::OutputText { text } => Some(text.as_str()),
+            lha_protocol::models::ContentItem::InputText { .. }
+            | lha_protocol::models::ContentItem::InputImage { .. } => None,
+        })
     }
 }

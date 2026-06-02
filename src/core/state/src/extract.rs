@@ -40,6 +40,9 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
     if let Some(provider) = meta_line.meta.model_provider.as_deref() {
         metadata.model_provider = provider.to_string();
     }
+    if let Some(memory_mode) = meta_line.meta.memory_mode.as_deref() {
+        metadata.memory_mode = memory_mode.to_string();
+    }
     if !meta_line.meta.cwd.as_os_str().is_empty() {
         metadata.cwd = meta_line.meta.cwd.clone();
     }
@@ -177,6 +180,7 @@ mod tests {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
+            memory_mode: "enabled".to_string(),
         };
         let mut other = base.clone();
         other.tokens_used = 2;
