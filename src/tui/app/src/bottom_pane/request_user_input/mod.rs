@@ -432,21 +432,16 @@ impl RequestUserInputOverlay {
         }
 
         let question_count = self.question_count();
-        let is_last_question = self.current_index().saturating_add(1) >= question_count;
         let enter_tip = if question_count == 1 {
             FooterTip::highlighted("enter to submit answer")
-        } else if is_last_question {
+        } else if self.current_index().saturating_add(1) >= question_count {
             FooterTip::highlighted("enter to submit all")
         } else {
             FooterTip::new("enter to submit answer")
         };
         tips.push(enter_tip);
         if question_count > 1 {
-            if is_last_question {
-                tips.push(FooterTip::new("ctrl + n first question"));
-            } else {
-                tips.push(FooterTip::new("ctrl + n next question"));
-            }
+            tips.push(FooterTip::new("ctrl + p/n questions"));
         }
         tips.push(FooterTip::new("esc to interrupt"));
         tips
@@ -955,6 +950,10 @@ impl BottomPaneView for RequestUserInputOverlay {
         true
     }
 
+    fn allow_background_transcript_interaction(&self) -> bool {
+        true
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if key_event.kind == KeyEventKind::Release {
             return;
@@ -977,21 +976,11 @@ impl BottomPaneView for RequestUserInputOverlay {
                 code: KeyCode::Char('p'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
-            }
-            | KeyEvent {
-                code: KeyCode::PageUp,
-                modifiers: KeyModifiers::NONE,
-                ..
             } => {
                 self.move_question(false);
                 return;
             }
             KeyEvent {
-                code: KeyCode::PageDown,
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
                 code: KeyCode::Char('n'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
@@ -2594,5 +2583,35 @@ mod tests {
         let answer = overlay.current_answer().expect("answer missing");
         assert_eq!(answer.options_state.selected_idx, Some(1));
         assert!(!answer.answer_committed);
+    }
+
+    #[test]
+    fn page_keys_do_not_move_questions_but_ctrl_p_n_still_do() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_with_options("q1", "Pick one"),
+                    question_with_options("q2", "Pick two"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::PageDown));
+        assert_eq!(overlay.current_index(), 0);
+
+        overlay.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        assert_eq!(overlay.current_index(), 1);
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::PageUp));
+        assert_eq!(overlay.current_index(), 1);
+
+        overlay.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        assert_eq!(overlay.current_index(), 0);
     }
 }

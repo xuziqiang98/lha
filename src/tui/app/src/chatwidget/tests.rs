@@ -96,6 +96,9 @@ use lha_protocol::plan_tool::PlanItemArg;
 use lha_protocol::plan_tool::StepStatus;
 use lha_protocol::plan_tool::UpdatePlanArgs;
 use lha_protocol::protocol::CodexErrorInfo;
+use lha_protocol::request_user_input::RequestUserInputEvent;
+use lha_protocol::request_user_input::RequestUserInputQuestion;
+use lha_protocol::request_user_input::RequestUserInputQuestionOption;
 use lha_protocol::user_input::TextElement;
 use lha_protocol::user_input::UserInput;
 use lha_utils_absolute_path::AbsolutePathBuf;
@@ -424,6 +427,30 @@ impl HistoryCell for TallTranscriptCell {
         (0..self.0)
             .map(|idx| Line::from(format!("transcript line {idx}")))
             .collect()
+    }
+}
+
+fn request_user_input_event() -> RequestUserInputEvent {
+    RequestUserInputEvent {
+        call_id: "call-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        questions: vec![RequestUserInputQuestion {
+            id: "q1".to_string(),
+            header: "Pick".to_string(),
+            question: "Choose an option.".to_string(),
+            is_other: false,
+            is_secret: false,
+            options: Some(vec![
+                RequestUserInputQuestionOption {
+                    label: "Option 1".to_string(),
+                    description: "First choice.".to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: "Option 2".to_string(),
+                    description: "Second choice.".to_string(),
+                },
+            ]),
+        }],
     }
 }
 
@@ -7440,6 +7467,84 @@ async fn feedback_selection_popup_ignores_mouse_selection_in_bottom_pane() {
     });
 
     assert!(!chat.transcript.borrow().selection_active_for_test());
+}
+
+#[tokio::test]
+async fn request_user_input_allows_transcript_page_scroll() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let at_tail = chat.transcript_scroll_offset();
+
+    chat.handle_request_user_input_now(request_user_input_event());
+    chat.handle_key_event(KeyEvent::from(KeyCode::PageUp));
+
+    assert!(chat.transcript_scroll_offset() < at_tail);
+}
+
+#[tokio::test]
+async fn request_user_input_keeps_arrow_keys_for_options() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let at_tail = chat.transcript_scroll_offset();
+
+    chat.handle_request_user_input_now(request_user_input_event());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+
+    assert_eq!(chat.transcript_scroll_offset(), at_tail);
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(popup.contains("› 2. Option 2"));
+}
+
+#[tokio::test]
+async fn request_user_input_allows_transcript_mouse_scroll_in_transcript_area() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    chat.handle_request_user_input_now(request_user_input_event());
+
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let at_tail = chat.transcript_scroll_offset();
+    let transcript_area = chat
+        .cached_transcript_area()
+        .expect("transcript area cached");
+
+    chat.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: transcript_area.x,
+        row: transcript_area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert!(chat.transcript_scroll_offset() < at_tail);
+}
+
+#[tokio::test]
+async fn request_user_input_ignores_mouse_scroll_over_prompt() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.replace_transcript_cells(vec![Arc::new(TallTranscriptCell(40))]);
+    chat.handle_request_user_input_now(request_user_input_event());
+
+    let area = Rect::new(0, 0, 80, 18);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let at_tail = chat.transcript_scroll_offset();
+    let bottom_area = chat.cached_bottom_area().expect("bottom area cached");
+
+    chat.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: bottom_area.x,
+        row: bottom_area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert_eq!(chat.transcript_scroll_offset(), at_tail);
 }
 
 #[tokio::test]
