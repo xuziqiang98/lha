@@ -26,7 +26,7 @@ Memory files live under `$LHA_HOME/memories`:
 - `phase2_workspace_diff.md` is a generated diff for consolidation.
 
 Memory state lives in `$LHA_HOME/memories_1.sqlite`, separate from `$LHA_HOME/state.sqlite`.
-When the memory feature is disabled, non-memory state features such as logs, goals, and plan completion do not open or require `memories_1.sqlite`.
+When the memory feature is disabled, non-memory state features such as logs and goals do not open or require `memories_1.sqlite`.
 
 ## Config
 

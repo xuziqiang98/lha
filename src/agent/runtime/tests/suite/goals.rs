@@ -14,6 +14,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use lha_agent::features::Feature;
 use lha_agent::protocol::AskForApproval;
 use lha_agent::protocol::EventMsg;
@@ -23,6 +24,7 @@ use lha_protocol::config_types::Identity;
 use lha_protocol::config_types::IdentityKind;
 use lha_protocol::config_types::ReasoningSummary;
 use lha_protocol::config_types::Settings;
+use lha_protocol::protocol::ThreadGoal;
 use lha_protocol::protocol::ThreadGoalSetMode;
 use lha_protocol::protocol::ThreadGoalStatus;
 use lha_protocol::user_input::UserInput;
@@ -114,6 +116,19 @@ async fn wait_for_goal_update(test: &TestCodex, objective: &str, status: ThreadG
     .await;
 }
 
+async fn wait_for_goal_update_matching<F>(test: &TestCodex, matcher: F) -> ThreadGoal
+where
+    F: Fn(&ThreadGoal) -> bool,
+{
+    wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ThreadGoalUpdated(updated) if matcher(&updated.goal) => {
+            Some(updated.goal.clone())
+        }
+        _ => None,
+    })
+    .await
+}
+
 fn create_goal_response(call_id: &str, response_id: &str, objective: &str) -> String {
     sse(vec![
         ev_response_created(response_id),
@@ -136,6 +151,93 @@ fn update_goal_response(call_id: &str, response_id: &str, status: &str) -> Strin
         ),
         ev_completed(response_id),
     ])
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_goal_from_proposed_plan_creates_goal_and_continues_until_complete() -> Result<()> {
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            update_goal_response("complete-plan-goal", "resp-plan-goal-1", "complete"),
+            sse(vec![
+                ev_assistant_message("msg-plan-goal-complete", "plan goal complete"),
+                ev_completed("resp-plan-goal-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::Goals);
+    });
+    let test = builder.build(&server).await?;
+    switch_to_programmer(&test).await?;
+
+    let plan_text = "# Plan\n- Finish the proposed work\n";
+    let plan_path = test
+        .lha_home_path()
+        .join("goals")
+        .join(test.session_configured.session_id.to_string())
+        .join("proposed_plan.md");
+    assert!(plan_path.is_absolute());
+    let expected_objective = format!(
+        "Implement the proposed plan stored at:\n{}\n\nBefore marking this goal complete, verify every explicit requirement in that plan, including docs, formatting, tests, and cleanup.",
+        plan_path.display()
+    );
+
+    test.codex
+        .submit(Op::ThreadGoalStartFromProposedPlan {
+            plan_text: plan_text.to_string(),
+        })
+        .await?;
+
+    let active_goal = wait_for_goal_update_matching(&test, |goal| {
+        goal.objective == expected_objective && goal.status == ThreadGoalStatus::Active
+    })
+    .await;
+    assert_eq!(expected_objective, active_goal.objective);
+    assert_eq!(ThreadGoalStatus::Active, active_goal.status);
+    assert_eq!(plan_text, tokio::fs::read_to_string(&plan_path).await?);
+
+    wait_for_request_count(&mock, 1).await;
+    let goal_request = mock
+        .requests()
+        .into_iter()
+        .find(|request| {
+            request
+                .message_input_texts("user")
+                .iter()
+                .any(|text| text.contains("<goal_context>"))
+        })
+        .expect("goal continuation request should be sent");
+    let goal_context = goal_request.message_input_texts("user").join("\n");
+    assert!(
+        goal_context.contains("If the objective references a proposed plan file, read that file")
+    );
+    assert!(goal_context.contains(&plan_path.display().to_string()));
+    assert!(goal_context.contains("docs, formatting, tests, and cleanup"));
+
+    let completed_goal = wait_for_goal_update_matching(&test, |goal| {
+        goal.objective == expected_objective && goal.status == ThreadGoalStatus::Complete
+    })
+    .await;
+    assert_eq!(ThreadGoalStatus::Complete, completed_goal.status);
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    wait_for_request_count(&mock, 2).await;
+
+    let db = test.codex.state_db().expect("state db enabled");
+    let stored = db
+        .get_thread_goal(test.session_configured.session_id)
+        .await?
+        .expect("goal should exist");
+    assert_eq!(expected_objective, stored.objective);
+    assert_eq!(lha_state::ThreadGoalStatus::Complete, stored.status);
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

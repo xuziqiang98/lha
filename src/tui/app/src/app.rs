@@ -3460,11 +3460,12 @@ impl App {
                 self.chat_widget
                     .submit_user_message_with_mode(text, identity);
             }
-            AppEvent::StartPlanCompletion {
+            AppEvent::StartGoalFromProposedPlan {
                 plan_text,
                 identity,
             } => {
-                self.chat_widget.start_plan_completion(plan_text, identity);
+                self.chat_widget
+                    .start_goal_from_proposed_plan(plan_text, identity);
             }
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
@@ -3842,9 +3843,6 @@ impl App {
                 Feature::WindowsSandbox | Feature::WindowsSandboxElevated
             )
         });
-        let plan_completion_enabled = updates
-            .iter()
-            .any(|(feature, enabled)| *feature == Feature::PlanCompletion && *enabled);
         let mut builder = ConfigEditsBuilder::new(&self.config.lha_home)
             .with_profile(self.active_profile.as_deref());
         for (feature, enabled) in &updates {
@@ -3889,17 +3887,7 @@ impl App {
             }
         }
         match builder.apply().await {
-            Ok(()) => {
-                if plan_completion_enabled {
-                    self.chat_widget.add_info_message(
-                        "YOLO plan completion was enabled.".to_string(),
-                        Some(
-                            "Restart LHA TUI for this change to take effect in the current session."
-                                .to_string(),
-                        ),
-                    );
-                }
-            }
+            Ok(()) => {}
             Err(err) => {
                 tracing::error!(error = %err, "failed to persist feature flags");
                 self.chat_widget
@@ -4791,7 +4779,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::prelude::Line;
-    use ratatui::text::Line as TextLine;
     use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -6038,54 +6025,6 @@ show_raw_agent_reasoning = true
     }
 
     #[tokio::test]
-    async fn enabling_plan_completion_shows_restart_hint() {
-        let (mut app, mut rx, _op_rx) = make_test_app_with_channels().await;
-        drain_insert_history(&mut rx);
-
-        app.update_feature_flags(vec![(Feature::PlanCompletion, true)])
-            .await;
-
-        let history = drain_insert_history_text(&mut rx);
-        assert!(history.contains("YOLO plan completion was enabled."));
-        assert!(
-            history
-                .contains("Restart LHA TUI for this change to take effect in the current session.")
-        );
-    }
-
-    #[tokio::test]
-    async fn disabling_plan_completion_does_not_show_restart_hint() {
-        let (mut app, mut rx, _op_rx) = make_test_app_with_channels().await;
-        drain_insert_history(&mut rx);
-
-        app.update_feature_flags(vec![(Feature::PlanCompletion, false)])
-            .await;
-
-        let history = drain_insert_history_text(&mut rx);
-        assert!(!history.contains("YOLO plan completion was enabled."));
-        assert!(
-            !history
-                .contains("Restart LHA TUI for this change to take effect in the current session.")
-        );
-    }
-
-    #[tokio::test]
-    async fn enabling_other_feature_does_not_show_plan_completion_restart_hint() {
-        let (mut app, mut rx, _op_rx) = make_test_app_with_channels().await;
-        drain_insert_history(&mut rx);
-
-        app.update_feature_flags(vec![(Feature::ShellSnapshot, true)])
-            .await;
-
-        let history = drain_insert_history_text(&mut rx);
-        assert!(!history.contains("YOLO plan completion was enabled."));
-        assert!(
-            !history
-                .contains("Restart LHA TUI for this change to take effect in the current session.")
-        );
-    }
-
-    #[tokio::test]
     async fn update_memory_settings_persists_toml_and_updates_in_memory() -> Result<()> {
         let mut app = make_test_app().await;
 
@@ -6354,38 +6293,6 @@ show_raw_agent_reasoning = true
         app.handle_codex_event_now(mcp_tools_event());
 
         assert!(matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_))));
-    }
-
-    fn drain_insert_history(
-        rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
-    ) -> Vec<Vec<TextLine<'static>>> {
-        let mut out = Vec::new();
-        while let Ok(event) = rx.try_recv() {
-            let cell = match event {
-                AppEvent::InsertHistoryCell(cell)
-                | AppEvent::InsertThreadHistoryCell { cell, .. } => cell,
-                _ => continue,
-            };
-            out.push(cell.display_lines(80));
-        }
-        out
-    }
-
-    fn drain_insert_history_text(
-        rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
-    ) -> String {
-        drain_insert_history(rx)
-            .into_iter()
-            .flat_map(|lines| {
-                lines.into_iter().map(|line| {
-                    line.spans
-                        .into_iter()
-                        .map(|span| span.content)
-                        .collect::<String>()
-                })
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
     }
 
     fn test_skill(name: &str) -> lha_agent::protocol::SkillMetadata {

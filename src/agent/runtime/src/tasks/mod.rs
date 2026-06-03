@@ -20,16 +20,13 @@ use tracing::Span;
 use tracing::trace;
 
 use crate::codex::GoalUsageSettlementMode;
-use crate::codex::PlanRunUsageSettlementMode;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::protocol_goal_from_state;
-use crate::codex::protocol_plan_run_from_state;
 use crate::features::Feature;
 use crate::protocol::BuddyReactionEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::ThreadGoalUpdatedEvent;
-use crate::protocol::ThreadPlanRunUpdatedEvent;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
 use crate::protocol::TurnCompleteEvent;
@@ -48,7 +45,6 @@ use lha_protocol::models::TranscriptItem;
 use lha_protocol::protocol::RolloutItem;
 use lha_protocol::user_input::UserInput;
 use lha_state::GoalAccountingOutcome;
-use lha_state::PlanRunAccountingOutcome;
 use tracing::warn;
 
 pub(crate) use compact::CompactTask;
@@ -159,11 +155,6 @@ impl Session {
         };
         self.initialize_goal_accounting_checkpoint_for_turn(turn_context.as_ref(), usage_snapshot)
             .await;
-        self.initialize_plan_run_accounting_checkpoint_for_turn(
-            turn_context.as_ref(),
-            usage_snapshot,
-        )
-        .await;
 
         let mut active = self.active_turn.lock().await;
         if active.is_some() {
@@ -245,25 +236,16 @@ impl Session {
         if should_close_processes {
             self.close_unified_exec_processes().await;
         }
-        let (goal_accounting_outcome, plan_run_accounting_outcome) = if finished_task.is_some() {
-            (
-                self.settle_goal_usage_for_turn_context(
-                    &turn_context,
-                    GoalUsageSettlementMode::FinalTask,
-                )
-                .await,
-                self.settle_plan_run_usage_for_turn_context(
-                    &turn_context,
-                    PlanRunUsageSettlementMode::FinalTask,
-                )
-                .await,
+        let goal_accounting_outcome = if finished_task.is_some() {
+            self.settle_goal_usage_for_turn_context(
+                &turn_context,
+                GoalUsageSettlementMode::FinalTask,
             )
+            .await
         } else {
-            (None, None)
+            None
         };
         self.emit_goal_accounting_update_if_needed(&turn_context, goal_accounting_outcome)
-            .await;
-        self.emit_plan_run_accounting_update_if_needed(&turn_context, plan_run_accounting_outcome)
             .await;
         let assistant_message_for_buddy = last_agent_message.clone();
         let event = EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message });
@@ -321,33 +303,6 @@ impl Session {
         .await;
     }
 
-    async fn emit_plan_run_accounting_update_if_needed(
-        &self,
-        turn_context: &TurnContext,
-        accounting_outcome: Option<PlanRunAccountingOutcome>,
-    ) {
-        if let Some(PlanRunAccountingOutcome::Updated(plan_run)) = accounting_outcome {
-            self.emit_thread_plan_run_updated(turn_context, plan_run)
-                .await;
-        }
-    }
-
-    async fn emit_thread_plan_run_updated(
-        &self,
-        turn_context: &TurnContext,
-        plan_run: lha_state::ThreadPlanRun,
-    ) {
-        self.send_event(
-            turn_context,
-            EventMsg::ThreadPlanRunUpdated(ThreadPlanRunUpdatedEvent {
-                thread_id: self.conversation_id,
-                turn_id: Some(turn_context.sub_id.clone()),
-                plan_run: protocol_plan_run_from_state(plan_run),
-            }),
-        )
-        .await;
-    }
-
     async fn pause_active_goal_for_interrupt(
         &self,
         turn_context: &TurnContext,
@@ -367,35 +322,6 @@ impl Session {
             Ok(goal) => goal,
             Err(err) => {
                 warn!("failed to pause active goal after interrupt: {err}");
-                None
-            }
-        }
-    }
-
-    async fn pause_active_plan_run_for_interrupt(
-        &self,
-        turn_context: &TurnContext,
-    ) -> Option<lha_state::ThreadPlanRun> {
-        if !self.enabled(Feature::PlanCompletion)
-            || turn_context.identity.kind != IdentityKind::Programmer
-        {
-            return None;
-        }
-        let state_db = self.state_db()?;
-        let mut expected_plan_run_id = turn_context.plan_run_context.expected_plan_run_id().await;
-        if expected_plan_run_id.is_none() {
-            expected_plan_run_id = turn_context.plan_run_context.accounting_plan_run_id().await;
-        }
-        match state_db
-            .pause_active_thread_plan_run_if_plan_run_id(
-                self.conversation_id,
-                expected_plan_run_id.as_deref(),
-            )
-            .await
-        {
-            Ok(plan_run) => plan_run,
-            Err(err) => {
-                warn!("failed to pause active plan run after interrupt: {err}");
                 None
             }
         }
@@ -471,36 +397,16 @@ impl Session {
         let accounting_outcome = self
             .settle_goal_usage_for_turn_context(&turn_context, GoalUsageSettlementMode::FinalTask)
             .await;
-        let plan_run_accounting_outcome = self
-            .settle_plan_run_usage_for_turn_context(
-                &turn_context,
-                PlanRunUsageSettlementMode::FinalTask,
-            )
-            .await;
         let paused_goal = if reason == TurnAbortReason::Interrupted {
             self.pause_active_goal_for_interrupt(&turn_context).await
         } else {
             None
         };
-        let paused_plan_run = if reason == TurnAbortReason::Interrupted && paused_goal.is_none() {
-            self.pause_active_plan_run_for_interrupt(&turn_context)
-                .await
-        } else {
-            None
-        };
         if let Some(goal) = paused_goal {
             self.emit_thread_goal_updated(&turn_context, goal).await;
-        } else if let Some(plan_run) = paused_plan_run {
-            self.emit_thread_plan_run_updated(&turn_context, plan_run)
-                .await;
         } else {
             self.emit_goal_accounting_update_if_needed(&turn_context, accounting_outcome)
                 .await;
-            self.emit_plan_run_accounting_update_if_needed(
-                &turn_context,
-                plan_run_accounting_outcome,
-            )
-            .await;
         }
 
         if reason == TurnAbortReason::Interrupted {

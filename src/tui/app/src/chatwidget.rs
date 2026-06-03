@@ -86,11 +86,6 @@ use lha_agent::protocol::ThreadGoalSetMode;
 use lha_agent::protocol::ThreadGoalSnapshotEvent;
 use lha_agent::protocol::ThreadGoalStatus;
 use lha_agent::protocol::ThreadGoalUpdatedEvent;
-use lha_agent::protocol::ThreadPlanRun;
-use lha_agent::protocol::ThreadPlanRunClearedEvent;
-use lha_agent::protocol::ThreadPlanRunSnapshotEvent;
-use lha_agent::protocol::ThreadPlanRunStatus;
-use lha_agent::protocol::ThreadPlanRunUpdatedEvent;
 use lha_agent::protocol::TokenUsage;
 use lha_agent::protocol::TokenUsageInfo;
 use lha_agent::protocol::TurnAbortReason;
@@ -384,17 +379,6 @@ fn goal_status_label(status: ThreadGoalStatus) -> &'static str {
     }
 }
 
-fn plan_run_status_label(status: ThreadPlanRunStatus) -> &'static str {
-    match status {
-        ThreadPlanRunStatus::Active => "active",
-        ThreadPlanRunStatus::Paused => "paused",
-        ThreadPlanRunStatus::Blocked => "blocked",
-        ThreadPlanRunStatus::UsageLimited => "usage limited",
-        ThreadPlanRunStatus::BudgetLimited => "limited by budget",
-        ThreadPlanRunStatus::Complete => "complete",
-    }
-}
-
 fn goal_usage_summary(goal: &ThreadGoal) -> String {
     let budget = goal
         .token_budget
@@ -404,19 +388,6 @@ fn goal_usage_summary(goal: &ThreadGoal) -> String {
         "Used {} tokens{budget}; elapsed {}.",
         goal.tokens_used,
         format_goal_elapsed_seconds(goal.time_used_seconds)
-    )
-}
-
-fn plan_run_usage_summary(plan_run: &ThreadPlanRun) -> String {
-    let budget = plan_run
-        .token_budget
-        .map(|budget| format!(" / {budget} budget"))
-        .unwrap_or_default();
-    format!(
-        "{} tokens{} · {} elapsed",
-        plan_run.tokens_used,
-        budget,
-        format_goal_elapsed_seconds(plan_run.time_used_seconds)
     )
 }
 
@@ -680,8 +651,6 @@ pub(crate) struct ChatWidget {
     current_rollout_path: Option<PathBuf>,
     current_goal: Option<ThreadGoal>,
     current_goal_state_known: bool,
-    current_plan_run: Option<ThreadPlanRun>,
-    current_plan_run_state_known: bool,
     external_editor_state: ExternalEditorState,
 }
 
@@ -1199,8 +1168,6 @@ impl ChatWidget {
         self.current_rollout_path = event.rollout_path.clone();
         self.current_goal = None;
         self.current_goal_state_known = false;
-        self.current_plan_run = None;
-        self.current_plan_run_state_known = false;
         self.latest_proposed_plan_text = None;
         self.latest_proposed_plan_title = None;
         let initial_messages = event.initial_messages.clone();
@@ -1333,40 +1300,6 @@ impl ChatWidget {
             allow_background_transcript_interaction: true,
             ..Default::default()
         });
-        self.request_redraw();
-    }
-
-    fn on_thread_plan_run_updated(&mut self, event: ThreadPlanRunUpdatedEvent) {
-        if self.thread_id != Some(event.thread_id) {
-            return;
-        }
-        self.current_plan_run = Some(event.plan_run.clone());
-        self.current_plan_run_state_known = true;
-        self.show_plan_run_summary(&event.plan_run);
-        self.request_redraw();
-    }
-
-    fn on_thread_plan_run_cleared(&mut self, event: ThreadPlanRunClearedEvent) {
-        if self.thread_id != Some(event.thread_id) {
-            return;
-        }
-        self.current_plan_run = None;
-        self.current_plan_run_state_known = true;
-        self.add_info_message("YOLO plan completion cleared.".to_string(), None);
-        self.request_redraw();
-    }
-
-    fn on_thread_plan_run_snapshot(&mut self, event: ThreadPlanRunSnapshotEvent) {
-        if self.thread_id != Some(event.thread_id) {
-            return;
-        }
-        self.current_plan_run = event.plan_run;
-        self.current_plan_run_state_known = true;
-        if let Some(plan_run) = self.current_plan_run.clone() {
-            self.show_plan_run_summary(&plan_run);
-        } else {
-            self.show_no_plan_run_usage();
-        }
         self.request_redraw();
     }
 
@@ -1681,13 +1614,13 @@ impl ChatWidget {
 
     fn open_plan_implementation_prompt(&mut self) {
         let programmer_mask = identities::programmer_mask(self.thread_manager.as_ref());
-        let plan_completion_enabled = self.config.features.enabled(Feature::PlanCompletion);
+        let goal_tracking_enabled = self.config.features.enabled(Feature::Goals);
         let latest_plan_text = self.latest_proposed_plan_text.clone();
         let (implement_actions, implement_disabled_reason) = match programmer_mask {
-            Some(mask) if plan_completion_enabled => {
+            Some(mask) if goal_tracking_enabled => {
                 if let Some(plan_text) = latest_plan_text {
                     let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                        tx.send(AppEvent::StartPlanCompletion {
+                        tx.send(AppEvent::StartGoalFromProposedPlan {
                             plan_text: plan_text.clone(),
                             identity: mask.clone(),
                         });
@@ -1716,8 +1649,8 @@ impl ChatWidget {
         let items = vec![
             SelectionItem {
                 name: PLAN_IMPLEMENTATION_YES.to_string(),
-                description: Some(if plan_completion_enabled {
-                    "Switch to programmer and keep going until YOLO marks the plan complete."
+                description: Some(if goal_tracking_enabled {
+                    "Switch to programmer and track this plan as a /goal until complete."
                         .to_string()
                 } else {
                     "Switch to programmer identity.".to_string()
@@ -2972,8 +2905,6 @@ impl ChatWidget {
             current_rollout_path: None,
             current_goal: None,
             current_goal_state_known: false,
-            current_plan_run: None,
-            current_plan_run_state_known: false,
             external_editor_state: ExternalEditorState::Closed,
         };
 
@@ -3150,8 +3081,6 @@ impl ChatWidget {
             current_rollout_path: None,
             current_goal: None,
             current_goal_state_known: false,
-            current_plan_run: None,
-            current_plan_run_state_known: false,
             external_editor_state: ExternalEditorState::Closed,
         };
 
@@ -3804,52 +3733,14 @@ impl ChatWidget {
         }
     }
 
-    fn ensure_plan_completion_enabled(&mut self) -> bool {
-        if self.config.features.enabled(Feature::PlanCompletion) {
-            return true;
-        }
-        self.add_info_message(
-            "YOLO plan completion is disabled.".to_string(),
-            Some(
-                "Enable the plan_completion experimental feature to use /plan status, pause, resume, or clear."
-                    .to_string(),
-            ),
-        );
-        false
-    }
-
     fn dispatch_plan_command(&mut self, trimmed: &str) {
         match trimmed {
             "" => self.dispatch_command(SlashCommand::Plan),
-            "status" => {
-                if self.ensure_plan_completion_enabled() {
-                    self.app_event_tx
-                        .send(AppEvent::CodexOp(Op::ThreadPlanRunGet));
-                }
-            }
-            "pause" => {
-                if self.ensure_plan_completion_enabled() {
-                    self.app_event_tx
-                        .send(AppEvent::CodexOp(Op::ThreadPlanRunSetStatus {
-                            status: ThreadPlanRunStatus::Paused,
-                        }));
-                }
-            }
-            "resume" => {
-                if self.ensure_plan_completion_enabled() {
-                    self.app_event_tx
-                        .send(AppEvent::CodexOp(Op::ThreadPlanRunSetStatus {
-                            status: ThreadPlanRunStatus::Active,
-                        }));
-                }
-            }
-            "clear" => {
-                if self.ensure_plan_completion_enabled() {
-                    self.app_event_tx
-                        .send(AppEvent::CodexOp(Op::ThreadPlanRunClear));
-                }
-            }
-            _ => self.add_error_message("Usage: /plan [status|pause|resume|clear]".to_string()),
+            "status" | "pause" | "resume" | "clear" => self.add_info_message(
+                "Plan execution is tracked by /goal.".to_string(),
+                Some("Use /goal to view, pause, resume, or clear the active goal.".to_string()),
+            ),
+            _ => self.add_error_message("Usage: /plan".to_string()),
         }
     }
 
@@ -3950,42 +3841,6 @@ impl ChatWidget {
                 goal.objective
             ),
             Some(goal_usage_summary(goal)),
-        );
-    }
-
-    fn show_no_plan_run_usage(&mut self) {
-        self.add_info_message(
-            "No YOLO plan completion is currently set.".to_string(),
-            Some("Start one from a planner proposed plan.".to_string()),
-        );
-    }
-
-    fn show_plan_run_summary(&mut self, plan_run: &ThreadPlanRun) {
-        let plan_label = extract_first_markdown_heading(&plan_run.plan_text)
-            .or_else(|| {
-                plan_run
-                    .plan_text
-                    .lines()
-                    .map(str::trim)
-                    .find(|line| !line.is_empty())
-                    .map(|line| truncate_text(line, 80))
-            })
-            .unwrap_or_else(|| "planner plan".to_string());
-        let hint = if plan_run.status == ThreadPlanRunStatus::Blocked {
-            Some(
-                "Run /plan resume after resolving the blocker, or /plan clear to stop tracking this plan."
-                    .to_string(),
-            )
-        } else {
-            Some(plan_run_usage_summary(plan_run))
-        };
-        self.add_info_message(
-            format!(
-                "YOLO plan completion is {} - {}",
-                plan_run_status_label(plan_run.status),
-                plan_label
-            ),
-            hint,
         );
     }
 
@@ -4461,9 +4316,6 @@ impl ChatWidget {
             EventMsg::ThreadGoalReplaceConfirmationRequired(e) => {
                 self.on_thread_goal_replace_confirmation_required(e)
             }
-            EventMsg::ThreadPlanRunUpdated(e) => self.on_thread_plan_run_updated(e),
-            EventMsg::ThreadPlanRunCleared(e) => self.on_thread_plan_run_cleared(e),
-            EventMsg::ThreadPlanRunSnapshot(e) => self.on_thread_plan_run_snapshot(e),
             EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
                 self.on_agent_message(message)
             }
@@ -6960,10 +6812,14 @@ impl ChatWidget {
         self.submit_user_message(text.into());
     }
 
-    pub(crate) fn start_plan_completion(&mut self, plan_text: String, identity: IdentityMask) {
+    pub(crate) fn start_goal_from_proposed_plan(
+        &mut self,
+        plan_text: String,
+        identity: IdentityMask,
+    ) {
         self.set_identity_mask(identity);
         self.sync_active_identity_to_runtime();
-        self.submit_op(Op::ThreadPlanRunStart { plan_text });
+        self.submit_op(Op::ThreadGoalStartFromProposedPlan { plan_text });
     }
 
     /// True when the UI is in the regular composer state with no running task,

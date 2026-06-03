@@ -2349,8 +2349,6 @@ async fn make_chatwidget_manual_inner(
         current_rollout_path: None,
         current_goal: None,
         current_goal_state_known: false,
-        current_plan_run: None,
-        current_plan_run_state_known: false,
         external_editor_state: ExternalEditorState::Closed,
     };
     widget.set_model(&resolved_model);
@@ -2528,8 +2526,6 @@ async fn make_chatwidget_manual_with_frame_requester(
         current_rollout_path: None,
         current_goal: None,
         current_goal_state_known: false,
-        current_plan_run: None,
-        current_plan_run_state_known: false,
         external_editor_state: ExternalEditorState::Closed,
     };
     widget.set_model(&resolved_model);
@@ -2741,23 +2737,10 @@ fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {
     }
 }
 
-fn test_thread_plan_run(thread_id: ThreadId, status: ThreadPlanRunStatus) -> ThreadPlanRun {
-    ThreadPlanRun {
-        thread_id,
-        plan_run_id: "plan-run-123".to_string(),
-        plan_text: "# Ship YOLO\n- finish implementation".to_string(),
-        status,
-        token_budget: Some(1_000),
-        tokens_used: 12,
-        time_used_seconds: 34,
-        created_at: 1_700_000_000,
-        updated_at: 1_700_000_100,
-    }
-}
-
 #[tokio::test]
 async fn plan_implementation_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.latest_proposed_plan_text = Some("# Plan\n- implement it".to_string());
     chat.open_plan_implementation_prompt();
 
     let popup = render_bottom_popup(&chat, 80);
@@ -2767,6 +2750,7 @@ async fn plan_implementation_popup_snapshot() {
 #[tokio::test]
 async fn plan_implementation_popup_no_selected_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.latest_proposed_plan_text = Some("# Plan\n- implement it".to_string());
     chat.open_plan_implementation_prompt();
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
 
@@ -2777,6 +2761,7 @@ async fn plan_implementation_popup_no_selected_snapshot() {
 #[tokio::test]
 async fn plan_implementation_popup_yes_emits_submit_message_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Goals, false);
     chat.open_plan_implementation_prompt();
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
@@ -2792,10 +2777,10 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
 }
 
 #[tokio::test]
-async fn plan_implementation_popup_with_plan_completion_emits_start_event() {
+async fn plan_implementation_popup_with_goal_tracking_emits_start_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::Identities, true);
-    chat.set_feature_enabled(Feature::PlanCompletion, true);
+    chat.set_feature_enabled(Feature::Goals, true);
     chat.on_plan_item_completed("# Captured plan\n- implement it".to_string());
     let _ = drain_insert_history(&mut rx);
     chat.open_plan_implementation_prompt();
@@ -2805,12 +2790,12 @@ async fn plan_implementation_popup_with_plan_completion_emits_start_event() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let event = rx.try_recv().expect("expected AppEvent");
-    let AppEvent::StartPlanCompletion {
+    let AppEvent::StartGoalFromProposedPlan {
         plan_text,
         identity,
     } = event
     else {
-        panic!("expected StartPlanCompletion, got {event:?}");
+        panic!("expected StartGoalFromProposedPlan, got {event:?}");
     };
     assert_eq!(plan_text, "# Captured plan\n- implement it");
     assert_eq!(identity.kind, Some(IdentityKind::Programmer));
@@ -2842,14 +2827,14 @@ async fn submit_user_message_with_mode_sets_coding_identity() {
 }
 
 #[tokio::test]
-async fn start_plan_completion_syncs_programmer_identity_and_starts_plan_run() {
+async fn start_goal_from_proposed_plan_syncs_programmer_identity_and_starts_goal() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::Identities, true);
     let programmer_mask = identities::programmer_mask(chat.thread_manager.as_ref())
         .expect("expected programmer identity");
 
-    chat.start_plan_completion("# Plan\n- finish".to_string(), programmer_mask);
+    chat.start_goal_from_proposed_plan("# Plan\n- finish".to_string(), programmer_mask);
 
     match op_rx.try_recv() {
         Ok(Op::OverrideTurnContext {
@@ -2864,7 +2849,7 @@ async fn start_plan_completion_syncs_programmer_identity_and_starts_plan_run() {
     }
     assert_matches!(
         op_rx.try_recv(),
-        Ok(Op::ThreadPlanRunStart { plan_text }) if plan_text == "# Plan\n- finish"
+        Ok(Op::ThreadGoalStartFromProposedPlan { plan_text }) if plan_text == "# Plan\n- finish"
     );
 }
 
@@ -3116,69 +3101,29 @@ async fn slash_plan_without_plan_inserts_info_message() {
 }
 
 #[tokio::test]
-async fn slash_plan_status_pause_resume_and_clear_emit_plan_run_ops() {
+async fn slash_plan_subcommands_point_to_goal_management() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.set_feature_enabled(Feature::PlanCompletion, true);
 
-    for (command, expected) in [
-        ("/plan status", "status"),
-        ("/plan pause", "pause"),
-        ("/plan resume", "resume"),
-        ("/plan clear", "clear"),
-    ] {
+    for command in ["/plan status", "/plan pause", "/plan resume", "/plan clear"] {
         chat.bottom_pane
             .set_composer_text(command.to_string(), Vec::new(), Vec::new());
         chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
         let events = drain_events(&mut rx);
-        let matched = events.iter().any(|event| {
-            matches!(
-                (expected, event),
-                ("status", AppEvent::CodexOp(Op::ThreadPlanRunGet))
-                    | (
-                        "pause",
-                        AppEvent::CodexOp(Op::ThreadPlanRunSetStatus {
-                            status: ThreadPlanRunStatus::Paused,
-                        }),
-                    )
-                    | (
-                        "resume",
-                        AppEvent::CodexOp(Op::ThreadPlanRunSetStatus {
-                            status: ThreadPlanRunStatus::Active,
-                        }),
-                    )
-                    | ("clear", AppEvent::CodexOp(Op::ThreadPlanRunClear))
-            )
-        });
         assert!(
-            matched,
-            "expected {expected} op for {command}, got {events:?}"
+            !events
+                .iter()
+                .any(|event| matches!(event, AppEvent::CodexOp(_))),
+            "did not expect codex op for {command}, got {events:?}"
         );
+        let text = events
+            .into_iter()
+            .filter_map(into_insert_history_cell)
+            .flat_map(|cell| cell.display_lines(80))
+            .map(|line| lines_to_single_string(&[line]))
+            .collect::<String>();
+        assert!(text.contains("Plan execution is tracked by /goal."));
+        assert!(text.contains("Use /goal to view, pause, resume, or clear the active goal."));
     }
-}
-
-#[tokio::test]
-async fn slash_plan_subcommands_require_plan_completion_feature() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-
-    chat.bottom_pane
-        .set_composer_text("/plan status".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-
-    let events = drain_events(&mut rx);
-    assert!(
-        !events
-            .iter()
-            .any(|event| matches!(event, AppEvent::CodexOp(_))),
-        "did not expect codex op when plan completion is disabled, got {events:?}"
-    );
-    let text = events
-        .into_iter()
-        .filter_map(into_insert_history_cell)
-        .flat_map(|cell| cell.display_lines(80))
-        .map(|line| lines_to_single_string(&[line]))
-        .collect::<String>();
-    assert!(text.contains("YOLO plan completion is disabled."));
-    assert!(text.contains("Enable the plan_completion experimental feature"));
 }
 
 #[tokio::test]
@@ -3450,104 +3395,6 @@ async fn ctrl_c_interrupt_does_not_pause_goal_from_tui_cache() {
 
     assert_matches!(op_rx.try_recv(), Ok(Op::Interrupt));
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
-}
-
-#[tokio::test]
-async fn plan_run_events_update_cache_and_show_summary() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    let thread_id = ThreadId::new();
-    chat.thread_id = Some(thread_id);
-    let plan_run = test_thread_plan_run(thread_id, ThreadPlanRunStatus::Active);
-
-    chat.handle_codex_event(Event {
-        id: "plan-run".to_string(),
-        msg: EventMsg::ThreadPlanRunUpdated(ThreadPlanRunUpdatedEvent {
-            thread_id,
-            turn_id: None,
-            plan_run: plan_run.clone(),
-        }),
-    });
-
-    assert_eq!(Some(plan_run), chat.current_plan_run);
-    assert!(chat.current_plan_run_state_known);
-    let cells = drain_insert_history(&mut rx);
-    let rendered = cells
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
-        .collect::<String>();
-    assert!(rendered.contains("YOLO plan completion is active - Ship YOLO"));
-    assert!(rendered.contains("12 tokens / 1000 budget"));
-}
-
-#[tokio::test]
-async fn blocked_plan_run_summary_shows_resume_hint() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    let thread_id = ThreadId::new();
-    chat.thread_id = Some(thread_id);
-
-    chat.handle_codex_event(Event {
-        id: "plan-run".to_string(),
-        msg: EventMsg::ThreadPlanRunSnapshot(ThreadPlanRunSnapshotEvent {
-            thread_id,
-            plan_run: Some(test_thread_plan_run(
-                thread_id,
-                ThreadPlanRunStatus::Blocked,
-            )),
-        }),
-    });
-
-    assert!(chat.current_plan_run_state_known);
-    assert_eq!(
-        Some(ThreadPlanRunStatus::Blocked),
-        chat.current_plan_run
-            .as_ref()
-            .map(|plan_run| plan_run.status)
-    );
-    let cells = drain_insert_history(&mut rx);
-    let rendered = cells
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
-        .collect::<String>();
-    assert!(rendered.contains("YOLO plan completion is blocked - Ship YOLO"));
-    assert!(rendered.contains("Run /plan resume after resolving the blocker"));
-}
-
-#[tokio::test]
-async fn plan_run_clear_and_empty_snapshot_update_cache() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    let thread_id = ThreadId::new();
-    chat.thread_id = Some(thread_id);
-    chat.current_plan_run = Some(test_thread_plan_run(thread_id, ThreadPlanRunStatus::Active));
-    chat.current_plan_run_state_known = true;
-
-    chat.handle_codex_event(Event {
-        id: "plan-run".to_string(),
-        msg: EventMsg::ThreadPlanRunCleared(ThreadPlanRunClearedEvent { thread_id }),
-    });
-
-    assert_eq!(None, chat.current_plan_run);
-    assert!(chat.current_plan_run_state_known);
-    let cleared = drain_insert_history(&mut rx)
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
-        .collect::<String>();
-    assert!(cleared.contains("YOLO plan completion cleared."));
-
-    chat.handle_codex_event(Event {
-        id: "plan-run".to_string(),
-        msg: EventMsg::ThreadPlanRunSnapshot(ThreadPlanRunSnapshotEvent {
-            thread_id,
-            plan_run: None,
-        }),
-    });
-
-    assert_eq!(None, chat.current_plan_run);
-    assert!(chat.current_plan_run_state_known);
-    let empty = drain_insert_history(&mut rx)
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
-        .collect::<String>();
-    assert!(empty.contains("No YOLO plan completion is currently set."));
 }
 
 #[tokio::test]

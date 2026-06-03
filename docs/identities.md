@@ -43,10 +43,9 @@ on product/design tradeoffs. In planner mode, LHA should:
 Clients that support planner output may show a separate `plan` item for planner
 identity turns.
 
-When the experimental `plan_completion` feature is enabled, the TUI can start
-YOLO plan completion from a planner plan. LHA stores the plan separately from
-`/goal` and hands it to `programmer` until the plan is marked complete or
-blocked.
+When goals are enabled, the TUI can start implementation from a planner plan by
+switching to `programmer` and creating a `/goal` that points at the persisted
+proposed plan.
 
 ## `programmer`
 
@@ -55,10 +54,9 @@ blocked.
 Use `programmer` when you want LHA to implement changes, edit files, run
 formatters, run tests, or carry out an already-decided plan.
 
-`programmer` is also the only identity that can run `/goal` long-running goals
-and continue active YOLO plan completion runs. Active goals and plan completion
-runs remain stored if you switch away, but they do not continue until you switch
-back to `programmer`.
+`programmer` is also the only identity that can run and continue `/goal`
+long-running goals. Active goals remain stored if you switch away, but they do
+not continue until you switch back to `programmer`.
 
 General repository instructions, sandboxing rules, and approval requirements
 still apply in `programmer` mode.

@@ -315,8 +315,8 @@ pub(crate) enum AppEvent {
         identity: IdentityMask,
     },
 
-    /// Start YOLO plan completion with an explicit programmer identity mask.
-    StartPlanCompletion {
+    /// Start a planner-proposed plan as a /goal with an explicit programmer identity mask.
+    StartGoalFromProposedPlan {
         plan_text: String,
         identity: IdentityMask,
     },

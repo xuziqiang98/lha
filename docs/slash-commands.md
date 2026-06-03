@@ -41,7 +41,7 @@ asking the model to interpret the request.
 | `/diff` | None | Yes | Show git diff, including untracked files. |
 | `/mention` | None | Yes | Insert `@` to start mentioning a file. |
 | `/status` | None | Yes | Show session configuration and token usage. |
-| `/plan` | Optional subcommand | Yes | Jump to the latest proposed plan, or manage YOLO plan completion when enabled. |
+| `/plan` | Optional subcommand | Yes | Jump to the latest proposed plan. |
 | `/goal` | Optional objective or subcommand | Yes | Set, view, edit, pause, resume, or clear the current programmer goal. |
 | `/bottom` | None | Yes | Scroll the transcript to the bottom. |
 | `/mcp` | None | Yes | List configured MCP tools. |
@@ -84,22 +84,28 @@ LHA shows a prompt to switch with `/identity` and does not mutate goal state.
 | `/goal resume` | Resume the current goal. |
 | `/goal clear` | Clear the current goal. |
 
-## Plan Completion Commands
+Planner implementation can also create a goal that references a persisted
+proposed plan file. Goal status, pause, resume, and clear behavior is the same
+as any other `/goal`.
+
+Starting implementation from a planner plan requires no unfinished goal. If a
+goal is already active, paused, blocked, usage-limited, or budget-limited,
+complete or clear it before starting the planner-derived goal.
+
+## Plan Commands
 
 `/plan` with no arguments still jumps to the latest proposed plan in the
 transcript.
 
-When `[features].plan_completion = true`, LHA can start YOLO plan completion
-from the planner implementation prompt. YOLO plan completion is independent
-from `/goal`; it stores the planner plan and continues in `programmer` until the
-plan is marked complete or blocked.
+Plan execution is tracked by `/goal`. The legacy `/plan` management
+subcommands now show a reminder to use `/goal`.
 
 | Command | Usage |
 | --- | --- |
-| `/plan status` | Show the current YOLO plan completion status. |
-| `/plan pause` | Pause the current YOLO plan completion. |
-| `/plan resume` | Resume the current YOLO plan completion. It continues when the `programmer` identity is active. |
-| `/plan clear` | Clear the current YOLO plan completion. |
+| `/plan status` | Show a reminder to use `/goal`. |
+| `/plan pause` | Show a reminder to use `/goal`. |
+| `/plan resume` | Show a reminder to use `/goal`. |
+| `/plan clear` | Show a reminder to use `/goal`. |
 
 ## Aliases And Hidden Popup Entries
 
