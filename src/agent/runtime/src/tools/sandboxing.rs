@@ -256,6 +256,8 @@ pub(crate) struct ToolCtx<'a> {
 #[derive(Debug)]
 pub(crate) enum ToolError {
     Rejected(String),
+    // LHA is the product acronym for Long-Horizon Agent.
+    #[allow(clippy::upper_case_acronyms)]
     LHA(CodexErr),
 }
 
