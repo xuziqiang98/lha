@@ -28,6 +28,7 @@ use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::line_truncation::truncate_line_to_width;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
@@ -1156,11 +1157,6 @@ pub(crate) fn card_inner_width(width: u16, max_inner_width: usize) -> Option<usi
     Some(inner_width)
 }
 
-/// Render `lines` inside a border sized to the widest span in the content.
-pub(crate) fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
-    with_border_internal(lines, None)
-}
-
 /// Render `lines` inside a border whose inner width is at least `inner_width`.
 ///
 /// This is useful when callers have already clamped their content to a
@@ -1442,13 +1438,14 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
 
-        // Title line rendered inside the box: ">_ LHA (vX)"
-        let title_spans: Vec<Span<'static>> = vec![
+        // Title line rendered inside the box: ">_ Long-Horizon Agent (vX)"
+        let title_line = make_row(vec![
             Span::from(">_ ").dim(),
-            Span::from("LHA").bold(),
+            Span::from("Long-Horizon Agent").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{})", self.version)).dim(),
-        ];
+        ]);
+        let title_line = truncate_line_to_width(title_line, inner_width);
 
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
         const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
@@ -1484,13 +1481,13 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let dir_spans = vec![Span::from(dir_prefix).dim(), Span::from(dir)];
 
         let lines = vec![
-            make_row(title_spans),
+            title_line,
             make_row(Vec::new()),
-            make_row(model_spans),
-            make_row(dir_spans),
+            truncate_line_to_width(make_row(model_spans), inner_width),
+            truncate_line_to_width(make_row(dir_spans), inner_width),
         ];
 
-        with_border(lines)
+        with_border_with_inner_width(lines, inner_width)
     }
 }
 
@@ -3765,6 +3762,31 @@ mod tests {
 
         assert!(model_line.contains("gpt-4o high"));
         assert!(model_line.contains("/model to change"));
+    }
+
+    #[test]
+    fn session_header_clamps_title_to_available_width() {
+        let cell = SessionHeaderHistoryCell::new(
+            "gpt-4o".to_string(),
+            Some(ReasoningEffortConfig::High),
+            std::env::temp_dir(),
+            "test",
+        );
+
+        let width = 24;
+        let lines = cell.display_lines(width);
+
+        assert!(!lines.is_empty());
+        assert!(
+            lines.iter().all(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                    .sum::<usize>()
+                    <= usize::from(width)
+            }),
+            "session header should not exceed requested width: {lines:?}"
+        );
     }
 
     #[test]
