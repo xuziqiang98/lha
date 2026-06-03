@@ -180,7 +180,7 @@ checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
 name = "app_test_support"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -962,7 +962,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "core_test_support"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2951,7 +2951,7 @@ dependencies = [
 
 [[package]]
 name = "lha-agent"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3061,7 +3061,7 @@ dependencies = [
 
 [[package]]
 name = "lha-agent-core"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -3075,7 +3075,7 @@ dependencies = [
 
 [[package]]
 name = "lha-agent-runtime"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "async-channel",
  "async-trait",
@@ -3091,7 +3091,7 @@ dependencies = [
 
 [[package]]
 name = "lha-ansi-escape"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "ansi-to-tui",
  "ratatui",
@@ -3100,7 +3100,7 @@ dependencies = [
 
 [[package]]
 name = "lha-api"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -3128,7 +3128,7 @@ dependencies = [
 
 [[package]]
 name = "lha-app-server"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "app_test_support",
@@ -3169,7 +3169,7 @@ dependencies = [
 
 [[package]]
 name = "lha-app-server-protocol"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3191,7 +3191,7 @@ dependencies = [
 
 [[package]]
 name = "lha-apply-patch"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3207,7 +3207,7 @@ dependencies = [
 
 [[package]]
 name = "lha-arg0"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "dotenvy",
@@ -3220,7 +3220,7 @@ dependencies = [
 
 [[package]]
 name = "lha-async-utils"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "pretty_assertions",
@@ -3230,7 +3230,7 @@ dependencies = [
 
 [[package]]
 name = "lha-backend-openapi-models"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3239,7 +3239,7 @@ dependencies = [
 
 [[package]]
 name = "lha-cli"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3276,7 +3276,7 @@ dependencies = [
 
 [[package]]
 name = "lha-client"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3300,7 +3300,7 @@ dependencies = [
 
 [[package]]
 name = "lha-common"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "clap",
  "lha-agent",
@@ -3314,7 +3314,7 @@ dependencies = [
 
 [[package]]
 name = "lha-exec"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3349,7 +3349,7 @@ dependencies = [
 
 [[package]]
 name = "lha-execpolicy"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3365,7 +3365,7 @@ dependencies = [
 
 [[package]]
 name = "lha-feedback"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "lha-protocol",
@@ -3380,7 +3380,7 @@ dependencies = [
 
 [[package]]
 name = "lha-file-search"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3396,7 +3396,7 @@ dependencies = [
 
 [[package]]
 name = "lha-git"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -3413,14 +3413,14 @@ dependencies = [
 
 [[package]]
 name = "lha-identity"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "lha-protocol",
 ]
 
 [[package]]
 name = "lha-keyring-store"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "keyring",
  "tracing",
@@ -3428,7 +3428,7 @@ dependencies = [
 
 [[package]]
 name = "lha-linux-sandbox"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "clap",
  "landlock",
@@ -3443,7 +3443,7 @@ dependencies = [
 
 [[package]]
 name = "lha-llm"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3466,7 +3466,7 @@ dependencies = [
 
 [[package]]
 name = "lha-llm-types"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "lha-git",
  "mcp-types",
@@ -3482,7 +3482,7 @@ dependencies = [
 
 [[package]]
 name = "lha-mcp-server"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "core_test_support",
@@ -3508,7 +3508,7 @@ dependencies = [
 
 [[package]]
 name = "lha-memories-read"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "lha-protocol",
  "lha-utils-absolute-path",
@@ -3519,7 +3519,7 @@ dependencies = [
 
 [[package]]
 name = "lha-memories-write"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3538,7 +3538,7 @@ dependencies = [
 
 [[package]]
 name = "lha-otel"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "eventsource-stream",
@@ -3568,7 +3568,7 @@ dependencies = [
 
 [[package]]
 name = "lha-process-hardening"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "libc",
  "pretty_assertions",
@@ -3576,7 +3576,7 @@ dependencies = [
 
 [[package]]
 name = "lha-protocol"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "icu_decimal",
@@ -3605,7 +3605,7 @@ dependencies = [
 
 [[package]]
 name = "lha-responses-api-proxy"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3621,7 +3621,7 @@ dependencies = [
 
 [[package]]
 name = "lha-rmcp-client"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3652,7 +3652,7 @@ dependencies = [
 
 [[package]]
 name = "lha-secrets"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "pretty_assertions",
  "regex",
@@ -3660,7 +3660,7 @@ dependencies = [
 
 [[package]]
 name = "lha-state"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3681,7 +3681,7 @@ dependencies = [
 
 [[package]]
 name = "lha-stdio-to-uds"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3693,7 +3693,7 @@ dependencies = [
 
 [[package]]
 name = "lha-tui"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3773,7 +3773,7 @@ dependencies = [
 
 [[package]]
 name = "lha-utils-absolute-path"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "dirs",
  "path-absolutize",
@@ -3787,7 +3787,7 @@ dependencies = [
 
 [[package]]
 name = "lha-utils-cache"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "lru 0.16.3",
  "sha1",
@@ -3796,7 +3796,7 @@ dependencies = [
 
 [[package]]
 name = "lha-utils-cargo-bin"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "assert_cmd",
  "thiserror 2.0.17",
@@ -3804,7 +3804,7 @@ dependencies = [
 
 [[package]]
 name = "lha-utils-home-dir"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "dirs",
  "pretty_assertions",
@@ -3813,7 +3813,7 @@ dependencies = [
 
 [[package]]
 name = "lha-utils-image"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "base64",
  "image",
@@ -3825,7 +3825,7 @@ dependencies = [
 
 [[package]]
 name = "lha-utils-json-to-toml"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "pretty_assertions",
  "serde_json",
@@ -3834,7 +3834,7 @@ dependencies = [
 
 [[package]]
 name = "lha-utils-pty"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "filedescriptor",
@@ -3850,7 +3850,7 @@ dependencies = [
 
 [[package]]
 name = "lha-utils-readiness"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "assert_matches",
  "async-trait",
@@ -3861,7 +3861,7 @@ dependencies = [
 
 [[package]]
 name = "lha-utils-sleep-inhibitor"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "core-foundation 0.9.4",
  "libc",
@@ -3872,11 +3872,11 @@ dependencies = [
 
 [[package]]
 name = "lha-utils-string"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 
 [[package]]
 name = "lha-windows-sandbox"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -4066,7 +4066,7 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "mcp-types"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "schemars 0.8.22",
  "serde",
@@ -4076,7 +4076,7 @@ dependencies = [
 
 [[package]]
 name = "mcp_test_support"
-version = "0.95.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "core_test_support",
