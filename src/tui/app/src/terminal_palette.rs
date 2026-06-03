@@ -19,11 +19,28 @@ pub fn best_color(target: (u8, u8, u8)) -> Color {
         #[allow(clippy::disallowed_methods)]
         Color::Rgb(r, g, b)
     } else if color_level.has_256
-        && let Some((i, _)) = xterm_fixed_colors().min_by(|(_, a), (_, b)| {
-            perceptual_distance(*a, target)
-                .partial_cmp(&perceptual_distance(*b, target))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        && let Some((i, _)) = nearest_xterm_fixed_color(target)
+    {
+        #[allow(clippy::disallowed_methods)]
+        Color::Indexed(i as u8)
+    } else {
+        #[allow(clippy::disallowed_methods)]
+        Color::default()
+    }
+}
+
+/// Returns the closest displayable color to `target` without choosing the same
+/// 256-color bucket as `avoid`.
+pub fn best_color_distinct_from(target: (u8, u8, u8), avoid: (u8, u8, u8)) -> Color {
+    let Some(color_level) = supports_color::on_cached(supports_color::Stream::Stdout) else {
+        return Color::default();
+    };
+    if color_level.has_16m {
+        let (r, g, b) = target;
+        #[allow(clippy::disallowed_methods)]
+        Color::Rgb(r, g, b)
+    } else if color_level.has_256
+        && let Some((i, _)) = nearest_xterm_fixed_color_distinct_from(target, avoid)
     {
         #[allow(clippy::disallowed_methods)]
         Color::Indexed(i as u8)
@@ -152,6 +169,32 @@ mod imp {
 /// The subset of Xterm colors that are usually consistent across terminals.
 fn xterm_fixed_colors() -> impl Iterator<Item = (usize, (u8, u8, u8))> {
     XTERM_COLORS.into_iter().enumerate().skip(16)
+}
+
+pub(crate) fn nearest_xterm_fixed_color(target: (u8, u8, u8)) -> Option<(usize, (u8, u8, u8))> {
+    nearest_xterm_fixed_color_from(target, xterm_fixed_colors())
+}
+
+pub(crate) fn nearest_xterm_fixed_color_distinct_from(
+    target: (u8, u8, u8),
+    avoid: (u8, u8, u8),
+) -> Option<(usize, (u8, u8, u8))> {
+    let (avoid_idx, _) = nearest_xterm_fixed_color(avoid)?;
+    nearest_xterm_fixed_color_from(
+        target,
+        xterm_fixed_colors().filter(|(idx, _)| *idx != avoid_idx),
+    )
+}
+
+fn nearest_xterm_fixed_color_from(
+    target: (u8, u8, u8),
+    colors: impl Iterator<Item = (usize, (u8, u8, u8))>,
+) -> Option<(usize, (u8, u8, u8))> {
+    colors.min_by(|(_, a), (_, b)| {
+        perceptual_distance(*a, target)
+            .partial_cmp(&perceptual_distance(*b, target))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })
 }
 
 // Xterm colors; derived from https://ss64.com/bash/syntax-colors.html
@@ -416,3 +459,24 @@ pub const XTERM_COLORS: [(u8, u8, u8); 256] = [
     (228, 228, 228), // 254 Grey89
     (238, 238, 238), // 255 Grey93
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn nearest_xterm_fixed_color_distinct_from_skips_avoided_index() {
+        let target = (29, 55, 66);
+        let avoid = (48, 48, 48);
+
+        let (target_idx, _) = nearest_xterm_fixed_color(target).expect("target color");
+        let (avoid_idx, _) = nearest_xterm_fixed_color(avoid).expect("avoid color");
+        assert_eq!(target_idx, 236);
+        assert_eq!(avoid_idx, 236);
+
+        let (distinct_idx, _) =
+            nearest_xterm_fixed_color_distinct_from(target, avoid).expect("distinct color");
+        assert_ne!(distinct_idx, avoid_idx);
+    }
+}
