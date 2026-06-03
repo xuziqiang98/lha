@@ -72,6 +72,7 @@ struct SpawnAgentArgs {
 struct SpawnAgentResult {
     id: String,
     agent_type: AgentJobType,
+    name: Option<String>,
     status: AgentJobStatus,
 }
 
@@ -111,6 +112,7 @@ async fn spawn_agent(
     let content = serde_json::to_string(&SpawnAgentResult {
         id: snapshot.id,
         agent_type: snapshot.agent_type,
+        name: snapshot.name,
         status: snapshot.status,
     })
     .map_err(|err| FunctionCallError::Fatal(format!("failed to serialize spawn result: {err}")))?;
@@ -145,6 +147,7 @@ struct WaitResult {
 #[derive(Debug, Serialize)]
 struct WaitJobResult {
     agent_type: AgentJobType,
+    name: Option<String>,
     status: AgentJobStatus,
 }
 
@@ -181,6 +184,7 @@ async fn wait(
             snapshot.id,
             WaitJobResult {
                 agent_type: snapshot.agent_type,
+                name: snapshot.name,
                 status: snapshot.status,
             },
         );
@@ -204,6 +208,7 @@ struct CloseAgentArgs {
 struct CloseAgentResult {
     id: String,
     agent_type: AgentJobType,
+    name: Option<String>,
     status: AgentJobStatus,
 }
 
@@ -218,6 +223,7 @@ async fn close_agent(
     let content = serde_json::to_string(&CloseAgentResult {
         id: snapshot.id,
         agent_type: snapshot.agent_type,
+        name: snapshot.name,
         status: snapshot.status,
     })
     .map_err(|err| FunctionCallError::Fatal(format!("failed to serialize close result: {err}")))?;
@@ -232,6 +238,7 @@ async fn close_agent(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
 
     #[test]
     fn parse_agent_job_type_defaults_to_explorer() {
@@ -260,5 +267,87 @@ mod tests {
 
         assert!(err.contains("planner"));
         assert!(err.contains("only 'explorer' is available"));
+    }
+
+    #[test]
+    fn spawn_agent_result_serializes_name() {
+        let result = SpawnAgentResult {
+            id: "agent-job-1".to_string(),
+            agent_type: AgentJobType::Explorer,
+            name: Some("Boyle".to_string()),
+            status: AgentJobStatus::Running,
+        };
+
+        assert_eq!(
+            serde_json::to_value(result).expect("serialize spawn result"),
+            json!({
+                "id": "agent-job-1",
+                "agent_type": "explorer",
+                "name": "Boyle",
+                "status": {
+                    "status": "running"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn wait_result_serializes_job_names() {
+        let mut jobs = BTreeMap::new();
+        jobs.insert(
+            "agent-job-1".to_string(),
+            WaitJobResult {
+                agent_type: AgentJobType::Explorer,
+                name: Some("Boyle".to_string()),
+                status: AgentJobStatus::Completed {
+                    result: "done".to_string(),
+                    exit_code: Some(0),
+                },
+            },
+        );
+        let result = WaitResult {
+            jobs,
+            timed_out: false,
+        };
+
+        assert_eq!(
+            serde_json::to_value(result).expect("serialize wait result"),
+            json!({
+                "jobs": {
+                    "agent-job-1": {
+                        "agent_type": "explorer",
+                        "name": "Boyle",
+                        "status": {
+                            "status": "completed",
+                            "result": "done",
+                            "exit_code": 0
+                        }
+                    }
+                },
+                "timed_out": false
+            })
+        );
+    }
+
+    #[test]
+    fn close_agent_result_serializes_name() {
+        let result = CloseAgentResult {
+            id: "agent-job-1".to_string(),
+            agent_type: AgentJobType::Explorer,
+            name: Some("Boyle".to_string()),
+            status: AgentJobStatus::Cancelled,
+        };
+
+        assert_eq!(
+            serde_json::to_value(result).expect("serialize close result"),
+            json!({
+                "id": "agent-job-1",
+                "agent_type": "explorer",
+                "name": "Boyle",
+                "status": {
+                    "status": "cancelled"
+                }
+            })
+        );
     }
 }

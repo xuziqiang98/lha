@@ -1081,6 +1081,9 @@ pub enum AgentJobDisplayStatus {
 pub struct AgentJobStatusEvent {
     pub job_id: String,
     pub agent_type: AgentJobKind,
+    #[ts(optional)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub status: AgentJobDisplayStatus,
     #[ts(optional)]
     #[serde(default, skip_serializing_if = "Option::is_none")]

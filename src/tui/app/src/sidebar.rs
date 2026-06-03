@@ -435,7 +435,7 @@ mod tests {
             files_more_count: 0,
             agents: vec![AgentPanelEntry {
                 job_id: "agent-job-1".to_string(),
-                label: "Explorer #1".to_string(),
+                label: "Boyle [explorer]".to_string(),
                 status: AgentJobDisplayStatus::Running,
             }],
             skills: vec![SkillPanelEntry {
@@ -478,10 +478,10 @@ mod tests {
         assert!(!rendered.contains("[x]"));
         assert!(!rendered.contains("[~]"));
         assert!(!rendered.contains("[ ]"));
-        assert!(rendered.contains("Explorer #1 running"));
+        assert!(rendered.contains("Boyle [explorer] running"));
         let agent_line = rendered
             .lines()
-            .find(|line| line.contains("Explorer #1 running"))
+            .find(|line| line.contains("Boyle [explorer] running"))
             .unwrap_or_else(|| panic!("missing agent line: {rendered:?}"));
         assert!(!agent_line.contains("●"));
         assert!(rendered.contains("skill-creator"));
@@ -593,7 +593,7 @@ mod tests {
             agents: (0..8)
                 .map(|i| AgentPanelEntry {
                     job_id: format!("agent-job-{i}"),
-                    label: format!("Explorer #{}", i + 1),
+                    label: format!("Boyle-{i} [explorer]"),
                     status: AgentJobDisplayStatus::Running,
                 })
                 .collect(),
@@ -609,8 +609,8 @@ mod tests {
         let rendered = render_sidebar(&snapshot);
         assert!(rendered.contains("file-5.rs"));
         assert!(!rendered.contains("file-6.rs"));
-        assert!(rendered.contains("Explorer #6"));
-        assert!(!rendered.contains("Explorer #7"));
+        assert!(rendered.contains("Boyle-5 [explorer]"));
+        assert!(!rendered.contains("Boyle-6 [explorer]"));
         assert!(rendered.contains("skill-5"));
         assert!(!rendered.contains("skill-6"));
         assert_eq!(rendered.matches("+2 more").count(), 3);
@@ -622,12 +622,12 @@ mod tests {
             agents: vec![
                 AgentPanelEntry {
                     job_id: "running".to_string(),
-                    label: "Explorer #1".to_string(),
+                    label: "Boyle [explorer]".to_string(),
                     status: AgentJobDisplayStatus::Running,
                 },
                 AgentPanelEntry {
                     job_id: "completed".to_string(),
-                    label: "Reviewer #2".to_string(),
+                    label: "Curie [reviewer]".to_string(),
                     status: AgentJobDisplayStatus::Completed,
                 },
                 AgentPanelEntry {
@@ -656,11 +656,27 @@ mod tests {
 
         let rendered = render_sidebar(&snapshot);
 
-        assert!(rendered.contains("Explorer #1 running"));
-        assert!(rendered.contains("Reviewer #2 completed"));
+        assert!(rendered.contains("Boyle [explorer] running"));
+        assert!(rendered.contains("Curie [reviewer] completed"));
         assert!(rendered.contains("Explorer #3 error"));
         assert!(rendered.contains("Explorer #4 cancelled"));
         assert!(rendered.contains("Explorer #5 timeout"));
         assert!(rendered.contains("Explorer #6 missing"));
+    }
+
+    #[test]
+    fn agents_render_fallback_labels() {
+        let snapshot = SidebarSnapshot {
+            agents: vec![AgentPanelEntry {
+                job_id: "legacy".to_string(),
+                label: "Explorer #1".to_string(),
+                status: AgentJobDisplayStatus::Running,
+            }],
+            ..Default::default()
+        };
+
+        let rendered = render_sidebar(&snapshot);
+
+        assert!(rendered.contains("Explorer #1 running"));
     }
 }

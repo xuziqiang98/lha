@@ -475,6 +475,7 @@ impl StatusIndicatorState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CliAgentJobEntry {
     agent_type: AgentJobKind,
+    name: Option<String>,
     status: AgentJobDisplayStatus,
     message: Option<String>,
     display_order: usize,
@@ -1482,12 +1483,17 @@ impl ChatWidget {
         let AgentJobStatusEvent {
             job_id,
             agent_type,
+            name,
             status,
             message,
         } = event;
+        let name = normalize_agent_job_name(name);
         let next_display_order = self.cli_agent_jobs.len() + 1;
         if let Some(entry) = self.cli_agent_jobs.get_mut(&job_id) {
             entry.agent_type = agent_type;
+            if name.is_some() {
+                entry.name = name;
+            }
             entry.status = status;
             entry.message = message;
         } else {
@@ -1495,6 +1501,7 @@ impl ChatWidget {
                 job_id,
                 CliAgentJobEntry {
                     agent_type,
+                    name,
                     status,
                     message,
                     display_order: next_display_order,
@@ -1513,7 +1520,6 @@ impl ChatWidget {
 
     fn on_task_started(&mut self) {
         let defer_review_redraw = self.pending_review_start_transition;
-        self.clear_cli_agent_jobs();
         self.agent_turn_running = true;
         self.turn_sleep_inhibitor
             .set_turn_running(/* turn_running */ true);
@@ -1546,7 +1552,6 @@ impl ChatWidget {
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
-        self.clear_cli_agent_jobs();
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         self.flush_plan_stream();
@@ -1766,7 +1771,6 @@ impl ChatWidget {
 
     fn on_error(&mut self, message: String) {
         self.finalize_turn();
-        self.clear_cli_agent_jobs();
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
 
@@ -1853,7 +1857,6 @@ impl ChatWidget {
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
-        self.clear_cli_agent_jobs();
 
         if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(
@@ -7140,16 +7143,22 @@ impl ChatWidget {
 
     fn sidebar_agent_entries(&self) -> Vec<AgentPanelEntry> {
         let mut entries = self.cli_agent_jobs.iter().collect::<Vec<_>>();
-        entries.sort_by_key(|(_, entry)| entry.display_order);
+        entries.sort_by(|(_, left), (_, right)| {
+            match (
+                matches!(left.status, AgentJobDisplayStatus::Running),
+                matches!(right.status, AgentJobDisplayStatus::Running),
+            ) {
+                (true, true) => left.display_order.cmp(&right.display_order),
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                (false, false) => right.display_order.cmp(&left.display_order),
+            }
+        });
         entries
             .into_iter()
             .map(|(job_id, entry)| AgentPanelEntry {
                 job_id: job_id.clone(),
-                label: format!(
-                    "{} #{}",
-                    agent_job_kind_label(entry.agent_type),
-                    entry.display_order
-                ),
+                label: agent_job_sidebar_label(entry),
                 status: entry.status,
             })
             .collect()
@@ -7160,6 +7169,32 @@ fn agent_job_kind_label(agent_type: AgentJobKind) -> &'static str {
     match agent_type {
         AgentJobKind::Explorer => "Explorer",
         AgentJobKind::Reviewer => "Reviewer",
+    }
+}
+
+fn agent_job_kind_role_label(agent_type: AgentJobKind) -> &'static str {
+    match agent_type {
+        AgentJobKind::Explorer => "explorer",
+        AgentJobKind::Reviewer => "reviewer",
+    }
+}
+
+fn normalize_agent_job_name(name: Option<String>) -> Option<String> {
+    name.map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+}
+
+fn agent_job_sidebar_label(entry: &CliAgentJobEntry) -> String {
+    match entry.name.as_deref() {
+        Some(name) => {
+            let role = agent_job_kind_role_label(entry.agent_type);
+            format!("{name} [{role}]")
+        }
+        None => {
+            let kind = agent_job_kind_label(entry.agent_type);
+            let display_order = entry.display_order;
+            format!("{kind} #{display_order}")
+        }
     }
 }
 

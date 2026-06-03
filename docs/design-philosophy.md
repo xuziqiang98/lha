@@ -31,6 +31,9 @@ Delegated jobs are not conversational agents:
 - A delegated job runs in a separate `lha exec --identity ...` process.
 - The job receives one task, produces one final result, and exits.
 - The main agent consumes only the final artifact or result.
+- The UI may assign a friendly display name such as `Boyle [explorer]`
+  while the job is visible. That name is only a label for a bounded one-shot
+  job, not a long-lived multi-agent identity.
 
 The runtime may expose tools such as `spawn_agent` for compatibility with model
 expectations, but those tools start one-shot jobs. They do not create long-lived

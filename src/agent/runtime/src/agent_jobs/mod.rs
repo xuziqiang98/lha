@@ -14,9 +14,11 @@ use lha_protocol::protocol::AgentJobStatusEvent;
 use lha_protocol::protocol::Event;
 use lha_protocol::protocol::EventMsg;
 use lha_protocol::protocol::SandboxPolicy;
+use rand::Rng;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -41,6 +43,8 @@ use uuid::Uuid;
 const DEFAULT_JOB_MAX_RUNTIME_SECONDS: u64 = 3600;
 const STDERR_TAIL_BYTES: usize = 4096;
 const JOBS_DIR: &str = "agent_jobs";
+const AGENT_JOB_NAMES: &str = include_str!("name.txt");
+const AGENT_JOB_NAME_FALLBACK: &str = "Agent";
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -122,6 +126,7 @@ impl AgentJobStatus {
 pub(crate) struct AgentJobSnapshot {
     pub(crate) id: String,
     pub(crate) agent_type: AgentJobType,
+    pub(crate) name: Option<String>,
     pub(crate) status: AgentJobStatus,
 }
 
@@ -130,6 +135,7 @@ impl AgentJobSnapshot {
         EventMsg::AgentJobStatus(AgentJobStatusEvent {
             job_id: self.id.clone(),
             agent_type: self.agent_type.protocol_kind(),
+            name: self.name.clone(),
             status: self.status.display_status(),
             message: self.status.display_message(),
         })
@@ -211,6 +217,7 @@ struct AgentJobProviderContext<'a> {
 #[derive(Debug, Serialize)]
 struct AgentJobMetadata<'a> {
     id: &'a str,
+    name: &'a str,
     parent_thread_id: ThreadId,
     agent_type: &'a AgentJobType,
     cwd: &'a Path,
@@ -233,6 +240,7 @@ fn canonical_model_arg(model_provider_id: &str, model: &str) -> String {
 #[derive(Debug)]
 struct ManagedAgentJob {
     agent_type: AgentJobType,
+    name: String,
     status: Arc<Mutex<AgentJobStatus>>,
     cancellation_token: CancellationToken,
     completion: watch::Receiver<bool>,
@@ -288,6 +296,7 @@ impl AgentJobManager {
             CodexErr::UnsupportedOperation("agent job concurrency limit reached".to_string())
         })?;
         let id = format!("agent-job-{}", Uuid::new_v4());
+        let name = self.allocate_job_name().await;
         let job_dir = create_job_dir(&self.lha_home, parent_thread_id, &id).await?;
         let prompt_path = job_dir.join("prompt.txt");
         let metadata_path = job_dir.join("metadata.json");
@@ -303,6 +312,7 @@ impl AgentJobManager {
         write_private_file(&prompt_path, prompt.as_bytes(), "agent job prompt").await?;
         let metadata = AgentJobMetadata {
             id: &id,
+            name: &name,
             parent_thread_id,
             agent_type: &agent_type,
             cwd: cwd.as_path(),
@@ -385,6 +395,7 @@ impl AgentJobManager {
             id.clone(),
             ManagedAgentJob {
                 agent_type: agent_type.clone(),
+                name: name.clone(),
                 status: Arc::clone(&status),
                 cancellation_token: cancellation_token.clone(),
                 completion: completion_rx,
@@ -408,6 +419,7 @@ impl AgentJobManager {
         Ok(AgentJobSnapshot {
             id,
             agent_type,
+            name: Some(name),
             status: AgentJobStatus::Running,
         })
     }
@@ -418,12 +430,14 @@ impl AgentJobManager {
             return AgentJobSnapshot {
                 id: id.to_string(),
                 agent_type: AgentJobType::Explorer,
+                name: None,
                 status: AgentJobStatus::NotFound,
             };
         };
         AgentJobSnapshot {
             id: id.to_string(),
             agent_type: job.agent_type.clone(),
+            name: Some(job.name.clone()),
             status: job.status.lock().await.clone(),
         }
     }
@@ -453,6 +467,7 @@ impl AgentJobManager {
             return AgentJobSnapshot {
                 id: id.to_string(),
                 agent_type: AgentJobType::Explorer,
+                name: None,
                 status: AgentJobStatus::NotFound,
             };
         };
@@ -489,10 +504,39 @@ impl AgentJobManager {
             None => Ok(self.configured_max_runtime),
         }
     }
+
+    async fn allocate_job_name(&self) -> String {
+        let candidates = agent_job_name_candidates(AGENT_JOB_NAMES);
+        self.allocate_job_name_from(&candidates).await
+    }
+
+    async fn allocate_job_name_from(&self, candidates: &[&str]) -> String {
+        let used_names = self.used_agent_job_names().await;
+        let unused_candidates = candidates
+            .iter()
+            .copied()
+            .filter(|name| !used_names.contains(*name))
+            .collect::<Vec<_>>();
+        if unused_candidates.is_empty() {
+            choose_agent_job_name(candidates)
+        } else {
+            choose_agent_job_name(&unused_candidates)
+        }
+    }
+
+    async fn used_agent_job_names(&self) -> HashSet<String> {
+        self.jobs
+            .lock()
+            .await
+            .values()
+            .map(|job| job.name.clone())
+            .collect()
+    }
 }
 
 struct JobCloseHandle {
     agent_type: AgentJobType,
+    name: Option<String>,
     status: Arc<Mutex<AgentJobStatus>>,
     cancellation_token: CancellationToken,
     completion: watch::Receiver<bool>,
@@ -502,6 +546,7 @@ impl From<&ManagedAgentJob> for JobCloseHandle {
     fn from(job: &ManagedAgentJob) -> Self {
         Self {
             agent_type: job.agent_type.clone(),
+            name: Some(job.name.clone()),
             status: Arc::clone(&job.status),
             cancellation_token: job.cancellation_token.clone(),
             completion: job.completion.clone(),
@@ -530,9 +575,26 @@ impl JobCloseHandle {
         AgentJobSnapshot {
             id,
             agent_type: self.agent_type,
+            name: self.name,
             status: self.status.lock().await.clone(),
         }
     }
+}
+
+fn agent_job_name_candidates(contents: &str) -> Vec<&str> {
+    contents
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+fn choose_agent_job_name(candidates: &[&str]) -> String {
+    if candidates.is_empty() {
+        return AGENT_JOB_NAME_FALLBACK.to_string();
+    }
+    let mut rng = rand::rng();
+    candidates[rng.random_range(0..candidates.len())].to_string()
 }
 
 async fn create_job_dir(
@@ -942,6 +1004,17 @@ mod tests {
         }
     }
 
+    fn managed_job_for_test(name: &str, status: AgentJobStatus) -> ManagedAgentJob {
+        let (_completion_tx, completion) = watch::channel(status.is_final());
+        ManagedAgentJob {
+            agent_type: AgentJobType::Explorer,
+            name: name.to_string(),
+            status: Arc::new(Mutex::new(status)),
+            cancellation_token: CancellationToken::new(),
+            completion,
+        }
+    }
+
     #[test]
     fn canonical_model_arg_uses_main_endpoint_for_provider_id() {
         assert_eq!(
@@ -963,6 +1036,7 @@ mod tests {
         let snapshot = AgentJobSnapshot {
             id: "agent-job-1".to_string(),
             agent_type: AgentJobType::Explorer,
+            name: Some("Boyle".to_string()),
             status: AgentJobStatus::Completed {
                 result: "large final answer".to_string(),
                 exit_code: Some(0),
@@ -977,7 +1051,65 @@ mod tests {
             AgentJobStatusEvent {
                 job_id: "agent-job-1".to_string(),
                 agent_type: AgentJobKind::Explorer,
+                name: Some("Boyle".to_string()),
                 status: AgentJobDisplayStatus::Completed,
+                message: None,
+            }
+        );
+    }
+
+    #[test]
+    fn agent_job_name_candidates_ignore_blank_lines() {
+        assert_eq!(
+            agent_job_name_candidates("  Boyle  \n\n\t\nCurie\n"),
+            vec!["Boyle", "Curie"]
+        );
+    }
+
+    #[tokio::test]
+    async fn completed_jobs_reserve_names_for_later_allocations() {
+        let lha_home = tempfile::tempdir().expect("lha home");
+        let manager = AgentJobManager::new(lha_home.path().to_path_buf(), Some(1), Some(5));
+        manager.jobs.lock().await.insert(
+            "agent-job-1".to_string(),
+            managed_job_for_test(
+                "Boyle",
+                AgentJobStatus::Completed {
+                    result: "done".to_string(),
+                    exit_code: Some(0),
+                },
+            ),
+        );
+
+        assert_eq!(
+            manager.used_agent_job_names().await,
+            HashSet::from(["Boyle".to_string()])
+        );
+        assert_eq!(
+            manager.allocate_job_name_from(&["Boyle", "Curie"]).await,
+            "Curie".to_string()
+        );
+    }
+
+    #[test]
+    fn status_event_omits_name_for_not_found_jobs() {
+        let snapshot = AgentJobSnapshot {
+            id: "missing".to_string(),
+            agent_type: AgentJobType::Explorer,
+            name: None,
+            status: AgentJobStatus::NotFound,
+        };
+
+        let EventMsg::AgentJobStatus(event) = snapshot.status_event() else {
+            panic!("expected agent job status event");
+        };
+        assert_eq!(
+            event,
+            AgentJobStatusEvent {
+                job_id: "missing".to_string(),
+                agent_type: AgentJobKind::Explorer,
+                name: None,
+                status: AgentJobDisplayStatus::NotFound,
                 message: None,
             }
         );
@@ -1037,12 +1169,18 @@ printf "explorer result" > "$out"
             )
             .await
             .expect("spawn job");
+        let name = snapshot
+            .name
+            .clone()
+            .expect("spawned job should have a name");
+        assert!(agent_job_name_candidates(AGENT_JOB_NAMES).contains(&name.as_str()));
         let snapshots = manager
             .wait(std::slice::from_ref(&snapshot.id), Duration::from_secs(5))
             .await;
 
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].agent_type, AgentJobType::Explorer);
+        assert_eq!(snapshots[0].name, Some(name.clone()));
         assert_eq!(
             snapshots[0].status,
             AgentJobStatus::Completed {
@@ -1050,6 +1188,9 @@ printf "explorer result" > "$out"
                 exit_code: Some(0)
             }
         );
+        let status = manager.status(&snapshot.id).await;
+        assert_eq!(status.name, Some(name.clone()));
+        assert_eq!(status.status, snapshots[0].status);
 
         let job_dir = lha_home
             .path()
@@ -1061,6 +1202,11 @@ printf "explorer result" > "$out"
         assert!(job_dir.join("stdout.log").is_file());
         assert!(job_dir.join("stderr.log").is_file());
         assert!(job_dir.join("result.txt").is_file());
+        let metadata_json = serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(job_dir.join("metadata.json")).expect("metadata json"),
+        )
+        .expect("parse metadata json");
+        assert_eq!(metadata_json["name"].as_str(), Some(name.as_str()));
         let persisted_status = serde_json::from_str::<AgentJobStatus>(
             &std::fs::read_to_string(job_dir.join("status.json")).expect("status json"),
         )
@@ -1394,10 +1540,12 @@ exec sleep 30
             )
             .await
             .expect("spawn job");
+        let name = snapshot.name.clone();
 
         let closed = manager.close(&snapshot.id).await;
 
         assert_eq!(closed.status, AgentJobStatus::Cancelled);
+        assert_eq!(closed.name, name);
 
         let persisted_status = serde_json::from_str::<AgentJobStatus>(
             &std::fs::read_to_string(
@@ -1459,6 +1607,12 @@ exec sleep 30
                 .iter()
                 .all(|snapshot| snapshot.status == AgentJobStatus::Cancelled)
         );
+        assert!(closed.iter().all(|snapshot| {
+            snapshot
+                .name
+                .as_deref()
+                .is_some_and(|name| !name.is_empty())
+        }));
         for snapshot in [&first, &second] {
             let persisted_status = serde_json::from_str::<AgentJobStatus>(
                 &std::fs::read_to_string(

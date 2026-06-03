@@ -4,4 +4,4 @@
 import type { AgentJobDisplayStatus } from "./AgentJobDisplayStatus";
 import type { AgentJobKind } from "./AgentJobKind";
 
-export type AgentJobStatusEvent = { job_id: string, agent_type: AgentJobKind, status: AgentJobDisplayStatus, message?: string, };
+export type AgentJobStatusEvent = { job_id: string, agent_type: AgentJobKind, name?: string, status: AgentJobDisplayStatus, message?: string, };

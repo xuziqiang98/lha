@@ -2731,6 +2731,12 @@
                 "null"
               ]
             },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "status": {
               "$ref": "#/definitions/AgentJobDisplayStatus"
             },

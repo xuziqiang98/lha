@@ -2066,6 +2066,7 @@ async fn sidebar_agent_entries_track_cli_backed_jobs() {
         msg: EventMsg::AgentJobStatus(AgentJobStatusEvent {
             job_id: "agent-job-1".to_string(),
             agent_type: AgentJobKind::Explorer,
+            name: Some("Boyle".to_string()),
             status: AgentJobDisplayStatus::Running,
             message: None,
         }),
@@ -2075,6 +2076,7 @@ async fn sidebar_agent_entries_track_cli_backed_jobs() {
         msg: EventMsg::AgentJobStatus(AgentJobStatusEvent {
             job_id: "agent-job-2".to_string(),
             agent_type: AgentJobKind::Reviewer,
+            name: Some("Curie".to_string()),
             status: AgentJobDisplayStatus::Running,
             message: None,
         }),
@@ -2084,6 +2086,7 @@ async fn sidebar_agent_entries_track_cli_backed_jobs() {
         msg: EventMsg::AgentJobStatus(AgentJobStatusEvent {
             job_id: "agent-job-1".to_string(),
             agent_type: AgentJobKind::Explorer,
+            name: Some("Boyle".to_string()),
             status: AgentJobDisplayStatus::Completed,
             message: None,
         }),
@@ -2093,21 +2096,21 @@ async fn sidebar_agent_entries_track_cli_backed_jobs() {
         chat.sidebar_snapshot().agents,
         vec![
             AgentPanelEntry {
-                job_id: "agent-job-1".to_string(),
-                label: "Explorer #1".to_string(),
-                status: AgentJobDisplayStatus::Completed,
+                job_id: "agent-job-2".to_string(),
+                label: "Curie [reviewer]".to_string(),
+                status: AgentJobDisplayStatus::Running,
             },
             AgentPanelEntry {
-                job_id: "agent-job-2".to_string(),
-                label: "Reviewer #2".to_string(),
-                status: AgentJobDisplayStatus::Running,
+                job_id: "agent-job-1".to_string(),
+                label: "Boyle [explorer]".to_string(),
+                status: AgentJobDisplayStatus::Completed,
             },
         ]
     );
 }
 
 #[tokio::test]
-async fn sidebar_agent_entries_clear_when_turn_ends() {
+async fn sidebar_agent_entries_persist_when_turn_ends() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
 
     chat.handle_codex_event(Event {
@@ -2115,7 +2118,8 @@ async fn sidebar_agent_entries_clear_when_turn_ends() {
         msg: EventMsg::AgentJobStatus(AgentJobStatusEvent {
             job_id: "agent-job-1".to_string(),
             agent_type: AgentJobKind::Explorer,
-            status: AgentJobDisplayStatus::Running,
+            name: Some("Boyle".to_string()),
+            status: AgentJobDisplayStatus::Completed,
             message: None,
         }),
     });
@@ -2128,7 +2132,112 @@ async fn sidebar_agent_entries_clear_when_turn_ends() {
         }),
     });
 
-    assert!(chat.sidebar_snapshot().agents.is_empty());
+    assert_eq!(
+        chat.sidebar_snapshot().agents,
+        vec![AgentPanelEntry {
+            job_id: "agent-job-1".to_string(),
+            label: "Boyle [explorer]".to_string(),
+            status: AgentJobDisplayStatus::Completed,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn sidebar_agent_entries_fallback_to_legacy_numbered_labels() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "job-1-running".into(),
+        msg: EventMsg::AgentJobStatus(AgentJobStatusEvent {
+            job_id: "agent-job-1".to_string(),
+            agent_type: AgentJobKind::Explorer,
+            name: None,
+            status: AgentJobDisplayStatus::Running,
+            message: None,
+        }),
+    });
+    assert_eq!(chat.sidebar_snapshot().agents.len(), 1);
+
+    assert_eq!(
+        chat.sidebar_snapshot().agents,
+        vec![AgentPanelEntry {
+            job_id: "agent-job-1".to_string(),
+            label: "Explorer #1".to_string(),
+            status: AgentJobDisplayStatus::Running,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn sidebar_agent_entries_preserve_name_when_later_status_omits_it() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "job-1-running".into(),
+        msg: EventMsg::AgentJobStatus(AgentJobStatusEvent {
+            job_id: "agent-job-1".to_string(),
+            agent_type: AgentJobKind::Explorer,
+            name: Some("Boyle".to_string()),
+            status: AgentJobDisplayStatus::Running,
+            message: None,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "job-1-completed".into(),
+        msg: EventMsg::AgentJobStatus(AgentJobStatusEvent {
+            job_id: "agent-job-1".to_string(),
+            agent_type: AgentJobKind::Explorer,
+            name: None,
+            status: AgentJobDisplayStatus::Completed,
+            message: None,
+        }),
+    });
+
+    assert_eq!(
+        chat.sidebar_snapshot().agents,
+        vec![AgentPanelEntry {
+            job_id: "agent-job-1".to_string(),
+            label: "Boyle [explorer]".to_string(),
+            status: AgentJobDisplayStatus::Completed,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn sidebar_agent_entries_order_running_then_recent_final_jobs() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    for (job_id, name, status) in [
+        ("agent-job-1", "Boyle", AgentJobDisplayStatus::Completed),
+        ("agent-job-2", "Curie", AgentJobDisplayStatus::Completed),
+        ("agent-job-3", "Darwin", AgentJobDisplayStatus::Running),
+        ("agent-job-4", "Euclid", AgentJobDisplayStatus::Running),
+    ] {
+        chat.handle_codex_event(Event {
+            id: format!("{job_id}-status"),
+            msg: EventMsg::AgentJobStatus(AgentJobStatusEvent {
+                job_id: job_id.to_string(),
+                agent_type: AgentJobKind::Explorer,
+                name: Some(name.to_string()),
+                status,
+                message: None,
+            }),
+        });
+    }
+
+    assert_eq!(
+        chat.sidebar_snapshot()
+            .agents
+            .into_iter()
+            .map(|agent| agent.label)
+            .collect::<Vec<_>>(),
+        vec![
+            "Darwin [explorer]".to_string(),
+            "Euclid [explorer]".to_string(),
+            "Curie [explorer]".to_string(),
+            "Boyle [explorer]".to_string(),
+        ]
+    );
 }
 
 #[cfg_attr(

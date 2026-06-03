@@ -2310,6 +2310,12 @@
                 "null"
               ]
             },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "status": {
               "$ref": "#/definitions/AgentJobDisplayStatus"
             },
@@ -6815,6 +6821,12 @@
           "type": "string"
         },
         "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
           "type": [
             "string",
             "null"
