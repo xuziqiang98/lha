@@ -8,6 +8,7 @@ use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
 use http::HeaderMap;
 use lha_llm_types::ToolCallPayload;
+use lha_llm_types::ToolResultContentItem;
 use lha_llm_types::ToolResultPayload;
 use lha_llm_types::TranscriptItem;
 use serde_json::Value;
@@ -240,10 +241,14 @@ fn transcript_item_to_provider_value(item: &TranscriptItem) -> Result<Value, Api
         TranscriptItem::ToolResult {
             call_id, payload, ..
         } => match payload {
-            ToolResultPayload::Structured { content, .. } => json!({
+            ToolResultPayload::Structured {
+                content,
+                content_items,
+                ..
+            } => json!({
                 "type": "function_call_output",
                 "call_id": call_id,
-                "output": content,
+                "output": map_structured_tool_result_output_for_responses(content, content_items.as_deref()),
             }),
             ToolResultPayload::Text { output } => json!({
                 "type": "custom_tool_call_output",
@@ -253,6 +258,35 @@ fn transcript_item_to_provider_value(item: &TranscriptItem) -> Result<Value, Api
         },
         TranscriptItem::Unknown { raw } => raw.clone(),
     })
+}
+
+fn map_structured_tool_result_output_for_responses(
+    content: &str,
+    content_items: Option<&[ToolResultContentItem]>,
+) -> Value {
+    if let Some(items) = content_items {
+        return Value::Array(
+            items
+                .iter()
+                .map(map_tool_result_content_item_for_responses)
+                .collect(),
+        );
+    }
+
+    json!(content)
+}
+
+fn map_tool_result_content_item_for_responses(item: &ToolResultContentItem) -> Value {
+    match item {
+        ToolResultContentItem::InputText { text } => json!({
+            "type": "input_text",
+            "text": text,
+        }),
+        ToolResultContentItem::InputImage { image_url } => json!({
+            "type": "input_image",
+            "image_url": image_url,
+        }),
+    }
 }
 
 fn attach_item_ids(payload_json: &mut Value, original_items: &[TranscriptItem]) {
@@ -392,6 +426,111 @@ mod tests {
             &json!({
                 "type": "web_search_call",
                 "action": {"query": "rust"},
+            })
+        );
+    }
+
+    #[test]
+    fn responses_request_serializes_structured_tool_result_content_items() {
+        let provider = provider("openai", "https://api.openai.com/v1");
+        let input = vec![
+            TranscriptItem::ToolCall {
+                id: None,
+                call_id: "call-1".to_string(),
+                tool_name: "imagegen".to_string(),
+                payload: ToolCallPayload::JsonArguments {
+                    arguments: "{}".to_string(),
+                },
+            },
+            TranscriptItem::ToolResult {
+                call_id: "call-1".to_string(),
+                tool_name: "imagegen".to_string(),
+                payload: ToolResultPayload::Structured {
+                    content: "Generated image saved to /tmp/image.png".to_string(),
+                    content_items: Some(vec![
+                        ToolResultContentItem::InputText {
+                            text: "Generated image saved to /tmp/image.png".to_string(),
+                        },
+                        ToolResultContentItem::InputImage {
+                            image_url: "data:image/png;base64,Zm9v".to_string(),
+                        },
+                    ]),
+                    success: Some(true),
+                },
+            },
+        ];
+
+        let request = ResponsesRequestBuilder::new("gpt-test", "inst", &input)
+            .build(&provider)
+            .expect("request");
+
+        assert_eq!(
+            &request.body["input"][1],
+            &json!({
+                "type": "function_call_output",
+                "call_id": "call-1",
+                "output": [
+                    {
+                        "type": "input_text",
+                        "text": "Generated image saved to /tmp/image.png",
+                    },
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,Zm9v",
+                    },
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn responses_request_keeps_plain_structured_tool_result_as_string() {
+        let provider = provider("openai", "https://api.openai.com/v1");
+        let input = vec![TranscriptItem::ToolResult {
+            call_id: "call-1".to_string(),
+            tool_name: "grep_files".to_string(),
+            payload: ToolResultPayload::Structured {
+                content: "No matches found.".to_string(),
+                content_items: None,
+                success: Some(false),
+            },
+        }];
+
+        let request = ResponsesRequestBuilder::new("gpt-test", "inst", &input)
+            .build(&provider)
+            .expect("request");
+
+        assert_eq!(
+            &request.body["input"][0],
+            &json!({
+                "type": "function_call_output",
+                "call_id": "call-1",
+                "output": "No matches found.",
+            })
+        );
+    }
+
+    #[test]
+    fn responses_request_keeps_custom_tool_result_output_unchanged() {
+        let provider = provider("openai", "https://api.openai.com/v1");
+        let input = vec![TranscriptItem::ToolResult {
+            call_id: "custom-1".to_string(),
+            tool_name: "custom_tool".to_string(),
+            payload: ToolResultPayload::Text {
+                output: "custom output".to_string(),
+            },
+        }];
+
+        let request = ResponsesRequestBuilder::new("gpt-test", "inst", &input)
+            .build(&provider)
+            .expect("request");
+
+        assert_eq!(
+            &request.body["input"][0],
+            &json!({
+                "type": "custom_tool_call_output",
+                "call_id": "custom-1",
+                "output": "custom output",
             })
         );
     }

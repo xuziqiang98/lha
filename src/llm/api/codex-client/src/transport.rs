@@ -1,6 +1,8 @@
 use crate::default_client::CodexHttpClient;
 use crate::default_client::CodexRequestBuilder;
 use crate::error::TransportError;
+use crate::request::MultipartForm;
+use crate::request::MultipartPart;
 use crate::request::Request;
 use crate::request::RequestCompression;
 use crate::request::Response;
@@ -69,6 +71,7 @@ impl ReqwestTransport {
             url,
             mut headers,
             body,
+            multipart,
             compression,
             timeout,
         } = req;
@@ -82,7 +85,29 @@ impl ReqwestTransport {
             builder = builder.timeout(timeout);
         }
 
-        if let Some(body) = body {
+        if body.is_some() && multipart.is_some() {
+            return Err(TransportError::Build(
+                "request cannot contain both JSON and multipart bodies".to_string(),
+            ));
+        }
+
+        if let Some(multipart) = multipart {
+            if compression != RequestCompression::None {
+                return Err(TransportError::Build(
+                    "request compression is not supported for multipart bodies".to_string(),
+                ));
+            }
+            if headers.contains_key(http::header::CONTENT_TYPE) {
+                return Err(TransportError::Build(
+                    "multipart request cannot set content-type; boundary is generated automatically"
+                        .to_string(),
+                ));
+            }
+
+            builder = builder
+                .headers(headers)
+                .multipart(reqwest_multipart_form(multipart)?);
+        } else if let Some(body) = body {
             if compression != RequestCompression::None {
                 if headers.contains_key(http::header::CONTENT_ENCODING) {
                     return Err(TransportError::Build(
@@ -139,6 +164,67 @@ impl ReqwestTransport {
             TransportError::Network(describe_reqwest_error(&err, phase))
         }
     }
+}
+
+fn reqwest_multipart_form(
+    multipart: MultipartForm,
+) -> Result<reqwest::multipart::Form, TransportError> {
+    let mut form = reqwest::multipart::Form::new();
+    for part in multipart.parts {
+        match part {
+            MultipartPart::Text { name, value } => {
+                form = form.text(name, value);
+            }
+            MultipartPart::Bytes {
+                name,
+                file_name,
+                mime,
+                bytes,
+            } => {
+                let reqwest_part = reqwest::multipart::Part::bytes(bytes.to_vec())
+                    .file_name(file_name)
+                    .mime_str(&mime)
+                    .map_err(|err| {
+                        TransportError::Build(format!(
+                            "invalid multipart MIME type `{mime}`: {err}"
+                        ))
+                    })?;
+                form = form.part(name, reqwest_part);
+            }
+        }
+    }
+    Ok(form)
+}
+
+fn request_body_trace(req: &Request) -> String {
+    if let Some(multipart) = &req.multipart {
+        return multipart_trace_summary(multipart);
+    }
+
+    req.body
+        .as_ref()
+        .map_or_else(String::new, serde_json::Value::to_string)
+}
+
+fn multipart_trace_summary(multipart: &MultipartForm) -> String {
+    let parts = multipart
+        .parts
+        .iter()
+        .map(|part| match part {
+            MultipartPart::Text { name, .. } => format!("text:{name}"),
+            MultipartPart::Bytes {
+                name,
+                file_name,
+                mime,
+                bytes,
+            } => format!(
+                "bytes:{name} filename={file_name} mime={mime} len={}",
+                bytes.len()
+            ),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("multipart [{parts}]")
 }
 
 fn describe_reqwest_error(err: &reqwest::Error, phase: ReqwestErrorPhase) -> String {
@@ -225,12 +311,8 @@ fn format_reqwest_error(
 impl HttpTransport for ReqwestTransport {
     async fn execute(&self, req: Request) -> Result<Response, TransportError> {
         if enabled!(Level::TRACE) {
-            trace!(
-                "{} to {}: {}",
-                req.method,
-                req.url,
-                req.body.as_ref().unwrap_or_default()
-            );
+            let body = request_body_trace(&req);
+            trace!("{} to {}: {}", req.method, req.url, body);
         }
 
         let url = req.url.clone();
@@ -263,12 +345,8 @@ impl HttpTransport for ReqwestTransport {
 
     async fn stream(&self, req: Request) -> Result<StreamResponse, TransportError> {
         if enabled!(Level::TRACE) {
-            trace!(
-                "{} to {}: {}",
-                req.method,
-                req.url,
-                req.body.as_ref().unwrap_or_default()
-            );
+            let body = request_body_trace(&req);
+            trace!("{} to {}: {}", req.method, req.url, body);
         }
 
         let url = req.url.clone();
@@ -323,7 +401,117 @@ impl HttpTransport for ReqwestTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http::HeaderValue;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    fn transport() -> ReqwestTransport {
+        ReqwestTransport::new(reqwest::Client::new())
+    }
+
+    fn request() -> Request {
+        Request::new(
+            Method::POST,
+            "https://api.example.test/v1/upload".to_string(),
+        )
+    }
+
+    #[test]
+    fn build_json_request_retains_json_body() {
+        let builder = transport()
+            .build(request().with_json(&json!({"foo": "bar"})))
+            .expect("json request should build");
+        let request = builder
+            .into_reqwest_request()
+            .expect("reqwest request should build");
+
+        assert_eq!(
+            request.headers().get(http::header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("application/json"))
+        );
+        assert_eq!(
+            request
+                .body()
+                .and_then(reqwest::Body::as_bytes)
+                .expect("json body bytes"),
+            br#"{"foo":"bar"}"#
+        );
+    }
+
+    #[test]
+    fn build_multipart_request_uses_multipart_body_and_redacted_trace() {
+        let multipart = MultipartForm::new().text("prompt", "secret prompt").bytes(
+            "image",
+            "image-1.png",
+            "image/png",
+            Bytes::from_static(b"raw-image-bytes"),
+        );
+        let request = request().with_multipart(multipart);
+        let trace = request_body_trace(&request);
+
+        assert_eq!(
+            trace,
+            "multipart [text:prompt, bytes:image filename=image-1.png mime=image/png len=15]"
+        );
+        assert!(!trace.contains("secret prompt"));
+        assert!(!trace.contains("raw-image-bytes"));
+
+        let builder = transport()
+            .build(request)
+            .expect("multipart request should build");
+        let request = builder
+            .into_reqwest_request()
+            .expect("reqwest request should build");
+        let content_type = request
+            .headers()
+            .get(http::header::CONTENT_TYPE)
+            .expect("content-type")
+            .to_str()
+            .expect("valid content-type");
+
+        assert!(content_type.starts_with("multipart/form-data; boundary="));
+        assert_ne!(content_type, "application/json");
+    }
+
+    #[test]
+    fn build_multipart_request_rejects_compression() {
+        let err = transport()
+            .build(
+                request()
+                    .with_multipart(MultipartForm::new().text("prompt", "hello"))
+                    .with_compression(RequestCompression::Zstd),
+            )
+            .expect_err("multipart compression should fail");
+
+        let TransportError::Build(message) = err else {
+            panic!("expected build error");
+        };
+        assert_eq!(
+            message,
+            "request compression is not supported for multipart bodies"
+        );
+    }
+
+    #[test]
+    fn build_multipart_request_rejects_preset_content_type() {
+        let mut request = request().with_multipart(MultipartForm::new().text("prompt", "hello"));
+        request.headers.insert(
+            http::header::CONTENT_TYPE,
+            HeaderValue::from_static("multipart/form-data"),
+        );
+
+        let err = transport()
+            .build(request)
+            .expect_err("multipart content-type should fail");
+
+        let TransportError::Build(message) = err else {
+            panic!("expected build error");
+        };
+        assert_eq!(
+            message,
+            "multipart request cannot set content-type; boundary is generated automatically"
+        );
+    }
 
     #[test]
     fn format_reqwest_error_includes_phase_kind_url_and_source_chain() {

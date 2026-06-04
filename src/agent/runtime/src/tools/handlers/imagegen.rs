@@ -110,9 +110,7 @@ impl ToolHandler for ImagegenHandler {
             ImageRequest::Generate(request) => client.generate(&request, HeaderMap::new()).await,
             ImageRequest::Edit(request) => client.edit(&request, HeaderMap::new()).await,
         }
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("image generation failed: {err}"))
-        })?;
+        .map_err(|err| FunctionCallError::RespondToModel(format!("image request failed: {err}")))?;
 
         let Some(result) = response.data.into_iter().next().map(|data| data.b64_json) else {
             return Err(FunctionCallError::RespondToModel(
@@ -366,11 +364,15 @@ async fn output_for_generated_image(
     result: &str,
 ) -> Result<ToolOutput, FunctionCallError> {
     let saved_path = save_generated_image(lha_home, conversation_id, call_id, result).await?;
+    let content = format!("Generated image saved to {}", saved_path.display());
     let image_url = format!("data:image/png;base64,{result}");
 
     Ok(ToolOutput::Function {
-        content: format!("Generated image saved to {}", saved_path.display()),
-        content_items: Some(vec![ToolResultContentItem::InputImage { image_url }]),
+        content: content.clone(),
+        content_items: Some(vec![
+            ToolResultContentItem::InputText { text: content },
+            ToolResultContentItem::InputImage { image_url },
+        ]),
         success: Some(true),
     })
 }
@@ -431,12 +433,17 @@ mod tests {
             payload: ToolResultPayload::Structured {
                 content: "ok".to_string(),
                 content_items: Some(
-                    images
-                        .iter()
-                        .map(|image_url| ToolResultContentItem::InputImage {
-                            image_url: (*image_url).to_string(),
-                        })
-                        .collect(),
+                    std::iter::once(ToolResultContentItem::InputText {
+                        text: "Generated image saved to /tmp/image.png".to_string(),
+                    })
+                    .chain(
+                        images
+                            .iter()
+                            .map(|image_url| ToolResultContentItem::InputImage {
+                                image_url: (*image_url).to_string(),
+                            }),
+                    )
+                    .collect(),
                 ),
                 success: Some(true),
             },
@@ -545,9 +552,14 @@ mod tests {
         );
         assert_eq!(
             content_items,
-            Some(vec![ToolResultContentItem::InputImage {
-                image_url: "data:image/png;base64,Zm9v".to_string(),
-            }])
+            Some(vec![
+                ToolResultContentItem::InputText {
+                    text: format!("Generated image saved to {}", expected_path.display()),
+                },
+                ToolResultContentItem::InputImage {
+                    image_url: "data:image/png;base64,Zm9v".to_string(),
+                },
+            ])
         );
         assert_eq!(success, Some(true));
     }

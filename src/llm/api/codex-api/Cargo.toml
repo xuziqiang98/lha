@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+base64 = { workspace = true }
 bytes = { workspace = true }
 lha-client = { workspace = true }
 lha-llm-types = { workspace = true }
