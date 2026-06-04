@@ -5,15 +5,15 @@ mod seatbelt;
 
 use std::path::PathBuf;
 
-use lha_agent::config::Config;
-use lha_agent::config::ConfigOverrides;
-use lha_agent::exec_env::create_env;
-use lha_agent::landlock::spawn_command_under_linux_sandbox;
+use crate::product::agent::config::Config;
+use crate::product::agent::config::ConfigOverrides;
+use crate::product::agent::exec_env::create_env;
+use crate::product::agent::landlock::spawn_command_under_linux_sandbox;
 #[cfg(target_os = "macos")]
-use lha_agent::seatbelt::spawn_command_under_seatbelt;
-use lha_agent::spawn::StdioPolicy;
-use lha_common::CliConfigOverrides;
-use lha_protocol::config_types::SandboxMode;
+use crate::product::agent::seatbelt::spawn_command_under_seatbelt;
+use crate::product::agent::spawn::StdioPolicy;
+use crate::product::common::CliConfigOverrides;
+use crate::product::protocol::config_types::SandboxMode;
 
 use crate::LandlockCommand;
 use crate::SeatbeltCommand;
@@ -136,10 +136,10 @@ async fn run_command_under_sandbox(
     if let SandboxType::Windows = sandbox_type {
         #[cfg(target_os = "windows")]
         {
-            use lha_agent::windows_sandbox::WindowsSandboxLevelExt;
-            use lha_protocol::config_types::WindowsSandboxLevel;
-            use lha_windows_sandbox::run_windows_sandbox_capture;
-            use lha_windows_sandbox::run_windows_sandbox_capture_elevated;
+            use crate::product::agent::windows_sandbox::WindowsSandboxLevelExt;
+            use crate::product::protocol::config_types::WindowsSandboxLevel;
+            use crate::product::windows_sandbox::run_windows_sandbox_capture;
+            use crate::product::windows_sandbox::run_windows_sandbox_capture_elevated;
 
             let policy_str = serde_json::to_string(config.sandbox_policy.get())?;
 

@@ -1,0 +1,12 @@
+---
+source: src/agent/cli/src/../product/tui_app/src/bottom_pane/mod.rs
+expression: "render_snapshot(&pane, area)"
+---
+• Working (0s • esc to interrupt)               
+                                                
+  ↳ Queued follow-up question                   
+    ⌥ + ↑ edit                                  
+                                                
+› Ask LHA to do anything                        
+                                                
+  loading · 100% left

@@ -1,0 +1,1392 @@
+//! Types used to define the fields of [`crate::product::agent::config::Config`].
+
+// Note this file should generally be restricted to simple struct/enum
+// definitions that do not contain business logic.
+
+use crate::product::agent::config_loader::RequirementSource;
+pub use crate::product::protocol::config_types::IdentityKind;
+pub use crate::product::protocol::config_types::Personality;
+pub use crate::product::protocol::config_types::WebSearchMode;
+use crate::product::utils_absolute_path::AbsolutePathBuf;
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::fmt;
+use std::path::PathBuf;
+use std::time::Duration;
+use wildmatch::WildMatchPattern;
+
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Deserializer;
+use serde::Serialize;
+use serde::de::Error as SerdeError;
+
+pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
+pub const DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 2;
+pub const DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS: i64 = 10;
+pub const DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS: i64 = 6;
+pub const DEFAULT_MEMORIES_MIN_RATE_LIMIT_REMAINING_PERCENT: i64 = 25;
+pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 256;
+pub const DEFAULT_MEMORIES_MAX_UNUSED_DAYS: i64 = 30;
+const MIN_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 1;
+const MAX_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 4096;
+const MIN_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 1;
+const MAX_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 128;
+
+/// Memories settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct MemoriesToml {
+    /// When `true`, external context sources mark the thread memory mode as `polluted`.
+    #[serde(alias = "no_memories_if_mcp_or_web_search")]
+    pub disable_on_external_context: Option<bool>,
+    /// When `false`, newly created threads are stored with `memory_mode = "disabled"`.
+    pub generate_memories: Option<bool>,
+    /// When `false`, skip injecting memory usage instructions into developer prompts.
+    pub use_memories: Option<bool>,
+    /// When `true`, expose dedicated memory tools.
+    pub dedicated_tools: Option<bool>,
+    /// Maximum number of raw memories retained for global consolidation.
+    #[schemars(range(min = 1, max = 4096))]
+    pub max_raw_memories_for_consolidation: Option<usize>,
+    /// Maximum days since last memory usage before phase-2 selection skips it.
+    pub max_unused_days: Option<i64>,
+    /// Maximum age of threads used for memories.
+    pub max_rollout_age_days: Option<i64>,
+    /// Maximum number of rollout candidates processed per startup pass.
+    #[schemars(range(min = 1, max = 128))]
+    pub max_rollouts_per_startup: Option<usize>,
+    /// Minimum idle time between last thread activity and memory creation, in hours.
+    pub min_rollout_idle_hours: Option<i64>,
+    /// Minimum remaining percentage required in rate-limit windows before memory startup runs.
+    #[schemars(range(min = 0, max = 100))]
+    pub min_rate_limit_remaining_percent: Option<i64>,
+    /// Model used for per-thread memory extraction.
+    pub extract_model: Option<String>,
+    /// Model used for memory consolidation.
+    pub consolidation_model: Option<String>,
+}
+
+/// Effective memories settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MemoriesConfig {
+    pub disable_on_external_context: bool,
+    pub generate_memories: bool,
+    pub use_memories: bool,
+    pub dedicated_tools: bool,
+    pub max_raw_memories_for_consolidation: usize,
+    pub max_unused_days: i64,
+    pub max_rollout_age_days: i64,
+    pub max_rollouts_per_startup: usize,
+    pub min_rollout_idle_hours: i64,
+    pub min_rate_limit_remaining_percent: i64,
+    pub extract_model: Option<String>,
+    pub consolidation_model: Option<String>,
+}
+
+impl Default for MemoriesConfig {
+    fn default() -> Self {
+        Self {
+            disable_on_external_context: false,
+            generate_memories: true,
+            use_memories: true,
+            dedicated_tools: false,
+            max_raw_memories_for_consolidation: DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
+            max_unused_days: DEFAULT_MEMORIES_MAX_UNUSED_DAYS,
+            max_rollout_age_days: DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS,
+            max_rollouts_per_startup: DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP,
+            min_rollout_idle_hours: DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS,
+            min_rate_limit_remaining_percent: DEFAULT_MEMORIES_MIN_RATE_LIMIT_REMAINING_PERCENT,
+            extract_model: None,
+            consolidation_model: None,
+        }
+    }
+}
+
+impl From<MemoriesToml> for MemoriesConfig {
+    fn from(toml: MemoriesToml) -> Self {
+        let defaults = Self::default();
+        Self {
+            disable_on_external_context: toml
+                .disable_on_external_context
+                .unwrap_or(defaults.disable_on_external_context),
+            generate_memories: toml.generate_memories.unwrap_or(defaults.generate_memories),
+            use_memories: toml.use_memories.unwrap_or(defaults.use_memories),
+            dedicated_tools: toml.dedicated_tools.unwrap_or(defaults.dedicated_tools),
+            max_raw_memories_for_consolidation: toml
+                .max_raw_memories_for_consolidation
+                .unwrap_or(defaults.max_raw_memories_for_consolidation)
+                .clamp(
+                    MIN_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
+                    MAX_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
+                ),
+            max_unused_days: toml
+                .max_unused_days
+                .unwrap_or(defaults.max_unused_days)
+                .clamp(0, 365),
+            max_rollout_age_days: toml
+                .max_rollout_age_days
+                .unwrap_or(defaults.max_rollout_age_days)
+                .clamp(0, 90),
+            max_rollouts_per_startup: toml
+                .max_rollouts_per_startup
+                .unwrap_or(defaults.max_rollouts_per_startup)
+                .clamp(
+                    MIN_MEMORIES_MAX_ROLLOUTS_PER_STARTUP,
+                    MAX_MEMORIES_MAX_ROLLOUTS_PER_STARTUP,
+                ),
+            min_rollout_idle_hours: toml
+                .min_rollout_idle_hours
+                .unwrap_or(defaults.min_rollout_idle_hours)
+                .clamp(1, 48),
+            min_rate_limit_remaining_percent: toml
+                .min_rate_limit_remaining_percent
+                .unwrap_or(defaults.min_rate_limit_remaining_percent)
+                .clamp(0, 100),
+            extract_model: toml.extract_model,
+            consolidation_model: toml.consolidation_model,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpServerDisabledReason {
+    Unknown,
+    Requirements { source: RequirementSource },
+}
+
+impl fmt::Display for McpServerDisabledReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            McpServerDisabledReason::Unknown => write!(f, "unknown"),
+            McpServerDisabledReason::Requirements { source } => {
+                write!(f, "requirements ({source})")
+            }
+        }
+    }
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct McpServerConfig {
+    #[serde(flatten)]
+    pub transport: McpServerTransportConfig,
+
+    /// When `false`, LHA skips initializing this MCP server.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+
+    /// Reason this server was disabled after applying requirements.
+    #[serde(skip)]
+    pub disabled_reason: Option<McpServerDisabledReason>,
+
+    /// Startup timeout in seconds for initializing MCP server & initially listing tools.
+    #[serde(
+        default,
+        with = "option_duration_secs",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub startup_timeout_sec: Option<Duration>,
+
+    /// Default timeout for MCP tool calls initiated via this server.
+    #[serde(default, with = "option_duration_secs")]
+    pub tool_timeout_sec: Option<Duration>,
+
+    /// Explicit allow-list of tools exposed from this server. When set, only these tools will be registered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_tools: Option<Vec<String>>,
+
+    /// Explicit deny-list of tools. These tools will be removed after applying `enabled_tools`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_tools: Option<Vec<String>>,
+
+    /// Optional OAuth scopes to request during MCP login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<String>>,
+}
+
+// Raw MCP config shape used for deserialization and JSON Schema generation.
+// Keep this in sync with the validation logic in `McpServerConfig`.
+#[derive(Deserialize, Clone, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(crate) struct RawMcpServerConfig {
+    // stdio
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
+    #[serde(default)]
+    pub env: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub env_vars: Option<Vec<String>>,
+    #[serde(default)]
+    pub cwd: Option<PathBuf>,
+    pub http_headers: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub env_http_headers: Option<HashMap<String, String>>,
+
+    // streamable_http
+    pub url: Option<String>,
+    pub bearer_token: Option<String>,
+    pub bearer_token_env_var: Option<String>,
+
+    // shared
+    #[serde(default)]
+    pub startup_timeout_sec: Option<f64>,
+    #[serde(default)]
+    pub startup_timeout_ms: Option<u64>,
+    #[serde(default, with = "option_duration_secs")]
+    #[schemars(with = "Option<f64>")]
+    pub tool_timeout_sec: Option<Duration>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub enabled_tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub disabled_tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub scopes: Option<Vec<String>>,
+}
+
+impl<'de> Deserialize<'de> for McpServerConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut raw = RawMcpServerConfig::deserialize(deserializer)?;
+
+        let startup_timeout_sec = match (raw.startup_timeout_sec, raw.startup_timeout_ms) {
+            (Some(sec), _) => {
+                let duration = Duration::try_from_secs_f64(sec).map_err(SerdeError::custom)?;
+                Some(duration)
+            }
+            (None, Some(ms)) => Some(Duration::from_millis(ms)),
+            (None, None) => None,
+        };
+        let tool_timeout_sec = raw.tool_timeout_sec;
+        let enabled = raw.enabled.unwrap_or_else(default_enabled);
+        let enabled_tools = raw.enabled_tools.clone();
+        let disabled_tools = raw.disabled_tools.clone();
+        let scopes = raw.scopes.clone();
+
+        fn throw_if_set<E, T>(transport: &str, field: &str, value: Option<&T>) -> Result<(), E>
+        where
+            E: SerdeError,
+        {
+            if value.is_none() {
+                return Ok(());
+            }
+            Err(E::custom(format!(
+                "{field} is not supported for {transport}",
+            )))
+        }
+
+        let transport = if let Some(command) = raw.command.clone() {
+            throw_if_set("stdio", "url", raw.url.as_ref())?;
+            throw_if_set(
+                "stdio",
+                "bearer_token_env_var",
+                raw.bearer_token_env_var.as_ref(),
+            )?;
+            throw_if_set("stdio", "bearer_token", raw.bearer_token.as_ref())?;
+            throw_if_set("stdio", "http_headers", raw.http_headers.as_ref())?;
+            throw_if_set("stdio", "env_http_headers", raw.env_http_headers.as_ref())?;
+            McpServerTransportConfig::Stdio {
+                command,
+                args: raw.args.clone().unwrap_or_default(),
+                env: raw.env.clone(),
+                env_vars: raw.env_vars.clone().unwrap_or_default(),
+                cwd: raw.cwd.take(),
+            }
+        } else if let Some(url) = raw.url.clone() {
+            throw_if_set("streamable_http", "args", raw.args.as_ref())?;
+            throw_if_set("streamable_http", "env", raw.env.as_ref())?;
+            throw_if_set("streamable_http", "env_vars", raw.env_vars.as_ref())?;
+            throw_if_set("streamable_http", "cwd", raw.cwd.as_ref())?;
+            throw_if_set("streamable_http", "bearer_token", raw.bearer_token.as_ref())?;
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                bearer_token_env_var: raw.bearer_token_env_var.clone(),
+                http_headers: raw.http_headers.clone(),
+                env_http_headers: raw.env_http_headers.take(),
+            }
+        } else {
+            return Err(SerdeError::custom("invalid transport"));
+        };
+
+        Ok(Self {
+            transport,
+            startup_timeout_sec,
+            tool_timeout_sec,
+            enabled,
+            disabled_reason: None,
+            enabled_tools,
+            disabled_tools,
+            scopes,
+        })
+    }
+}
+
+const fn default_enabled() -> bool {
+    true
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[serde(untagged, deny_unknown_fields, rename_all = "snake_case")]
+pub enum McpServerTransportConfig {
+    /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#stdio
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        env: Option<HashMap<String, String>>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        env_vars: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<PathBuf>,
+    },
+    /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http
+    StreamableHttp {
+        url: String,
+        /// Name of the environment variable to read for an HTTP bearer token.
+        /// When set, requests will include the token via `Authorization: Bearer <token>`.
+        /// The actual secret value must be provided via the environment.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bearer_token_env_var: Option<String>,
+        /// Additional HTTP headers to include in requests to this server.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        http_headers: Option<HashMap<String, String>>,
+        /// HTTP headers where the value is sourced from an environment variable.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        env_http_headers: Option<HashMap<String, String>>,
+    },
+}
+
+mod option_duration_secs {
+    use serde::Deserialize;
+    use serde::Deserializer;
+    use serde::Serializer;
+    use std::time::Duration;
+
+    pub fn serialize<S>(value: &Option<Duration>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            Some(duration) => serializer.serialize_some(&duration.as_secs_f64()),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let secs = Option::<f64>::deserialize(deserializer)?;
+        secs.map(|secs| Duration::try_from_secs_f64(secs).map_err(serde::de::Error::custom))
+            .transpose()
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, JsonSchema)]
+pub enum UriBasedFileOpener {
+    #[serde(rename = "vscode")]
+    VsCode,
+
+    #[serde(rename = "vscode-insiders")]
+    VsCodeInsiders,
+
+    #[serde(rename = "windsurf")]
+    Windsurf,
+
+    #[serde(rename = "cursor")]
+    Cursor,
+
+    /// Option to disable the URI-based file opener.
+    #[serde(rename = "none")]
+    None,
+}
+
+impl UriBasedFileOpener {
+    pub fn get_scheme(&self) -> Option<&str> {
+        match self {
+            UriBasedFileOpener::VsCode => Some("vscode"),
+            UriBasedFileOpener::VsCodeInsiders => Some("vscode-insiders"),
+            UriBasedFileOpener::Windsurf => Some("windsurf"),
+            UriBasedFileOpener::Cursor => Some("cursor"),
+            UriBasedFileOpener::None => None,
+        }
+    }
+}
+
+/// Settings that govern if and what will be written to `~/.lha/history.jsonl`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct History {
+    /// If true, history entries will not be written to disk.
+    pub persistence: HistoryPersistence,
+
+    /// If set, the maximum size of the history file in bytes. The oldest entries
+    /// are dropped once the file exceeds this limit.
+    pub max_bytes: Option<usize>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Default, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum HistoryPersistence {
+    /// Save all history entries to disk.
+    #[default]
+    SaveAll,
+    /// Do not write history to disk.
+    None,
+}
+
+// ===== Analytics configuration =====
+
+/// Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AnalyticsConfigToml {
+    /// When `false`, disables analytics across LHA product surfaces in this profile.
+    pub enabled: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct FeedbackConfigToml {
+    /// When `false`, disables the feedback flow across LHA product surfaces.
+    pub enabled: Option<bool>,
+}
+
+// ===== OTEL configuration =====
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum OtelHttpProtocol {
+    /// Binary payload
+    Binary,
+    /// JSON payload
+    Json,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[serde(rename_all = "kebab-case")]
+pub struct OtelTlsConfig {
+    pub ca_certificate: Option<AbsolutePathBuf>,
+    pub client_certificate: Option<AbsolutePathBuf>,
+    pub client_private_key: Option<AbsolutePathBuf>,
+}
+
+/// Which OTEL exporter to use.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[serde(rename_all = "kebab-case")]
+pub enum OtelExporterKind {
+    None,
+    Statsig,
+    OtlpHttp {
+        endpoint: String,
+        #[serde(default)]
+        headers: HashMap<String, String>,
+        protocol: OtelHttpProtocol,
+        #[serde(default)]
+        tls: Option<OtelTlsConfig>,
+    },
+    OtlpGrpc {
+        endpoint: String,
+        #[serde(default)]
+        headers: HashMap<String, String>,
+        #[serde(default)]
+        tls: Option<OtelTlsConfig>,
+    },
+}
+
+/// OTEL settings loaded from config.toml. Fields are optional so we can apply defaults.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct OtelConfigToml {
+    /// Log user prompt in traces
+    pub log_user_prompt: Option<bool>,
+
+    /// Mark traces with environment (dev, staging, prod, test). Defaults to dev.
+    pub environment: Option<String>,
+
+    /// Optional log exporter
+    pub exporter: Option<OtelExporterKind>,
+
+    /// Optional trace exporter
+    pub trace_exporter: Option<OtelExporterKind>,
+}
+
+/// Effective OTEL settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OtelConfig {
+    pub log_user_prompt: bool,
+    pub environment: String,
+    pub exporter: OtelExporterKind,
+    pub trace_exporter: OtelExporterKind,
+    pub metrics_exporter: OtelExporterKind,
+}
+
+impl Default for OtelConfig {
+    fn default() -> Self {
+        OtelConfig {
+            log_user_prompt: false,
+            environment: DEFAULT_OTEL_ENVIRONMENT.to_owned(),
+            exporter: OtelExporterKind::None,
+            trace_exporter: OtelExporterKind::None,
+            metrics_exporter: OtelExporterKind::Statsig,
+        }
+    }
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum Notifications {
+    Enabled(bool),
+    Custom(Vec<String>),
+}
+
+impl Default for Notifications {
+    fn default() -> Self {
+        Self::Enabled(true)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum NotificationMethod {
+    #[default]
+    Auto,
+    Osc9,
+    Bel,
+}
+
+impl fmt::Display for NotificationMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NotificationMethod::Auto => write!(f, "auto"),
+            NotificationMethod::Osc9 => write!(f, "osc9"),
+            NotificationMethod::Bel => write!(f, "bel"),
+        }
+    }
+}
+
+/// OSC52 sequence style to use when the TUI copies text from inside tmux.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Osc52TmuxMode {
+    /// Let LHA choose the tmux OSC52 strategy.
+    #[default]
+    Auto,
+    /// Send a bare OSC52 sequence and let tmux forward it via `set-clipboard`.
+    Bare,
+    /// Wrap the OSC52 sequence in tmux passthrough DCS escape sequences.
+    Passthrough,
+}
+
+/// Collection of settings that are specific to the TUI.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct Tui {
+    /// Enable desktop notifications from the TUI when the terminal is unfocused.
+    /// Defaults to `true`.
+    #[serde(default)]
+    pub notifications: Notifications,
+
+    /// Notification method to use for unfocused terminal notifications.
+    /// Defaults to `auto`.
+    #[serde(default)]
+    pub notification_method: NotificationMethod,
+
+    /// Enable animations (welcome screen, shimmer effects, spinners).
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub animations: bool,
+
+    /// Show startup tooltips in the TUI welcome screen.
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub show_tooltips: bool,
+
+    /// Capture mouse input for internal scrolling and transcript selection.
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub mouse_capture: bool,
+
+    /// OSC52 mode to use when copying text from inside tmux.
+    /// Defaults to `auto`.
+    #[serde(default)]
+    pub osc52_tmux_mode: Osc52TmuxMode,
+
+    /// Tiny companion rendered next to the TUI composer.
+    #[serde(default)]
+    pub buddy: TuiBuddy,
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+fn default_buddy_reaction_cooldown_seconds() -> u64 {
+    60
+}
+
+fn default_buddy_max_reaction_chars() -> usize {
+    80
+}
+
+fn default_tui_buddy_enabled() -> bool {
+    true
+}
+
+/// TUI buddy companion settings.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiBuddy {
+    /// Show the generated buddy next to the composer.
+    #[serde(default = "default_tui_buddy_enabled")]
+    pub enabled: bool,
+
+    /// Suppress the buddy and any reactions without deleting its saved name/species.
+    #[serde(default)]
+    pub muted: bool,
+
+    /// User-visible buddy name.
+    #[serde(default)]
+    pub name: Option<String>,
+
+    /// Buddy species used to pick the face and label.
+    #[serde(default)]
+    pub species: Option<BuddySpecies>,
+
+    /// Optional eye variant used in richer sprite rendering.
+    #[serde(default)]
+    pub eye: Option<BuddyEye>,
+
+    /// Optional hat/accessory for richer sprite rendering.
+    #[serde(default)]
+    pub hat: Option<BuddyHat>,
+
+    /// Optional rarity used for styling accents.
+    #[serde(default)]
+    pub rarity: Option<BuddyRarity>,
+
+    /// Whether the buddy should render with shiny accents.
+    #[serde(default)]
+    pub shiny: Option<bool>,
+
+    /// Short generated personality label used in buddy details and companion instructions.
+    #[serde(default)]
+    pub personality: Option<String>,
+
+    /// Optional model-powered reaction settings.
+    #[serde(default)]
+    pub observer: BuddyObserverConfig,
+}
+
+impl Default for TuiBuddy {
+    fn default() -> Self {
+        Self {
+            enabled: default_tui_buddy_enabled(),
+            muted: false,
+            name: None,
+            species: None,
+            eye: None,
+            hat: None,
+            rarity: None,
+            shiny: None,
+            personality: None,
+            observer: BuddyObserverConfig::default(),
+        }
+    }
+}
+
+/// Supported TUI buddy species.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum BuddySpecies {
+    Duck,
+    Cat,
+    Blob,
+    Robot,
+    Turtle,
+    Goose,
+    Dragon,
+    Octopus,
+    Owl,
+    Penguin,
+    Snail,
+    Ghost,
+    Axolotl,
+    Capybara,
+    Cactus,
+    Rabbit,
+    Mushroom,
+    Chonk,
+}
+
+impl std::fmt::Display for BuddySpecies {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            BuddySpecies::Duck => "duck",
+            BuddySpecies::Cat => "cat",
+            BuddySpecies::Blob => "blob",
+            BuddySpecies::Robot => "robot",
+            BuddySpecies::Turtle => "turtle",
+            BuddySpecies::Goose => "goose",
+            BuddySpecies::Dragon => "dragon",
+            BuddySpecies::Octopus => "octopus",
+            BuddySpecies::Owl => "owl",
+            BuddySpecies::Penguin => "penguin",
+            BuddySpecies::Snail => "snail",
+            BuddySpecies::Ghost => "ghost",
+            BuddySpecies::Axolotl => "axolotl",
+            BuddySpecies::Capybara => "capybara",
+            BuddySpecies::Cactus => "cactus",
+            BuddySpecies::Rabbit => "rabbit",
+            BuddySpecies::Mushroom => "mushroom",
+            BuddySpecies::Chonk => "chonk",
+        };
+        write!(f, "{value}")
+    }
+}
+
+impl std::str::FromStr for BuddySpecies {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "duck" => Ok(BuddySpecies::Duck),
+            "cat" => Ok(BuddySpecies::Cat),
+            "blob" => Ok(BuddySpecies::Blob),
+            "robot" => Ok(BuddySpecies::Robot),
+            "turtle" => Ok(BuddySpecies::Turtle),
+            "goose" => Ok(BuddySpecies::Goose),
+            "dragon" => Ok(BuddySpecies::Dragon),
+            "octopus" => Ok(BuddySpecies::Octopus),
+            "owl" => Ok(BuddySpecies::Owl),
+            "penguin" => Ok(BuddySpecies::Penguin),
+            "snail" => Ok(BuddySpecies::Snail),
+            "ghost" => Ok(BuddySpecies::Ghost),
+            "axolotl" => Ok(BuddySpecies::Axolotl),
+            "capybara" => Ok(BuddySpecies::Capybara),
+            "cactus" => Ok(BuddySpecies::Cactus),
+            "rabbit" => Ok(BuddySpecies::Rabbit),
+            "mushroom" => Ok(BuddySpecies::Mushroom),
+            "chonk" => Ok(BuddySpecies::Chonk),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Supported buddy eye variants for richer sprite rendering.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum BuddyEye {
+    Dot,
+    Sparkle,
+    Cross,
+    Circle,
+    At,
+    #[default]
+    Degree,
+}
+
+impl std::fmt::Display for BuddyEye {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            BuddyEye::Dot => "dot",
+            BuddyEye::Sparkle => "sparkle",
+            BuddyEye::Cross => "cross",
+            BuddyEye::Circle => "circle",
+            BuddyEye::At => "at",
+            BuddyEye::Degree => "degree",
+        };
+        write!(f, "{value}")
+    }
+}
+
+impl std::str::FromStr for BuddyEye {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "dot" => Ok(BuddyEye::Dot),
+            "sparkle" => Ok(BuddyEye::Sparkle),
+            "cross" => Ok(BuddyEye::Cross),
+            "circle" => Ok(BuddyEye::Circle),
+            "at" => Ok(BuddyEye::At),
+            "degree" => Ok(BuddyEye::Degree),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Supported buddy hat/accessory variants.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum BuddyHat {
+    #[default]
+    None,
+    Crown,
+    TopHat,
+    Propeller,
+    Halo,
+    Wizard,
+    Beanie,
+    TinyDuck,
+}
+
+impl std::fmt::Display for BuddyHat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            BuddyHat::None => "none",
+            BuddyHat::Crown => "crown",
+            BuddyHat::TopHat => "top-hat",
+            BuddyHat::Propeller => "propeller",
+            BuddyHat::Halo => "halo",
+            BuddyHat::Wizard => "wizard",
+            BuddyHat::Beanie => "beanie",
+            BuddyHat::TinyDuck => "tiny-duck",
+        };
+        write!(f, "{value}")
+    }
+}
+
+impl std::str::FromStr for BuddyHat {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "none" => Ok(BuddyHat::None),
+            "crown" => Ok(BuddyHat::Crown),
+            "top-hat" => Ok(BuddyHat::TopHat),
+            "propeller" => Ok(BuddyHat::Propeller),
+            "halo" => Ok(BuddyHat::Halo),
+            "wizard" => Ok(BuddyHat::Wizard),
+            "beanie" => Ok(BuddyHat::Beanie),
+            "tiny-duck" => Ok(BuddyHat::TinyDuck),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Rarity used for buddy accent styling.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum BuddyRarity {
+    #[default]
+    Common,
+    Uncommon,
+    Rare,
+    Epic,
+    Legendary,
+}
+
+impl std::fmt::Display for BuddyRarity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            BuddyRarity::Common => "common",
+            BuddyRarity::Uncommon => "uncommon",
+            BuddyRarity::Rare => "rare",
+            BuddyRarity::Epic => "epic",
+            BuddyRarity::Legendary => "legendary",
+        };
+        write!(f, "{value}")
+    }
+}
+
+impl std::str::FromStr for BuddyRarity {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "common" => Ok(BuddyRarity::Common),
+            "uncommon" => Ok(BuddyRarity::Uncommon),
+            "rare" => Ok(BuddyRarity::Rare),
+            "epic" => Ok(BuddyRarity::Epic),
+            "legendary" => Ok(BuddyRarity::Legendary),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Model-powered buddy reaction settings.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct BuddyObserverConfig {
+    /// Enable model-powered short reactions after completed turns.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Optional model override for the observer.
+    #[serde(default)]
+    pub model: Option<String>,
+
+    /// Legacy minimum seconds between reactions. Buddy reactions now attempt after every turn.
+    #[serde(default = "default_buddy_reaction_cooldown_seconds")]
+    pub cooldown_seconds: u64,
+
+    /// Maximum characters in a reaction.
+    #[serde(default = "default_buddy_max_reaction_chars")]
+    pub max_reaction_chars: usize,
+}
+
+impl Default for BuddyObserverConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            model: None,
+            cooldown_seconds: default_buddy_reaction_cooldown_seconds(),
+            max_reaction_chars: default_buddy_max_reaction_chars(),
+        }
+    }
+}
+
+/// Settings for notices we display to users via the tui and app-server clients
+/// (primarily the LHA IDE extension). NOTE: these are different from
+/// notifications - notices are warnings, NUX screens, acknowledgements, etc.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+pub struct Notice {
+    /// Tracks whether the user has acknowledged the full access warning prompt.
+    pub hide_full_access_warning: Option<bool>,
+    /// Tracks whether the user has acknowledged the Windows world-writable directories warning.
+    pub hide_world_writable_warning: Option<bool>,
+    /// Tracks whether the user has seen the model migration prompt
+    pub hide_gpt5_1_migration_prompt: Option<bool>,
+    /// Tracks whether the user has seen the gpt-5.1-codex-max migration prompt
+    #[serde(rename = "hide_gpt-5.1-codex-max_migration_prompt")]
+    pub hide_gpt_5_1_codex_max_migration_prompt: Option<bool>,
+    /// Tracks acknowledged model migrations as old->new model slug mappings.
+    #[serde(default)]
+    pub model_migrations: BTreeMap<String, String>,
+}
+
+impl Notice {
+    /// referenced by config_edit helpers when writing notice flags
+    pub(crate) const TABLE_KEY: &'static str = "notice";
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SkillConfig {
+    pub path: AbsolutePathBuf,
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SkillsConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config: Vec<SkillConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SandboxWorkspaceWrite {
+    #[serde(default)]
+    pub writable_roots: Vec<AbsolutePathBuf>,
+    #[serde(default)]
+    pub network_access: bool,
+    #[serde(default)]
+    pub exclude_tmpdir_env_var: bool,
+    #[serde(default)]
+    pub exclude_slash_tmp: bool,
+}
+
+impl From<SandboxWorkspaceWrite> for crate::product::app_server_protocol::SandboxSettings {
+    fn from(sandbox_workspace_write: SandboxWorkspaceWrite) -> Self {
+        Self {
+            writable_roots: sandbox_workspace_write.writable_roots,
+            network_access: Some(sandbox_workspace_write.network_access),
+            exclude_tmpdir_env_var: Some(sandbox_workspace_write.exclude_tmpdir_env_var),
+            exclude_slash_tmp: Some(sandbox_workspace_write.exclude_slash_tmp),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShellEnvironmentPolicyInherit {
+    /// "Core" environment variables for the platform. On UNIX, this would
+    /// include HOME, LOGNAME, PATH, SHELL, and USER, among others.
+    Core,
+
+    /// Inherits the full environment from the parent process.
+    #[default]
+    All,
+
+    /// Do not inherit any environment variables from the parent process.
+    None,
+}
+
+/// Policy for building the `env` when spawning a process via either the
+/// `shell` or `local_shell` tool.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ShellEnvironmentPolicyToml {
+    pub inherit: Option<ShellEnvironmentPolicyInherit>,
+
+    pub ignore_default_excludes: Option<bool>,
+
+    /// List of regular expressions.
+    pub exclude: Option<Vec<String>>,
+
+    pub r#set: Option<HashMap<String, String>>,
+
+    /// List of regular expressions.
+    pub include_only: Option<Vec<String>>,
+
+    pub experimental_use_profile: Option<bool>,
+}
+
+pub type EnvironmentVariablePattern = WildMatchPattern<'*', '?'>;
+
+/// Deriving the `env` based on this policy works as follows:
+/// 1. Create an initial map based on the `inherit` policy.
+/// 2. If `ignore_default_excludes` is false, filter the map using the default
+///    exclude pattern(s), which are: `"*KEY*"`, `"*SECRET*"`, and `"*TOKEN*"`.
+/// 3. If `exclude` is not empty, filter the map using the provided patterns.
+/// 4. Insert any entries from `r#set` into the map.
+/// 5. If non-empty, filter the map using the `include_only` patterns.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShellEnvironmentPolicy {
+    /// Starting point when building the environment.
+    pub inherit: ShellEnvironmentPolicyInherit,
+
+    /// True to skip the check to exclude default environment variables that
+    /// contain "KEY", "SECRET", or "TOKEN" in their name. Defaults to true.
+    pub ignore_default_excludes: bool,
+
+    /// Environment variable names to exclude from the environment.
+    pub exclude: Vec<EnvironmentVariablePattern>,
+
+    /// (key, value) pairs to insert in the environment.
+    pub r#set: HashMap<String, String>,
+
+    /// Environment variable names to retain in the environment.
+    pub include_only: Vec<EnvironmentVariablePattern>,
+
+    /// If true, the shell profile will be used to run the command.
+    pub use_profile: bool,
+}
+
+impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
+    fn from(toml: ShellEnvironmentPolicyToml) -> Self {
+        // Default to inheriting the full environment when not specified.
+        let inherit = toml.inherit.unwrap_or(ShellEnvironmentPolicyInherit::All);
+        let ignore_default_excludes = toml.ignore_default_excludes.unwrap_or(true);
+        let exclude = toml
+            .exclude
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| EnvironmentVariablePattern::new_case_insensitive(&s))
+            .collect();
+        let r#set = toml.r#set.unwrap_or_default();
+        let include_only = toml
+            .include_only
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| EnvironmentVariablePattern::new_case_insensitive(&s))
+            .collect();
+        let use_profile = toml.experimental_use_profile.unwrap_or(false);
+
+        Self {
+            inherit,
+            ignore_default_excludes,
+            exclude,
+            r#set,
+            include_only,
+            use_profile,
+        }
+    }
+}
+
+impl Default for ShellEnvironmentPolicy {
+    fn default() -> Self {
+        Self {
+            inherit: ShellEnvironmentPolicyInherit::All,
+            ignore_default_excludes: true,
+            exclude: Vec::new(),
+            r#set: HashMap::new(),
+            include_only: Vec::new(),
+            use_profile: false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn deserialize_stdio_command_server_config() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+        "#,
+        )
+        .expect("should deserialize command config");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::Stdio {
+                command: "echo".to_string(),
+                args: vec![],
+                env: None,
+                env_vars: Vec::new(),
+                cwd: None,
+            }
+        );
+        assert!(cfg.enabled);
+        assert!(cfg.enabled_tools.is_none());
+        assert!(cfg.disabled_tools.is_none());
+    }
+
+    #[test]
+    fn deserialize_stdio_command_server_config_with_args() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            args = ["hello", "world"]
+        "#,
+        )
+        .expect("should deserialize command config");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::Stdio {
+                command: "echo".to_string(),
+                args: vec!["hello".to_string(), "world".to_string()],
+                env: None,
+                env_vars: Vec::new(),
+                cwd: None,
+            }
+        );
+        assert!(cfg.enabled);
+    }
+
+    #[test]
+    fn deserialize_stdio_command_server_config_with_arg_with_args_and_env() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            args = ["hello", "world"]
+            env = { "FOO" = "BAR" }
+        "#,
+        )
+        .expect("should deserialize command config");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::Stdio {
+                command: "echo".to_string(),
+                args: vec!["hello".to_string(), "world".to_string()],
+                env: Some(HashMap::from([("FOO".to_string(), "BAR".to_string())])),
+                env_vars: Vec::new(),
+                cwd: None,
+            }
+        );
+        assert!(cfg.enabled);
+    }
+
+    #[test]
+    fn deserialize_stdio_command_server_config_with_env_vars() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            env_vars = ["FOO", "BAR"]
+        "#,
+        )
+        .expect("should deserialize command config with env_vars");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::Stdio {
+                command: "echo".to_string(),
+                args: vec![],
+                env: None,
+                env_vars: vec!["FOO".to_string(), "BAR".to_string()],
+                cwd: None,
+            }
+        );
+    }
+
+    #[test]
+    fn deserialize_stdio_command_server_config_with_cwd() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            cwd = "/tmp"
+        "#,
+        )
+        .expect("should deserialize command config with cwd");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::Stdio {
+                command: "echo".to_string(),
+                args: vec![],
+                env: None,
+                env_vars: Vec::new(),
+                cwd: Some(PathBuf::from("/tmp")),
+            }
+        );
+    }
+
+    #[test]
+    fn deserialize_disabled_server_config() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            enabled = false
+        "#,
+        )
+        .expect("should deserialize disabled server config");
+
+        assert!(!cfg.enabled);
+    }
+
+    #[test]
+    fn deserialize_streamable_http_server_config() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            url = "https://example.com/mcp"
+        "#,
+        )
+        .expect("should deserialize http config");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::StreamableHttp {
+                url: "https://example.com/mcp".to_string(),
+                bearer_token_env_var: None,
+                http_headers: None,
+                env_http_headers: None,
+            }
+        );
+        assert!(cfg.enabled);
+    }
+
+    #[test]
+    fn deserialize_streamable_http_server_config_with_env_var() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            url = "https://example.com/mcp"
+            bearer_token_env_var = "GITHUB_TOKEN"
+        "#,
+        )
+        .expect("should deserialize http config");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::StreamableHttp {
+                url: "https://example.com/mcp".to_string(),
+                bearer_token_env_var: Some("GITHUB_TOKEN".to_string()),
+                http_headers: None,
+                env_http_headers: None,
+            }
+        );
+        assert!(cfg.enabled);
+    }
+
+    #[test]
+    fn deserialize_streamable_http_server_config_with_headers() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            url = "https://example.com/mcp"
+            http_headers = { "X-Foo" = "bar" }
+            env_http_headers = { "X-Token" = "TOKEN_ENV" }
+        "#,
+        )
+        .expect("should deserialize http config with headers");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::StreamableHttp {
+                url: "https://example.com/mcp".to_string(),
+                bearer_token_env_var: None,
+                http_headers: Some(HashMap::from([("X-Foo".to_string(), "bar".to_string())])),
+                env_http_headers: Some(HashMap::from([(
+                    "X-Token".to_string(),
+                    "TOKEN_ENV".to_string()
+                )])),
+            }
+        );
+    }
+
+    #[test]
+    fn deserialize_server_config_with_tool_filters() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            enabled_tools = ["allowed"]
+            disabled_tools = ["blocked"]
+        "#,
+        )
+        .expect("should deserialize tool filters");
+
+        assert_eq!(cfg.enabled_tools, Some(vec!["allowed".to_string()]));
+        assert_eq!(cfg.disabled_tools, Some(vec!["blocked".to_string()]));
+    }
+
+    #[test]
+    fn deserialize_rejects_command_and_url() {
+        toml::from_str::<McpServerConfig>(
+            r#"
+            command = "echo"
+            url = "https://example.com"
+        "#,
+        )
+        .expect_err("should reject command+url");
+    }
+
+    #[test]
+    fn deserialize_rejects_env_for_http_transport() {
+        toml::from_str::<McpServerConfig>(
+            r#"
+            url = "https://example.com"
+            env = { "FOO" = "BAR" }
+        "#,
+        )
+        .expect_err("should reject env for http transport");
+    }
+
+    #[test]
+    fn deserialize_rejects_headers_for_stdio() {
+        toml::from_str::<McpServerConfig>(
+            r#"
+            command = "echo"
+            http_headers = { "X-Foo" = "bar" }
+        "#,
+        )
+        .expect_err("should reject http_headers for stdio transport");
+
+        toml::from_str::<McpServerConfig>(
+            r#"
+            command = "echo"
+            env_http_headers = { "X-Foo" = "BAR_ENV" }
+        "#,
+        )
+        .expect_err("should reject env_http_headers for stdio transport");
+    }
+
+    #[test]
+    fn deserialize_rejects_inline_bearer_token_field() {
+        let err = toml::from_str::<McpServerConfig>(
+            r#"
+            url = "https://example.com"
+            bearer_token = "secret"
+        "#,
+        )
+        .expect_err("should reject bearer_token field");
+
+        assert!(
+            err.to_string().contains("bearer_token is not supported"),
+            "unexpected error: {err}"
+        );
+    }
+}

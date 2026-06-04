@@ -143,37 +143,22 @@ temporary compatibility shims that re-export `lha-core`.
 
 ### Maps to `lha-cli`
 
-Everything product-facing remains in the `lha-cli` publish boundary, including:
+Phase 3 has been implemented in the current checkout. Everything
+product-facing now lives inside the `lha-cli` package rooted at
+`src/agent/cli`:
 
-- `src/agent/runtime`
-- `src/agent/cli`
-- `src/agent/feedback`
-- `src/agent/identity`
-- `src/agent/memories/read`
-- `src/agent/memories/write`
-- `src/core/protocol`
-- `src/core/state`
-- `src/integrations/app-server`
-- `src/integrations/app-server-protocol`
-- `src/integrations/mcp-server`
-- `src/integrations/rmcp-client`
-- `src/integrations/responses-api-proxy`
-- `src/platform/exec`
-- `src/platform/ipc/stdio-to-uds`
-- `src/platform/sandbox/*`
-- `src/resources/apply-patch`
-- `src/resources/file-search`
-- `src/resources/keyring-store`
-- `src/shared/*`
-- `src/tui/app`
+- `src/agent/cli/src` contains the `lha` binary entrypoint, CLI dispatch, and
+  intentionally public sandbox debug command types.
+- `src/agent/cli/product` contains private product modules for the former
+  runtime, TUI, protocol, state, app-server, MCP server/client, exec surface,
+  responses proxy, sandbox helpers, memories, identity, feedback, and utility
+  crates.
+- `src/agent/cli/product/test_support` contains private test support modules
+  replacing the former test-helper crates.
 
-Dev/test-only helper crates should remain unpublished and may stay as test
-helpers or private modules:
-
-- `core_test_support`
-- `app_test_support`
-- `mcp_test_support`
-- `lha-utils-cargo-bin`
+The former product packages are no longer Cargo workspace members or
+`lha-cli` dependencies. `lha-cli` depends internally only on `lha-llm`,
+`lha-core`, and third-party crates from crates.io.
 
 ## lha-llm boundary
 
@@ -463,14 +448,18 @@ pub mod mcp {
 
 ### Phase 3: Collapse product crates into `lha-cli`
 
-- Keep package name `lha-cli`.
-- Keep binary name `lha`.
-- Move or inline remaining product crates so final `lha-cli` depends only on:
+- Implemented: package name remains `lha-cli`.
+- Implemented: binary name remains `lha`.
+- Implemented: product crates have been moved or inlined under
+  `src/agent/cli/product` so `lha-cli` depends only on:
   - `lha-llm`
   - `lha-core`
   - third-party crates from crates.io
-- Keep product modules private unless intentionally public.
-- Keep current CLI behavior stable.
+- Implemented: product modules are private to `lha-cli` unless intentionally
+  exposed through the existing `lha-cli` library surface.
+- Implemented target: CLI behavior is routed through the single `lha` binary,
+  hidden developer schema commands, and arg0/hidden helper dispatch instead of
+  standalone product package binaries.
 
 ### Phase 4: Publishing readiness
 
@@ -574,8 +563,9 @@ lha --version
   stable minimal agent SDK boundary.
 - Moving `mcp-types` under `lha-core::mcp::types` may require compatibility
   adapters for existing product code and tests.
-- Collapsing product crates into `lha-cli` will require a staged module move to
-  preserve current CLI, TUI, app-server, and sandbox behavior.
+- The product crate collapse should continue to be validated across CLI, TUI,
+  app-server, and sandbox entrypoints because those surfaces now share one
+  package boundary.
 - Package names on crates.io are immutable once published; name availability
   must be checked before any real publish.
 - Published versions on crates.io are immutable. If a bad version is published,

@@ -1,6 +1,0 @@
----
-source: src/tui/app/src/history_cell.rs
-expression: rendered
----
-• Exploring
-  └ Read auth.rs, shimmer.rs

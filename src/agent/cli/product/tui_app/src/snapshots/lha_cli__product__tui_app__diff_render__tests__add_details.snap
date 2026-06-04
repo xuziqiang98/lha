@@ -1,0 +1,15 @@
+---
+source: src/agent/cli/product/tui_app/src/diff_render.rs
+assertion_line: 765
+expression: terminal.backend()
+---
+"• Proposed Change README.md (+2 -0)                                             "
+"    1     +first line                                                           "
+"    2     +second line                                                          "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "

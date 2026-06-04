@@ -1,0 +1,274 @@
+#![cfg(target_os = "linux")]
+#![allow(clippy::unwrap_used)]
+use crate::product::agent::config::types::ShellEnvironmentPolicy;
+use crate::product::agent::error::CodexErr;
+use crate::product::agent::error::SandboxErr;
+use crate::product::agent::exec::ExecParams;
+use crate::product::agent::exec::process_exec_tool_call;
+use crate::product::agent::exec_env::create_env;
+use crate::product::agent::protocol::SandboxPolicy;
+use crate::product::agent::protocol_config_types::WindowsSandboxLevel;
+use crate::product::agent::sandboxing::SandboxPermissions;
+use crate::product::utils_absolute_path::AbsolutePathBuf;
+use pretty_assertions::assert_eq;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use tempfile::NamedTempFile;
+
+// At least on GitHub CI, the arm64 tests appear to need longer timeouts.
+
+#[cfg(not(target_arch = "aarch64"))]
+const SHORT_TIMEOUT_MS: u64 = 200;
+#[cfg(target_arch = "aarch64")]
+const SHORT_TIMEOUT_MS: u64 = 5_000;
+
+#[cfg(not(target_arch = "aarch64"))]
+const LONG_TIMEOUT_MS: u64 = 1_000;
+#[cfg(target_arch = "aarch64")]
+const LONG_TIMEOUT_MS: u64 = 5_000;
+
+#[cfg(not(target_arch = "aarch64"))]
+const NETWORK_TIMEOUT_MS: u64 = 2_000;
+#[cfg(target_arch = "aarch64")]
+const NETWORK_TIMEOUT_MS: u64 = 10_000;
+
+fn create_env_from_core_vars() -> HashMap<String, String> {
+    let policy = ShellEnvironmentPolicy::default();
+    create_env(&policy)
+}
+
+#[expect(clippy::print_stdout)]
+async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
+    let output = run_cmd_output(cmd, writable_roots, timeout_ms).await;
+    if output.exit_code != 0 {
+        println!("stdout:\n{}", output.stdout.text);
+        println!("stderr:\n{}", output.stderr.text);
+        panic!("exit code: {}", output.exit_code);
+    }
+}
+
+#[expect(clippy::expect_used, clippy::unwrap_used)]
+async fn run_cmd_output(
+    cmd: &[&str],
+    writable_roots: &[PathBuf],
+    timeout_ms: u64,
+) -> crate::product::agent::exec::ExecToolCallOutput {
+    let cwd = std::env::current_dir().expect("cwd should exist");
+    let sandbox_cwd = cwd.clone();
+    let params = ExecParams {
+        command: cmd.iter().copied().map(str::to_owned).collect(),
+        cwd,
+        expiration: timeout_ms.into(),
+        env: create_env_from_core_vars(),
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+        justification: None,
+        arg0: None,
+    };
+
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: writable_roots
+            .iter()
+            .map(|p| AbsolutePathBuf::try_from(p.as_path()).unwrap())
+            .collect(),
+        network_access: false,
+        // Exclude tmp-related folders from writable roots because we need a
+        // folder that is writable by tests but that we intentionally disallow
+        // writing to in the sandbox.
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let codex_linux_sandbox_exe = Some(
+        crate::test_support::cargo_bin::cargo_bin("lha-linux-sandbox")
+            .expect("should find lha-linux-sandbox alias"),
+    );
+
+    process_exec_tool_call(
+        params,
+        &sandbox_policy,
+        sandbox_cwd.as_path(),
+        &codex_linux_sandbox_exe,
+        None,
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn test_root_read() {
+    run_cmd(&["ls", "-l", "/bin"], &[], SHORT_TIMEOUT_MS).await;
+}
+
+#[tokio::test]
+#[should_panic]
+async fn test_root_write() {
+    let tmpfile = NamedTempFile::new().unwrap();
+    let tmpfile_path = tmpfile.path().to_string_lossy();
+    run_cmd(
+        &["bash", "-lc", &format!("echo blah > {tmpfile_path}")],
+        &[],
+        SHORT_TIMEOUT_MS,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_dev_null_write() {
+    run_cmd(
+        &["bash", "-lc", "echo blah > /dev/null"],
+        &[],
+        // We have seen timeouts when running this test in CI on GitHub,
+        // so we are using a generous timeout until we can diagnose further.
+        LONG_TIMEOUT_MS,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_writable_root() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let file_path = tmpdir.path().join("test");
+    run_cmd(
+        &[
+            "bash",
+            "-lc",
+            &format!("echo blah > {}", file_path.to_string_lossy()),
+        ],
+        &[tmpdir.path().to_path_buf()],
+        // We have seen timeouts when running this test in CI on GitHub,
+        // so we are using a generous timeout until we can diagnose further.
+        LONG_TIMEOUT_MS,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_no_new_privs_is_enabled() {
+    let output = run_cmd_output(
+        &["bash", "-lc", "grep '^NoNewPrivs:' /proc/self/status"],
+        &[],
+        SHORT_TIMEOUT_MS,
+    )
+    .await;
+    let line = output
+        .stdout
+        .text
+        .lines()
+        .find(|line| line.starts_with("NoNewPrivs:"))
+        .unwrap_or("");
+    assert_eq!(line.trim(), "NoNewPrivs:\t1");
+}
+
+#[tokio::test]
+#[should_panic(expected = "Sandbox(Timeout")]
+async fn test_timeout() {
+    run_cmd(&["sleep", "2"], &[], 50).await;
+}
+
+/// Helper that runs `cmd` under the Linux sandbox and asserts that the command
+/// does NOT succeed. Some tools fail with an immediate sandbox denial, while
+/// others stall until the sandboxed process hits the command timeout.
+#[expect(clippy::expect_used)]
+async fn assert_network_blocked(cmd: &[&str]) {
+    let cwd = std::env::current_dir().expect("cwd should exist");
+    let sandbox_cwd = cwd.clone();
+    let params = ExecParams {
+        command: cmd.iter().copied().map(str::to_owned).collect(),
+        cwd,
+        // Give the tool a generous 2-second timeout so even slow DNS timeouts
+        // do not stall the suite.
+        expiration: NETWORK_TIMEOUT_MS.into(),
+        env: create_env_from_core_vars(),
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+        justification: None,
+        arg0: None,
+    };
+
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let codex_linux_sandbox_exe: Option<PathBuf> = Some(
+        crate::test_support::cargo_bin::cargo_bin("lha-linux-sandbox")
+            .expect("should find lha-linux-sandbox alias"),
+    );
+    let result = process_exec_tool_call(
+        params,
+        &sandbox_policy,
+        sandbox_cwd.as_path(),
+        &codex_linux_sandbox_exe,
+        None,
+    )
+    .await;
+
+    let output = match result {
+        Ok(output) => output,
+        Err(CodexErr::Sandbox(SandboxErr::Denied { output } | SandboxErr::Timeout { output })) => {
+            *output
+        }
+        _ => panic!("expected sandbox denied or timeout error, got: {result:?}"),
+    };
+
+    dbg!(&output.stderr.text);
+    dbg!(&output.stdout.text);
+    dbg!(&output.exit_code);
+
+    // A completely missing binary exits with 127. Anything else should also be
+    // non-zero, whether the sandbox rejects the syscall immediately or the
+    // process times out waiting on a blocked network operation.
+
+    if output.exit_code == 0 {
+        panic!(
+            "Network sandbox FAILED - {cmd:?} exited 0\nstdout:\n{}\nstderr:\n{}",
+            output.stdout.text, output.stderr.text
+        );
+    }
+}
+
+#[tokio::test]
+async fn sandbox_blocks_curl() {
+    assert_network_blocked(&["curl", "-I", "http://openai.com"]).await;
+}
+
+#[tokio::test]
+async fn sandbox_blocks_wget() {
+    assert_network_blocked(&["wget", "-qO-", "http://openai.com"]).await;
+}
+
+#[tokio::test]
+async fn sandbox_blocks_ping() {
+    // ICMP requires raw socket – should be denied quickly with EPERM.
+    assert_network_blocked(&["ping", "-c", "1", "8.8.8.8"]).await;
+}
+
+#[tokio::test]
+async fn sandbox_blocks_nc() {
+    // Zero‑length connection attempt to localhost.
+    assert_network_blocked(&["nc", "-z", "127.0.0.1", "80"]).await;
+}
+
+#[tokio::test]
+async fn sandbox_blocks_ssh() {
+    // Force ssh to attempt a real TCP connection but fail quickly.  `BatchMode`
+    // avoids password prompts, and `ConnectTimeout` keeps the hang time low.
+    assert_network_blocked(&[
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=1",
+        "github.com",
+    ])
+    .await;
+}
+
+#[tokio::test]
+async fn sandbox_blocks_getent() {
+    assert_network_blocked(&["getent", "ahosts", "openai.com"]).await;
+}
+
+#[tokio::test]
+async fn sandbox_blocks_dev_tcp_redirection() {
+    // This syntax is only supported by bash and zsh. We try bash first.
+    // Fallback generic socket attempt using /bin/sh with bash‑style /dev/tcp.  Not
+    // all images ship bash, so we guard against 127 as well.
+    assert_network_blocked(&["bash", "-c", "echo hi > /dev/tcp/127.0.0.1/80"]).await;
+}

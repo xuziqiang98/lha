@@ -1,0 +1,19 @@
+use anyhow::Result;
+use clap::Parser;
+use std::path::PathBuf;
+
+#[derive(Parser)]
+#[command(name = "lha-write-models-schema")]
+struct Args {
+    #[arg(short, long, value_name = "PATH")]
+    out: Option<PathBuf>,
+}
+
+fn main() -> Result<()> {
+    let args = Args::parse();
+    let out_path = args
+        .out
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models.schema.json"));
+    crate::product::agent::config::schema::write_models_schema(&out_path)?;
+    Ok(())
+}

@@ -1,0 +1,44 @@
+---
+source: src/agent/cli/src/../product/tui_app/src/chatwidget/tests.rs
+expression: term.backend().vt100().screen().contents()
+---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+• I’m going to search the repo for where “Change Approved” is rendered to update
+  that view.
+
+• Exploring
+  └ Search Change Approved
+    Read diff_render.rs
+
+• Investigating rendering code (0s • esc to interrupt)
+
+
+› Summarize recent commits
+
+  gpt-5.3-codex · 100% left · ~/Workspace/lha/src/tui/app

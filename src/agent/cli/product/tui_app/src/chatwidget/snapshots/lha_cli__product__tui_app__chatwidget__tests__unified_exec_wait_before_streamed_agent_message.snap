@@ -1,0 +1,8 @@
+---
+source: src/agent/cli/src/../product/tui_app/src/chatwidget/tests.rs
+expression: combined
+---
+↳ Interacted with background terminal · cargo test -p lha-agent
+  └ (waited)
+
+• Streaming response.

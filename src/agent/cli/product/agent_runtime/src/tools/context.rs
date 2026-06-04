@@ -1,0 +1,250 @@
+use crate::product::agent::codex::Session;
+use crate::product::agent::codex::TurnContext;
+use crate::product::agent::tools::TELEMETRY_PREVIEW_MAX_BYTES;
+use crate::product::agent::tools::TELEMETRY_PREVIEW_MAX_LINES;
+use crate::product::agent::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
+use crate::product::agent::turn_diff_tracker::TurnDiffTracker;
+use crate::product::protocol::models::ShellToolCallParams;
+use crate::product::utils_string::take_bytes_at_char_boundary;
+use lha_llm::ToolResultContentItem;
+use lha_llm::ToolResultItem;
+use lha_llm::ToolResultPayload;
+use std::borrow::Cow;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
+
+#[derive(Clone)]
+pub struct ToolInvocation {
+    pub session: Arc<Session>,
+    pub turn: Arc<TurnContext>,
+    pub tracker: SharedTurnDiffTracker,
+    pub call_id: String,
+    pub tool_name: String,
+    pub payload: ToolPayload,
+}
+
+#[derive(Clone, Debug)]
+pub enum ToolPayload {
+    Function {
+        arguments: String,
+    },
+    Custom {
+        input: String,
+    },
+    LocalShell {
+        params: ShellToolCallParams,
+    },
+    Mcp {
+        server: String,
+        tool: String,
+        raw_arguments: String,
+    },
+}
+
+impl ToolPayload {
+    pub fn log_payload(&self) -> Cow<'_, str> {
+        match self {
+            ToolPayload::Function { arguments } => Cow::Borrowed(arguments),
+            ToolPayload::Custom { input } => Cow::Borrowed(input),
+            ToolPayload::LocalShell { params } => Cow::Owned(params.command.join(" ")),
+            ToolPayload::Mcp { raw_arguments, .. } => Cow::Borrowed(raw_arguments),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum ToolOutput {
+    Function {
+        // Plain text representation of the tool output.
+        content: String,
+        // Some tool calls such as MCP calls may return structured content that can get parsed into an array of polymorphic content items.
+        content_items: Option<Vec<ToolResultContentItem>>,
+        success: Option<bool>,
+    },
+}
+
+impl ToolOutput {
+    pub fn log_preview(&self) -> String {
+        match self {
+            ToolOutput::Function { content, .. } => telemetry_preview(content),
+        }
+    }
+
+    pub fn success_for_logging(&self) -> bool {
+        match self {
+            ToolOutput::Function { success, .. } => success.unwrap_or(true),
+        }
+    }
+
+    pub fn into_tool_result(
+        self,
+        call_id: &str,
+        tool_name: &str,
+        payload: &ToolPayload,
+    ) -> ToolResultItem {
+        match self {
+            ToolOutput::Function {
+                content,
+                content_items,
+                success,
+            } => {
+                if matches!(payload, ToolPayload::Custom { .. }) {
+                    ToolResultItem {
+                        call_id: call_id.to_string(),
+                        tool_name: tool_name.to_string(),
+                        payload: ToolResultPayload::Text { output: content },
+                    }
+                } else {
+                    ToolResultItem {
+                        call_id: call_id.to_string(),
+                        tool_name: tool_name.to_string(),
+                        payload: ToolResultPayload::Structured {
+                            content,
+                            content_items,
+                            success,
+                        },
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn telemetry_preview(content: &str) -> String {
+    let truncated_slice = take_bytes_at_char_boundary(content, TELEMETRY_PREVIEW_MAX_BYTES);
+    let truncated_by_bytes = truncated_slice.len() < content.len();
+
+    let mut preview = String::new();
+    let mut lines_iter = truncated_slice.lines();
+    for idx in 0..TELEMETRY_PREVIEW_MAX_LINES {
+        match lines_iter.next() {
+            Some(line) => {
+                if idx > 0 {
+                    preview.push('\n');
+                }
+                preview.push_str(line);
+            }
+            None => break,
+        }
+    }
+    let truncated_by_lines = lines_iter.next().is_some();
+
+    if !truncated_by_bytes && !truncated_by_lines {
+        return content.to_string();
+    }
+
+    if preview.len() < truncated_slice.len()
+        && truncated_slice
+            .as_bytes()
+            .get(preview.len())
+            .is_some_and(|byte| *byte == b'\n')
+    {
+        preview.push('\n');
+    }
+
+    if !preview.is_empty() && !preview.ends_with('\n') {
+        preview.push('\n');
+    }
+    preview.push_str(TELEMETRY_PREVIEW_TRUNCATION_NOTICE);
+
+    preview
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn custom_tool_calls_should_roundtrip_as_custom_outputs() {
+        let payload = ToolPayload::Custom {
+            input: "patch".to_string(),
+        };
+        let response = ToolOutput::Function {
+            content: "patched".to_string(),
+            content_items: None,
+            success: Some(true),
+        }
+        .into_tool_result("call-42", "apply_patch", &payload);
+
+        match response {
+            ToolResultItem {
+                call_id,
+                tool_name,
+                payload: ToolResultPayload::Text { output },
+            } => {
+                assert_eq!(call_id, "call-42");
+                assert_eq!(tool_name, "apply_patch");
+                assert_eq!(output, "patched");
+            }
+            other => panic!("expected text tool result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn function_payloads_remain_function_outputs() {
+        let payload = ToolPayload::Function {
+            arguments: "{}".to_string(),
+        };
+        let response = ToolOutput::Function {
+            content: "ok".to_string(),
+            content_items: None,
+            success: Some(true),
+        }
+        .into_tool_result("fn-1", "shell", &payload);
+
+        match response {
+            ToolResultItem {
+                call_id,
+                tool_name,
+                payload:
+                    ToolResultPayload::Structured {
+                        content,
+                        content_items,
+                        success,
+                    },
+            } => {
+                assert_eq!(call_id, "fn-1");
+                assert_eq!(tool_name, "shell");
+                assert_eq!(content, "ok");
+                assert!(content_items.is_none());
+                assert_eq!(success, Some(true));
+            }
+            other => panic!("expected structured tool result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn telemetry_preview_returns_original_within_limits() {
+        let content = "short output";
+        assert_eq!(telemetry_preview(content), content);
+    }
+
+    #[test]
+    fn telemetry_preview_truncates_by_bytes() {
+        let content = "x".repeat(TELEMETRY_PREVIEW_MAX_BYTES + 8);
+        let preview = telemetry_preview(&content);
+
+        assert!(preview.contains(TELEMETRY_PREVIEW_TRUNCATION_NOTICE));
+        assert!(
+            preview.len()
+                <= TELEMETRY_PREVIEW_MAX_BYTES + TELEMETRY_PREVIEW_TRUNCATION_NOTICE.len() + 1
+        );
+    }
+
+    #[test]
+    fn telemetry_preview_truncates_by_lines() {
+        let content = (0..(TELEMETRY_PREVIEW_MAX_LINES + 5))
+            .map(|idx| format!("line {idx}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let preview = telemetry_preview(&content);
+        let lines: Vec<&str> = preview.lines().collect();
+
+        assert!(lines.len() <= TELEMETRY_PREVIEW_MAX_LINES + 1);
+        assert_eq!(lines.last(), Some(&TELEMETRY_PREVIEW_TRUNCATION_NOTICE));
+    }
+}

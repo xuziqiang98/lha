@@ -1,0 +1,13 @@
+---
+source: src/agent/cli/src/../product/tui_app/src/chatwidget/tests.rs
+expression: popup
+---
+  Save logs locally?
+
+  The following files will be saved under LHA_HOME/feedback:
+    • lha-logs.log
+
+› 1. Yes  Save the current LHA session logs locally for troubleshooting.
+  2. No   Save feedback only, without logs.
+
+  Press enter to confirm or esc to go back

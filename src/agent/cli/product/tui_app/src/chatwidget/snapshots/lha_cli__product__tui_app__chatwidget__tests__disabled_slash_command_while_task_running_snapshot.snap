@@ -1,0 +1,5 @@
+---
+source: src/agent/cli/src/../product/tui_app/src/chatwidget/tests.rs
+expression: blob
+---
+■ '/model' is disabled while a task is in progress.

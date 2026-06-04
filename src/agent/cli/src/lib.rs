@@ -1,8 +1,14 @@
 pub mod debug_sandbox;
+mod entry;
 mod exit_status;
+mod product;
+#[cfg(test)]
+mod product_tests;
+#[cfg(test)]
+mod test_support;
 
+use crate::product::common::CliConfigOverrides;
 use clap::Parser;
-use lha_common::CliConfigOverrides;
 
 #[derive(Debug, Parser)]
 pub struct SeatbeltCommand {
@@ -49,3 +55,5 @@ pub struct WindowsCommand {
     #[arg(trailing_var_arg = true)]
     pub command: Vec<String>,
 }
+
+pub use entry::main;

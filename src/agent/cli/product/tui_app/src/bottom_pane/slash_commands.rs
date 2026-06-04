@@ -1,0 +1,88 @@
+//! Shared helpers for filtering and matching built-in slash commands.
+//!
+//! The same sandbox- and feature-gating rules are used by both the composer
+//! and the command popup. Centralizing them here keeps those call sites small
+//! and ensures they stay in sync.
+use std::str::FromStr;
+
+use crate::product::common::fuzzy_match::fuzzy_match;
+
+use crate::product::tui_app::slash_command::SlashCommand;
+use crate::product::tui_app::slash_command::built_in_slash_commands;
+
+/// Return the built-ins that should be visible/usable for the current input.
+pub(crate) fn builtins_for_input(
+    identities_enabled: bool,
+    personality_command_enabled: bool,
+    allow_elevate_sandbox: bool,
+) -> Vec<(&'static str, SlashCommand)> {
+    built_in_slash_commands()
+        .into_iter()
+        .filter(|(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
+        .filter(|(_, cmd)| identities_enabled || !matches!(*cmd, SlashCommand::Identity))
+        .filter(|(_, cmd)| personality_command_enabled || *cmd != SlashCommand::Personality)
+        .collect()
+}
+
+/// Find a single built-in command by exact name, after applying the gating rules.
+pub(crate) fn find_builtin_command(
+    name: &str,
+    identities_enabled: bool,
+    personality_command_enabled: bool,
+    allow_elevate_sandbox: bool,
+) -> Option<SlashCommand> {
+    let cmd = SlashCommand::from_str(name).ok()?;
+
+    builtins_for_input(
+        identities_enabled,
+        personality_command_enabled,
+        allow_elevate_sandbox,
+    )
+    .into_iter()
+    .any(|(_, visible_cmd)| visible_cmd == cmd)
+    .then_some(cmd)
+}
+
+/// Whether any visible built-in fuzzily matches the provided prefix.
+pub(crate) fn has_builtin_prefix(
+    name: &str,
+    identities_enabled: bool,
+    personality_command_enabled: bool,
+    allow_elevate_sandbox: bool,
+) -> bool {
+    builtins_for_input(
+        identities_enabled,
+        personality_command_enabled,
+        allow_elevate_sandbox,
+    )
+    .into_iter()
+    .any(|(command_name, _)| fuzzy_match(command_name, name).is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn stop_command_resolves_for_dispatch() {
+        assert_eq!(
+            find_builtin_command("stop", true, true, true),
+            Some(SlashCommand::Stop)
+        );
+    }
+
+    #[test]
+    fn clean_command_alias_resolves_for_dispatch() {
+        assert_eq!(
+            find_builtin_command("clean", true, true, true),
+            Some(SlashCommand::Stop)
+        );
+    }
+
+    #[test]
+    fn apps_command_does_not_resolve_for_dispatch() {
+        assert_eq!(find_builtin_command("apps", true, true, true), None);
+    }
+}

@@ -1,0 +1,9 @@
+---
+source: src/agent/cli/src/../product/tui_app/src/chatwidget/tests.rs
+expression: combined
+---
+↳ Interacted with background terminal · just fix
+  └ (waited)
+
+↳ Interacted with background terminal · just fix
+  └ ls

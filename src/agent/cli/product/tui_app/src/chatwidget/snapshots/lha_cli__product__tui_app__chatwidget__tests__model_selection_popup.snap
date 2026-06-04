@@ -1,0 +1,11 @@
+---
+source: src/agent/cli/product/tui_app/src/chatwidget/tests.rs
+assertion_line: 4644
+expression: popup
+---
+  Select Model and Effort
+  Access legacy models by running lha -m <model_name> or in your config.toml
+
+› 1. gpt-5-codex (current)  Configured model from openai provider.
+
+  Press enter to select reasoning effort, or esc to dismiss.

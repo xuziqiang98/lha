@@ -1,0 +1,647 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ResumeConversationParams",
+  "type": "object",
+  "properties": {
+    "conversationId": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ThreadId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "history": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/definitions/TranscriptItem"
+      }
+    },
+    "overrides": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/NewConversationParams"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "definitions": {
+    "AskForApproval": {
+      "description": "Determines the conditions under which the user is consulted to approve running the command proposed by LHA.",
+      "oneOf": [
+        {
+          "description": "Under this policy, only \"known safe\" commands—as determined by `is_safe_command()`—that **only read files** are auto‑approved. Everything else will ask the user to approve.",
+          "type": "string",
+          "enum": [
+            "untrusted"
+          ]
+        },
+        {
+          "description": "*All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox.",
+          "type": "string",
+          "enum": [
+            "on-failure"
+          ]
+        },
+        {
+          "description": "The model decides when to ask the user for approval.",
+          "type": "string",
+          "enum": [
+            "on-request"
+          ]
+        },
+        {
+          "description": "Never ask the user to approve commands. Failures are immediately returned to the model, and never escalated to the user for approval.",
+          "type": "string",
+          "enum": [
+            "never"
+          ]
+        }
+      ]
+    },
+    "ContentItem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "text",
+            "type"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "input_text"
+              ],
+              "title": "InputTextContentItemType"
+            }
+          },
+          "title": "InputTextContentItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "image_url",
+            "type"
+          ],
+          "properties": {
+            "image_url": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "input_image"
+              ],
+              "title": "InputImageContentItemType"
+            }
+          },
+          "title": "InputImageContentItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "text",
+            "type"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "output_text"
+              ],
+              "title": "OutputTextContentItemType"
+            }
+          },
+          "title": "OutputTextContentItem"
+        }
+      ]
+    },
+    "NewConversationParams": {
+      "type": "object",
+      "properties": {
+        "approvalPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AskForApproval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "baseInstructions": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "compactPrompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "config": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "developerInstructions": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "includeApplyPatchTool": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modelProvider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sandbox": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ReasoningItemContent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "text",
+            "type"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "reasoning_text"
+              ],
+              "title": "ReasoningTextReasoningItemContentType"
+            }
+          },
+          "title": "ReasoningTextReasoningItemContent"
+        },
+        {
+          "type": "object",
+          "required": [
+            "text",
+            "type"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "text"
+              ],
+              "title": "TextReasoningItemContentType"
+            }
+          },
+          "title": "TextReasoningItemContent"
+        }
+      ]
+    },
+    "ReasoningItemReasoningSummary": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "text",
+            "type"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "summary_text"
+              ],
+              "title": "SummaryTextReasoningItemReasoningSummaryType"
+            }
+          },
+          "title": "SummaryTextReasoningItemReasoningSummary"
+        }
+      ]
+    },
+    "SandboxMode": {
+      "type": "string",
+      "enum": [
+        "read-only",
+        "workspace-write",
+        "danger-full-access"
+      ]
+    },
+    "ThreadId": {
+      "type": "string"
+    },
+    "ToolCallPayload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "arguments",
+            "type"
+          ],
+          "properties": {
+            "arguments": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "json_arguments"
+              ],
+              "title": "JsonArgumentsToolCallPayloadType"
+            }
+          },
+          "title": "JsonArgumentsToolCallPayload"
+        },
+        {
+          "type": "object",
+          "required": [
+            "input",
+            "type"
+          ],
+          "properties": {
+            "input": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "text_input"
+              ],
+              "title": "TextInputToolCallPayloadType"
+            }
+          },
+          "title": "TextInputToolCallPayload"
+        }
+      ]
+    },
+    "ToolResultContentItem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "text",
+            "type"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "input_text"
+              ],
+              "title": "InputTextToolResultContentItemType"
+            }
+          },
+          "title": "InputTextToolResultContentItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "image_url",
+            "type"
+          ],
+          "properties": {
+            "image_url": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "input_image"
+              ],
+              "title": "InputImageToolResultContentItemType"
+            }
+          },
+          "title": "InputImageToolResultContentItem"
+        }
+      ]
+    },
+    "ToolResultPayload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "content",
+            "type"
+          ],
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "content_items": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/ToolResultContentItem"
+              }
+            },
+            "success": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "structured"
+              ],
+              "title": "StructuredToolResultPayloadType"
+            }
+          },
+          "title": "StructuredToolResultPayload"
+        },
+        {
+          "type": "object",
+          "required": [
+            "output",
+            "type"
+          ],
+          "properties": {
+            "output": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "text"
+              ],
+              "title": "TextToolResultPayloadType"
+            }
+          },
+          "title": "TextToolResultPayload"
+        }
+      ]
+    },
+    "TranscriptItem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "content",
+            "role",
+            "type"
+          ],
+          "properties": {
+            "content": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ContentItem"
+              }
+            },
+            "end_turn": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "message"
+              ],
+              "title": "MessageTranscriptItemType"
+            }
+          },
+          "title": "MessageTranscriptItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "summary",
+            "type"
+          ],
+          "properties": {
+            "content": {
+              "default": null,
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/ReasoningItemContent"
+              }
+            },
+            "encrypted_content": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ReasoningItemReasoningSummary"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "reasoning"
+              ],
+              "title": "ReasoningTranscriptItemType"
+            }
+          },
+          "title": "ReasoningTranscriptItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "activity_type",
+            "payload",
+            "type"
+          ],
+          "properties": {
+            "activity_type": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "payload": true,
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "hosted_activity"
+              ],
+              "title": "HostedActivityTranscriptItemType"
+            }
+          },
+          "title": "HostedActivityTranscriptItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "call_id",
+            "payload",
+            "tool_name",
+            "type"
+          ],
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ToolCallPayload"
+            },
+            "tool_name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "tool_call"
+              ],
+              "title": "ToolCallTranscriptItemType"
+            }
+          },
+          "title": "ToolCallTranscriptItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "call_id",
+            "payload",
+            "tool_name",
+            "type"
+          ],
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "payload": {
+              "$ref": "#/definitions/ToolResultPayload"
+            },
+            "tool_name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "tool_result"
+              ],
+              "title": "ToolResultTranscriptItemType"
+            }
+          },
+          "title": "ToolResultTranscriptItem"
+        },
+        {
+          "type": "object",
+          "required": [
+            "raw",
+            "type"
+          ],
+          "properties": {
+            "raw": true,
+            "type": {
+              "type": "string",
+              "enum": [
+                "unknown"
+              ],
+              "title": "UnknownTranscriptItemType"
+            }
+          },
+          "title": "UnknownTranscriptItem"
+        }
+      ]
+    }
+  }
+}

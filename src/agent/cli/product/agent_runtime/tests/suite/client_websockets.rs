@@ -1,0 +1,289 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+use crate::product::agent::AuthManager;
+use crate::product::agent::CodexAuth;
+use crate::product::agent::ContentItem;
+use crate::product::agent::features::Feature;
+use crate::product::agent::models_manager::manager::ModelsManager;
+use crate::product::agent::protocol::SessionSource;
+use crate::product::otel::OtelManager;
+use crate::product::otel::metrics::MetricsClient;
+use crate::product::otel::metrics::MetricsConfig;
+use crate::product::protocol::ThreadId;
+use crate::product::protocol::config_types::ReasoningSummary;
+use crate::product::protocol::models::TranscriptItem;
+use crate::test_support::core::load_default_config_for_test;
+use crate::test_support::core::responses::WebSocketConnectionConfig;
+use crate::test_support::core::responses::WebSocketTestServer;
+use crate::test_support::core::responses::ev_completed;
+use crate::test_support::core::responses::ev_response_created;
+use crate::test_support::core::responses::start_websocket_server;
+use crate::test_support::core::responses::start_websocket_server_with_headers;
+use crate::test_support::core::runtime_client::TestRuntimeClient;
+use crate::test_support::core::runtime_client::TestRuntimeSession;
+use crate::test_support::core::skip_if_no_network;
+use futures::StreamExt;
+use lha_llm::RuntimeEndpoint;
+use lha_llm::TurnEvent;
+use lha_llm::TurnRequest;
+use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+use pretty_assertions::assert_eq;
+use std::sync::Arc;
+use std::time::Duration;
+use tempfile::TempDir;
+use tracing_test::traced_test;
+
+const MODEL: &str = "gpt-5.2-codex";
+
+struct WebsocketTestHarness {
+    _lha_home: TempDir,
+    client: TestRuntimeClient,
+    otel_manager: OtelManager,
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_streams_request() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut session = harness.client.new_session();
+    let turn = turn_with_input(vec![message_item("hello")]);
+
+    stream_until_complete(&mut session, &turn).await;
+
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 1);
+    let body = connection.first().expect("missing request").body_json();
+
+    assert_eq!(body["type"].as_str(), Some("response.create"));
+    assert_eq!(body["model"].as_str(), Some(MODEL));
+    assert_eq!(body["stream"], serde_json::Value::Bool(true));
+    assert_eq!(body["input"].as_array().map(Vec::len), Some(1));
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[traced_test]
+async fn responses_websocket_emits_websocket_telemetry_events() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    harness.otel_manager.reset_runtime_metrics();
+    let mut session = harness.client.new_session();
+    let turn = turn_with_input(vec![message_item("hello")]);
+
+    stream_until_complete(&mut session, &turn).await;
+
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let summary = harness
+        .otel_manager
+        .runtime_metrics_summary()
+        .expect("runtime metrics summary");
+    assert_eq!(summary.api_calls.count, 0);
+    assert_eq!(summary.streaming_events.count, 0);
+    assert_eq!(summary.websocket_calls.count, 1);
+    assert_eq!(summary.websocket_events.count, 2);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_emits_reasoning_included_event() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![vec![ev_response_created("resp-1"), ev_completed("resp-1")]],
+        response_headers: vec![("X-Reasoning-Included".to_string(), "true".to_string())],
+    }])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut session = harness.client.new_session();
+    let turn = turn_with_input(vec![message_item("hello")]);
+
+    let mut stream = session
+        .run_turn(&turn)
+        .await
+        .expect("websocket stream failed");
+
+    let mut saw_reasoning_included = false;
+    while let Some(event) = stream.next().await {
+        match event.expect("event") {
+            TurnEvent::ServerReasoningIncluded(true) => {
+                saw_reasoning_included = true;
+            }
+            TurnEvent::Completed { .. } => break,
+            _ => {}
+        }
+    }
+
+    assert!(saw_reasoning_included);
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_appends_on_prefix() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![
+        vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
+    ]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut session = harness.client.new_session();
+    let turn_one = turn_with_input(vec![message_item("hello")]);
+    let turn_two = turn_with_input(vec![message_item("hello"), message_item("second")]);
+
+    stream_until_complete(&mut session, &turn_one).await;
+    stream_until_complete(&mut session, &turn_two).await;
+
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 2);
+    let first = connection.first().expect("missing request").body_json();
+    let second = connection.get(1).expect("missing request").body_json();
+
+    assert_eq!(first["type"].as_str(), Some("response.create"));
+    assert_eq!(first["model"].as_str(), Some(MODEL));
+    assert_eq!(first["stream"], serde_json::Value::Bool(true));
+    assert_eq!(first["input"].as_array().map(Vec::len), Some(1));
+    let expected_append = serde_json::json!({
+        "type": "response.append",
+        "input": serde_json::to_value(&turn_two.conversation[1..])
+            .expect("serialize append items"),
+    });
+    assert_eq!(second, expected_append);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_creates_on_non_prefix() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![
+        vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
+    ]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut session = harness.client.new_session();
+    let turn_one = turn_with_input(vec![message_item("hello")]);
+    let turn_two = turn_with_input(vec![message_item("different")]);
+
+    stream_until_complete(&mut session, &turn_one).await;
+    stream_until_complete(&mut session, &turn_two).await;
+
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 2);
+    let second = connection.get(1).expect("missing request").body_json();
+
+    assert_eq!(second["type"].as_str(), Some("response.create"));
+    assert_eq!(second["model"].as_str(), Some(MODEL));
+    assert_eq!(second["stream"], serde_json::Value::Bool(true));
+    assert_eq!(
+        second["input"],
+        serde_json::to_value(&turn_two.conversation).unwrap()
+    );
+
+    server.shutdown().await;
+}
+
+fn message_item(text: &str) -> TranscriptItem {
+    TranscriptItem::Message {
+        id: None,
+        role: "user".into(),
+        content: vec![ContentItem::InputText { text: text.into() }],
+        end_turn: None,
+    }
+}
+
+fn turn_with_input(input: Vec<TranscriptItem>) -> TurnRequest {
+    TurnRequest {
+        conversation: input,
+        ..Default::default()
+    }
+}
+
+fn websocket_provider(server: &WebSocketTestServer) -> RuntimeEndpoint {
+    RuntimeEndpoint::openai_compatible_responses("mock-ws", format!("{}/v1", server.uri()))
+        .with_request_max_retries(Some(0))
+        .with_stream_max_retries(Some(0))
+        .with_stream_idle_timeout_ms(Some(5_000))
+        .with_realtime_turn_streaming_enabled(true)
+}
+
+async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness {
+    let provider = websocket_provider(server);
+    let lha_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&lha_home).await;
+    config.model = Some(MODEL.to_string());
+    config.features.enable(Feature::ResponsesWebsockets);
+    let config = Arc::new(config);
+    let model_info = ModelsManager::construct_model_info_offline(MODEL, &config);
+    let conversation_id = ThreadId::new();
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let exporter = InMemoryMetricExporter::default();
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "lha-agent", env!("CARGO_PKG_VERSION"), exporter)
+            .with_runtime_reader(),
+    )
+    .expect("in-memory metrics client");
+    let otel_manager = OtelManager::new(
+        conversation_id,
+        MODEL,
+        model_info.slug.as_str(),
+        None,
+        Some("test@test.com".to_string()),
+        auth_manager.get_auth_mode(),
+        false,
+        "test".to_string(),
+        SessionSource::Exec,
+    )
+    .with_metrics(metrics);
+    let client = TestRuntimeClient::new(
+        Arc::clone(&config),
+        None,
+        model_info,
+        otel_manager.clone(),
+        provider.clone(),
+        None,
+        ReasoningSummary::Auto,
+        conversation_id,
+        SessionSource::Exec,
+    );
+
+    WebsocketTestHarness {
+        _lha_home: lha_home,
+        client,
+        otel_manager,
+    }
+}
+
+async fn stream_until_complete(session: &mut TestRuntimeSession, turn: &TurnRequest) {
+    let mut stream = session
+        .run_turn(turn)
+        .await
+        .expect("websocket stream failed");
+
+    while let Some(event) = stream.next().await {
+        if matches!(event, Ok(TurnEvent::Completed { .. })) {
+            break;
+        }
+    }
+}

@@ -1,0 +1,107 @@
+#![cfg(not(target_os = "windows"))]
+
+use crate::product::agent::CodexAuth;
+use crate::product::agent::features::Feature;
+use crate::product::agent::protocol::EventMsg;
+use crate::product::agent::protocol::Op;
+use crate::product::protocol::user_input::UserInput;
+use crate::test_support::core::responses::ev_completed;
+use crate::test_support::core::responses::ev_response_created;
+use crate::test_support::core::responses::mount_sse_once;
+use crate::test_support::core::responses::sse;
+use crate::test_support::core::responses::start_mock_server;
+use crate::test_support::core::skip_if_no_network;
+use crate::test_support::core::test_codex::test_codex;
+use crate::test_support::core::wait_for_event;
+use pretty_assertions::assert_eq;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_body_is_zstd_compressed_for_codex_backend_when_enabled() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let base_url = format!("{}/backend-api/codex/v1", server.uri());
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(move |config| {
+            config.features.enable(Feature::EnableRequestCompression);
+            config.model_provider.base_url = Some(base_url);
+        });
+    let codex = builder.build(&server).await?.codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "compress me".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    // Wait until the task completes so the request definitely hit the server.
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = request_log.single_request();
+    assert_eq!(request.header("content-encoding").as_deref(), Some("zstd"));
+
+    let decompressed = zstd::stream::decode_all(std::io::Cursor::new(request.body_bytes()))?;
+    let json: serde_json::Value = serde_json::from_slice(&decompressed)?;
+    assert!(
+        json.get("input").is_some(),
+        "expected request body to decode as Responses API JSON"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_body_is_not_compressed_for_api_key_auth_even_when_enabled() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let base_url = format!("{}/backend-api/codex/v1", server.uri());
+    let mut builder = test_codex().with_config(move |config| {
+        config.features.enable(Feature::EnableRequestCompression);
+        config.model_provider.base_url = Some(base_url);
+    });
+    let codex = builder.build(&server).await?.codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "do not compress".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = request_log.single_request();
+    assert!(
+        request.header("content-encoding").is_none(),
+        "did not expect request compression for API-key auth"
+    );
+
+    let json: serde_json::Value = serde_json::from_slice(&request.body_bytes())?;
+    assert!(
+        json.get("input").is_some(),
+        "expected request body to be plain Responses API JSON"
+    );
+
+    Ok(())
+}

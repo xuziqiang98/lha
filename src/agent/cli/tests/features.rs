@@ -4,8 +4,10 @@ use anyhow::Result;
 use predicates::str::contains;
 use tempfile::TempDir;
 
+mod common;
+
 fn codex_command(lha_home: &Path) -> Result<assert_cmd::Command> {
-    let mut cmd = assert_cmd::Command::new(lha_utils_cargo_bin::cargo_bin("lha")?);
+    let mut cmd = assert_cmd::Command::new(common::cargo_bin::cargo_bin("lha")?);
     cmd.env("LHA_HOME", lha_home);
     Ok(cmd)
 }

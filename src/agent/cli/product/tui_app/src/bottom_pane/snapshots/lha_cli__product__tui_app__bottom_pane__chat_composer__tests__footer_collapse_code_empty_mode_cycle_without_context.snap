@@ -1,0 +1,13 @@
+---
+source: src/agent/cli/product/tui_app/src/bottom_pane/chat_composer.rs
+expression: terminal.backend()
+---
+"                                            "
+"› Ask LHA to do anything                    "
+"                                            "
+"                                            "
+"                                            "
+"                                            "
+"                                            "
+"                                            "
+" Identity programmer (shift+tab to change)  "

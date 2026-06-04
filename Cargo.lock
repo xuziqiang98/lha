@@ -179,26 +179,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
-name = "app_test_support"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "base64",
- "chrono",
- "core_test_support",
- "lha-agent",
- "lha-app-server-protocol",
- "lha-protocol",
- "lha-utils-cargo-bin",
- "serde",
- "serde_json",
- "shlex",
- "tokio",
- "uuid",
- "wiremock",
-]
-
-[[package]]
 name = "arboard"
 version = "3.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -775,7 +755,6 @@ dependencies = [
  "anstyle",
  "clap_lex",
  "strsim 0.11.1",
- "terminal_size",
 ]
 
 [[package]]
@@ -959,35 +938,6 @@ name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
-
-[[package]]
-name = "core_test_support"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "async-trait",
- "base64",
- "futures",
- "lha-agent",
- "lha-llm",
- "lha-otel",
- "lha-protocol",
- "lha-utils-absolute-path",
- "lha-utils-cargo-bin",
- "notify",
- "pretty_assertions",
- "regex-lite",
- "reqwest",
- "serde_json",
- "shlex",
- "tempfile",
- "tokio",
- "tokio-tungstenite",
- "walkdir",
- "wiremock",
- "zstd",
-]
 
 [[package]]
 name = "cpufeatures"
@@ -2243,11 +2193,11 @@ dependencies = [
 
 [[package]]
 name = "home"
-version = "0.5.11"
+version = "0.5.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "589533453244b0995c858700322199b2becb13b627df2851f64a2775d024abcf"
+checksum = "cc627f471c528ff0c4a49e1d5e60450c8f6461dd6d10ba9dcd3a61d3dff7728d"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2950,113 +2900,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lha-agent"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "arc-swap",
- "assert_cmd",
- "assert_matches",
- "async-channel",
- "async-trait",
- "base64",
- "chardetng",
- "chrono",
- "clap",
- "core-foundation 0.9.4",
- "core_test_support",
- "ctor 0.6.3",
- "dirs",
- "dunce",
- "encoding_rs",
- "env-flags",
- "eventsource-stream",
- "futures",
- "http",
- "image",
- "include_dir",
- "indexmap 2.12.0",
- "indoc",
- "jsonschema",
- "keyring",
- "landlock",
- "lha-agent",
- "lha-app-server-protocol",
- "lha-apply-patch",
- "lha-arg0",
- "lha-async-utils",
- "lha-core",
- "lha-execpolicy",
- "lha-file-search",
- "lha-git",
- "lha-identity",
- "lha-keyring-store",
- "lha-llm",
- "lha-memories-read",
- "lha-memories-write",
- "lha-otel",
- "lha-protocol",
- "lha-rmcp-client",
- "lha-secrets",
- "lha-state",
- "lha-utils-absolute-path",
- "lha-utils-cargo-bin",
- "lha-utils-home-dir",
- "lha-utils-pty",
- "lha-utils-readiness",
- "lha-utils-string",
- "lha-windows-sandbox",
- "libc",
- "maplit",
- "mcp-types",
- "multimap",
- "once_cell",
- "openssl-sys",
- "opentelemetry_sdk",
- "os_info",
- "predicates",
- "pretty_assertions",
- "rand 0.9.4",
- "regex",
- "regex-lite",
- "reqwest",
- "schemars 0.8.22",
- "seccompiler",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "serde_yaml",
- "serial_test",
- "sha1",
- "sha2",
- "shlex",
- "similar",
- "sqlx",
- "tempfile",
- "test-case",
- "test-log",
- "thiserror 2.0.17",
- "time",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "toml 0.9.5",
- "toml_edit 0.24.0+spec-1.1.0",
- "tracing",
- "tracing-subscriber",
- "tracing-test",
- "tree-sitter",
- "tree-sitter-bash",
- "url",
- "uuid",
- "walkdir",
- "which",
- "wildmatch",
- "wiremock",
- "zstd",
-]
-
-[[package]]
 name = "lha-agent-core"
 version = "1.0.0"
 dependencies = [
@@ -3068,117 +2911,6 @@ name = "lha-agent-runtime"
 version = "1.0.0"
 dependencies = [
  "lha-core",
-]
-
-[[package]]
-name = "lha-ansi-escape"
-version = "1.0.0"
-dependencies = [
- "ansi-to-tui",
- "ratatui",
- "tracing",
-]
-
-[[package]]
-name = "lha-app-server"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "app_test_support",
- "async-trait",
- "axum",
- "base64",
- "chrono",
- "core_test_support",
- "lha-agent",
- "lha-app-server-protocol",
- "lha-arg0",
- "lha-common",
- "lha-execpolicy",
- "lha-feedback",
- "lha-file-search",
- "lha-llm",
- "lha-protocol",
- "lha-rmcp-client",
- "lha-utils-absolute-path",
- "lha-utils-json-to-toml",
- "mcp-types",
- "os_info",
- "pretty_assertions",
- "rmcp",
- "serde",
- "serde_json",
- "serial_test",
- "shlex",
- "tempfile",
- "time",
- "tokio",
- "toml 0.9.5",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "wiremock",
-]
-
-[[package]]
-name = "lha-app-server-protocol"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "clap",
- "lha-protocol",
- "lha-utils-absolute-path",
- "lha-utils-cargo-bin",
- "mcp-types",
- "pretty_assertions",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "similar",
- "strum_macros 0.27.2",
- "tempfile",
- "thiserror 2.0.17",
- "ts-rs",
- "uuid",
-]
-
-[[package]]
-name = "lha-apply-patch"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "assert_matches",
- "lha-utils-cargo-bin",
- "pretty_assertions",
- "similar",
- "tempfile",
- "thiserror 2.0.17",
- "tree-sitter",
- "tree-sitter-bash",
-]
-
-[[package]]
-name = "lha-arg0"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "dotenvy",
- "lha-agent",
- "lha-apply-patch",
- "lha-linux-sandbox",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "lha-async-utils"
-version = "1.0.0"
-dependencies = [
- "async-trait",
- "pretty_assertions",
- "tokio",
- "tokio-util",
 ]
 
 [[package]]
@@ -3194,51 +2926,144 @@ dependencies = [
 name = "lha-cli"
 version = "1.0.0"
 dependencies = [
+ "ansi-to-tui",
  "anyhow",
+ "arboard",
+ "arc-swap",
  "assert_cmd",
  "assert_matches",
+ "async-channel",
+ "async-trait",
+ "axum",
+ "base64",
+ "bytes",
+ "chardetng",
+ "chrono",
  "clap",
  "clap_complete",
- "lha-agent",
- "lha-app-server",
- "lha-app-server-protocol",
- "lha-arg0",
- "lha-common",
- "lha-exec",
- "lha-execpolicy",
- "lha-mcp-server",
- "lha-protocol",
- "lha-responses-api-proxy",
- "lha-rmcp-client",
- "lha-stdio-to-uds",
- "lha-tui",
- "lha-utils-cargo-bin",
- "lha-windows-sandbox",
+ "color-eyre",
+ "core-foundation 0.9.4",
+ "crossbeam-channel",
+ "crossterm",
+ "ctor 0.6.3",
+ "derive_more 2.1.1",
+ "diffy",
+ "dirs",
+ "dirs-next",
+ "dotenvy",
+ "dunce",
+ "encoding_rs",
+ "env-flags",
+ "eventsource-stream",
+ "futures",
+ "globset",
+ "http",
+ "icu_decimal",
+ "icu_locale_core",
+ "icu_provider",
+ "ignore",
+ "image",
+ "include_dir",
+ "indexmap 2.12.0",
+ "indoc",
+ "insta",
+ "itertools 0.14.0",
+ "jsonschema",
+ "keyring",
+ "landlock",
+ "lazy_static",
+ "lha-core",
+ "lha-llm",
  "libc",
+ "log",
+ "lru 0.16.3",
+ "maplit",
+ "mime_guess",
+ "multimap",
+ "notify",
+ "nucleo",
+ "oauth2",
+ "once_cell",
+ "openssl-sys",
+ "opentelemetry",
+ "opentelemetry-appender-tracing",
+ "opentelemetry-otlp",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk",
+ "os_info",
  "owo-colors",
+ "path-absolutize",
+ "pathdiff",
+ "portable-pty",
  "predicates",
  "pretty_assertions",
+ "pulldown-cmark",
+ "rand 0.8.6",
+ "rand 0.9.4",
+ "ratatui",
+ "ratatui-macros",
+ "regex",
  "regex-lite",
- "serde_json",
- "supports-color",
- "tempfile",
- "tokio",
- "toml 0.9.5",
- "tracing",
-]
-
-[[package]]
-name = "lha-common"
-version = "1.0.0"
-dependencies = [
- "clap",
- "lha-agent",
- "lha-llm",
- "lha-protocol",
- "lha-utils-absolute-path",
- "pretty_assertions",
+ "reqwest",
+ "rmcp",
+ "schemars 0.8.22",
+ "seccompiler",
  "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_with",
+ "serde_yaml",
+ "serial_test",
+ "sha1",
+ "sha2",
+ "shlex",
+ "similar",
+ "sqlx",
+ "starlark",
+ "strum 0.27.2",
+ "strum_macros 0.27.2",
+ "supports-color",
+ "sys-locale",
+ "tempfile",
+ "test-case",
+ "test-log",
+ "textwrap 0.16.2",
+ "thiserror 2.0.17",
+ "time",
+ "tiny_http",
+ "tokio",
+ "tokio-stream",
+ "tokio-test",
+ "tokio-tungstenite",
+ "tokio-util",
  "toml 0.9.5",
+ "toml_edit 0.24.0+spec-1.1.0",
+ "tracing",
+ "tracing-appender",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "tracing-test",
+ "tree-sitter",
+ "tree-sitter-bash",
+ "tree-sitter-highlight",
+ "ts-rs",
+ "unicode-segmentation",
+ "unicode-width 0.2.1",
+ "url",
+ "urlencoding",
+ "uuid",
+ "vt100",
+ "walkdir",
+ "webbrowser",
+ "which",
+ "wildmatch",
+ "windows 0.58.0",
+ "windows-sys 0.52.0",
+ "winres",
+ "winsplit",
+ "wiremock",
+ "zeroize",
+ "zstd",
 ]
 
 [[package]]
@@ -3255,135 +3080,6 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tokio-util",
-]
-
-[[package]]
-name = "lha-exec"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "clap",
- "core_test_support",
- "lha-agent",
- "lha-arg0",
- "lha-common",
- "lha-identity",
- "lha-llm",
- "lha-protocol",
- "lha-utils-absolute-path",
- "lha-utils-cargo-bin",
- "libc",
- "mcp-types",
- "owo-colors",
- "predicates",
- "pretty_assertions",
- "serde",
- "serde_json",
- "shlex",
- "supports-color",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "ts-rs",
- "uuid",
- "walkdir",
- "wiremock",
-]
-
-[[package]]
-name = "lha-execpolicy"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "clap",
- "multimap",
- "pretty_assertions",
- "serde",
- "serde_json",
- "shlex",
- "starlark",
- "tempfile",
- "thiserror 2.0.17",
-]
-
-[[package]]
-name = "lha-feedback"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "lha-protocol",
- "pretty_assertions",
- "serde",
- "serde_json",
- "tempfile",
- "time",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "lha-file-search"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "clap",
- "crossbeam-channel",
- "ignore",
- "nucleo",
- "pretty_assertions",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "lha-git"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "assert_matches",
- "once_cell",
- "pretty_assertions",
- "regex",
- "schemars 0.8.22",
- "serde",
- "tempfile",
- "thiserror 2.0.17",
- "ts-rs",
- "walkdir",
-]
-
-[[package]]
-name = "lha-identity"
-version = "1.0.0"
-dependencies = [
- "lha-protocol",
-]
-
-[[package]]
-name = "lha-keyring-store"
-version = "1.0.0"
-dependencies = [
- "keyring",
- "tracing",
-]
-
-[[package]]
-name = "lha-linux-sandbox"
-version = "1.0.0"
-dependencies = [
- "clap",
- "landlock",
- "lha-agent",
- "lha-utils-absolute-path",
- "libc",
- "pretty_assertions",
- "seccompiler",
- "tempfile",
- "tokio",
 ]
 
 [[package]]
@@ -3422,420 +3118,6 @@ dependencies = [
  "url",
  "wiremock",
  "zstd",
-]
-
-[[package]]
-name = "lha-mcp-server"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "core_test_support",
- "lha-agent",
- "lha-arg0",
- "lha-common",
- "lha-protocol",
- "lha-utils-json-to-toml",
- "mcp-types",
- "mcp_test_support",
- "os_info",
- "pretty_assertions",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "shlex",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "wiremock",
-]
-
-[[package]]
-name = "lha-memories-read"
-version = "1.0.0"
-dependencies = [
- "lha-protocol",
- "lha-utils-absolute-path",
- "pretty_assertions",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "lha-memories-write"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "chrono",
- "lha-git",
- "lha-protocol",
- "lha-state",
- "lha-utils-absolute-path",
- "pretty_assertions",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "lha-otel"
-version = "1.0.0"
-dependencies = [
- "chrono",
- "eventsource-stream",
- "http",
- "lha-app-server-protocol",
- "lha-llm",
- "lha-protocol",
- "lha-utils-absolute-path",
- "opentelemetry",
- "opentelemetry-appender-tracing",
- "opentelemetry-otlp",
- "opentelemetry-semantic-conventions",
- "opentelemetry_sdk",
- "pretty_assertions",
- "reqwest",
- "serde",
- "serde_json",
- "strum_macros 0.27.2",
- "thiserror 2.0.17",
- "tokio",
- "tokio-tungstenite",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "lha-process-hardening"
-version = "1.0.0"
-dependencies = [
- "libc",
- "pretty_assertions",
-]
-
-[[package]]
-name = "lha-protocol"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "icu_decimal",
- "icu_locale_core",
- "icu_provider",
- "lha-execpolicy",
- "lha-git",
- "lha-llm",
- "lha-utils-absolute-path",
- "lha-utils-image",
- "mcp-types",
- "mime_guess",
- "pretty_assertions",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "serde_with",
- "strum 0.27.2",
- "strum_macros 0.27.2",
- "sys-locale",
- "tempfile",
- "tracing",
- "ts-rs",
- "uuid",
-]
-
-[[package]]
-name = "lha-responses-api-proxy"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "clap",
- "ctor 0.6.3",
- "lha-process-hardening",
- "libc",
- "reqwest",
- "serde",
- "serde_json",
- "tiny_http",
- "zeroize",
-]
-
-[[package]]
-name = "lha-rmcp-client"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "axum",
- "futures",
- "keyring",
- "lha-keyring-store",
- "lha-protocol",
- "lha-utils-cargo-bin",
- "lha-utils-home-dir",
- "mcp-types",
- "oauth2",
- "pretty_assertions",
- "reqwest",
- "rmcp",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "serial_test",
- "sha2",
- "tempfile",
- "tiny_http",
- "tokio",
- "tracing",
- "urlencoding",
- "webbrowser",
- "which",
-]
-
-[[package]]
-name = "lha-secrets"
-version = "1.0.0"
-dependencies = [
- "pretty_assertions",
- "regex",
-]
-
-[[package]]
-name = "lha-state"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "dirs",
- "lha-otel",
- "lha-protocol",
- "owo-colors",
- "pretty_assertions",
- "serde",
- "serde_json",
- "sqlx",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "lha-stdio-to-uds"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "lha-utils-cargo-bin",
- "pretty_assertions",
- "tempfile",
- "uds_windows",
-]
-
-[[package]]
-name = "lha-tui"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "arboard",
- "assert_matches",
- "base64",
- "chrono",
- "clap",
- "color-eyre",
- "crossterm",
- "derive_more 2.1.1",
- "diffy",
- "dirs",
- "dunce",
- "image",
- "insta",
- "itertools 0.14.0",
- "lazy_static",
- "lha-agent",
- "lha-ansi-escape",
- "lha-app-server-protocol",
- "lha-arg0",
- "lha-cli",
- "lha-common",
- "lha-feedback",
- "lha-file-search",
- "lha-llm",
- "lha-otel",
- "lha-protocol",
- "lha-state",
- "lha-utils-absolute-path",
- "lha-utils-cargo-bin",
- "lha-utils-pty",
- "lha-utils-sleep-inhibitor",
- "lha-windows-sandbox",
- "libc",
- "mcp-types",
- "pathdiff",
- "pretty_assertions",
- "pulldown-cmark",
- "rand 0.9.4",
- "ratatui",
- "ratatui-macros",
- "regex-lite",
- "reqwest",
- "serde",
- "serde_json",
- "serial_test",
- "sha2",
- "shlex",
- "strum 0.27.2",
- "strum_macros 0.27.2",
- "supports-color",
- "tempfile",
- "textwrap 0.16.2",
- "thiserror 2.0.17",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "toml 0.9.5",
- "toml_edit 0.24.0+spec-1.1.0",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "tree-sitter-bash",
- "tree-sitter-highlight",
- "unicode-segmentation",
- "unicode-width 0.2.1",
- "url",
- "uuid",
- "vt100",
- "walkdir",
- "which",
- "windows-sys 0.52.0",
- "winsplit",
-]
-
-[[package]]
-name = "lha-utils-absolute-path"
-version = "1.0.0"
-dependencies = [
- "dirs",
- "path-absolutize",
- "pretty_assertions",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "tempfile",
- "ts-rs",
-]
-
-[[package]]
-name = "lha-utils-cache"
-version = "1.0.0"
-dependencies = [
- "lru 0.16.3",
- "sha1",
- "tokio",
-]
-
-[[package]]
-name = "lha-utils-cargo-bin"
-version = "1.0.0"
-dependencies = [
- "assert_cmd",
- "thiserror 2.0.17",
-]
-
-[[package]]
-name = "lha-utils-home-dir"
-version = "1.0.0"
-dependencies = [
- "dirs",
- "pretty_assertions",
- "tempfile",
-]
-
-[[package]]
-name = "lha-utils-image"
-version = "1.0.0"
-dependencies = [
- "base64",
- "image",
- "lha-utils-cache",
- "tempfile",
- "thiserror 2.0.17",
- "tokio",
-]
-
-[[package]]
-name = "lha-utils-json-to-toml"
-version = "1.0.0"
-dependencies = [
- "pretty_assertions",
- "serde_json",
- "toml 0.9.5",
-]
-
-[[package]]
-name = "lha-utils-pty"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "filedescriptor",
- "lazy_static",
- "libc",
- "log",
- "portable-pty",
- "pretty_assertions",
- "shared_library",
- "tokio",
- "winapi",
-]
-
-[[package]]
-name = "lha-utils-readiness"
-version = "1.0.0"
-dependencies = [
- "assert_matches",
- "async-trait",
- "thiserror 2.0.17",
- "time",
- "tokio",
-]
-
-[[package]]
-name = "lha-utils-sleep-inhibitor"
-version = "1.0.0"
-dependencies = [
- "core-foundation 0.9.4",
- "libc",
- "pretty_assertions",
- "tracing",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "lha-utils-string"
-version = "1.0.0"
-
-[[package]]
-name = "lha-windows-sandbox"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "base64",
- "chrono",
- "dirs-next",
- "dunce",
- "lha-protocol",
- "lha-utils-absolute-path",
- "lha-utils-string",
- "pretty_assertions",
- "rand 0.8.6",
- "serde",
- "serde_json",
- "tempfile",
- "windows 0.58.0",
- "windows-sys 0.52.0",
- "winres",
 ]
 
 [[package]]
@@ -4005,35 +3287,6 @@ name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
-
-[[package]]
-name = "mcp-types"
-version = "1.0.0"
-dependencies = [
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "ts-rs",
-]
-
-[[package]]
-name = "mcp_test_support"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "core_test_support",
- "lha-agent",
- "lha-mcp-server",
- "lha-utils-cargo-bin",
- "mcp-types",
- "os_info",
- "pretty_assertions",
- "serde",
- "serde_json",
- "shlex",
- "tokio",
- "wiremock",
-]
 
 [[package]]
 name = "md-5"
@@ -6784,16 +6037,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "terminal_size"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45c6481c4829e4cc63825e62c49186a34538b7b2750b73b266581ffb612fb5ed"
-dependencies = [
- "rustix 1.0.8",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "termtree"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7025,7 +6268,6 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",

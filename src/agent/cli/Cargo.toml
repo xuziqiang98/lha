@@ -3,6 +3,7 @@ name = "lha-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [[bin]]
 name = "lha"
@@ -11,49 +12,182 @@ path = "src/main.rs"
 [lib]
 name = "lha_cli"
 path = "src/lib.rs"
+doctest = false
+
+[features]
+default = ["cli", "elapsed", "sandbox_summary"]
+cli = []
+elapsed = []
+sandbox_summary = []
+deterministic_process_ids = []
+test-support = []
+vt100-tests = []
+debug-logs = []
+disable-default-metrics-exporter = []
 
 [lints]
 workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+ansi-to-tui = { workspace = true }
+arc-swap = "1.8.0"
+async-channel = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true, default-features = false, features = ["http1", "json", "tokio"] }
+base64 = { workspace = true }
+bytes = { workspace = true }
+chardetng = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
 clap_complete = { workspace = true }
-lha-app-server = { workspace = true }
-lha-app-server-protocol = { workspace = true }
-lha-arg0 = { workspace = true }
-lha-common = { workspace = true, features = ["cli"] }
-lha-agent = { workspace = true }
-lha-exec = { workspace = true }
-lha-execpolicy = { workspace = true }
-lha-mcp-server = { workspace = true }
-lha-protocol = { workspace = true }
-lha-responses-api-proxy = { workspace = true }
-lha-rmcp-client = { workspace = true }
-lha-stdio-to-uds = { workspace = true }
-lha-tui = { workspace = true }
+color-eyre = { workspace = true }
+starlark = { workspace = true }
+sqlx = { workspace = true }
+nucleo = { workspace = true }
+icu_provider = { workspace = true, features = ["sync"] }
+icu_locale_core = { workspace = true }
+icu_decimal = { workspace = true }
+crossbeam-channel = { workspace = true }
+crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
+ctor = { workspace = true }
+derive_more = { workspace = true, features = ["is_variant"] }
+diffy = { workspace = true }
+dirs = { workspace = true }
+dirs-next = "2.0"
+dotenvy = { workspace = true }
+dunce = { workspace = true }
+encoding_rs = { workspace = true }
+env-flags = { workspace = true }
+eventsource-stream = { workspace = true }
+futures = { workspace = true, default-features = false, features = ["std"] }
+globset = { workspace = true }
+http = { workspace = true }
+ignore = { workspace = true }
+include_dir = { workspace = true }
+indexmap = { workspace = true }
+indoc = { workspace = true }
+itertools = { workspace = true }
+image = { workspace = true, features = ["jpeg", "png"] }
+jsonschema = { workspace = true }
+keyring = { workspace = true, features = ["crypto-rust"] }
+serde_with = { workspace = true, features = ["base64"] }
+lazy_static = { workspace = true }
 libc = { workspace = true }
+log = { workspace = true }
+lha-core = { workspace = true }
+lha-llm = { workspace = true }
+lru = { workspace = true }
+maplit = { workspace = true }
+mime_guess = { workspace = true }
+multimap = { workspace = true }
+notify = { workspace = true }
+once_cell = { workspace = true }
+oauth2 = "5"
+opentelemetry = { workspace = true, features = ["logs", "metrics", "trace"] }
+opentelemetry-appender-tracing = { workspace = true }
+opentelemetry-otlp = { workspace = true, features = ["grpc-tonic", "http-proto", "http-json", "logs", "metrics", "trace", "reqwest-blocking-client", "reqwest-rustls", "tls", "tls-roots"] }
+opentelemetry-semantic-conventions = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = ["experimental_metrics_custom_reader", "logs", "metrics", "rt-tokio", "testing", "trace"] }
+sys-locale = { workspace = true }
+os_info = { workspace = true }
 owo-colors = { workspace = true }
+path-absolutize = { workspace = true }
+pathdiff = { workspace = true }
+portable-pty = { workspace = true }
+pulldown-cmark = { workspace = true }
+rand = { workspace = true }
+rand08 = { package = "rand", version = "0.8", default-features = false, features = ["std", "small_rng"] }
+ratatui = { workspace = true, features = ["scrolling-regions", "unstable-backend-writer", "unstable-rendered-line-info", "unstable-widget-ref"] }
+ratatui-macros = { workspace = true }
+regex = { workspace = true }
 regex-lite = { workspace = true }
-serde_json = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "json", "multipart", "rustls-tls", "stream"] }
+rmcp = { workspace = true, default-features = false, features = ["auth", "base64", "client", "macros", "schemars", "server", "transport-child-process", "transport-streamable-http-client-reqwest", "transport-streamable-http-server"] }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+serde_path_to_error = { workspace = true }
+serde_yaml = { workspace = true }
+sha1 = { workspace = true }
+sha2 = { workspace = true }
+shlex = { workspace = true }
+similar = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
 supports-color = { workspace = true }
-tokio = { workspace = true, features = [
-    "io-std",
-    "macros",
-    "process",
-    "rt-multi-thread",
-    "signal",
-] }
+tempfile = { workspace = true }
+test-case = "3.3.1"
+test-log = { workspace = true }
+textwrap = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true, features = ["formatting", "parsing", "local-offset", "macros"] }
+tiny_http = { workspace = true }
+tokio = { workspace = true, features = ["io-std", "io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "test-util", "time"] }
+tokio-stream = { workspace = true, features = ["sync"] }
+tokio-tungstenite = { workspace = true }
+tokio-util = { workspace = true, features = ["rt", "time"] }
 toml = { workspace = true }
-tracing = { workspace = true }
+toml_edit = { workspace = true }
+tracing = { workspace = true, features = ["log"] }
+tracing-appender = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tree-sitter = { workspace = true }
+tree-sitter-bash = { workspace = true }
+tree-sitter-highlight = { workspace = true }
+ts-rs = { workspace = true, features = ["uuid-impl", "serde-json-impl", "no-serde-warnings"] }
+unicode-segmentation = { workspace = true }
+unicode-width = { workspace = true }
+url = { workspace = true }
+urlencoding = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4", "v5", "v7"] }
+walkdir = { workspace = true }
+webbrowser = { workspace = true }
+which = { workspace = true }
+wildmatch = { workspace = true }
+wiremock = { workspace = true }
+zeroize = { workspace = true }
+zstd = { workspace = true }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = { workspace = true }
+seccompiler = { workspace = true }
+keyring = { workspace = true, features = ["linux-native-async-persistent"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.9"
+keyring = { workspace = true, features = ["apple-native"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-lha_windows_sandbox = { package = "lha-windows-sandbox", path = "../../platform/sandbox/windows" }
+keyring = { workspace = true, features = ["windows-native"] }
+which = { workspace = true }
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_NetworkManagement_WindowsFirewall", "Win32_System_Com", "Win32_System_Variant"] }
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_SystemServices", "Win32_System_Environment", "Win32_System_Pipes", "Win32_System_WindowsProgramming", "Win32_System_IO", "Win32_System_Memory", "Win32_System_Kernel", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_NetworkManagement_NetManagement", "Win32_Networking_WinSock", "Win32_System_LibraryLoader", "Win32_System_Com", "Win32_Security_Cryptography", "Win32_Security_Authentication_Identity", "Win32_UI_Shell", "Win32_System_Registry"] }
+winsplit = "0.1"
+
+[target.'cfg(any(target_os = "freebsd", target_os = "openbsd"))'.dependencies]
+keyring = { workspace = true, features = ["sync-secret-service"] }
+
+[target.x86_64-unknown-linux-musl.dependencies]
+openssl-sys = { workspace = true, features = ["vendored"] }
+
+[target.aarch64-unknown-linux-musl.dependencies]
+openssl-sys = { workspace = true, features = ["vendored"] }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
-lha-utils-cargo-bin = { workspace = true }
+insta = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
-tempfile = { workspace = true }
+serial_test = { workspace = true }
+tokio-test = { workspace = true }
+tracing-test = { workspace = true, features = ["no-env-filter"] }
+vt100 = { workspace = true }
+
+[build-dependencies]
+winres = "0.1"

@@ -1,20 +1,31 @@
 use std::path::Path;
 
 use anyhow::Result;
-use lha_agent::config::edit::ConfigEditsBuilder;
-use lha_agent::config::load_global_mcp_servers;
-use lha_agent::config::types::McpServerTransportConfig;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use tempfile::TempDir;
+use toml_edit::Array;
+use toml_edit::DocumentMut;
+use toml_edit::Item;
+use toml_edit::value;
+
+mod common;
 
 fn codex_command(lha_home: &Path) -> Result<assert_cmd::Command> {
-    let mut cmd = assert_cmd::Command::new(lha_utils_cargo_bin::cargo_bin("lha")?);
+    let mut cmd = assert_cmd::Command::new(common::cargo_bin::cargo_bin("lha")?);
     cmd.env("LHA_HOME", lha_home);
     Ok(cmd)
+}
+
+fn update_server_config(lha_home: &Path, name: &str, update: impl FnOnce(&mut Item)) -> Result<()> {
+    let config_path = lha_home.join("config.toml");
+    let mut doc = std::fs::read_to_string(&config_path)?.parse::<DocumentMut>()?;
+    update(&mut doc["mcp_servers"][name]);
+    std::fs::write(config_path, doc.to_string())?;
+    Ok(())
 }
 
 #[test]
@@ -49,19 +60,12 @@ async fn list_and_get_render_expected_output() -> Result<()> {
     .assert()
     .success();
 
-    let mut servers = load_global_mcp_servers(lha_home.path()).await?;
-    let docs_entry = servers
-        .get_mut("docs")
-        .expect("docs server should exist after add");
-    match &mut docs_entry.transport {
-        McpServerTransportConfig::Stdio { env_vars, .. } => {
-            *env_vars = vec!["APP_TOKEN".to_string(), "WORKSPACE_ID".to_string()];
-        }
-        other => panic!("unexpected transport: {other:?}"),
-    }
-    ConfigEditsBuilder::new(lha_home.path())
-        .replace_mcp_servers(&servers)
-        .apply_blocking()?;
+    update_server_config(lha_home.path(), "docs", |server| {
+        let mut env_vars = Array::new();
+        env_vars.push("APP_TOKEN");
+        env_vars.push("WORKSPACE_ID");
+        server["env_vars"] = value(env_vars);
+    })?;
 
     let mut list_cmd = codex_command(lha_home.path())?;
     let list_output = list_cmd.args(["mcp", "list"]).output()?;
@@ -147,14 +151,9 @@ async fn get_disabled_server_shows_single_line() -> Result<()> {
         .assert()
         .success();
 
-    let mut servers = load_global_mcp_servers(lha_home.path()).await?;
-    let docs = servers
-        .get_mut("docs")
-        .expect("docs server should exist after add");
-    docs.enabled = false;
-    ConfigEditsBuilder::new(lha_home.path())
-        .replace_mcp_servers(&servers)
-        .apply_blocking()?;
+    update_server_config(lha_home.path(), "docs", |server| {
+        server["enabled"] = value(false);
+    })?;
 
     let mut get_cmd = codex_command(lha_home.path())?;
     let get_output = get_cmd.args(["mcp", "get", "docs"]).output()?;

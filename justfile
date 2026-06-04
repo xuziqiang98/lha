@@ -40,17 +40,17 @@ test:
 
 # Regenerate the json schema for config.toml from the current config types.
 write-config-schema:
-    cargo run -p lha-agent --bin lha-write-config-schema
+    cargo run -p lha-cli -- dev write-config-schema
 
 write-models-schema:
-    cargo run -p lha-agent --bin lha-write-models-schema
+    cargo run -p lha-cli -- dev write-models-schema
 
 write-state-schema:
-    cargo run -p lha-agent --bin lha-write-state-schema
+    cargo run -p lha-cli -- dev write-state-schema
 
 # Regenerate vendored app-server protocol schema artifacts.
 write-app-server-schema:
-    cargo run -p lha-app-server-protocol --bin write_schema_fixtures
+    cargo run -p lha-cli -- dev write-app-server-schema
 
 # Tail logs from the state SQLite database
 log *args:

@@ -1,0 +1,5 @@
+---
+source: src/agent/cli/src/../product/tui_app/src/history_cell.rs
+expression: rendered
+---
+• Calling search.find_docs({"query":"ratatui styling","limit":3})

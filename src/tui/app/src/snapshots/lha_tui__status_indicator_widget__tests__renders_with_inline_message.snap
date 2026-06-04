@@ -1,6 +1,0 @@
----
-source: src/harness/tui/src/status_indicator_widget.rs
-expression: terminal.backend()
----
-"• Working (0s • esc to interrupt) · 1 background terminal running · /ps to view…"
-"                                                                                "

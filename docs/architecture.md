@@ -1,6 +1,7 @@
 # Workspace Architecture
 
-The Rust workspace is organized around the current top-level domains under `src/`:
+The Rust workspace is organized around three main package boundaries under
+`src/`:
 
 - `src/llm`: the LLM-facing SDK boundary.
   - `src/llm/src/api` owns wire-level API clients and provider protocol details.
@@ -10,33 +11,32 @@ The Rust workspace is organized around the current top-level domains under `src/
     Its public surface should remain semantic and provider-neutral rather than
     re-exporting protocol compatibility helpers or wire-specific request types.
   - `src/llm/providers` is reserved for provider-specific adapters when needed.
-- `src/core`: cross-surface product primitives that should not depend on a specific UI.
+- `src/core`: reusable agent SDK primitives that should not depend on a
+  specific product UI.
   - `src/core` owns the `lha-core` publish boundary: the reusable agent-loop kernel, stateful in-memory agent SDK, lightweight skills API, and optional MCP SDK skeleton.
   - `src/core/agent-core` and `src/core/agent-runtime` are temporary compatibility shims over `lha-core`.
-  - `src/core/protocol` defines shared protocol types.
-  - `src/core/state` owns durable state and storage primitives.
-- `src/agent`: the LHA agent runtime and product logic.
-  - `src/agent/runtime` contains LHA-specific agent policy, tool orchestration, model management, config, and prompt assembly.
-  - `src/agent/cli`, `login`, `feedback`, and `chatgpt` provide supporting product surfaces around that runtime.
-- `src/tui`: the terminal UI surface.
-  - `src/tui/app` is the interactive TUI built on top of `lha-agent`.
-- `src/platform`: process- and OS-facing execution layers.
-  - `src/platform/exec` is the headless execution surface.
-  - `src/platform/sandbox` and `src/platform/ipc` contain sandboxing and IPC support.
-- `src/integrations`: external protocols and service adapters.
-  - This includes `app-server`, MCP-facing crates, cloud adapters, and the responses proxy.
-- `src/resources`: focused capability crates that can be reused by higher layers.
-  - Examples include `apply-patch`, `file-search`, `keyring-store`, and generated backend models.
-- `src/shared`: low-level shared utilities and helpers that should stay policy-light.
-  - Examples include `common`, `otel`, `arg0`, `async-utils`, and `shared/utils/*`.
+- `src/agent/cli`: the full LHA product package.
+  - `src/agent/cli/src` owns the public `lha` binary entrypoint, CLI parsing,
+    and intentionally public sandbox debug command types.
+  - `src/agent/cli/product` contains private product modules for the LHA
+    runtime, TUI, protocol, app-server, state, MCP, sandboxing, helper
+    adapters, and low-level product utilities.
+  - `src/agent/cli/product/agent_runtime` contains LHA-specific agent policy,
+    tool orchestration, model management, config, persistence integration, and
+    prompt assembly.
+  - `src/agent/cli/product/tui_app`, `exec_cli`, `app_server`,
+    `app_server_protocol`, `mcp_server`, `rmcp_client`, `responses_api_proxy`,
+    `state`, `protocol`, and `windows_sandbox` are private modules inside the
+    `lha-cli` package, not separate publishable crates.
 
 ## Primary Product Stack
 
 The main product path is:
 
-`src/llm` -> `src/core` -> `src/agent` -> surface crates such as `src/tui/app`, `src/platform/exec`, and `src/integrations/app-server`
+`src/llm` -> `src/core` -> `src/agent/cli/product` -> `src/agent/cli/src`
 
-The important boundary in this stack is that `lha-agent` should talk to `lha-llm` as an SDK, not by reaching into provider-specific internals.
+The important boundary in this stack is that the LHA product runtime should
+talk to `lha-llm` as an SDK, not by reaching into provider-specific internals.
 The reusable turn-stream kernel and higher-level reusable session runtime now live in `lha-core`, so new agent products should prefer building on that layer instead of reimplementing the loop inside a product crate.
 In particular, `lha-llm` should expose semantic tool descriptors, turn requests,
 and turn events, while conversion to provider-specific payloads stays inside
@@ -72,33 +72,47 @@ rules.
 
 The intended dependency flow is:
 
-- `src/shared` and `src/resources` stay near the leaves.
 - `src/llm` provides model-facing SDK primitives.
-- `src/core` provides product-neutral protocol, state, and agent-loop primitives.
-- `src/agent` owns LHA-specific agent behavior and orchestration on top of those primitives.
-- UI and protocol surfaces such as `src/tui`, `src/platform/exec`, and `src/integrations/app-server` sit above the coding-agent runtime.
+- `src/core` provides product-neutral agent-loop primitives and SDK surface.
+- `src/agent/cli/product` owns LHA-specific agent behavior and orchestration
+  on top of those primitives.
+- UI, CLI, protocol, app-server, sandbox, and helper modules under
+  `src/agent/cli/product` sit above the coding-agent runtime while remaining
+  private to the `lha-cli` package.
 
 This is the target mental model for the workspace. Some older crates still reflect historical layering decisions, but new work should follow this direction.
 
 ## Current Boundary Note
 
-Today, `src/agent/runtime` still contains substantial LHA-specific policy around the reusable loop. The current directory layout should be read as:
+Today, `src/agent/cli/product/agent_runtime` still contains substantial
+LHA-specific policy around the reusable loop. The current directory layout
+should be read as:
 
 - `src/llm`: model SDK boundary
 - `src/core`: shared product primitives, including the extracted agent-loop kernel and the reusable in-memory agent runtime
-- `src/agent`: LHA orchestration and product behavior
-- `src/tui`: presentation layer
+- `src/agent/cli`: LHA product package, including orchestration, protocol,
+  app-server, sandboxing, TUI, and helper behavior
 
-Follow-on extractions should continue to live between `src/core` and the product-specific parts of `src/agent`, without collapsing the existing `src/llm` SDK boundary. Today that reusable session/runtime layer is `lha-core`.
+Follow-on extractions should continue to live between `src/core` and the
+product-specific parts of `src/agent/cli/product`, without collapsing the
+existing `src/llm` SDK boundary. Today that reusable session/runtime layer is
+`lha-core`.
 
 Workflow identities are an LHA-specific runtime policy in this layering. Their
-shared protocol and rollout types belong in `src/core/protocol`, while workflow
-state machines, artifact validation, tool filtering, and identity-specific
-prompt injection belong in `src/agent/runtime`. See
+shared protocol and rollout types now live in the private product protocol
+module, while workflow state machines, artifact validation, tool filtering, and
+identity-specific prompt injection belong in
+`src/agent/cli/product/agent_runtime`. See
 `docs/workflow-identities.md` for the detailed design. They should not move into
 `lha-core` until the reusable/product-specific boundary is clearer.
 
-The important nuance is that this extraction is not yet the same thing as migrating the product runtime. `lha-core` and `lha-llm` now provide the cleaner SDK-facing layer, while `src/agent/runtime` still owns the main LHA session loop, persistence integration, and product-specific tool behavior. `ThreadManager` and `CodexThread` therefore remain LHA-facing compatibility wrappers over the existing product runtime rather than a full rewrite on top of `lha-core`.
+The important nuance is that this extraction is not yet the same thing as
+rewriting the product runtime. `lha-core` and `lha-llm` now provide the cleaner
+SDK-facing layer, while `src/agent/cli/product/agent_runtime` still owns the
+main LHA session loop, persistence integration, and product-specific tool
+behavior. `ThreadManager` and `CodexThread` therefore remain LHA-facing
+compatibility wrappers over the existing product runtime rather than a full
+rewrite on top of `lha-core`.
 
 ## Workspace Root
 
@@ -108,7 +122,7 @@ Examples:
 
 ```sh
 cargo build -p lha-cli --bin lha
-cargo test -p lha-tui
+cargo test -p lha-cli
 just fmt
 ```
 

@@ -1,5 +1,0 @@
----
-source: src/tui/app/src/bottom_pane/footer.rs
-expression: terminal.backend()
----
-"  Identity planner (shift+tab to change)"

@@ -1,24 +1,24 @@
 use std::collections::HashMap;
 
+use crate::product::agent::config::Config;
+use crate::product::agent::config::edit::ConfigEditsBuilder;
+use crate::product::agent::config::find_lha_home;
+use crate::product::agent::config::load_global_mcp_servers;
+use crate::product::agent::config::types::McpServerConfig;
+use crate::product::agent::config::types::McpServerTransportConfig;
+use crate::product::agent::mcp::auth::McpOAuthLoginSupport;
+use crate::product::agent::mcp::auth::compute_auth_statuses;
+use crate::product::agent::mcp::auth::oauth_login_support;
+use crate::product::agent::protocol::McpAuthStatus;
+use crate::product::common::CliConfigOverrides;
+use crate::product::common::format_env_display::format_env_display;
+use crate::product::rmcp_client::delete_oauth_tokens;
+use crate::product::rmcp_client::perform_oauth_login;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use clap::ArgGroup;
-use lha_agent::config::Config;
-use lha_agent::config::edit::ConfigEditsBuilder;
-use lha_agent::config::find_lha_home;
-use lha_agent::config::load_global_mcp_servers;
-use lha_agent::config::types::McpServerConfig;
-use lha_agent::config::types::McpServerTransportConfig;
-use lha_agent::mcp::auth::McpOAuthLoginSupport;
-use lha_agent::mcp::auth::compute_auth_statuses;
-use lha_agent::mcp::auth::oauth_login_support;
-use lha_agent::protocol::McpAuthStatus;
-use lha_common::CliConfigOverrides;
-use lha_common::format_env_display::format_env_display;
-use lha_rmcp_client::delete_oauth_tokens;
-use lha_rmcp_client::perform_oauth_login;
 
 /// Subcommands:
 /// - `list`   — list configured servers (with `--json`)

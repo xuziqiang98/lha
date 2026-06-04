@@ -1,0 +1,183 @@
+use std::sync::Arc;
+
+use crate::product::agent::AuthManager;
+use crate::product::agent::CodexAuth;
+use crate::product::agent::ContentItem;
+use crate::product::agent::WEB_SEARCH_ELIGIBLE_HEADER;
+use crate::product::agent::models_manager::manager::ModelsManager;
+use crate::product::otel::OtelManager;
+use crate::product::protocol::ThreadId;
+use crate::product::protocol::config_types::ReasoningSummary;
+use crate::product::protocol::config_types::WebSearchMode;
+use crate::product::protocol::models::TranscriptItem;
+use crate::product::protocol::protocol::SessionSource;
+use crate::test_support::core::load_default_config_for_test;
+use crate::test_support::core::responses;
+use crate::test_support::core::runtime_client::TestRuntimeClient;
+use crate::test_support::core::test_codex::test_codex;
+use futures::StreamExt;
+use lha_llm::RuntimeEndpoint;
+use lha_llm::TurnEvent;
+use lha_llm::TurnRequest;
+use tempfile::TempDir;
+use wiremock::matchers::header;
+
+#[tokio::test]
+async fn responses_stream_includes_web_search_eligible_header_true_by_default() {
+    crate::test_support::core::skip_if_no_network!();
+
+    let server = responses::start_mock_server().await;
+    let response_body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
+
+    let request_recorder = responses::mount_sse_once_match(
+        &server,
+        header(WEB_SEARCH_ELIGIBLE_HEADER, "true"),
+        response_body,
+    )
+    .await;
+
+    let test = test_codex().build(&server).await.expect("build test codex");
+    test.submit_turn("hello").await.expect("submit test prompt");
+
+    let request = request_recorder.single_request();
+    assert_eq!(
+        request.header(WEB_SEARCH_ELIGIBLE_HEADER).as_deref(),
+        Some("true")
+    );
+}
+
+#[tokio::test]
+async fn responses_stream_includes_web_search_eligible_header_false_when_disabled() {
+    crate::test_support::core::skip_if_no_network!();
+
+    let server = responses::start_mock_server().await;
+    let response_body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
+
+    let request_recorder = responses::mount_sse_once_match(
+        &server,
+        header(WEB_SEARCH_ELIGIBLE_HEADER, "false"),
+        response_body,
+    )
+    .await;
+
+    let test = test_codex()
+        .with_config(|config| {
+            config.web_search_mode = Some(WebSearchMode::Disabled);
+        })
+        .build(&server)
+        .await
+        .expect("build test codex");
+    test.submit_turn("hello").await.expect("submit test prompt");
+
+    let request = request_recorder.single_request();
+    assert_eq!(
+        request.header(WEB_SEARCH_ELIGIBLE_HEADER).as_deref(),
+        Some("false")
+    );
+}
+
+#[tokio::test]
+async fn responses_respects_model_info_overrides_from_config() {
+    crate::test_support::core::skip_if_no_network!();
+
+    let server = responses::start_mock_server().await;
+    let response_body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
+
+    let request_recorder = responses::mount_sse_once(&server, response_body).await;
+
+    let provider =
+        RuntimeEndpoint::openai_compatible_responses("mock", format!("{}/v1", server.uri()))
+            .with_request_max_retries(Some(0))
+            .with_stream_max_retries(Some(0))
+            .with_stream_idle_timeout_ms(Some(5_000));
+
+    let lha_home = TempDir::new().expect("failed to create TempDir");
+    let mut config = load_default_config_for_test(&lha_home).await;
+    config.model = Some("gpt-3.5-turbo".to_string());
+    config.model_provider_id = provider.name.clone();
+    config.model_provider = provider.clone();
+    config.model_supports_reasoning_summaries = Some(true);
+    config.model_reasoning_summary = ReasoningSummary::Detailed;
+    let effort = config.model_reasoning_effort;
+    let summary = config.model_reasoning_summary;
+    let model = config.model.clone().expect("model configured");
+    let config = Arc::new(config);
+
+    let conversation_id = ThreadId::new();
+    let auth_mode =
+        AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key")).get_auth_mode();
+    let session_source = SessionSource::Exec;
+    let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+    let otel_manager = OtelManager::new(
+        conversation_id,
+        model.as_str(),
+        model_info.slug.as_str(),
+        None,
+        Some("test@test.com".to_string()),
+        auth_mode,
+        false,
+        "test".to_string(),
+        session_source.clone(),
+    );
+
+    let mut client = TestRuntimeClient::new(
+        Arc::clone(&config),
+        None,
+        model_info,
+        otel_manager,
+        provider,
+        effort,
+        summary,
+        conversation_id,
+        session_source,
+    )
+    .new_session();
+
+    let turn = TurnRequest {
+        conversation: vec![TranscriptItem::Message {
+            id: None,
+            role: "user".into(),
+            content: vec![ContentItem::InputText {
+                text: "hello".into(),
+            }],
+            end_turn: None,
+        }],
+        ..Default::default()
+    };
+
+    let mut stream = client.run_turn(&turn).await.expect("stream failed");
+    while let Some(event) = stream.next().await {
+        if matches!(event, Ok(TurnEvent::Completed { .. })) {
+            break;
+        }
+    }
+
+    let request = request_recorder.single_request();
+    let body = request.body_json();
+    let reasoning = body
+        .get("reasoning")
+        .and_then(|value| value.as_object())
+        .cloned();
+
+    assert!(
+        reasoning.is_some(),
+        "reasoning should be present when config enables summaries"
+    );
+
+    assert_eq!(
+        reasoning
+            .as_ref()
+            .and_then(|value| value.get("summary"))
+            .and_then(|value| value.as_str()),
+        Some("detailed")
+    );
+}

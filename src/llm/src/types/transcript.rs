@@ -12,8 +12,7 @@ pub enum ContentItem {
     OutputText { text: String },
 }
 
-pub const BASE_INSTRUCTIONS_DEFAULT: &str =
-    include_str!("../../../core/protocol/src/prompts/base_instructions/default.md");
+pub const BASE_INSTRUCTIONS_DEFAULT: &str = include_str!("base_instructions_default.md");
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(rename = "base_instructions", rename_all = "snake_case")]

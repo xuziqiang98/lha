@@ -1,0 +1,7 @@
+---
+source: src/agent/cli/product/tui_app/src/chatwidget/tests.rs
+expression: terminal.backend()
+---
+"                                        "
+"› Ask LHA to do anything                "
+"                                        "

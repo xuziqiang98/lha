@@ -1,0 +1,13 @@
+---
+source: src/agent/cli/product/tui_app/src/bottom_pane/chat_composer.rs
+expression: terminal.backend()
+---
+"                                                                                                    "
+"                                                                                           .----.   "
+"                                                                                          ( @  @ )  "
+"                                                                                          (______)  "
+"                                                                                          /\/\/\/\\ "
+"                                                                                            Echo    "
+"› h                                                                                                 "
+"                                                                                                    "
+"  loading · 100% left                                                                               "

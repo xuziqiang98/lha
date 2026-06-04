@@ -1,51 +1,11 @@
 [workspace]
 members = [
+    "src/agent/cli",
+    "src/core",
     "src/core/agent-core",
     "src/core/agent-runtime",
-    "src/shared/ansi-escape",
-    "src/shared/async-utils",
-    "src/integrations/app-server",
-    "src/integrations/app-server-protocol",
-    "src/resources/apply-patch",
-    "src/shared/arg0",
-    "src/agent/feedback",
-    "src/resources/codex-backend-openapi-models",
-    "src/agent/cli",
-    "src/shared/common",
-    "src/core",
-    "src/agent/runtime",
-    "src/agent/identity",
-    "src/agent/memories/read",
-    "src/agent/memories/write",
-    "src/shared/secrets",
-    "src/platform/exec",
-    "src/platform/sandbox/execpolicy",
-    "src/resources/keyring-store",
-    "src/resources/file-search",
-    "src/platform/sandbox/linux",
-    "src/integrations/mcp-server",
-    "src/integrations/mcp-types",
-    "src/platform/sandbox/process-hardening",
-    "src/core/protocol",
-    "src/integrations/rmcp-client",
-    "src/integrations/responses-api-proxy",
-    "src/platform/ipc/stdio-to-uds",
-    "src/shared/otel",
-    "src/tui/app",
-    "src/shared/utils/absolute-path",
-    "src/shared/utils/cargo-bin",
-    "src/shared/utils/git",
-    "src/shared/utils/cache",
-    "src/shared/utils/image",
-    "src/shared/utils/json-to-toml",
-    "src/shared/utils/home-dir",
-    "src/shared/utils/pty",
-    "src/shared/utils/readiness",
-    "src/shared/utils/sleep-inhibitor",
-    "src/shared/utils/string",
-    "src/core/state",
-    "src/platform/sandbox/windows",
     "src/llm",
+    "src/resources/codex-backend-openapi-models",
 ]
 resolver = "2"
 
@@ -56,54 +16,9 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 # Internal
-app_test_support = { path = "src/integrations/app-server/tests/common" }
-lha-ansi-escape = { path = "src/shared/ansi-escape" }
-lha-app-server = { path = "src/integrations/app-server" }
-lha-app-server-protocol = { path = "src/integrations/app-server-protocol" }
-lha-apply-patch = { path = "src/resources/apply-patch" }
-lha-arg0 = { path = "src/shared/arg0" }
-lha-async-utils = { path = "src/shared/async-utils" }
 lha-cli = { path = "src/agent/cli" }
-lha-common = { path = "src/shared/common" }
 lha-core = { path = "src/core", version = "1.0.0" }
-lha-agent = { path = "src/agent/runtime" }
-lha-agent-core = { path = "src/core/agent-core" }
-lha-agent-runtime = { path = "src/core/agent-runtime" }
-lha-exec = { path = "src/platform/exec" }
-lha-execpolicy = { path = "src/platform/sandbox/execpolicy" }
-lha-feedback = { path = "src/agent/feedback" }
-lha-identity = { path = "src/agent/identity" }
-lha-memories-read = { path = "src/agent/memories/read" }
-lha-memories-write = { path = "src/agent/memories/write" }
-lha-secrets = { path = "src/shared/secrets" }
-lha-file-search = { path = "src/resources/file-search" }
-lha-git = { path = "src/shared/utils/git" }
-lha-keyring-store = { path = "src/resources/keyring-store" }
 lha-llm = { path = "src/llm", version = "1.0.0" }
-lha-linux-sandbox = { path = "src/platform/sandbox/linux" }
-lha-mcp-server = { path = "src/integrations/mcp-server" }
-lha-otel = { path = "src/shared/otel" }
-lha-process-hardening = { path = "src/platform/sandbox/process-hardening" }
-lha-protocol = { path = "src/core/protocol" }
-lha-responses-api-proxy = { path = "src/integrations/responses-api-proxy" }
-lha-rmcp-client = { path = "src/integrations/rmcp-client" }
-lha-state = { path = "src/core/state" }
-lha-stdio-to-uds = { path = "src/platform/ipc/stdio-to-uds" }
-lha-tui = { path = "src/tui/app" }
-lha-utils-absolute-path = { path = "src/shared/utils/absolute-path" }
-lha-utils-cache = { path = "src/shared/utils/cache" }
-lha-utils-cargo-bin = { path = "src/shared/utils/cargo-bin" }
-lha-utils-image = { path = "src/shared/utils/image" }
-lha-utils-json-to-toml = { path = "src/shared/utils/json-to-toml" }
-lha-utils-home-dir = { path = "src/shared/utils/home-dir" }
-lha-utils-pty = { path = "src/shared/utils/pty" }
-lha-utils-readiness = { path = "src/shared/utils/readiness" }
-lha-utils-sleep-inhibitor = { path = "src/shared/utils/sleep-inhibitor" }
-lha-utils-string = { path = "src/shared/utils/string" }
-lha-windows-sandbox = { path = "src/platform/sandbox/windows" }
-core_test_support = { path = "src/agent/runtime/tests/common" }
-mcp-types = { path = "src/integrations/mcp-types" }
-mcp_test_support = { path = "src/integrations/mcp-server/tests/common" }
 
 # External
 allocative = "0.3.3"
@@ -159,7 +74,7 @@ maplit = "1.0.2"
 mime_guess = "2.0.5"
 multimap = "0.10.0"
 notify = "8.2.0"
-nucleo = { git = "https://github.com/helix-editor/nucleo.git", rev = "4253de9faabb4e5c6d81d946a5e35a90f87347ee" }
+nucleo = { git = "https://github.com/helix-editor/nucleo.git", rev = "4253de9faabb4e5c6d81d946a5e35a90f87347ee", version = "0.5.0" }
 once_cell = "1.20.2"
 openssl-sys = "*"
 opentelemetry = "0.31.0"

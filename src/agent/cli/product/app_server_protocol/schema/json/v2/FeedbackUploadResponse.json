@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FeedbackUploadResponse",
+  "type": "object",
+  "required": [
+    "savedPath",
+    "threadId"
+  ],
+  "properties": {
+    "savedPath": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  }
+}

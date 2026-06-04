@@ -1,7 +1,0 @@
----
-source: src/tui/app/src/history_cell.rs
-expression: rendered
----
-• Exploring
-  └ Search shimmer_spans
-    Read shimmer.rs, status_indicator_widget.rs

@@ -1,0 +1,8 @@
+---
+source: src/agent/cli/src/../product/tui_app/src/history_cell.rs
+expression: rendered
+---
+• Exploring
+  └ Search shimmer_spans
+    Read shimmer.rs
+    Read status_indicator_widget.rs

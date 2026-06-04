@@ -1,0 +1,8 @@
+---
+source: src/agent/cli/src/../product/tui_app/src/history_cell.rs
+expression: rendered
+---
+
+• Updated Plan
+  └ □ Define error taxonomy
+    □ Implement mapping to user messages

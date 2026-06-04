@@ -1,0 +1,12 @@
+---
+source: src/agent/cli/product/tui_app/src/status_indicator_widget.rs
+expression: terminal.backend()
+---
+"• Working (0s • esc to interrupt)                                               "
+"                                                                                "
+" ↳ first                                                                        "
+" ↳ second                                                                       "
+"   alt + ↑ edit                                                                 "
+"                                                                                "
+"                                                                                "
+"                                                                                "

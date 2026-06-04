@@ -1,0 +1,35 @@
+use crate::product::agent::skills::model::SkillMetadata;
+use crate::product::common::fuzzy_match::fuzzy_match;
+
+pub(crate) fn skill_display_name(skill: &SkillMetadata) -> &str {
+    skill
+        .interface
+        .as_ref()
+        .and_then(|interface| interface.display_name.as_deref())
+        .unwrap_or(&skill.name)
+}
+
+pub(crate) fn skill_description(skill: &SkillMetadata) -> &str {
+    skill
+        .interface
+        .as_ref()
+        .and_then(|interface| interface.short_description.as_deref())
+        .or(skill.short_description.as_deref())
+        .unwrap_or(&skill.description)
+}
+
+pub(crate) fn match_skill(
+    filter: &str,
+    display_name: &str,
+    skill_name: &str,
+) -> Option<(Option<Vec<usize>>, i32)> {
+    if let Some((indices, score)) = fuzzy_match(display_name, filter) {
+        return Some((Some(indices), score));
+    }
+    if display_name != skill_name
+        && let Some((_indices, score)) = fuzzy_match(skill_name, filter)
+    {
+        return Some((None, score));
+    }
+    None
+}

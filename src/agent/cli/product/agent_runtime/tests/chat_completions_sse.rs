@@ -1,0 +1,673 @@
+use crate::product::agent::AuthManager;
+use assert_matches::assert_matches;
+use std::sync::Arc;
+use tracing_test::traced_test;
+
+use crate::product::agent::CodexAuth;
+use crate::product::agent::ContentItem;
+use crate::product::agent::models_manager::manager::ModelsManager;
+use crate::product::otel::OtelManager;
+use crate::product::protocol::ThreadId;
+use crate::product::protocol::models::ReasoningItemContent;
+use crate::product::protocol::protocol::SessionSource;
+use crate::test_support::core::load_default_config_for_test;
+use crate::test_support::core::runtime_client::TestRuntimeClient;
+use crate::test_support::core::skip_if_no_network;
+use futures::StreamExt;
+use lha_llm::OutputItem;
+use lha_llm::RuntimeEndpoint;
+use lha_llm::TranscriptItem;
+use lha_llm::TurnEvent;
+use lha_llm::TurnRequest;
+use pretty_assertions::assert_eq;
+use tempfile::TempDir;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
+
+async fn run_stream(sse_body: &str) -> Vec<TurnEvent> {
+    run_stream_with_show_raw_agent_reasoning(sse_body.as_bytes(), true).await
+}
+
+async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<TurnEvent> {
+    run_stream_with_show_raw_agent_reasoning(sse_body, true).await
+}
+
+async fn run_stream_with_show_raw_agent_reasoning(
+    sse_body: &[u8],
+    show_raw_agent_reasoning: bool,
+) -> Vec<TurnEvent> {
+    let server = MockServer::start().await;
+
+    let template = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_bytes(sse_body.to_vec());
+
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(template)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider = RuntimeEndpoint::openai_compatible_chat("mock", format!("{}/v1", server.uri()))
+        .with_request_max_retries(Some(0))
+        .with_stream_max_retries(Some(0))
+        .with_stream_idle_timeout_ms(Some(5_000));
+
+    let lha_home = match TempDir::new() {
+        Ok(dir) => dir,
+        Err(e) => panic!("failed to create TempDir: {e}"),
+    };
+    let mut config = load_default_config_for_test(&lha_home).await;
+    config.model_provider_id = provider.name.clone();
+    config.model_provider = provider.clone();
+    config.show_raw_agent_reasoning = show_raw_agent_reasoning;
+    let effort = config.model_reasoning_effort;
+    let summary = config.model_reasoning_summary;
+    let config = Arc::new(config);
+
+    let conversation_id = ThreadId::new();
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let auth_mode = auth_manager.get_auth_mode();
+    let model = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+    let otel_manager = OtelManager::new(
+        conversation_id,
+        model.as_str(),
+        model_info.slug.as_str(),
+        None,
+        Some("test@test.com".to_string()),
+        auth_mode,
+        false,
+        "test".to_string(),
+        SessionSource::Exec,
+    );
+
+    let mut client = TestRuntimeClient::new(
+        Arc::clone(&config),
+        None,
+        model_info,
+        otel_manager,
+        provider,
+        effort,
+        summary,
+        conversation_id,
+        SessionSource::Exec,
+    )
+    .new_session();
+
+    let turn = TurnRequest {
+        conversation: vec![TranscriptItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "hello".to_string(),
+            }],
+            end_turn: None,
+        }],
+        ..Default::default()
+    };
+
+    let mut stream = match client.run_turn(&turn).await {
+        Ok(s) => s,
+        Err(e) => panic!("stream chat failed: {e}"),
+    };
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        match event {
+            Ok(ev) => events.push(ev),
+            // We still collect the error to exercise telemetry and complete the task.
+            Err(_e) => break,
+        }
+    }
+    events
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn default_chat_aggregate_preserves_proposed_plan_deltas() {
+    skip_if_no_network!();
+
+    let sse = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Intro\\n<proposed_plan>\\n\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"- Step 1\\n\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"</proposed_plan>\\nOutro\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+
+    let events = run_stream_with_show_raw_agent_reasoning(sse.as_bytes(), false).await;
+
+    assert!(events.iter().any(|event| matches!(
+        event,
+        TurnEvent::ProposedPlanDelta { delta: text, .. } if text == "- Step 1\n"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        TurnEvent::ProposedPlanDone { text, .. } if text == "- Step 1\n"
+    )));
+
+    let message = events
+        .iter()
+        .find_map(|event| match event {
+            TurnEvent::ItemCompleted {
+                item: OutputItem::AssistantMessage { item },
+                ..
+            } => Some(item),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected aggregated assistant message, got {events:?}"));
+    assert_message(
+        message,
+        "Intro\n<proposed_plan>\n- Step 1\n</proposed_plan>\nOutro",
+    );
+
+    assert!(matches!(events.last(), Some(TurnEvent::Completed { .. })));
+}
+
+fn assert_message(item: &TranscriptItem, expected: &str) {
+    if let TranscriptItem::Message { content, .. } = item {
+        let text = content.iter().find_map(|part| match part {
+            ContentItem::OutputText { text } | ContentItem::InputText { text } => Some(text),
+            _ => None,
+        });
+        let Some(text) = text else {
+            panic!("message missing text: {item:?}");
+        };
+        assert_eq!(text, expected);
+    } else {
+        panic!("expected message item, got: {item:?}");
+    }
+}
+
+fn assert_reasoning(item: &TranscriptItem, expected: &str) {
+    if let TranscriptItem::Reasoning {
+        content: Some(parts),
+        ..
+    } = item
+    {
+        let mut combined = String::new();
+        for part in parts {
+            match part {
+                ReasoningItemContent::ReasoningText { text }
+                | ReasoningItemContent::Text { text } => combined.push_str(text),
+            }
+        }
+        assert_eq!(combined, expected);
+    } else {
+        panic!("expected reasoning item, got: {item:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn streams_text_without_reasoning() {
+    skip_if_no_network!();
+
+    let sse = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+
+    let events = run_stream(sse).await;
+    assert_eq!(events.len(), 4, "unexpected events: {events:?}");
+
+    match &events[0] {
+        TurnEvent::ItemStarted {
+            item: OutputItem::AssistantMessage { .. },
+            ..
+        } => {}
+        other => panic!("expected initial assistant item, got {other:?}"),
+    }
+
+    match &events[1] {
+        TurnEvent::OutputTextDelta { delta: text, .. } => assert_eq!(text, "hi"),
+        other => panic!("expected text delta, got {other:?}"),
+    }
+
+    match &events[2] {
+        TurnEvent::ItemCompleted {
+            item: OutputItem::AssistantMessage { item },
+            ..
+        } => assert_message(item, "hi"),
+        other => panic!("expected terminal message, got {other:?}"),
+    }
+
+    assert_matches!(events[3], TurnEvent::Completed { .. });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn streams_text_without_provider_usage_falls_back_to_estimation() {
+    skip_if_no_network!();
+
+    let sse = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+
+    let events = run_stream(sse).await;
+    let completed = events
+        .last()
+        .unwrap_or_else(|| panic!("expected completed event, got {events:?}"));
+
+    match completed {
+        TurnEvent::Completed {
+            token_usage: Some(token_usage),
+            ..
+        } => {
+            assert!(token_usage.input_tokens > 0);
+            assert_eq!(token_usage.cached_input_tokens, 0);
+            assert_eq!(token_usage.output_tokens, 1);
+            assert_eq!(token_usage.reasoning_output_tokens, 0);
+            assert_eq!(
+                token_usage.total_tokens,
+                token_usage.input_tokens + token_usage.output_tokens
+            );
+        }
+        other => panic!("expected completed event with usage, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn streams_text_with_provider_token_usage() {
+    skip_if_no_network!();
+
+    let sse = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":69,\"completion_tokens\":20,\"total_tokens\":89}}\n\n",
+        "data: [DONE]\n\n",
+    );
+
+    let events = run_stream(sse).await;
+    let completed = events
+        .last()
+        .unwrap_or_else(|| panic!("expected completed event, got {events:?}"));
+
+    match completed {
+        TurnEvent::Completed {
+            token_usage: Some(token_usage),
+            ..
+        } => {
+            assert_eq!(token_usage.input_tokens, 69);
+            assert_eq!(token_usage.cached_input_tokens, 0);
+            assert_eq!(token_usage.output_tokens, 20);
+            assert_eq!(token_usage.reasoning_output_tokens, 0);
+            assert_eq!(token_usage.total_tokens, 89);
+        }
+        other => panic!("expected completed event with usage, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn streams_reasoning_from_string_delta() {
+    skip_if_no_network!();
+
+    let sse = concat!(
+        "data: {\"choices\":[{\"delta\":{\"reasoning\":\"think1\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{} ,\"finish_reason\":\"stop\"}]}\n\n",
+    );
+
+    let events = run_stream(sse).await;
+    assert_eq!(events.len(), 7, "unexpected events: {events:?}");
+
+    match &events[0] {
+        TurnEvent::ItemStarted {
+            item: OutputItem::Reasoning { .. },
+            ..
+        } => {}
+        other => panic!("expected initial reasoning item, got {other:?}"),
+    }
+
+    match &events[1] {
+        TurnEvent::ReasoningContentDelta {
+            delta,
+            content_index,
+            ..
+        } => {
+            assert_eq!(delta, "think1");
+            assert_eq!(content_index, &0);
+        }
+        other => panic!("expected reasoning delta, got {other:?}"),
+    }
+
+    match &events[2] {
+        TurnEvent::ItemStarted {
+            item: OutputItem::AssistantMessage { .. },
+            ..
+        } => {}
+        other => panic!("expected initial message item, got {other:?}"),
+    }
+
+    match &events[3] {
+        TurnEvent::OutputTextDelta { delta: text, .. } => assert_eq!(text, "ok"),
+        other => panic!("expected text delta, got {other:?}"),
+    }
+
+    match &events[4] {
+        TurnEvent::ItemCompleted {
+            item: OutputItem::Reasoning { item },
+            ..
+        } => assert_reasoning(item, "think1"),
+        other => panic!("expected terminal reasoning, got {other:?}"),
+    }
+
+    match &events[5] {
+        TurnEvent::ItemCompleted {
+            item: OutputItem::AssistantMessage { item },
+            ..
+        } => assert_message(item, "ok"),
+        other => panic!("expected terminal message, got {other:?}"),
+    }
+
+    assert_matches!(events[6], TurnEvent::Completed { .. });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn streams_reasoning_from_object_delta() {
+    skip_if_no_network!();
+
+    let sse = concat!(
+        "data: {\"choices\":[{\"delta\":{\"reasoning\":{\"text\":\"partA\"}}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"reasoning\":{\"content\":\"partB\"}}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{} ,\"finish_reason\":\"stop\"}]}\n\n",
+    );
+
+    let events = run_stream(sse).await;
+    assert_eq!(events.len(), 8, "unexpected events: {events:?}");
+
+    match &events[0] {
+        TurnEvent::ItemStarted {
+            item: OutputItem::Reasoning { .. },
+            ..
+        } => {}
+        other => panic!("expected initial reasoning item, got {other:?}"),
+    }
+
+    match &events[1] {
+        TurnEvent::ReasoningContentDelta {
+            delta,
+            content_index,
+            ..
+        } => {
+            assert_eq!(delta, "partA");
+            assert_eq!(content_index, &0);
+        }
+        other => panic!("expected reasoning delta, got {other:?}"),
+    }
+
+    match &events[2] {
+        TurnEvent::ReasoningContentDelta {
+            delta,
+            content_index,
+            ..
+        } => {
+            assert_eq!(delta, "partB");
+            assert_eq!(content_index, &1);
+        }
+        other => panic!("expected reasoning delta, got {other:?}"),
+    }
+
+    match &events[3] {
+        TurnEvent::ItemStarted {
+            item: OutputItem::AssistantMessage { .. },
+            ..
+        } => {}
+        other => panic!("expected initial message item, got {other:?}"),
+    }
+
+    match &events[4] {
+        TurnEvent::OutputTextDelta { delta: text, .. } => assert_eq!(text, "answer"),
+        other => panic!("expected text delta, got {other:?}"),
+    }
+
+    match &events[5] {
+        TurnEvent::ItemCompleted {
+            item: OutputItem::Reasoning { item },
+            ..
+        } => assert_reasoning(item, "partApartB"),
+        other => panic!("expected terminal reasoning, got {other:?}"),
+    }
+
+    match &events[6] {
+        TurnEvent::ItemCompleted {
+            item: OutputItem::AssistantMessage { item },
+            ..
+        } => assert_message(item, "answer"),
+        other => panic!("expected terminal message, got {other:?}"),
+    }
+
+    assert_matches!(events[7], TurnEvent::Completed { .. });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn streams_reasoning_from_final_message() {
+    skip_if_no_network!();
+
+    let sse = "data: {\"choices\":[{\"message\":{\"reasoning\":\"final-cot\"},\"finish_reason\":\"stop\"}]}\n\n";
+
+    let events = run_stream(sse).await;
+    assert_eq!(events.len(), 4, "unexpected events: {events:?}");
+
+    match &events[0] {
+        TurnEvent::ItemStarted {
+            item: OutputItem::Reasoning { .. },
+            ..
+        } => {}
+        other => panic!("expected initial reasoning item, got {other:?}"),
+    }
+
+    match &events[1] {
+        TurnEvent::ReasoningContentDelta {
+            delta,
+            content_index,
+            ..
+        } => {
+            assert_eq!(delta, "final-cot");
+            assert_eq!(content_index, &0);
+        }
+        other => panic!("expected reasoning delta, got {other:?}"),
+    }
+
+    match &events[2] {
+        TurnEvent::ItemCompleted {
+            item: OutputItem::Reasoning { item },
+            ..
+        } => assert_reasoning(item, "final-cot"),
+        other => panic!("expected reasoning item, got {other:?}"),
+    }
+
+    assert_matches!(events[3], TurnEvent::Completed { .. });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn streams_reasoning_before_tool_call() {
+    skip_if_no_network!();
+
+    let sse = concat!(
+        "data: {\"choices\":[{\"delta\":{\"reasoning\":\"pre-tool\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"run\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+    );
+
+    let events = run_stream(sse).await;
+    assert_eq!(events.len(), 5, "unexpected events: {events:?}");
+
+    match &events[0] {
+        TurnEvent::ItemStarted {
+            item: OutputItem::Reasoning { .. },
+            ..
+        } => {}
+        other => panic!("expected initial reasoning item, got {other:?}"),
+    }
+
+    match &events[1] {
+        TurnEvent::ReasoningContentDelta {
+            delta,
+            content_index,
+            ..
+        } => {
+            assert_eq!(delta, "pre-tool");
+            assert_eq!(content_index, &0);
+        }
+        other => panic!("expected reasoning delta, got {other:?}"),
+    }
+
+    match &events[2] {
+        TurnEvent::ItemCompleted {
+            item: OutputItem::Reasoning { item },
+            ..
+        } => assert_reasoning(item, "pre-tool"),
+        other => panic!("expected reasoning item, got {other:?}"),
+    }
+
+    match &events[3] {
+        TurnEvent::ToolCall(call) => {
+            assert_eq!(call.tool_name, "run");
+            match &call.payload {
+                lha_llm::ToolCallPayload::JsonArguments { arguments } => {
+                    assert_eq!(arguments, "{}");
+                }
+                other => panic!("expected function payload, got {other:?}"),
+            }
+            assert_eq!(call.call_id, "call_1");
+        }
+        other => panic!("expected function call, got {other:?}"),
+    }
+
+    assert_matches!(events[4], TurnEvent::Completed { .. });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn streams_tool_call_without_provider_usage_falls_back_to_estimation() {
+    skip_if_no_network!();
+
+    let sse = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"run\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+
+    let events = run_stream(sse).await;
+    let completed = events
+        .last()
+        .unwrap_or_else(|| panic!("expected completed event, got {events:?}"));
+
+    match completed {
+        TurnEvent::Completed {
+            token_usage: Some(token_usage),
+            ..
+        } => {
+            assert!(token_usage.input_tokens > 0);
+            assert_eq!(token_usage.cached_input_tokens, 0);
+            assert_eq!(token_usage.output_tokens, 2);
+            assert_eq!(token_usage.reasoning_output_tokens, 0);
+            assert_eq!(
+                token_usage.total_tokens,
+                token_usage.input_tokens + token_usage.output_tokens
+            );
+        }
+        other => panic!("expected completed event with usage, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn streams_tool_call_with_provider_token_usage() {
+    skip_if_no_network!();
+
+    let sse = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"run\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":17,\"completion_tokens\":5,\"total_tokens\":22}}\n\n",
+        "data: [DONE]\n\n",
+    );
+
+    let events = run_stream(sse).await;
+    let completed = events
+        .last()
+        .unwrap_or_else(|| panic!("expected completed event, got {events:?}"));
+
+    match completed {
+        TurnEvent::Completed {
+            token_usage: Some(token_usage),
+            ..
+        } => {
+            assert_eq!(token_usage.input_tokens, 17);
+            assert_eq!(token_usage.cached_input_tokens, 0);
+            assert_eq!(token_usage.output_tokens, 5);
+            assert_eq!(token_usage.reasoning_output_tokens, 0);
+            assert_eq!(token_usage.total_tokens, 22);
+        }
+        other => panic!("expected completed event with usage, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+#[traced_test]
+async fn chat_sse_emits_failed_on_parse_error() {
+    skip_if_no_network!();
+
+    let sse_body = concat!("data: not-json\n\n", "data: [DONE]\n\n");
+
+    let _ = run_stream(sse_body).await;
+
+    logs_assert(|lines: &[&str]| {
+        lines
+            .iter()
+            .find(|line| {
+                line.contains("codex.api_request") && line.contains("http.response.status_code=200")
+            })
+            .map(|_| Ok(()))
+            .unwrap_or(Err("cannot find codex.api_request event".to_string()))
+    });
+
+    logs_assert(|lines: &[&str]| {
+        lines
+            .iter()
+            .find(|line| {
+                line.contains("codex.sse_event")
+                    && line.contains("error.message")
+                    && line.contains("expected ident at line 1 column 2")
+            })
+            .map(|_| Ok(()))
+            .unwrap_or(Err("cannot find SSE event".to_string()))
+    });
+}
+
+#[tokio::test]
+#[traced_test]
+async fn chat_sse_done_chunk_emits_event() {
+    skip_if_no_network!();
+
+    let sse_body = "data: [DONE]\n\n";
+
+    let _ = run_stream(sse_body).await;
+
+    logs_assert(|lines: &[&str]| {
+        lines
+            .iter()
+            .find(|line| line.contains("codex.sse_event") && line.contains("event.kind=message"))
+            .map(|_| Ok(()))
+            .unwrap_or(Err("cannot find SSE event".to_string()))
+    });
+}
+
+#[tokio::test]
+#[traced_test]
+async fn chat_sse_emits_error_on_invalid_utf8() {
+    skip_if_no_network!();
+
+    let _ = run_stream_with_bytes(b"data: \x80\x80\n\n").await;
+
+    logs_assert(|lines: &[&str]| {
+        lines
+            .iter()
+            .find(|line| {
+                line.contains("codex.sse_event")
+                    && line.contains("error.message")
+                    && line.contains("UTF8 error: invalid utf-8 sequence of 1 bytes from index 0")
+            })
+            .map(|_| Ok(()))
+            .unwrap_or(Err("cannot find SSE event".to_string()))
+    });
+}
