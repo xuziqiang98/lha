@@ -30,6 +30,8 @@ use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::handle_tool_call_request;
 use crate::stream_events_utils::last_assistant_message_from_item;
+use crate::stream_events_utils::record_memory_citation_usage;
+use crate::stream_events_utils::strip_memory_citation_from_item;
 use crate::terminal;
 use crate::truncate::TruncationPolicy;
 use crate::user_notification::UserNotifier;
@@ -6201,9 +6203,20 @@ async fn handle_assistant_item_done_in_plan_mode(
     if let TranscriptItem::Message { role, .. } = item
         && role == "assistant"
     {
-        maybe_complete_plan_item_from_message(sess, turn_context, state, item).await;
+        let (item, memory_citation) = if sess.memory_citations_enabled().await {
+            strip_memory_citation_from_item(item.clone())
+        } else {
+            (item.clone(), None)
+        };
 
-        if let Some(turn_item) = handle_non_tool_response_item(item, true).await {
+        maybe_complete_plan_item_from_message(sess, turn_context, state, &item).await;
+
+        if let Some(mut turn_item) = handle_non_tool_response_item(&item, true).await {
+            if let (Some(citation), TurnItem::AgentMessage(agent_message)) =
+                (memory_citation.clone(), &mut turn_item)
+            {
+                agent_message.memory_citation = Some(citation);
+            }
             emit_turn_item_in_plan_mode(
                 sess,
                 turn_context,
@@ -6214,9 +6227,12 @@ async fn handle_assistant_item_done_in_plan_mode(
             .await;
         }
 
-        sess.record_conversation_items(turn_context, std::slice::from_ref(item))
+        sess.record_conversation_items(turn_context, std::slice::from_ref(&item))
             .await;
-        if let Some(agent_message) = last_assistant_message_from_item(item, true) {
+        if let Some(memory_citation) = memory_citation.as_ref() {
+            record_memory_citation_usage(sess, memory_citation).await;
+        }
+        if let Some(agent_message) = last_assistant_message_from_item(&item, true) {
             *last_agent_message = Some(agent_message);
         }
         return true;

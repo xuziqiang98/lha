@@ -91,8 +91,16 @@ pub(crate) async fn handle_output_item_done(
     ctx.sess
         .record_conversation_items(&ctx.turn_context, std::slice::from_ref(&item))
         .await;
-    if let Some(memory_citation) = memory_citation.as_ref()
-        && let Some(state_db) = ctx.sess.state_db()
+    if let Some(memory_citation) = memory_citation.as_ref() {
+        record_memory_citation_usage(&ctx.sess, memory_citation).await;
+    }
+    output.last_agent_message = last_assistant_message_from_item(&item, plan_mode);
+
+    Ok(output)
+}
+
+pub(crate) async fn record_memory_citation_usage(sess: &Session, memory_citation: &MemoryCitation) {
+    if let Some(state_db) = sess.state_db()
         && let Some(memories) = state_db.memories()
     {
         let thread_ids =
@@ -101,12 +109,9 @@ pub(crate) async fn handle_output_item_done(
             warn!("failed to record memory citation usage: {err}");
         }
     }
-    output.last_agent_message = last_assistant_message_from_item(&item, plan_mode);
-
-    Ok(output)
 }
 
-fn strip_memory_citation_from_item(
+pub(crate) fn strip_memory_citation_from_item(
     item: TranscriptItem,
 ) -> (TranscriptItem, Option<MemoryCitation>) {
     let TranscriptItem::Message {
