@@ -45,11 +45,11 @@ use async_channel::Sender;
 use async_trait::async_trait;
 use chrono::DateTime;
 use chrono::Utc;
-use lha_agent_core::kernel::AgentKernel;
-use lha_agent_core::kernel::TurnEventProcessor;
-use lha_agent_core::kernel::TurnEventUpdate;
-use lha_agent_core::kernel::TurnStreamOutcome;
-use lha_agent_runtime::SessionStatus;
+use lha_core::SessionStatus;
+use lha_core::kernel::AgentKernel;
+use lha_core::kernel::TurnEventProcessor;
+use lha_core::kernel::TurnEventUpdate;
+use lha_core::kernel::TurnStreamOutcome;
 use lha_llm::DefaultRuntimeClientFactory;
 use lha_llm::RuntimeEndpoint;
 use lha_llm::RuntimeNotice;
@@ -6732,7 +6732,7 @@ impl TurnEventProcessor for CodexTurnStreamProcessor {
 
     async fn finish(
         self,
-        state: lha_agent_core::kernel::TurnStreamState,
+        state: lha_core::kernel::TurnStreamState,
     ) -> Result<TurnStreamOutcome, Self::Error> {
         let needs_follow_up = if self.cancellation_token.is_cancelled() {
             false

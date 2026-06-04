@@ -261,8 +261,8 @@ The first implementation belongs in the LHA product runtime:
 - Tool filtering: `src/agent/runtime/src/tools/spec.rs`
 - Session wiring: `src/agent/runtime/src/codex.rs` and session state
 
-It should not be moved into `lha-agent-runtime` until the product-specific
-policy surface is better understood.
+It should not be moved into `lha-core` until the product-specific policy
+surface is better understood.
 
 ## Testing Expectations
 
@@ -277,4 +277,3 @@ Tests should cover:
 - rollout persistence and state reconstruction
 - tool exposure per step
 - unchanged behavior for built-in `planner` and `programmer`
-

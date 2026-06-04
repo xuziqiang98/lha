@@ -34,13 +34,10 @@ base64 = { workspace = true }
 chardetng = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
-lha-api = { workspace = true }
-lha-agent-core = { workspace = true }
-lha-agent-runtime = { workspace = true }
 lha-app-server-protocol = { workspace = true }
 lha-apply-patch = { workspace = true }
 lha-async-utils = { workspace = true }
-lha-client = { workspace = true }
+lha-core = { workspace = true }
 lha-execpolicy = { workspace = true }
 lha-file-search = { workspace = true }
 lha-git = { workspace = true }

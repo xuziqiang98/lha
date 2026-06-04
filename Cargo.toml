@@ -12,14 +12,13 @@ members = [
     "src/resources/codex-backend-openapi-models",
     "src/agent/cli",
     "src/shared/common",
+    "src/core",
     "src/agent/runtime",
     "src/agent/identity",
     "src/agent/memories/read",
     "src/agent/memories/write",
     "src/shared/secrets",
     "src/platform/exec",
-    "src/llm/types",
-    "src/llm/runtime",
     "src/platform/sandbox/execpolicy",
     "src/resources/keyring-store",
     "src/resources/file-search",
@@ -44,10 +43,9 @@ members = [
     "src/shared/utils/readiness",
     "src/shared/utils/sleep-inhibitor",
     "src/shared/utils/string",
-    "src/llm/api/codex-client",
-    "src/llm/api/codex-api",
     "src/core/state",
     "src/platform/sandbox/windows",
+    "src/llm",
 ]
 resolver = "2"
 
@@ -60,15 +58,14 @@ license = "Apache-2.0"
 # Internal
 app_test_support = { path = "src/integrations/app-server/tests/common" }
 lha-ansi-escape = { path = "src/shared/ansi-escape" }
-lha-api = { path = "src/llm/api/codex-api" }
 lha-app-server = { path = "src/integrations/app-server" }
 lha-app-server-protocol = { path = "src/integrations/app-server-protocol" }
 lha-apply-patch = { path = "src/resources/apply-patch" }
 lha-arg0 = { path = "src/shared/arg0" }
 lha-async-utils = { path = "src/shared/async-utils" }
 lha-cli = { path = "src/agent/cli" }
-lha-client = { path = "src/llm/api/codex-client" }
 lha-common = { path = "src/shared/common" }
+lha-core = { path = "src/core", version = "1.0.0" }
 lha-agent = { path = "src/agent/runtime" }
 lha-agent-core = { path = "src/core/agent-core" }
 lha-agent-runtime = { path = "src/core/agent-runtime" }
@@ -82,9 +79,8 @@ lha-secrets = { path = "src/shared/secrets" }
 lha-file-search = { path = "src/resources/file-search" }
 lha-git = { path = "src/shared/utils/git" }
 lha-keyring-store = { path = "src/resources/keyring-store" }
-lha-llm = { path = "src/llm/runtime" }
+lha-llm = { path = "src/llm", version = "1.0.0" }
 lha-linux-sandbox = { path = "src/platform/sandbox/linux" }
-lha-llm-types = { path = "src/llm/types" }
 lha-mcp-server = { path = "src/integrations/mcp-server" }
 lha-otel = { path = "src/shared/otel" }
 lha-process-hardening = { path = "src/platform/sandbox/process-hardening" }
@@ -217,7 +213,7 @@ tiny_http = "0.12"
 tokio = "1"
 tokio-stream = "0.1.18"
 tokio-test = "0.4"
-tokio-tungstenite = { version = "0.28.0", features = ["proxy", "rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-native-roots"] }
 tokio-util = "0.7.18"
 toml = "0.9.5"
 toml_edit = "0.24.0"

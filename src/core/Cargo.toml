@@ -1,0 +1,33 @@
+[package]
+edition.workspace = true
+exclude = ["agent-core/**", "agent-runtime/**", "protocol/**", "state/**"]
+license.workspace = true
+name = "lha-core"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "lha_core"
+path = "src/lib.rs"
+
+[features]
+default = []
+mcp = []
+
+[lints]
+workspace = true
+
+[dependencies]
+async-channel = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+lha-llm = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync"] }
+tokio-util = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }

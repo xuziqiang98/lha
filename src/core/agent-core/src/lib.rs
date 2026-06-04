@@ -1,3 +1,11 @@
-//! Core agent-loop SDK primitives shared by higher-level agent products.
+pub use lha_core::kernel;
 
-pub mod kernel;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reexports_kernel_path() {
+        let _kernel = kernel::AgentKernel::new();
+    }
+}

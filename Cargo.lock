@@ -2981,14 +2981,11 @@ dependencies = [
  "keyring",
  "landlock",
  "lha-agent",
- "lha-agent-core",
- "lha-agent-runtime",
- "lha-api",
  "lha-app-server-protocol",
  "lha-apply-patch",
  "lha-arg0",
  "lha-async-utils",
- "lha-client",
+ "lha-core",
  "lha-execpolicy",
  "lha-file-search",
  "lha-git",
@@ -3063,30 +3060,14 @@ dependencies = [
 name = "lha-agent-core"
 version = "1.0.0"
 dependencies = [
- "async-trait",
- "futures",
- "lha-async-utils",
- "lha-llm",
- "lha-llm-types",
- "pretty_assertions",
- "tokio",
- "tokio-util",
+ "lha-core",
 ]
 
 [[package]]
 name = "lha-agent-runtime"
 version = "1.0.0"
 dependencies = [
- "async-channel",
- "async-trait",
- "lha-agent-core",
- "lha-llm",
- "lha-llm-types",
- "pretty_assertions",
- "serde_json",
- "thiserror 2.0.17",
- "tokio",
- "tokio-util",
+ "lha-core",
 ]
 
 [[package]]
@@ -3096,35 +3077,6 @@ dependencies = [
  "ansi-to-tui",
  "ratatui",
  "tracing",
-]
-
-[[package]]
-name = "lha-api"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "assert_matches",
- "async-trait",
- "base64",
- "bytes",
- "eventsource-stream",
- "futures",
- "http",
- "lha-client",
- "lha-llm-types",
- "pretty_assertions",
- "regex-lite",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
- "tokio",
- "tokio-test",
- "tokio-tungstenite",
- "tokio-util",
- "tracing",
- "url",
- "wiremock",
 ]
 
 [[package]]
@@ -3276,30 +3228,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lha-client"
-version = "1.0.0"
-dependencies = [
- "async-trait",
- "bytes",
- "eventsource-stream",
- "futures",
- "http",
- "opentelemetry",
- "opentelemetry_sdk",
- "pretty_assertions",
- "rand 0.9.4",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "zstd",
-]
-
-[[package]]
 name = "lha-common"
 version = "1.0.0"
 dependencies = [
@@ -3311,6 +3239,22 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "toml 0.9.5",
+]
+
+[[package]]
+name = "lha-core"
+version = "1.0.0"
+dependencies = [
+ "async-channel",
+ "async-trait",
+ "futures",
+ "lha-llm",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -3446,39 +3390,38 @@ dependencies = [
 name = "lha-llm"
 version = "1.0.0"
 dependencies = [
+ "anyhow",
+ "assert_matches",
  "async-trait",
+ "base64",
+ "bytes",
  "chrono",
  "eventsource-stream",
  "futures",
  "http",
- "lha-api",
- "lha-client",
- "lha-llm-types",
- "lha-otel",
- "reqwest",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
- "tokio",
- "tokio-tungstenite",
- "tracing",
-]
-
-[[package]]
-name = "lha-llm-types"
-version = "1.0.0"
-dependencies = [
- "lha-git",
- "mcp-types",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "pretty_assertions",
+ "rand 0.9.4",
+ "regex-lite",
+ "reqwest",
  "schemars 0.8.22",
  "serde",
  "serde_json",
  "strum 0.27.2",
  "strum_macros 0.27.2",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-test",
+ "tokio-tungstenite",
+ "tokio-util",
  "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
  "ts-rs",
+ "url",
+ "wiremock",
+ "zstd",
 ]
 
 [[package]]
@@ -3544,9 +3487,8 @@ dependencies = [
  "chrono",
  "eventsource-stream",
  "http",
- "lha-api",
  "lha-app-server-protocol",
- "lha-llm-types",
+ "lha-llm",
  "lha-protocol",
  "lha-utils-absolute-path",
  "opentelemetry",
@@ -3585,7 +3527,7 @@ dependencies = [
  "icu_provider",
  "lha-execpolicy",
  "lha-git",
- "lha-llm-types",
+ "lha-llm",
  "lha-utils-absolute-path",
  "lha-utils-image",
  "mcp-types",
@@ -3714,7 +3656,6 @@ dependencies = [
  "lazy_static",
  "lha-agent",
  "lha-ansi-escape",
- "lha-api",
  "lha-app-server-protocol",
  "lha-arg0",
  "lha-cli",

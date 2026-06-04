@@ -38,7 +38,7 @@ use crate::user_input::UserInput;
 use crate::workflow::WorkflowRolloutItem;
 use crate::workflow::WorkflowUpdateEvent;
 use lha_git::GhostCommit;
-pub use lha_llm_types::TokenUsage;
+pub use lha_llm::types::TokenUsage;
 use lha_utils_absolute_path::AbsolutePathBuf;
 use mcp_types::CallToolResult;
 use mcp_types::RequestId;

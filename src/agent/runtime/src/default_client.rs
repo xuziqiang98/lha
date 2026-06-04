@@ -1,7 +1,7 @@
 use crate::config_loader::ResidencyRequirement;
 use crate::spawn::LHA_SANDBOX_ENV_VAR;
-use lha_client::CodexHttpClient;
-pub use lha_client::CodexRequestBuilder;
+use lha_llm::client::CodexHttpClient;
+pub use lha_llm::client::CodexRequestBuilder;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderValue;
 use std::sync::LazyLock;

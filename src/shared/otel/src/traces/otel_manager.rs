@@ -13,9 +13,9 @@ use chrono::SecondsFormat;
 use chrono::Utc;
 use eventsource_stream::Event as StreamEvent;
 use eventsource_stream::EventStreamError as StreamError;
-use lha_api::ApiError;
-use lha_api::ResponseEvent;
-use lha_llm_types::TranscriptItem;
+use lha_llm::api::ApiError;
+use lha_llm::api::ResponseEvent;
+use lha_llm::types::TranscriptItem;
 use lha_protocol::ThreadId;
 use lha_protocol::config_types::ReasoningSummary;
 use lha_protocol::openai_models::ReasoningEffort;
@@ -672,17 +672,109 @@ impl OtelManager {
                 }
             }
             TranscriptItem::ToolCall { payload, .. } => match payload {
-                lha_llm_types::ToolCallPayload::JsonArguments { .. } => "function_call".into(),
-                lha_llm_types::ToolCallPayload::TextInput { .. } => "custom_tool_call".into(),
+                lha_llm::types::ToolCallPayload::JsonArguments { .. } => "function_call".into(),
+                lha_llm::types::ToolCallPayload::TextInput { .. } => "custom_tool_call".into(),
             },
             TranscriptItem::ToolResult { payload, .. } => match payload {
-                lha_llm_types::ToolResultPayload::Structured { .. } => {
+                lha_llm::types::ToolResultPayload::Structured { .. } => {
                     "function_call_output".into()
                 }
-                lha_llm_types::ToolResultPayload::Text { .. } => "custom_tool_call_output".into(),
+                lha_llm::types::ToolResultPayload::Text { .. } => "custom_tool_call_output".into(),
             },
             TranscriptItem::Unknown { .. } => "unknown".into(),
         }
+    }
+}
+
+impl lha_llm::RuntimeTelemetry for OtelManager {
+    fn record_api_request(
+        &self,
+        attempt: u64,
+        status: Option<u16>,
+        error: Option<&str>,
+        duration: Duration,
+    ) {
+        OtelManager::record_api_request(self, attempt, status, error, duration);
+    }
+
+    fn record_sse_event(
+        &self,
+        kind: Option<&str>,
+        success: bool,
+        error: Option<&str>,
+        duration: Duration,
+    ) {
+        if success {
+            self.sse_event(kind.unwrap_or(SSE_UNKNOWN_KIND), duration);
+            return;
+        }
+
+        let kind = kind.map(str::to_string);
+        self.sse_event_failed(
+            kind.as_ref(),
+            duration,
+            &error.unwrap_or("unknown SSE error"),
+        );
+    }
+
+    fn record_response_completed(
+        &self,
+        input_tokens: i64,
+        output_tokens: i64,
+        cached_input_tokens: Option<i64>,
+        reasoning_output_tokens: Option<i64>,
+        total_tokens: i64,
+    ) {
+        self.sse_event_completed(
+            input_tokens,
+            output_tokens,
+            cached_input_tokens,
+            reasoning_output_tokens,
+            total_tokens,
+        );
+    }
+
+    fn record_response_completed_failed(&self, error: &str) {
+        self.see_event_completed_failed(&error);
+    }
+
+    fn record_websocket_request(&self, duration: Duration, error: Option<&str>) {
+        OtelManager::record_websocket_request(self, duration, error);
+    }
+
+    fn record_websocket_event(
+        &self,
+        kind: Option<&str>,
+        success: bool,
+        error: Option<&str>,
+        duration: Duration,
+    ) {
+        let kind = kind.unwrap_or(WEBSOCKET_UNKNOWN_KIND);
+        let success = if success { "true" } else { "false" };
+        let tags = [("kind", kind), ("success", success)];
+        self.counter(WEBSOCKET_EVENT_COUNT_METRIC, 1, &tags);
+        self.record_duration(WEBSOCKET_EVENT_DURATION_METRIC, duration, &tags);
+        tracing::event!(
+            tracing::Level::INFO,
+            event.name = "codex.websocket_event",
+            event.timestamp = %timestamp(),
+            event.kind = %kind,
+            conversation.id = %self.metadata.conversation_id,
+            app.version = %self.metadata.app_version,
+            auth_mode = self.metadata.auth_mode,
+            user.account_id = self.metadata.account_id,
+            user.email = self.metadata.account_email,
+            terminal.type = %self.metadata.terminal_type,
+            model = %self.metadata.model,
+            slug = %self.metadata.slug,
+            duration_ms = %duration.as_millis(),
+            success = success,
+            error.message = error,
+        );
+    }
+
+    fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) {
+        OtelManager::counter(self, name, inc, tags);
     }
 }
 

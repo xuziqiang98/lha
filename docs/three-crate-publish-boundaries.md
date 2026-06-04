@@ -116,19 +116,30 @@ inside one of the three public publish boundaries.
 
 ### Maps to `lha-llm`
 
-- `src/llm/runtime` -> `lha-llm`
-- `src/llm/api/codex-api` -> `lha-llm::api`
-- `src/llm/api/codex-client` -> `lha-llm::client`
-- `src/llm/types` -> `lha-llm::types`
+Phase 1 has been implemented in the current checkout. The `lha-llm` package is
+now rooted at `src/llm` and contains:
+
+- `src/llm/src` runtime modules -> `lha-llm`
+- `src/llm/src/api` -> `lha-llm::api`
+- `src/llm/src/client` -> `lha-llm::client`
+- `src/llm/src/types` -> `lha-llm::types`
+- `src/llm/src/telemetry.rs` -> product-neutral runtime telemetry hooks
 
 ### Maps to `lha-core`
 
-- `src/core/agent-core` -> `lha-core::kernel`
-- `src/core/agent-runtime` -> `lha-core`
-- selected helper code from `src/shared/async-utils` -> private `lha-core`
-  module
-- selected MCP protocol types and adapters from `src/integrations/mcp-types`
-  -> optional `lha-core::mcp`
+Phase 2A and 2B have been implemented in the current checkout. The
+publishable `lha-core` package is now rooted at `src/core` and contains:
+
+- `src/core/src/kernel.rs` -> `lha-core::kernel`
+- `src/core/src` session runtime modules -> `lha-core`
+- private cancellation helper code replacing the old `lha-async-utils` package
+  dependency
+- `src/core/src/skills.rs` -> `lha-core::skills`
+- `src/core/src/mcp` -> optional `lha-core::mcp` skeleton and SDK-owned MCP
+  types
+
+The old `lha-agent-core` and `lha-agent-runtime` workspace packages are
+temporary compatibility shims that re-export `lha-core`.
 
 ### Maps to `lha-cli`
 
@@ -178,9 +189,8 @@ helpers or private modules:
 - turn requests and turn events
 - model/runtime metadata
 
-The current `lha-llm`, `lha-api`, `lha-client`, and `lha-llm-types` crates
-should be folded into one package. The public surface should continue to expose
-semantic concepts:
+The API, client, types, and runtime code now live in the single `lha-llm`
+package. The public surface should continue to expose semantic concepts:
 
 ```rust
 use lha_llm::SemanticRuntime;
@@ -191,7 +201,7 @@ use lha_llm::TurnEvent;
 use lha_llm::TurnRequest;
 ```
 
-Product coupling to remove:
+Product coupling removed in Phase 1:
 
 - direct dependency on `lha-otel`
 - unused `lha-git` or `mcp-types` dependencies in LLM types
@@ -199,7 +209,7 @@ Product coupling to remove:
 
 Telemetry should be represented by generic hooks or traits inside `lha-llm`.
 The `lha-cli` product layer is responsible for adapting those hooks to the
-current `lha-otel` implementation.
+current `lha-otel` implementation through `lha_llm::RuntimeTelemetry`.
 
 ## lha-core boundary
 
@@ -215,9 +225,9 @@ current `lha-otel` implementation.
 - lightweight skills abstractions
 - optional MCP-to-tool adapter support
 
-The current `lha-agent-core` and `lha-agent-runtime` crates should be folded
-into a single `lha-core` package. Imports should eventually move from
-`lha_agent_runtime::*` to `lha_core::*`.
+The current `lha-agent-core` and `lha-agent-runtime` crates have been folded
+into a single `lha-core` package. Product imports now use `lha_core::*` for
+this SDK surface, while the old crates remain temporary compatibility shims.
 
 Future public API direction:
 
@@ -416,25 +426,40 @@ pub mod mcp {
 
 ### Phase 1: Consolidate `lha-llm`
 
-- Create a single publishable `lha-llm` package.
-- Move current API, client, types, and runtime modules under one package.
-- Preserve semantic public re-exports where possible.
-- Remove the direct `lha-otel` dependency.
-- Replace product telemetry with generic hooks.
-- Ensure `cargo package -p lha-llm --no-verify` does not require any internal
-  unpublished crate.
+- Implemented: a single publishable `lha-llm` package is rooted at `src/llm`.
+- Implemented: API, client, types, and runtime modules live under one package.
+- Implemented: semantic public re-exports are preserved where possible.
+- Implemented: the direct `lha-otel` dependency is removed.
+- Implemented: product telemetry is adapted through generic hooks.
+- Implemented target: `cargo package -p lha-llm --no-verify` should not require
+  any internal unpublished crate.
 
 ### Phase 2: Consolidate `lha-core`
 
-- Create a publishable `lha-core` package.
-- Move the `lha-agent-core` kernel into `lha_core::kernel`.
-- Move the `lha-agent-runtime` session runtime into `lha_core`.
-- Rename public imports from `lha_agent_runtime::*` to `lha_core::*`.
-- Add a `skills` module with lightweight abstractions.
-- Add an optional `mcp` feature with adapter traits and conversion helpers.
-- Ensure default `lha-core` depends on `lha-llm` and third-party crates only.
-- Ensure `cargo package -p lha-core --no-verify` does not require any internal
-  unpublished crate.
+#### Phase 2A: `lha-core` package consolidation
+
+- Implemented: a publishable `lha-core` package is rooted at `src/core`.
+- Implemented: the `lha-agent-core` kernel lives under `lha_core::kernel`.
+- Implemented: the `lha-agent-runtime` session runtime lives under `lha_core`.
+- Implemented: old `lha-agent-core` and `lha-agent-runtime` crates are
+  temporary re-export compatibility shims.
+
+#### Phase 2B: SDK surface additions
+
+- Implemented: `lha_core::skills` provides lightweight skill abstractions.
+- Implemented: `lha_core::mcp` is feature-gated behind `mcp` and provides
+  skeleton adapter traits, naming helpers, and SDK-owned MCP types.
+- Intentional limitation: full product MCP startup, OAuth, approval prompts,
+  resource tools, telemetry, and `lha mcp-server` remain in `lha-cli`.
+
+#### Phase 2C: Internal import migration and packaging validation
+
+- Implemented: product runtime imports use `lha_core` for the consolidated SDK
+  surface.
+- Implemented target: default `lha-core` depends on `lha-llm` and third-party
+  crates only.
+- Implemented target: `cargo package -p lha-core --no-verify` should not
+  require any internal unpublished crate.
 
 ### Phase 3: Collapse product crates into `lha-cli`
 
@@ -543,8 +568,6 @@ lha --version
 
 ## Open risks
 
-- `lha-llm` currently has product telemetry coupling through `lha-otel`; this
-  must be replaced with generic hooks before it can be a clean reusable SDK.
 - Git dependencies and workspace `[patch]` entries may still block crates.io
   publishing until replaced by registry dependencies or upstreamed changes.
 - `lha-core` needs a careful public API review because it will become the

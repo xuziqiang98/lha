@@ -57,7 +57,7 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
     manager.log_sse_event(&sse_response, Duration::from_millis(120));
     let ws_response: std::result::Result<
         Option<std::result::Result<Message, tokio_tungstenite::tungstenite::Error>>,
-        lha_api::ApiError,
+        lha_llm::api::ApiError,
     > = Ok(Some(Ok(Message::Text(
         r#"{"type":"response.created"}"#.into(),
     ))));

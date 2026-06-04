@@ -7,11 +7,11 @@ This crate implements the business logic for LHA. It is designed to be used by t
 `lha-agent` sits above `lha-llm` and below user-facing surfaces such as `lha-tui`, `lha-exec`, and `lha app-server`.
 
 - `lha-llm` is the model/runtime SDK boundary.
-- `lha-agent-core` now provides the reusable turn-stream kernel shared by agent products.
+- `lha-core` now provides the reusable turn-stream kernel and in-memory session SDK shared by agent products.
 - `lha-agent` owns LHA-specific agent behavior, tool orchestration, config, prompts, and adapters on top of that kernel.
 - UI and protocol surfaces should depend on `lha-agent` rather than reimplementing agent logic.
 
-Today this crate still contains substantial LHA-specific policy and the legacy thread/task adapters that drive the product. The regular turn path now routes through `lha-agent-core::kernel::AgentKernel`, and follow-on extractions should continue moving reusable loop concerns into `lha-agent-core` while keeping the `lha-llm` SDK boundary intact.
+Today this crate still contains substantial LHA-specific policy and the legacy thread/task adapters that drive the product. The regular turn path now routes through `lha_core::kernel::AgentKernel`, and follow-on extractions should continue moving reusable loop concerns into `lha-core` while keeping the `lha-llm` SDK boundary intact.
 
 ## Dependencies
 

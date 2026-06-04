@@ -22,9 +22,8 @@ disable-default-metrics-exporter = []
 [dependencies]
 chrono = { workspace = true }
 lha-app-server-protocol = { workspace = true }
+lha-llm = { workspace = true }
 lha-utils-absolute-path = { workspace = true }
-lha-api = { workspace = true }
-lha-llm-types = { workspace = true }
 lha-protocol = { workspace = true }
 eventsource-stream = { workspace = true }
 opentelemetry = { workspace = true, features = ["logs", "metrics", "trace"] }

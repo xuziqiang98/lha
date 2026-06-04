@@ -7,19 +7,19 @@ use async_trait::async_trait;
 use http::HeaderMap;
 use http::HeaderName;
 use http::HeaderValue;
-use lha_api::AuthProvider;
-use lha_api::ImageBackground;
-use lha_api::ImageEditRequest;
-use lha_api::ImageGenerationRequest;
-use lha_api::ImageQuality;
-use lha_api::ImageUrl;
-use lha_api::ImagesClient;
-use lha_api::Provider;
-use lha_api::ReqwestTransport;
-use lha_api::WireApi;
 use lha_llm::RuntimeEndpoint;
 use lha_llm::ToolResultContentItem;
 use lha_llm::ToolResultPayload;
+use lha_llm::api::AuthProvider;
+use lha_llm::api::ImageBackground;
+use lha_llm::api::ImageEditRequest;
+use lha_llm::api::ImageGenerationRequest;
+use lha_llm::api::ImageQuality;
+use lha_llm::api::ImageUrl;
+use lha_llm::api::ImagesClient;
+use lha_llm::api::Provider;
+use lha_llm::api::ReqwestTransport;
+use lha_llm::api::WireApi;
 use lha_protocol::models::ContentItem;
 use lha_protocol::models::TranscriptItem;
 use serde::Deserialize;
@@ -268,7 +268,7 @@ fn image_api_provider(endpoint: &RuntimeEndpoint) -> Result<Provider, FunctionCa
             WireApi::Chat
         },
         headers: build_header_map(endpoint),
-        retry: lha_api::provider::RetryConfig {
+        retry: lha_llm::api::provider::RetryConfig {
             max_attempts: endpoint.request_max_retries(),
             base_delay: Duration::from_millis(200),
             retry_429: false,

@@ -8,7 +8,7 @@
 mod agent_jobs;
 pub mod api_bridge;
 mod apply_patch;
-pub use lha_agent_runtime::SessionStatus;
+pub use lha_core::SessionStatus;
 pub mod auth;
 pub mod bash;
 mod buddy_intro;
@@ -126,7 +126,7 @@ pub use command_safety::is_safe_command;
 pub use exec_policy::ExecPolicyError;
 pub use exec_policy::check_execpolicy_for_warnings;
 pub use exec_policy::load_exec_policy;
-pub use lha_agent_runtime as core_runtime;
+pub use lha_core as core_runtime;
 pub use safety::get_platform_sandbox;
 pub use tools::spec::parse_tool_input_schema;
 // Re-export the protocol types from the standalone `lha-protocol` crate so existing

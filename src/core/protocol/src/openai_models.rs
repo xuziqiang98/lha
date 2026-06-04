@@ -6,15 +6,15 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
-pub use lha_llm_types::ModelInfoUpgrade;
-pub use lha_llm_types::ModelInstructionsVariables;
-pub use lha_llm_types::ModelMessages;
-pub use lha_llm_types::ModelVisibility;
-pub use lha_llm_types::ReasoningEffort;
-pub use lha_llm_types::ReasoningEffortPreset;
-pub use lha_llm_types::TruncationMode;
-pub use lha_llm_types::TruncationPolicyConfig;
-pub use lha_llm_types::reasoning_effort_mapping_from_presets;
+pub use lha_llm::types::ModelInfoUpgrade;
+pub use lha_llm::types::ModelInstructionsVariables;
+pub use lha_llm::types::ModelMessages;
+pub use lha_llm::types::ModelVisibility;
+pub use lha_llm::types::ReasoningEffort;
+pub use lha_llm::types::ReasoningEffortPreset;
+pub use lha_llm::types::TruncationMode;
+pub use lha_llm::types::TruncationPolicyConfig;
+pub use lha_llm::types::reasoning_effort_mapping_from_presets;
 
 #[derive(
     Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema, strum_macros::Display,
@@ -54,7 +54,7 @@ pub struct ModelInfo {
     pub model_messages: Option<ModelMessages>,
     pub supports_reasoning_summaries: bool,
     pub support_verbosity: bool,
-    pub default_verbosity: Option<lha_llm_types::Verbosity>,
+    pub default_verbosity: Option<lha_llm::types::Verbosity>,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub truncation_policy: TruncationPolicyConfig,
     pub supports_parallel_tool_calls: bool,
@@ -86,14 +86,14 @@ impl ModelInfo {
 
     pub fn get_model_instructions(
         &self,
-        personality: Option<lha_llm_types::Personality>,
+        personality: Option<lha_llm::types::Personality>,
     ) -> String {
         self.semantic_model_info()
             .get_model_instructions(personality)
     }
 
-    pub fn semantic_model_info(&self) -> lha_llm_types::ModelInfo {
-        lha_llm_types::ModelInfo {
+    pub fn semantic_model_info(&self) -> lha_llm::types::ModelInfo {
+        lha_llm::types::ModelInfo {
             slug: self.slug.clone(),
             display_name: self.display_name.clone(),
             description: self.description.clone(),
@@ -117,8 +117,8 @@ impl ModelInfo {
     }
 }
 
-impl From<lha_llm_types::ModelInfo> for ModelInfo {
-    fn from(value: lha_llm_types::ModelInfo) -> Self {
+impl From<lha_llm::types::ModelInfo> for ModelInfo {
+    fn from(value: lha_llm::types::ModelInfo) -> Self {
         Self {
             slug: value.slug,
             display_name: value.display_name,
@@ -146,7 +146,7 @@ impl From<lha_llm_types::ModelInfo> for ModelInfo {
     }
 }
 
-impl From<ModelInfo> for lha_llm_types::ModelInfo {
+impl From<ModelInfo> for lha_llm::types::ModelInfo {
     fn from(value: ModelInfo) -> Self {
         value.semantic_model_info()
     }
@@ -339,7 +339,8 @@ mod tests {
             instructions_variables: Some(personality_variables()),
         }));
 
-        let instructions = model.get_model_instructions(Some(lha_llm_types::Personality::Friendly));
+        let instructions =
+            model.get_model_instructions(Some(lha_llm::types::Personality::Friendly));
         assert_eq!(instructions, "hello friendly");
     }
 
@@ -361,7 +362,8 @@ mod tests {
             instructions_variables: Some(personality_variables()),
         }));
 
-        let instructions = model.get_model_instructions(Some(lha_llm_types::Personality::Friendly));
+        let instructions =
+            model.get_model_instructions(Some(lha_llm::types::Personality::Friendly));
         assert_eq!(instructions, "base");
     }
 
@@ -369,11 +371,11 @@ mod tests {
     fn exposes_personality_messages() {
         let variables = personality_variables();
         assert_eq!(
-            variables.get_personality_message(Some(lha_llm_types::Personality::Friendly)),
+            variables.get_personality_message(Some(lha_llm::types::Personality::Friendly)),
             Some("friendly".to_string()),
         );
         assert_eq!(
-            variables.get_personality_message(Some(lha_llm_types::Personality::Pragmatic)),
+            variables.get_personality_message(Some(lha_llm::types::Personality::Pragmatic)),
             Some("pragmatic".to_string()),
         );
         assert_eq!(

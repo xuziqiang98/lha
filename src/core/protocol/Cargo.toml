@@ -14,7 +14,7 @@ workspace = true
 [dependencies]
 lha-git = { workspace = true }
 lha-execpolicy = { workspace = true }
-lha-llm-types = { workspace = true }
+lha-llm = { workspace = true }
 lha-utils-absolute-path = { workspace = true }
 lha-utils-image = { workspace = true }
 icu_decimal = { workspace = true }

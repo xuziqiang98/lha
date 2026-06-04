@@ -1,10 +1,9 @@
-# Agent Runtime Layer
+# Agent Core SDK Layer
 
-`lha-agent-runtime` is the reusable, product-neutral agent SDK that sits between `lha-llm` and product runtimes such as `lha-agent`.
+`lha-core` is the reusable, product-neutral agent SDK that sits between `lha-llm` and product runtimes such as `lha-agent`.
 
-`lha-agent-runtime` is also a transitional workspace crate. The target
-crates.io publish boundary is `lha-core`, where the current `lha-agent-core`
-kernel and `lha-agent-runtime` session SDK will be combined. See
+`lha-agent-core` and `lha-agent-runtime` are now transitional workspace
+compatibility shims that re-export the consolidated `lha-core` SDK. See
 [Three-Crate Publish Boundary Refactor](./three-crate-publish-boundaries.md)
 for the publishing plan.
 
@@ -12,32 +11,34 @@ for the publishing plan.
 
 The intended stack is:
 
-`lha-llm` -> `lha-agent-core` -> `lha-agent-runtime` -> product runtime
+`lha-llm` -> `lha-core` -> product runtime
 
 - `lha-llm` is the model/runtime SDK boundary.
-- `lha-agent-core` is the low-level turn-stream kernel.
-- `lha-agent-runtime` is the stateful session SDK.
-- `lha-agent` is one product-specific runtime built on top of those layers.
+- `lha-core::kernel` is the low-level turn-stream kernel.
+- `lha-core` is the stateful session SDK.
+- `lha-agent` is one product-specific runtime built on top of that layer.
 
-## What `lha-agent-runtime` owns
+## What `lha-core` owns
 
 - Session lifecycle and status
 - In-memory transcript state
-- Turn execution built on `lha-agent-core`
+- Turn execution built on `lha_core::kernel`
 - Generic event streaming
 - Generic tool registration and execution
+- Lightweight skill provider abstractions
+- Optional MCP-to-tool SDK skeleton behind the `mcp` feature
 - Steering and follow-up input queues
 - Session snapshots for adapters and callers
 
-## What stays out of `lha-agent-runtime`
+## What stays out of `lha-core`
 
 - Rollout persistence and thread indexing
 - SQLite-backed session state
 - LHA protocol `Op` / `EventMsg`
 - Approval, sandbox, exec-policy, and coding tool UX
-- Skills, project-doc injection, review flows, and CLI-backed delegated jobs
+- Product skill installation, project-doc injection, review flows, and CLI-backed delegated jobs
 
-`lha-agent-runtime` also should not depend on `lha-llm` compatibility bridges
+`lha-core` also should not depend on `lha-llm` compatibility bridges
 that reconstruct provider-facing transcript items. Session/runtime code should
 append semantic transcript items directly from tool calls and tool results.
 It should also treat tool names such as `local_shell` as ordinary semantic tool
@@ -50,9 +51,9 @@ Those concerns remain in `lha-agent` or other higher-level crates.
 
 The current migration path is:
 
-1. Build new generic agents directly on `lha-agent-runtime`.
+1. Build new generic agents directly on `lha-core`.
 2. Keep `lha-agent` as the compatibility/product layer.
-3. Gradually move generic runtime behavior out of `src/agent/runtime` and into `src/core/agent-runtime`.
+3. Keep `lha-agent-core` and `lha-agent-runtime` only as temporary re-export shims while downstream imports migrate.
 
 This lets the workspace expose a small reusable agent SDK without forcing an all-at-once product rewrite.
 
@@ -63,17 +64,14 @@ runtime bridge APIs.
 
 ## Minimal SDK shape
 
-A downstream crate can build a minimal in-memory agent using `lha-llm` and
-`lha-agent-runtime` without importing `lha_protocol::*` directly. In the
-three-crate publishing target, the `lha_agent_runtime` imports in this example
-move to `lha_core`:
+A downstream crate can build a minimal in-memory agent using `lha-llm` and `lha-core` without importing `lha_protocol::*` directly:
 
 ```rust
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use lha_agent_runtime::AgentBuilder;
-use lha_agent_runtime::SessionInput;
+use lha_core::AgentBuilder;
+use lha_core::SessionInput;
 use lha_llm::RuntimeCapabilities;
 use lha_llm::RuntimeMetadata;
 use lha_llm::SemanticConversationCompactor;

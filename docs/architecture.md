@@ -3,14 +3,16 @@
 The Rust workspace is organized around the current top-level domains under `src/`:
 
 - `src/llm`: the LLM-facing SDK boundary.
-  - `src/llm/api` owns wire-level API clients and provider protocol details.
-  - `src/llm/runtime` exposes the semantic runtime interface consumed by the agent layer.
+  - `src/llm/src/api` owns wire-level API clients and provider protocol details.
+  - `src/llm/src/client` owns generic HTTP transport, retry, SSE, and multipart primitives.
+  - `src/llm/src/types` owns model catalog, transcript, usage, and config semantics.
+  - `src/llm/src` exposes the semantic runtime interface consumed by the agent layer.
     Its public surface should remain semantic and provider-neutral rather than
     re-exporting protocol compatibility helpers or wire-specific request types.
   - `src/llm/providers` is reserved for provider-specific adapters when needed.
 - `src/core`: cross-surface product primitives that should not depend on a specific UI.
-  - `src/core/agent-core` owns the reusable agent-loop kernel that sits above `lha-llm` and below product-specific agent behavior.
-  - `src/core/agent-runtime` owns the reusable stateful agent SDK that builds on `lha-agent-core`.
+  - `src/core` owns the `lha-core` publish boundary: the reusable agent-loop kernel, stateful in-memory agent SDK, lightweight skills API, and optional MCP SDK skeleton.
+  - `src/core/agent-core` and `src/core/agent-runtime` are temporary compatibility shims over `lha-core`.
   - `src/core/protocol` defines shared protocol types.
   - `src/core/state` owns durable state and storage primitives.
 - `src/agent`: the LHA agent runtime and product logic.
@@ -35,10 +37,10 @@ The main product path is:
 `src/llm` -> `src/core` -> `src/agent` -> surface crates such as `src/tui/app`, `src/platform/exec`, and `src/integrations/app-server`
 
 The important boundary in this stack is that `lha-agent` should talk to `lha-llm` as an SDK, not by reaching into provider-specific internals.
-The reusable turn-stream kernel now lives in `lha-agent-core`, and the higher-level reusable session runtime lives in `lha-agent-runtime`, so new agent products should prefer building on those layers instead of reimplementing the loop inside a product crate.
+The reusable turn-stream kernel and higher-level reusable session runtime now live in `lha-core`, so new agent products should prefer building on that layer instead of reimplementing the loop inside a product crate.
 In particular, `lha-llm` should expose semantic tool descriptors, turn requests,
 and turn events, while conversion to provider-specific payloads stays inside
-`src/llm/api` and `src/llm/runtime`.
+`src/llm/src/api` and the runtime modules under `src/llm/src`.
 Tool names such as `local_shell` should remain generic function-tool names at
 the `lha-llm` boundary; product defaults such as sandbox policy belong above
 that SDK boundary.
@@ -48,9 +50,9 @@ that SDK boundary.
 The long-term crates.io publishing target is three public packages:
 
 - `lha-llm`: reusable model API and semantic runtime SDK.
-- `lha-core`: minimal agent SDK built from the current `src/core/agent-core`
-  and `src/core/agent-runtime` layers, with tools, lightweight skills, and
-  optional MCP-to-tool support.
+- `lha-core`: minimal agent SDK rooted at `src/core`, with tools, lightweight
+  skills, and optional MCP-to-tool support. `src/core/agent-core` and
+  `src/core/agent-runtime` are compatibility shims.
 - `lha-cli`: the complete LHA product package that depends on `lha-llm` and
   `lha-core` and installs the `lha` command.
 
@@ -87,16 +89,16 @@ Today, `src/agent/runtime` still contains substantial LHA-specific policy around
 - `src/agent`: LHA orchestration and product behavior
 - `src/tui`: presentation layer
 
-Follow-on extractions should continue to live between `src/core` and the product-specific parts of `src/agent`, without collapsing the existing `src/llm` SDK boundary. Today that reusable session/runtime layer is `lha-agent-runtime`.
+Follow-on extractions should continue to live between `src/core` and the product-specific parts of `src/agent`, without collapsing the existing `src/llm` SDK boundary. Today that reusable session/runtime layer is `lha-core`.
 
 Workflow identities are an LHA-specific runtime policy in this layering. Their
 shared protocol and rollout types belong in `src/core/protocol`, while workflow
 state machines, artifact validation, tool filtering, and identity-specific
 prompt injection belong in `src/agent/runtime`. See
 `docs/workflow-identities.md` for the detailed design. They should not move into
-`lha-agent-runtime` until the reusable/product-specific boundary is clearer.
+`lha-core` until the reusable/product-specific boundary is clearer.
 
-The important nuance is that this extraction is not yet the same thing as migrating the product runtime. `lha-agent-runtime` and `lha-llm` now provide the cleaner SDK-facing layer, while `src/agent/runtime` still owns the main LHA session loop, persistence integration, and product-specific tool behavior. `ThreadManager` and `CodexThread` therefore remain LHA-facing compatibility wrappers over the existing product runtime rather than a full rewrite on top of `lha-agent-runtime`.
+The important nuance is that this extraction is not yet the same thing as migrating the product runtime. `lha-core` and `lha-llm` now provide the cleaner SDK-facing layer, while `src/agent/runtime` still owns the main LHA session loop, persistence integration, and product-specific tool behavior. `ThreadManager` and `CodexThread` therefore remain LHA-facing compatibility wrappers over the existing product runtime rather than a full rewrite on top of `lha-core`.
 
 ## Workspace Root
 

@@ -86,7 +86,7 @@ impl TurnRuntime {
             endpoint_id: config.model_provider_id.clone(),
             http_client: build_reqwest_client_with_options(http_client_options),
             model_info: model_info.clone().into(),
-            otel_manager: otel_manager.clone(),
+            telemetry: Arc::new(otel_manager.clone()),
             endpoint: endpoint.clone(),
             effort,
             summary,
