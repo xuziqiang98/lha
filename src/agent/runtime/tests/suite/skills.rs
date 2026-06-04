@@ -161,29 +161,35 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
 async fn list_skills_includes_system_cache_entries() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    const SYSTEM_SKILL_NAME: &str = "skill-creator";
+    const SYSTEM_SKILL_NAMES: [&str; 2] = ["skill-creator", "imagegen"];
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_pre_build_hook(|home| {
-        let system_skill_path = system_skill_md_path(home, SYSTEM_SKILL_NAME);
-        assert!(
-            !system_skill_path.exists(),
-            "expected embedded system skills not yet installed, but {system_skill_path:?} exists"
-        );
+        for name in SYSTEM_SKILL_NAMES {
+            let system_skill_path = system_skill_md_path(home, name);
+            assert!(
+                !system_skill_path.exists(),
+                "expected embedded system skills not yet installed, but {system_skill_path:?} exists"
+            );
+        }
     });
     let test = builder.build(&server).await?;
 
-    let system_skill_path = system_skill_md_path(test.lha_home_path(), SYSTEM_SKILL_NAME);
-    assert!(
-        system_skill_path.exists(),
-        "expected embedded system skills installed to {system_skill_path:?}"
-    );
-    let system_skill_contents = fs::read_to_string(&system_skill_path)?;
-    let expected_name_line = format!("name: {SYSTEM_SKILL_NAME}");
-    assert!(
-        system_skill_contents.contains(&expected_name_line),
-        "expected embedded system skill file, got:\n{system_skill_contents}"
-    );
+    for name in SYSTEM_SKILL_NAMES {
+        let system_skill_path = system_skill_md_path(test.lha_home_path(), name);
+        assert!(
+            system_skill_path.exists(),
+            "expected embedded system skills installed to {system_skill_path:?}"
+        );
+        let system_skill_contents = fs::read_to_string(&system_skill_path)?;
+        let expected_name_line = format!("name: {name}");
+        let expected_quoted_name_line = format!("name: \"{name}\"");
+        assert!(
+            system_skill_contents.contains(&expected_name_line)
+                || system_skill_contents.contains(&expected_quoted_name_line),
+            "expected embedded system skill file, got:\n{system_skill_contents}"
+        );
+    }
 
     test.codex
         .submit(Op::ListSkills {
@@ -206,17 +212,19 @@ async fn list_skills_includes_system_cache_entries() -> Result<()> {
         .map(|entry| (entry.skills.clone(), entry.errors.clone()))
         .unwrap_or_default();
 
-    let skill = skills
-        .iter()
-        .find(|skill| skill.name == SYSTEM_SKILL_NAME)
-        .expect("expected system skill to be present");
-    assert_eq!(skill.scope, lha_protocol::protocol::SkillScope::System);
-    let path_str = skill.path.to_string_lossy().replace('\\', "/");
-    let expected_path_suffix = format!("/skills/.system/{SYSTEM_SKILL_NAME}/SKILL.md");
-    assert!(
-        path_str.ends_with(&expected_path_suffix),
-        "unexpected skill path: {path_str}"
-    );
+    for name in SYSTEM_SKILL_NAMES {
+        let skill = skills
+            .iter()
+            .find(|skill| skill.name == name)
+            .unwrap_or_else(|| panic!("expected system skill {name} to be present"));
+        assert_eq!(skill.scope, lha_protocol::protocol::SkillScope::System);
+        let path_str = skill.path.to_string_lossy().replace('\\', "/");
+        let expected_path_suffix = format!("/skills/.system/{name}/SKILL.md");
+        assert!(
+            path_str.ends_with(&expected_path_suffix),
+            "unexpected skill path: {path_str}"
+        );
+    }
 
     Ok(())
 }

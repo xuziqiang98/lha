@@ -76,8 +76,13 @@ mod tests {
 
     #[test]
     fn chat_tools_include_top_level_name() {
-        let properties =
-            BTreeMap::from([("foo".to_string(), JsonSchema::String { description: None })]);
+        let properties = BTreeMap::from([(
+            "foo".to_string(),
+            JsonSchema::String {
+                description: None,
+                enum_values: None,
+            },
+        )]);
         let tools = vec![ToolSpec::Function(ResponsesApiTool {
             name: "demo".to_string(),
             description: "A demo tool".to_string(),

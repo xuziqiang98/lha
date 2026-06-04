@@ -54,6 +54,8 @@ pub enum ToolInputSchema {
     String {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
+        #[serde(rename = "enum", default, skip_serializing_if = "Option::is_none")]
+        enum_values: Option<Vec<String>>,
     },
     #[serde(alias = "integer")]
     Number {
@@ -81,7 +83,13 @@ impl From<JsonSchema> for ToolInputSchema {
     fn from(value: JsonSchema) -> Self {
         match value {
             JsonSchema::Boolean { description } => Self::Boolean { description },
-            JsonSchema::String { description } => Self::String { description },
+            JsonSchema::String {
+                description,
+                enum_values,
+            } => Self::String {
+                description,
+                enum_values,
+            },
             JsonSchema::Number { description } => Self::Number { description },
             JsonSchema::Array { items, description } => Self::Array {
                 items: Box::new(Self::from(*items)),
@@ -107,7 +115,13 @@ impl From<ToolInputSchema> for JsonSchema {
     fn from(value: ToolInputSchema) -> Self {
         match value {
             ToolInputSchema::Boolean { description } => Self::Boolean { description },
-            ToolInputSchema::String { description } => Self::String { description },
+            ToolInputSchema::String {
+                description,
+                enum_values,
+            } => Self::String {
+                description,
+                enum_values,
+            },
             ToolInputSchema::Number { description } => Self::Number { description },
             ToolInputSchema::Array { items, description } => Self::Array {
                 items: Box::new(Self::from(*items)),

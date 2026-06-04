@@ -24,6 +24,7 @@ pub static WORKFLOW_SUBMIT_ARTIFACT_TOOL: LazyLock<ToolDescriptor> = LazyLock::n
                 description: Some(
                     "The current workflow step id for the artifact being submitted.".to_string(),
                 ),
+                enum_values: None,
             },
         ),
         (

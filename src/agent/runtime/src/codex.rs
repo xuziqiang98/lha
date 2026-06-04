@@ -1389,6 +1389,10 @@ impl Session {
             declared_tool_contract: session_configuration.provider.enforce_declared_tool_names(),
             features: &per_turn_config.features,
             web_search_mode: per_turn_config.web_search_mode,
+            image_generation_tools: session_configuration.provider.is_openai()
+                && (session_configuration.provider.uses_responses_api()
+                    || session_configuration.provider.uses_chat_completions_api())
+                && session_configuration.provider.has_local_auth(),
             memory_tools: per_turn_config.features.enabled(Feature::MemoryTool)
                 && per_turn_config.memories.use_memories
                 && per_turn_config.memories.dedicated_tools,
@@ -4973,6 +4977,7 @@ async fn start_cli_backed_review_turn(
         declared_tool_contract: endpoint.enforce_declared_tool_names(),
         features: &review_features,
         web_search_mode: Some(review_web_search_mode),
+        image_generation_tools: false,
         memory_tools: false,
         session_source: parent_turn_context.runtime.get_session_source(),
     })

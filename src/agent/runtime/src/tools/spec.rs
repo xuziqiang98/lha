@@ -41,6 +41,7 @@ pub(crate) struct ToolsConfig {
     pub delegated_job_tools: bool,
     pub identity_tools: bool,
     pub goal_tools: bool,
+    pub image_generation_tools: bool,
     pub memory_tools: bool,
     pub request_rule_enabled: bool,
     pub experimental_supported_tools: Vec<String>,
@@ -54,6 +55,7 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) declared_tool_contract: bool,
     pub(crate) features: &'a Features,
     pub(crate) web_search_mode: Option<WebSearchMode>,
+    pub(crate) image_generation_tools: bool,
     pub(crate) memory_tools: bool,
     #[allow(dead_code)]
     pub(crate) session_source: SessionSource,
@@ -66,6 +68,7 @@ impl ToolsConfig {
             declared_tool_contract,
             features,
             web_search_mode,
+            image_generation_tools,
             memory_tools,
             session_source: _,
         } = params;
@@ -108,6 +111,7 @@ impl ToolsConfig {
             delegated_job_tools: include_delegated_job_tools,
             identity_tools: include_identity_tools,
             goal_tools: include_goal_tools,
+            image_generation_tools: *image_generation_tools,
             memory_tools: *memory_tools,
             request_rule_enabled,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
@@ -239,6 +243,7 @@ fn create_approval_parameters(include_prefix_rule: bool) -> BTreeMap<String, Jso
                     "Sandbox permissions for the command. Set to \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\"."
                         .to_string(),
                 ),
+                enum_values: None,
             },
         ),
         (
@@ -252,6 +257,7 @@ fn create_approval_parameters(include_prefix_rule: bool) -> BTreeMap<String, Jso
                     fetch and pull the latest version of this git branch?'"#
                     .to_string(),
                 ),
+                enum_values: None,
             },
         ),
     ]);
@@ -260,7 +266,7 @@ fn create_approval_parameters(include_prefix_rule: bool) -> BTreeMap<String, Jso
         properties.insert(
             "prefix_rule".to_string(),
             JsonSchema::Array {
-                items: Box::new(JsonSchema::String { description: None }),
+                items: Box::new(JsonSchema::String { description: None, enum_values: None }),
                 description: Some(
                     r#"Only specify when sandbox_permissions is `require_escalated`. 
                     Suggest a prefix command pattern that will allow you to fulfill similar requests from the user in the future.
@@ -278,6 +284,7 @@ fn create_exec_command_tool(include_prefix_rule: bool) -> ToolDescriptor {
             "cmd".to_string(),
             JsonSchema::String {
                 description: Some("Shell command to execute.".to_string()),
+                enum_values: None,
             },
         ),
         (
@@ -287,12 +294,14 @@ fn create_exec_command_tool(include_prefix_rule: bool) -> ToolDescriptor {
                     "Optional working directory to run the command in; defaults to the turn cwd."
                         .to_string(),
                 ),
+                enum_values: None,
             },
         ),
         (
             "shell".to_string(),
             JsonSchema::String {
                 description: Some("Shell binary to launch. Defaults to the user's default shell.".to_string()),
+                enum_values: None,
             },
         ),
         (
@@ -358,6 +367,7 @@ fn create_write_stdin_tool() -> ToolDescriptor {
             "chars".to_string(),
             JsonSchema::String {
                 description: Some("Bytes to write to stdin (may be empty to poll).".to_string()),
+                enum_values: None,
             },
         ),
         (
@@ -398,7 +408,10 @@ fn create_shell_tool(include_prefix_rule: bool) -> ToolDescriptor {
         (
             "command".to_string(),
             JsonSchema::Array {
-                items: Box::new(JsonSchema::String { description: None }),
+                items: Box::new(JsonSchema::String {
+                    description: None,
+                    enum_values: None,
+                }),
                 description: Some("The command to execute".to_string()),
             },
         ),
@@ -406,6 +419,7 @@ fn create_shell_tool(include_prefix_rule: bool) -> ToolDescriptor {
             "workdir".to_string(),
             JsonSchema::String {
                 description: Some("The working directory to execute the command in".to_string()),
+                enum_values: None,
             },
         ),
         (
@@ -463,12 +477,14 @@ fn create_shell_command_tool(include_prefix_rule: bool) -> ToolDescriptor {
                 description: Some(
                     "The shell script to execute in the user's default shell".to_string(),
                 ),
+                enum_values: None,
             },
         ),
         (
             "workdir".to_string(),
             JsonSchema::String {
                 description: Some("The working directory to execute the command in".to_string()),
+                enum_values: None,
             },
         ),
         (
@@ -523,6 +539,7 @@ fn create_view_image_tool() -> ToolDescriptor {
         "path".to_string(),
         JsonSchema::String {
             description: Some("Local filesystem path to an image file".to_string()),
+            enum_values: None,
         },
     )]);
 
@@ -539,18 +556,53 @@ fn create_view_image_tool() -> ToolDescriptor {
     })
 }
 
+fn create_imagegen_tool() -> ToolDescriptor {
+    let properties = BTreeMap::from([
+        (
+            "prompt".to_string(),
+            JsonSchema::String {
+                description: Some("Rewritten prompt for image generation or editing.".to_string()),
+                enum_values: None,
+            },
+        ),
+        (
+            "action".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Use generate for new images and edit when modifying image context from the conversation."
+                        .to_string(),
+                ),
+                enum_values: Some(vec!["generate".to_string(), "edit".to_string()]),
+            },
+        ),
+    ]);
+
+    ToolDescriptor::Function(ResponsesApiTool {
+        name: "imagegen".to_string(),
+        description: include_str!("handlers/imagegen_description.md").to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["prompt".to_string(), "action".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_spawn_agent_tool(_config: &ToolsConfig) -> ToolDescriptor {
     let properties = BTreeMap::from([
         (
             "message".to_string(),
             JsonSchema::String {
                 description: Some("Plain-text task for the isolated exploration job.".to_string()),
+                enum_values: None,
             },
         ),
         (
             "agent_type".to_string(),
             JsonSchema::String {
                 description: Some("Delegated job type. Only `explorer` is supported.".to_string()),
+                enum_values: None,
             },
         ),
         (
@@ -580,9 +632,11 @@ fn create_spawn_agent_tool(_config: &ToolsConfig) -> ToolDescriptor {
 fn create_goal_tools() -> Vec<ToolDescriptor> {
     let objective_schema = JsonSchema::String {
         description: Some("The goal objective.".to_string()),
+        enum_values: None,
     };
     let status_schema = JsonSchema::String {
         description: Some("One of: complete, blocked.".to_string()),
+        enum_values: None,
     };
     vec![
         ToolDescriptor::Function(ResponsesApiTool {
@@ -625,7 +679,7 @@ fn create_wait_tool() -> ToolDescriptor {
     properties.insert(
         "ids".to_string(),
         JsonSchema::Array {
-            items: Box::new(JsonSchema::String { description: None }),
+            items: Box::new(JsonSchema::String { description: None, enum_values: None }),
             description: Some(
                 "Delegated job ids to wait on. Pass multiple ids to wait for all requested jobs or until timeout."
                     .to_string(),
@@ -660,6 +714,7 @@ fn create_request_user_input_tool() -> ToolDescriptor {
         "label".to_string(),
         JsonSchema::String {
             description: Some("User-facing label (1-5 words).".to_string()),
+            enum_values: None,
         },
     );
     option_props.insert(
@@ -668,6 +723,7 @@ fn create_request_user_input_tool() -> ToolDescriptor {
             description: Some(
                 "One short sentence explaining impact/tradeoff if selected.".to_string(),
             ),
+            enum_values: None,
         },
     );
 
@@ -688,6 +744,7 @@ fn create_request_user_input_tool() -> ToolDescriptor {
         "id".to_string(),
         JsonSchema::String {
             description: Some("Stable identifier for mapping answers (snake_case).".to_string()),
+            enum_values: None,
         },
     );
     question_props.insert(
@@ -696,12 +753,14 @@ fn create_request_user_input_tool() -> ToolDescriptor {
             description: Some(
                 "Short header label shown in the UI (12 or fewer chars).".to_string(),
             ),
+            enum_values: None,
         },
     );
     question_props.insert(
         "question".to_string(),
         JsonSchema::String {
             description: Some("Single-sentence prompt shown to the user.".to_string()),
+            enum_values: None,
         },
     );
     question_props.insert("options".to_string(), options_schema);
@@ -743,6 +802,7 @@ fn create_close_agent_tool() -> ToolDescriptor {
         "id".to_string(),
         JsonSchema::String {
             description: Some("Delegated job id to cancel (from spawn_agent).".to_string()),
+            enum_values: None,
         },
     );
 
@@ -766,6 +826,7 @@ fn create_test_sync_tool() -> ToolDescriptor {
                 description: Some(
                     "Identifier shared by concurrent calls that should rendezvous".to_string(),
                 ),
+                enum_values: None,
             },
         ),
         (
@@ -831,6 +892,7 @@ fn create_grep_files_tool() -> ToolDescriptor {
             "pattern".to_string(),
             JsonSchema::String {
                 description: Some("Regular expression pattern to search for.".to_string()),
+                enum_values: None,
             },
         ),
         (
@@ -841,6 +903,7 @@ fn create_grep_files_tool() -> ToolDescriptor {
                      \"*.{ts,tsx}\")."
                         .to_string(),
                 ),
+                enum_values: None,
             },
         ),
         (
@@ -850,6 +913,7 @@ fn create_grep_files_tool() -> ToolDescriptor {
                     "Directory or file path to search. Defaults to the session's working directory."
                         .to_string(),
                 ),
+                enum_values: None,
             },
         ),
         (
@@ -929,6 +993,7 @@ fn create_read_file_tool() -> ToolDescriptor {
             "file_path".to_string(),
             JsonSchema::String {
                 description: Some("Absolute path to the file".to_string()),
+                enum_values: None,
             },
         ),
         (
@@ -953,6 +1018,7 @@ fn create_read_file_tool() -> ToolDescriptor {
                      to expand around an anchor line."
                         .to_string(),
                 ),
+                enum_values: None,
             },
         ),
         (
@@ -985,6 +1051,7 @@ fn create_list_dir_tool() -> ToolDescriptor {
             "dir_path".to_string(),
             JsonSchema::String {
                 description: Some("Absolute path to the directory to list.".to_string()),
+                enum_values: None,
             },
         ),
         (
@@ -1040,6 +1107,7 @@ fn create_memory_tools() -> Vec<ToolDescriptor> {
                                 "Relative directory under the memory root; defaults to root."
                                     .to_string(),
                             ),
+                            enum_values: None,
                         },
                     ),
                     (
@@ -1070,6 +1138,7 @@ fn create_memory_tools() -> Vec<ToolDescriptor> {
                         "path".to_string(),
                         JsonSchema::String {
                             description: Some("Relative file path under the memory root.".to_string()),
+                            enum_values: None,
                         },
                     ),
                     (
@@ -1099,6 +1168,7 @@ fn create_memory_tools() -> Vec<ToolDescriptor> {
                         "query".to_string(),
                         JsonSchema::String {
                             description: Some("Case-insensitive substring to search for.".to_string()),
+                            enum_values: None,
                         },
                     ),
                     (
@@ -1108,6 +1178,7 @@ fn create_memory_tools() -> Vec<ToolDescriptor> {
                                 "Relative file or directory under the memory root; defaults to root."
                                     .to_string(),
                             ),
+                            enum_values: None,
                         },
                     ),
                     (
@@ -1139,12 +1210,14 @@ fn create_memory_tools() -> Vec<ToolDescriptor> {
                         "content".to_string(),
                         JsonSchema::String {
                             description: Some("Markdown note content to add.".to_string()),
+                            enum_values: None,
                         },
                     ),
                     (
                         "slug".to_string(),
                         JsonSchema::String {
                             description: Some("Short filename slug; sanitized to lowercase ASCII.".to_string()),
+                            enum_values: None,
                         },
                     ),
                 ]),
@@ -1164,6 +1237,7 @@ fn create_list_mcp_resources_tool() -> ToolDescriptor {
                     "Optional MCP server name. When omitted, lists resources from every configured server."
                         .to_string(),
                 ),
+                enum_values: None,
             },
         ),
         (
@@ -1173,6 +1247,7 @@ fn create_list_mcp_resources_tool() -> ToolDescriptor {
                     "Opaque cursor returned by a previous list_mcp_resources call for the same server."
                         .to_string(),
                 ),
+                enum_values: None,
             },
         ),
     ]);
@@ -1198,6 +1273,7 @@ fn create_list_mcp_resource_templates_tool() -> ToolDescriptor {
                     "Optional MCP server name. When omitted, lists resource templates from all configured servers."
                         .to_string(),
                 ),
+                enum_values: None,
             },
         ),
         (
@@ -1207,6 +1283,7 @@ fn create_list_mcp_resource_templates_tool() -> ToolDescriptor {
                     "Opaque cursor returned by a previous list_mcp_resource_templates call for the same server."
                         .to_string(),
                 ),
+                enum_values: None,
             },
         ),
     ]);
@@ -1232,6 +1309,7 @@ fn create_read_mcp_resource_tool() -> ToolDescriptor {
                     "MCP server name exactly as configured. Must match the 'server' field returned by list_mcp_resources."
                         .to_string(),
                 ),
+                enum_values: None,
             },
         ),
         (
@@ -1241,6 +1319,7 @@ fn create_read_mcp_resource_tool() -> ToolDescriptor {
                     "Resource URI to read. Must be one of the URIs returned by list_mcp_resources."
                         .to_string(),
                 ),
+                enum_values: None,
             },
         ),
     ]);
@@ -1516,6 +1595,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GoalHandler;
     use crate::tools::handlers::GrepFilesHandler;
+    use crate::tools::handlers::ImagegenHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
@@ -1544,6 +1624,7 @@ pub(crate) fn build_specs(
     let workflow_handler = Arc::new(WorkflowHandler);
     let goal_handler = Arc::new(GoalHandler);
     let memories_handler = Arc::new(MemoriesHandler);
+    let imagegen_handler = Arc::new(ImagegenHandler);
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
@@ -1700,6 +1781,16 @@ pub(crate) fn build_specs(
                 memories_handler.clone(),
             );
         }
+    }
+
+    if config.image_generation_tools {
+        maybe_push_spec_and_register_handler(
+            &mut builder,
+            config,
+            create_imagegen_tool(),
+            "imagegen",
+            imagegen_handler,
+        );
     }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
@@ -1953,7 +2044,10 @@ mod tests {
     fn strip_descriptions_schema(schema: &mut JsonSchema) {
         match schema {
             JsonSchema::Boolean { description }
-            | JsonSchema::String { description }
+            | JsonSchema::String {
+                description,
+                enum_values: _,
+            }
             | JsonSchema::Number { description } => {
                 *description = None;
             }
@@ -1997,6 +2091,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -2071,6 +2166,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -2092,6 +2188,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         })
@@ -2130,6 +2227,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         })
@@ -2181,6 +2279,7 @@ mod tests {
             declared_tool_contract: true,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -2210,6 +2309,7 @@ mod tests {
             declared_tool_contract: true,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -2242,6 +2342,7 @@ mod tests {
             declared_tool_contract: true,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -2264,6 +2365,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -2279,6 +2381,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -2297,6 +2400,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         })
@@ -2323,6 +2427,7 @@ mod tests {
             declared_tool_contract: false,
             features,
             web_search_mode,
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -2368,6 +2473,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: None,
+            image_generation_tools: false,
             memory_tools: features.enabled(Feature::MemoryTool),
             session_source: SessionSource::Cli,
         });
@@ -2386,6 +2492,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: None,
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -2414,6 +2521,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: None,
+            image_generation_tools: false,
             memory_tools: true,
             session_source: SessionSource::Cli,
         });
@@ -2433,6 +2541,64 @@ mod tests {
     }
 
     #[test]
+    fn imagegen_tool_schema_and_handler_are_registered_when_enabled() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let features = Features::with_defaults();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            declared_tool_contract: false,
+            features: &features,
+            web_search_mode: None,
+            image_generation_tools: true,
+            memory_tools: false,
+            session_source: SessionSource::Cli,
+        });
+
+        let (tools, registry) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
+        let tool = find_tool(&tools, "imagegen");
+
+        let ToolDescriptor::Function(ResponsesApiTool {
+            name, parameters, ..
+        }) = &tool.spec
+        else {
+            panic!("expected imagegen function tool");
+        };
+        assert_eq!(name, "imagegen");
+        let JsonSchema::Object {
+            properties,
+            required,
+            additional_properties,
+        } = parameters
+        else {
+            panic!("expected imagegen object schema");
+        };
+        assert_eq!(
+            required.as_deref(),
+            Some(&["prompt".to_string(), "action".to_string()][..])
+        );
+        assert_eq!(additional_properties, &Some(false.into()));
+        assert!(matches!(
+            properties.get("prompt"),
+            Some(JsonSchema::String {
+                enum_values: None,
+                ..
+            })
+        ));
+        assert_eq!(
+            properties.get("action"),
+            Some(&JsonSchema::String {
+                description: Some(
+                    "Use generate for new images and edit when modifying image context from the conversation."
+                        .to_string()
+                ),
+                enum_values: Some(vec!["generate".to_string(), "edit".to_string()]),
+            })
+        );
+        assert!(registry.handler("imagegen").is_some());
+    }
+
+    #[test]
     fn web_search_mode_cached_sets_external_web_access_false() {
         let config = test_config();
         let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
@@ -2443,6 +2609,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -2468,6 +2635,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -2717,6 +2885,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -2742,6 +2911,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -2764,6 +2934,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -2798,6 +2969,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -2850,7 +3022,10 @@ mod tests {
                     properties: BTreeMap::from([
                         (
                             "string_argument".to_string(),
-                            JsonSchema::String { description: None }
+                            JsonSchema::String {
+                                description: None,
+                                enum_values: None
+                            }
                         ),
                         (
                             "number_argument".to_string(),
@@ -2862,7 +3037,10 @@ mod tests {
                                 properties: BTreeMap::from([
                                     (
                                         "string_property".to_string(),
-                                        JsonSchema::String { description: None }
+                                        JsonSchema::String {
+                                            description: None,
+                                            enum_values: None
+                                        }
                                     ),
                                     (
                                         "number_property".to_string(),
@@ -2897,6 +3075,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -2977,6 +3156,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -3015,7 +3195,8 @@ mod tests {
                     properties: BTreeMap::from([(
                         "query".to_string(),
                         JsonSchema::String {
-                            description: Some("search query".to_string())
+                            description: Some("search query".to_string()),
+                            enum_values: None,
                         }
                     )]),
                     required: None,
@@ -3038,6 +3219,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -3096,6 +3278,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -3132,7 +3315,10 @@ mod tests {
                     properties: BTreeMap::from([(
                         "tags".to_string(),
                         JsonSchema::Array {
-                            items: Box::new(JsonSchema::String { description: None }),
+                            items: Box::new(JsonSchema::String {
+                                description: None,
+                                enum_values: None
+                            }),
                             description: None
                         }
                     )]),
@@ -3156,6 +3342,7 @@ mod tests {
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -3191,7 +3378,10 @@ mod tests {
                 parameters: JsonSchema::Object {
                     properties: BTreeMap::from([(
                         "value".to_string(),
-                        JsonSchema::String { description: None }
+                        JsonSchema::String {
+                            description: None,
+                            enum_values: None
+                        }
                     )]),
                     required: None,
                     additional_properties: None,
@@ -3272,6 +3462,7 @@ Examples of valid command strings:
             declared_tool_contract: false,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            image_generation_tools: false,
             memory_tools: false,
             session_source: SessionSource::Cli,
         });
@@ -3333,7 +3524,10 @@ Examples of valid command strings:
                     properties: BTreeMap::from([
                         (
                             "string_argument".to_string(),
-                            JsonSchema::String { description: None }
+                            JsonSchema::String {
+                                description: None,
+                                enum_values: None
+                            }
                         ),
                         (
                             "number_argument".to_string(),
@@ -3345,7 +3539,10 @@ Examples of valid command strings:
                                 properties: BTreeMap::from([
                                     (
                                         "string_property".to_string(),
-                                        JsonSchema::String { description: None }
+                                        JsonSchema::String {
+                                            description: None,
+                                            enum_values: None
+                                        }
                                     ),
                                     (
                                         "number_property".to_string(),
@@ -3360,7 +3557,10 @@ Examples of valid command strings:
                                     JsonSchema::Object {
                                         properties: BTreeMap::from([(
                                             "addtl_prop".to_string(),
-                                            JsonSchema::String { description: None }
+                                            JsonSchema::String {
+                                                description: None,
+                                                enum_values: None
+                                            }
                                         ),]),
                                         required: Some(vec!["addtl_prop".to_string(),]),
                                         additional_properties: Some(false.into()),
@@ -3381,8 +3581,13 @@ Examples of valid command strings:
 
     #[test]
     fn chat_tools_include_top_level_name() {
-        let properties =
-            BTreeMap::from([("foo".to_string(), JsonSchema::String { description: None })]);
+        let properties = BTreeMap::from([(
+            "foo".to_string(),
+            JsonSchema::String {
+                description: None,
+                enum_values: None,
+            },
+        )]);
         let tools = vec![ToolDescriptor::Function(ResponsesApiTool {
             name: "demo".to_string(),
             description: "A demo tool".to_string(),
@@ -3435,8 +3640,13 @@ Examples of valid command strings:
 
     #[test]
     fn messages_tools_support_function_tools() {
-        let properties =
-            BTreeMap::from([("foo".to_string(), JsonSchema::String { description: None })]);
+        let properties = BTreeMap::from([(
+            "foo".to_string(),
+            JsonSchema::String {
+                description: None,
+                enum_values: None,
+            },
+        )]);
         let tools = vec![ToolDescriptor::Function(ResponsesApiTool {
             name: "demo".to_string(),
             description: "A demo tool".to_string(),

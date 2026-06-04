@@ -37,6 +37,8 @@ pub enum JsonSchema {
     String {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
+        #[serde(rename = "enum", default, skip_serializing_if = "Option::is_none")]
+        enum_values: Option<Vec<String>>,
     },
     #[serde(alias = "integer")]
     Number {

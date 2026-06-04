@@ -176,15 +176,51 @@ mod tests {
         let mut paths: Vec<String> = items.into_iter().map(|(path, _)| path).collect();
         paths.sort_unstable();
 
+        for expected in [
+            "skill-creator/SKILL.md",
+            "skill-creator/scripts/init_skill.py",
+            "skill-installer/SKILL.md",
+            "imagegen/SKILL.md",
+            "imagegen/scripts/image_gen.py",
+            "imagegen/scripts/remove_chroma_key.py",
+        ] {
+            assert!(
+                paths
+                    .binary_search_by(|probe| probe.as_str().cmp(expected))
+                    .is_ok(),
+                "expected embedded system skills fingerprint to include {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn skill_installer_keeps_codex_github_source() {
+        let list_skills = SYSTEM_SKILLS_DIR
+            .get_file("skill-installer/scripts/list-skills.py")
+            .expect("list-skills.py should be embedded");
+        let list_skills =
+            std::str::from_utf8(list_skills.contents()).expect("list-skills.py should be utf-8");
         assert!(
-            paths
-                .binary_search_by(|probe| probe.as_str().cmp("skill-creator/SKILL.md"))
-                .is_ok()
+            list_skills.contains("DEFAULT_REPO = \"openai/skills\""),
+            "skill-installer must list curated skills from openai/skills"
         );
         assert!(
-            paths
-                .binary_search_by(|probe| probe.as_str().cmp("skill-creator/scripts/init_skill.py"))
-                .is_ok()
+            list_skills.contains("DEFAULT_PATH = \"skills/.curated\""),
+            "skill-installer must list the same curated path as Codex"
+        );
+        assert!(
+            list_skills.contains("github_request(url, \"codex-skill-list\")"),
+            "skill-installer list requests should match Codex GitHub request behavior"
+        );
+
+        let install_skill = SYSTEM_SKILLS_DIR
+            .get_file("skill-installer/scripts/install-skill-from-github.py")
+            .expect("install-skill-from-github.py should be embedded");
+        let install_skill = std::str::from_utf8(install_skill.contents())
+            .expect("install-skill-from-github.py should be utf-8");
+        assert!(
+            install_skill.contains("github_request(url, \"codex-skill-install\")"),
+            "skill-installer install requests should match Codex GitHub request behavior"
         );
     }
 }
