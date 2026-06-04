@@ -2,6 +2,12 @@
 
 `lha-agent-runtime` is the reusable, product-neutral agent SDK that sits between `lha-llm` and product runtimes such as `lha-agent`.
 
+`lha-agent-runtime` is also a transitional workspace crate. The target
+crates.io publish boundary is `lha-core`, where the current `lha-agent-core`
+kernel and `lha-agent-runtime` session SDK will be combined. See
+[Three-Crate Publish Boundary Refactor](./three-crate-publish-boundaries.md)
+for the publishing plan.
+
 ## Layering
 
 The intended stack is:
@@ -57,7 +63,10 @@ runtime bridge APIs.
 
 ## Minimal SDK shape
 
-A downstream crate can build a minimal in-memory agent using `lha-llm` and `lha-agent-runtime` without importing `lha_protocol::*` directly:
+A downstream crate can build a minimal in-memory agent using `lha-llm` and
+`lha-agent-runtime` without importing `lha_protocol::*` directly. In the
+three-crate publishing target, the `lha_agent_runtime` imports in this example
+move to `lha_core`:
 
 ```rust
 use std::sync::Arc;

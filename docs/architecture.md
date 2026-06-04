@@ -43,6 +43,21 @@ Tool names such as `local_shell` should remain generic function-tool names at
 the `lha-llm` boundary; product defaults such as sandbox policy belong above
 that SDK boundary.
 
+## Target crates.io publish boundaries
+
+The long-term crates.io publishing target is three public packages:
+
+- `lha-llm`: reusable model API and semantic runtime SDK.
+- `lha-core`: minimal agent SDK built from the current `src/core/agent-core`
+  and `src/core/agent-runtime` layers, with tools, lightweight skills, and
+  optional MCP-to-tool support.
+- `lha-cli`: the complete LHA product package that depends on `lha-llm` and
+  `lha-core` and installs the `lha` command.
+
+See [Three-Crate Publish Boundary Refactor](./three-crate-publish-boundaries.md)
+for the detailed mapping from current workspace crates to these publish
+boundaries.
+
 ## Product Philosophy
 
 LHA's product model is a single main agent. Isolated model work such as
