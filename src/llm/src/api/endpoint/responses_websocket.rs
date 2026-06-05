@@ -2,6 +2,7 @@ use crate::api::auth::AuthProvider;
 use crate::api::common::ResponseEvent;
 use crate::api::common::ResponseStream;
 use crate::api::common::ResponsesWsRequest;
+use crate::api::endpoint::websocket_proxy;
 use crate::api::error::ApiError;
 use crate::api::provider::Provider;
 use crate::api::sse::responses::ResponsesStreamEvent;
@@ -169,7 +170,7 @@ async fn connect_websocket(
         .map_err(|err| ApiError::Stream(format!("failed to build websocket request: {err}")))?;
     request.headers_mut().extend(headers);
 
-    let response = tokio_tungstenite::connect_async(request).await;
+    let response = websocket_proxy::connect_async(request).await;
 
     let (stream, response) = match response {
         Ok((stream, response)) => {
@@ -179,9 +180,15 @@ async fn connect_websocket(
             );
             (stream, response)
         }
-        Err(err) => {
+        Err(websocket_proxy::ConnectError::WebSocket(err)) => {
             error!("failed to connect to websocket: {err}, url: {url}");
             return Err(map_ws_error(err, &url));
+        }
+        Err(websocket_proxy::ConnectError::Proxy(err)) => {
+            error!("failed to connect to websocket through proxy: {err}, url: {url}");
+            return Err(ApiError::Transport(TransportError::Network(
+                err.to_string(),
+            )));
         }
     };
 

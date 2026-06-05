@@ -81,14 +81,88 @@ pub fn palette_version() -> u64 {
     DEFAULT_PALETTE_VERSION.load(Ordering::Relaxed)
 }
 
+fn parse_osc_color_response(buffer: &[u8], expected_slot: u8) -> Option<(u8, u8, u8)> {
+    let mut index = 0;
+    while index + 3 <= buffer.len() {
+        let start = buffer[index..]
+            .windows(2)
+            .position(|window| window == b"\x1B]")?;
+        index += start + 2;
+
+        let content_end = find_osc_end(&buffer[index..])?;
+        let content = std::str::from_utf8(&buffer[index..index + content_end]).ok()?;
+        let mut parts = content.splitn(2, ';');
+        let slot = parts.next()?.parse::<u8>().ok()?;
+        let payload = parts.next()?;
+        if slot == expected_slot
+            && let Some(color) = parse_osc_color_payload(payload)
+        {
+            return Some(color);
+        }
+        index += content_end;
+    }
+
+    None
+}
+
+fn find_osc_end(buffer: &[u8]) -> Option<usize> {
+    let mut index = 0;
+    while index < buffer.len() {
+        match buffer[index] {
+            0x07 => return Some(index),
+            0x1B if buffer.get(index + 1) == Some(&b'\\') => return Some(index),
+            0x1B => return None,
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
+fn parse_osc_color_payload(payload: &str) -> Option<(u8, u8, u8)> {
+    let (prefix, rest) = payload.split_once(':')?;
+    let expected_components = match prefix {
+        "rgb" => 3,
+        "rgba" => 4,
+        _ => return None,
+    };
+    let components: Vec<&str> = rest.split('/').collect();
+    if components.len() != expected_components {
+        return None;
+    }
+
+    Some((
+        parse_osc_color_component(components[0])?,
+        parse_osc_color_component(components[1])?,
+        parse_osc_color_component(components[2])?,
+    ))
+}
+
+fn parse_osc_color_component(component: &str) -> Option<u8> {
+    if component.is_empty() || component.len() > 4 {
+        return None;
+    }
+    let value = u32::from_str_radix(component, 16).ok()?;
+    let max = (1u32 << (component.len() * 4)) - 1;
+    Some(((value * 255 + max / 2) / max) as u8)
+}
+
 #[cfg(all(unix, not(test)))]
 mod imp {
     use super::DefaultColors;
-    use crossterm::style::Color as CrosstermColor;
-    use crossterm::style::query_background_color;
-    use crossterm::style::query_foreground_color;
+    use super::parse_osc_color_response;
+    use std::fs::File;
+    use std::fs::OpenOptions;
+    use std::io::ErrorKind;
+    use std::io::Read;
+    use std::io::Write;
+    use std::os::fd::AsRawFd;
     use std::sync::Mutex;
     use std::sync::OnceLock;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    const OSC_QUERY_TIMEOUT: Duration = Duration::from_millis(200);
 
     struct Cache<T> {
         attempted: bool,
@@ -133,24 +207,86 @@ mod imp {
 
     pub(super) fn requery_default_colors() {
         if let Ok(mut cache) = default_colors_cache().lock() {
-            // Don't try to refresh if the cache is already attempted and failed.
-            if cache.attempted && cache.value.is_none() {
-                return;
-            }
             cache.refresh_with(|| query_default_colors().unwrap_or_default());
         }
     }
 
     fn query_default_colors() -> std::io::Result<Option<DefaultColors>> {
-        let fg = query_foreground_color()?.and_then(color_to_tuple);
-        let bg = query_background_color()?.and_then(color_to_tuple);
+        let fg = query_color_slot(10)?;
+        let bg = query_color_slot(11)?;
         Ok(fg.zip(bg).map(|(fg, bg)| DefaultColors { fg, bg }))
     }
 
-    fn color_to_tuple(color: CrosstermColor) -> Option<(u8, u8, u8)> {
-        match color {
-            CrosstermColor::Rgb { r, g, b } => Some((r, g, b)),
-            _ => None,
+    fn query_color_slot(slot: u8) -> std::io::Result<Option<(u8, u8, u8)>> {
+        match OpenOptions::new().read(true).write(true).open("/dev/tty") {
+            Ok(mut tty) => query_color_slot_from_tty(&mut tty, slot),
+            Err(_) => {
+                let sequence = format!("\x1B]{slot};?\x1B\\");
+                std::io::stdout().write_all(sequence.as_bytes())?;
+                std::io::stdout().flush()?;
+                Ok(None)
+            }
+        }
+    }
+
+    fn query_color_slot_from_tty(
+        tty: &mut File,
+        slot: u8,
+    ) -> std::io::Result<Option<(u8, u8, u8)>> {
+        let _guard = NonblockingGuard::new(tty)?;
+        let sequence = format!("\x1B]{slot};?\x1B\\");
+        tty.write_all(sequence.as_bytes())?;
+        tty.flush()?;
+
+        let mut response = Vec::new();
+        let deadline = Instant::now() + OSC_QUERY_TIMEOUT;
+        let mut chunk = [0u8; 256];
+        while Instant::now() < deadline {
+            match tty.read(&mut chunk) {
+                Ok(0) => std::thread::sleep(Duration::from_millis(5)),
+                Ok(n) => {
+                    response.extend_from_slice(&chunk[..n]);
+                    if let Some(color) = parse_osc_color_response(&response, slot) {
+                        return Ok(Some(color));
+                    }
+                }
+                Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(err) if err.kind() == ErrorKind::Interrupted => {}
+                Err(err) => return Err(err),
+            }
+        }
+
+        Ok(None)
+    }
+
+    struct NonblockingGuard {
+        fd: i32,
+        flags: i32,
+    }
+
+    impl NonblockingGuard {
+        fn new(file: &File) -> std::io::Result<Self> {
+            let fd = file.as_raw_fd();
+            // SAFETY: fcntl only reads and updates status flags for a valid file descriptor.
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            if flags < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // SAFETY: fd is valid and flags are the previously read descriptor flags plus O_NONBLOCK.
+            let updated = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+            if updated < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(Self { fd, flags })
+        }
+    }
+
+    impl Drop for NonblockingGuard {
+        fn drop(&mut self) {
+            // SAFETY: restores the original descriptor flags for the same live file descriptor.
+            let _ = unsafe { libc::fcntl(self.fd, libc::F_SETFL, self.flags) };
         }
     }
 }
@@ -478,5 +614,43 @@ mod tests {
         let (distinct_idx, _) =
             nearest_xterm_fixed_color_distinct_from(target, avoid).expect("distinct color");
         assert_ne!(distinct_idx, avoid_idx);
+    }
+
+    #[test]
+    fn terminal_palette_parse_osc_color_bel_terminated_short_rgb() {
+        let response = b"\x1B]10;rgb:ff/00/7f\x07";
+
+        assert_eq!(parse_osc_color_response(response, 10), Some((255, 0, 127)));
+    }
+
+    #[test]
+    fn terminal_palette_parse_osc_color_st_terminated_long_rgb() {
+        let response = b"\x1B]11;rgb:ffff/8000/0000\x1B\\";
+
+        assert_eq!(parse_osc_color_response(response, 11), Some((255, 128, 0)));
+    }
+
+    #[test]
+    fn terminal_palette_parse_osc_color_ignores_rgba_alpha() {
+        let response = b"\x1B]10;rgba:aaaa/bbbb/cccc/dddd\x07";
+
+        assert_eq!(
+            parse_osc_color_response(response, 10),
+            Some((170, 187, 204))
+        );
+    }
+
+    #[test]
+    fn terminal_palette_parse_osc_color_ignores_other_slot() {
+        let response = b"\x1B]11;rgb:00/00/ff\x07";
+
+        assert_eq!(parse_osc_color_response(response, 10), None);
+    }
+
+    #[test]
+    fn terminal_palette_parse_osc_color_rejects_invalid_payload() {
+        let response = b"\x1B]10;rgb:ff/00\x07";
+
+        assert_eq!(parse_osc_color_response(response, 10), None);
     }
 }

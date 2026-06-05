@@ -2,6 +2,7 @@
 edition.workspace = true
 license.workspace = true
 name = "lha-agent-runtime"
+publish = false
 version.workspace = true
 
 [lib]

@@ -3,6 +3,10 @@ name = "lha-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Long-Horizon Agent command-line product package that installs the lha binary."
+homepage.workspace = true
+readme = "README.md"
+repository.workspace = true
 build = "build.rs"
 
 [[bin]]

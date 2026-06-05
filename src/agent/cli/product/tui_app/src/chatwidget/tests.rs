@@ -259,7 +259,7 @@ async fn session_configured_updates_footer_reasoning_effort_immediately() {
     let height = chat.desired_height(width);
     let mut terminal =
         ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    let _ = terminal.resize(Rect::new(0, 0, width, height));
 
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
@@ -308,7 +308,7 @@ async fn session_configured_updates_footer_reasoning_effort_immediately() {
     let height = chat.desired_height(width);
     let mut terminal =
         ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    let _ = terminal.resize(Rect::new(0, 0, width, height));
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("render configured state");
@@ -713,7 +713,7 @@ async fn session_configured_suppression_updates_footer_without_requesting_redraw
     let height = chat.desired_height(width);
     let mut terminal =
         ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    let _ = terminal.resize(Rect::new(0, 0, width, height));
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("render configured state");
@@ -7861,7 +7861,7 @@ async fn approvals_popup_shows_disabled_presets() {
     let height = chat.desired_height(width);
     let mut terminal =
         ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    let _ = terminal.resize(Rect::new(0, 0, width, height));
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("render approvals popup");
@@ -7904,7 +7904,7 @@ async fn approvals_popup_navigation_skips_disabled() {
     let height = chat.desired_height(width);
     let mut terminal =
         ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    let _ = terminal.resize(Rect::new(0, 0, width, height));
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("render approvals popup after disabled selection");
@@ -8039,7 +8039,7 @@ async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
     let height = chat.desired_height(width);
     let mut terminal =
         ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    let _ = terminal.resize(Rect::new(0, 0, width, height));
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw approval modal (no reason)");
@@ -8079,7 +8079,7 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
     let height = chat.desired_height(width);
     let mut terminal =
         ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    let _ = terminal.resize(Rect::new(0, 0, width, height));
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw approval modal (multiline prefix)");
@@ -8123,7 +8123,7 @@ async fn approval_modal_patch_snapshot() -> anyhow::Result<()> {
     let height = chat.desired_height(80);
     let mut terminal =
         ratatui::Terminal::new(VT100Backend::new(80, height)).expect("create terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, 80, height));
+    let _ = terminal.resize(Rect::new(0, 0, 80, height));
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw patch approval modal");
@@ -8378,7 +8378,7 @@ async fn status_widget_and_approval_modal_snapshot() {
     let height = chat.desired_height(width);
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
         .expect("create terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    let _ = terminal.resize(Rect::new(0, 0, width, height));
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw status + approval modal");

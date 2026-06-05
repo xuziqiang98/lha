@@ -1,7 +1,11 @@
 [package]
+description = "Reusable model API clients, streaming transports, and semantic runtime SDK for LHA."
 edition.workspace = true
+homepage.workspace = true
 license.workspace = true
 name = "lha-llm"
+readme = "README.md"
+repository.workspace = true
 version.workspace = true
 
 [lib]

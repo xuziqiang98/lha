@@ -3,6 +3,7 @@ name = "lha-backend-openapi-models"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 [lib]
 name = "lha_backend_openapi_models"

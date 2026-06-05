@@ -6,3 +6,4 @@ pub mod models;
 pub mod responses;
 pub mod responses_websocket;
 mod streaming;
+mod websocket_proxy;

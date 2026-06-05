@@ -1,8 +1,12 @@
 [package]
+description = "Minimal agent SDK for LHA with session runtime, tools, skills, and optional MCP adapters."
 edition.workspace = true
 exclude = ["agent-core/**", "agent-runtime/**", "protocol/**", "state/**"]
+homepage.workspace = true
 license.workspace = true
 name = "lha-core"
+readme = "README.md"
+repository.workspace = true
 version.workspace = true
 
 [lib]
