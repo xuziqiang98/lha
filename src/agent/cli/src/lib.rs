@@ -7,7 +7,7 @@ mod product_tests;
 #[cfg(test)]
 mod test_support;
 
-use crate::product::common::CliConfigOverrides;
+pub use crate::product::common::CliConfigOverrides;
 use clap::Parser;
 
 #[derive(Debug, Parser)]
