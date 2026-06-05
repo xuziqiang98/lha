@@ -4,10 +4,10 @@ mod oauth;
 mod perform_oauth_login;
 mod program_resolver;
 mod rmcp_client;
-#[cfg(test)]
+#[cfg(any(test, debug_assertions))]
 #[path = "bin/test_stdio_server.rs"]
 pub(crate) mod test_stdio_server;
-#[cfg(test)]
+#[cfg(any(test, debug_assertions))]
 #[path = "bin/test_streamable_http_server.rs"]
 pub(crate) mod test_streamable_http_server;
 mod utils;

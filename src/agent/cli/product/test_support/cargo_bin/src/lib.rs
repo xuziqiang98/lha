@@ -85,8 +85,46 @@ fn is_single_binary_alias(name: &str) -> bool {
 }
 
 fn legacy_arg0_alias(name: &str) -> io::Result<PathBuf> {
+    let lha_binary = resolve_lha_binary()?;
     let alias_dir = ARG0_ALIAS_DIR
         .get_or_init(|| std::env::temp_dir().join(format!("lha-test-arg0-{}", std::process::id())));
+    create_arg0_alias(alias_dir, name, &lha_binary)
+}
+
+fn resolve_lha_binary() -> io::Result<PathBuf> {
+    for key in cargo_bin_env_keys("lha") {
+        if let Some(value) = std::env::var_os(&key) {
+            return resolve_bin_from_env(&key, value).map_err(cargo_bin_error_to_io);
+        }
+    }
+
+    let cmd = assert_cmd::Command::cargo_bin("lha").map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("assert_cmd::Command::cargo_bin(\"lha\") failed: {err}"),
+        )
+    })?;
+    let mut path = PathBuf::from(cmd.get_program());
+    if !path.is_absolute() {
+        path = std::env::current_dir()?.join(path);
+    }
+    if path.exists() {
+        Ok(path)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "assert_cmd::Command::cargo_bin(\"lha\") resolved to {path:?}, but it does not exist"
+            ),
+        ))
+    }
+}
+
+fn cargo_bin_error_to_io(err: CargoBinError) -> io::Error {
+    io::Error::new(io::ErrorKind::NotFound, err.to_string())
+}
+
+fn create_arg0_alias(alias_dir: &Path, name: &str, target_lha: &Path) -> io::Result<PathBuf> {
     std::fs::create_dir_all(alias_dir)?;
     let alias_name = if cfg!(windows) && !name.ends_with(".exe") {
         format!("{name}.exe")
@@ -94,15 +132,14 @@ fn legacy_arg0_alias(name: &str) -> io::Result<PathBuf> {
         name.to_string()
     };
     let alias = alias_dir.join(alias_name);
-    if alias.exists() {
+    if std::fs::symlink_metadata(&alias).is_ok() {
         return Ok(alias);
     }
 
-    let current_exe = std::env::current_exe()?;
     #[cfg(unix)]
-    symlink(&current_exe, &alias)?;
+    symlink(target_lha, &alias)?;
     #[cfg(windows)]
-    std::fs::copy(&current_exe, &alias).map(|_| ())?;
+    std::fs::copy(target_lha, &alias).map(|_| ())?;
 
     Ok(alias)
 }
@@ -166,4 +203,38 @@ pub fn repo_root() -> io::Result<PathBuf> {
         io::ErrorKind::NotFound,
         "failed to locate repository root from repo_root.marker",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn creates_production_arg0_alias_to_lha_binary() -> io::Result<()> {
+        assert_alias_points_to_lha_binary("lha-exec")
+    }
+
+    #[test]
+    fn creates_test_server_arg0_alias_to_lha_binary() -> io::Result<()> {
+        assert_alias_points_to_lha_binary("test_stdio_server")
+    }
+
+    fn assert_alias_points_to_lha_binary(name: &str) -> io::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let lha_binary = temp_dir
+            .path()
+            .join(if cfg!(windows) { "lha.exe" } else { "lha" });
+        let lha_contents = b"fake lha binary";
+        std::fs::write(&lha_binary, lha_contents)?;
+
+        let alias = create_arg0_alias(&temp_dir.path().join("aliases"), name, &lha_binary)?;
+
+        #[cfg(unix)]
+        assert_eq!(std::fs::read_link(&alias)?, lha_binary);
+        #[cfg(windows)]
+        assert_eq!(std::fs::read(&alias)?, lha_contents);
+
+        Ok(())
+    }
 }

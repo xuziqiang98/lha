@@ -15,9 +15,9 @@ const EXEC_ARG0: &str = "lha-exec";
 const APP_SERVER_ARG0: &str = "lha-app-server";
 const MCP_SERVER_ARG0: &str = "lha-mcp-server";
 const STDIO_TO_UDS_ARG0: &str = "lha-stdio-to-uds";
-#[cfg(test)]
+#[cfg(any(test, debug_assertions))]
 const TEST_STDIO_SERVER_ARG0: &str = "test_stdio_server";
-#[cfg(test)]
+#[cfg(any(test, debug_assertions))]
 const TEST_STREAMABLE_HTTP_SERVER_ARG0: &str = "test_streamable_http_server";
 
 pub fn arg0_dispatch() -> Option<TempDir> {
@@ -122,13 +122,13 @@ fn dispatch_single_binary_alias(exe_name: &str, _path_entry: Option<&TempDir>) {
             };
             exit_with_result(crate::product::stdio_to_uds::run(Path::new(&socket_path)));
         }
-        #[cfg(test)]
+        #[cfg(any(test, debug_assertions))]
         TEST_STDIO_SERVER_ARG0 => {
             exit_after_block_on(async {
                 crate::product::rmcp_client::test_stdio_server::run_main().await
             });
         }
-        #[cfg(test)]
+        #[cfg(any(test, debug_assertions))]
         TEST_STREAMABLE_HTTP_SERVER_ARG0 => {
             exit_after_block_on(async {
                 crate::product::rmcp_client::test_streamable_http_server::run_main().await
