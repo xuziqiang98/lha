@@ -15,6 +15,7 @@ const EXEC_ARG0: &str = "lha-exec";
 const APP_SERVER_ARG0: &str = "lha-app-server";
 const MCP_SERVER_ARG0: &str = "lha-mcp-server";
 const STDIO_TO_UDS_ARG0: &str = "lha-stdio-to-uds";
+const CODEX_RESPONSES_API_PROXY_ARG0: &str = "codex-responses-api-proxy";
 #[cfg(any(test, debug_assertions))]
 const TEST_STDIO_SERVER_ARG0: &str = "test_stdio_server";
 #[cfg(any(test, debug_assertions))]
@@ -35,6 +36,10 @@ pub fn arg0_dispatch() -> Option<TempDir> {
         crate::product::linux_sandbox::run_main();
     } else if exe_name == APPLY_PATCH_ARG0 || exe_name == MISSPELLED_APPLY_PATCH_ARG0 {
         crate::product::apply_patch::main();
+    } else if is_sensitive_early_alias(exe_name) {
+        let args = crate::product::responses_api_proxy::Args::parse();
+        crate::product::process_hardening::pre_main_hardening();
+        exit_with_result(crate::product::responses_api_proxy::run_main(args));
     }
 
     let argv1 = args.next().unwrap_or_default();
@@ -136,6 +141,10 @@ fn dispatch_single_binary_alias(exe_name: &str, _path_entry: Option<&TempDir>) {
         }
         _ => {}
     }
+}
+
+fn is_sensitive_early_alias(exe_name: &str) -> bool {
+    exe_name == CODEX_RESPONSES_API_PROXY_ARG0
 }
 
 fn linux_sandbox_exe() -> Option<PathBuf> {
@@ -353,4 +362,14 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
     }
 
     Ok(temp_dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_responses_proxy_is_sensitive_early_alias() {
+        assert!(is_sensitive_early_alias("codex-responses-api-proxy"));
+    }
 }

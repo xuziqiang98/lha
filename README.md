@@ -5,13 +5,11 @@ From the repository root:
 
 ```
 cargo build -p lha-cli --bin lha --release
-cargo build -p lha-exec --bin lha-exec --release
 
 export PATH="<lha binary path>:$PATH" >> ~/.bashrc
 ```
 
 The resulting binary is written to `target/release/lha`.
-The `lha-exec` binary is written to `target/release/lha-exec`.
 
 ## Documentation
 
@@ -21,15 +19,11 @@ The `lha-exec` binary is written to `target/release/lha-exec`.
 
 ## Structure
 
-The workspace is organized under [`src/`](./src) with seven top-level domains:
+The workspace is organized under [`src/`](./src) around three crates.io publish boundaries:
 
-- `llm`: model runtime SDK, provider adapters, and wire-level API clients
-- `core`: shared protocol and session state types
-- `coding-agent`: LHA-specific runtime, CLI, login, and product logic
-- `tui`: terminal user interface application
-- `integrations`: app-server, MCP, backend, and cloud-facing adapters
-- `platform`: sandboxing, execution, and IPC primitives
-- `shared`: reusable support crates and utilities
+- `src/llm`: `lha-llm`, the reusable model runtime SDK, provider adapters, and wire-level API clients
+- `src/core`: `lha-core`, the reusable agent core APIs
+- `src/agent/cli`: `lha-cli`, the LHA product package that installs `lha`; its private `product/` modules include the TUI, runtime, state, app-server, MCP, sandboxing, and related tooling
 
 ## TUI Copying
 

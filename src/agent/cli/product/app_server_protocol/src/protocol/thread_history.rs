@@ -48,7 +48,7 @@ impl ThreadHistoryBuilder {
     }
 
     /// This function should handle all EventMsg variants that can be persisted in a rollout file.
-    /// See `should_persist_event_msg` in `src/agent/runtime/rollout/policy.rs`.
+    /// See `should_persist_event_msg` in `src/agent/cli/product/agent_runtime/src/rollout/policy.rs`.
     fn handle_event(&mut self, event: &EventMsg) {
         match event {
             EventMsg::UserMessage(payload) => self.handle_user_message(payload),

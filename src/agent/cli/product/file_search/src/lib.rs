@@ -14,6 +14,8 @@ use nucleo::Utf32String;
 use nucleo::pattern::CaseMatching;
 use nucleo::pattern::Normalization;
 use serde::Serialize;
+use serde_json::json;
+use std::io::IsTerminal;
 use std::num::NonZero;
 use std::path::Path;
 use std::path::PathBuf;
@@ -210,6 +212,80 @@ pub trait Reporter {
     fn report_match(&self, file_match: &FileMatch);
     fn warn_matches_truncated(&self, total_match_count: usize, shown_match_count: usize);
     fn warn_no_search_pattern(&self, search_directory: &Path);
+}
+
+pub(crate) async fn run_cli(cli: Cli) -> anyhow::Result<()> {
+    let reporter = StdioReporter {
+        write_output_as_json: cli.json,
+        show_indices: cli.compute_indices && std::io::stdout().is_terminal(),
+    };
+    run_main(cli, reporter).await
+}
+
+struct StdioReporter {
+    write_output_as_json: bool,
+    show_indices: bool,
+}
+
+impl StdioReporter {
+    fn print_json<T: Serialize>(value: &T) {
+        match serde_json::to_string(value) {
+            Ok(line) => println!("{line}"),
+            Err(err) => eprintln!("failed to serialize file-search output: {err}"),
+        }
+    }
+}
+
+impl Reporter for StdioReporter {
+    fn report_match(&self, file_match: &FileMatch) {
+        if self.write_output_as_json {
+            Self::print_json(file_match);
+        } else if self.show_indices {
+            let Some(indices) = file_match.indices.as_ref() else {
+                println!("{}", file_match.path.to_string_lossy());
+                return;
+            };
+            // `indices` is guaranteed to be sorted in ascending order. Instead
+            // of calling `contains` for every character (which would be O(N^2)
+            // in the worst-case), walk through the `indices` vector once while
+            // iterating over the characters.
+            let mut indices_iter = indices.iter().peekable();
+
+            for (i, c) in file_match.path.to_string_lossy().chars().enumerate() {
+                match indices_iter.peek() {
+                    Some(next) if **next == i as u32 => {
+                        // ANSI escape code for bold: \x1b[1m ... \x1b[0m
+                        print!("\x1b[1m{c}\x1b[0m");
+                        indices_iter.next();
+                    }
+                    _ => {
+                        print!("{c}");
+                    }
+                }
+            }
+            println!();
+        } else {
+            println!("{}", file_match.path.to_string_lossy());
+        }
+    }
+
+    fn warn_matches_truncated(&self, total_match_count: usize, shown_match_count: usize) {
+        if self.write_output_as_json {
+            let value = json!({"matches_truncated": true});
+            Self::print_json(&value);
+        } else {
+            eprintln!(
+                "Warning: showing {shown_match_count} out of {total_match_count} results. Provide a more specific pattern or increase the --limit.",
+            );
+        }
+    }
+
+    fn warn_no_search_pattern(&self, search_directory: &Path) {
+        eprintln!(
+            "No search pattern specified. Showing the contents of the current directory ({}):",
+            search_directory.to_string_lossy()
+        );
+    }
 }
 
 pub async fn run_main<T: Reporter>(

@@ -6,6 +6,7 @@
 
 mod extract;
 pub mod log_db;
+pub(crate) mod logs_client;
 mod migrations;
 mod model;
 mod paths;

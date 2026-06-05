@@ -78,6 +78,7 @@ fn is_single_binary_alias(name: &str) -> bool {
             | "lha-app-server"
             | "lha-linux-sandbox"
             | "lha-mcp-server"
+            | "codex-responses-api-proxy"
             | "lha-stdio-to-uds"
             | "test_stdio_server"
             | "test_streamable_http_server"

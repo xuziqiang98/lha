@@ -15,7 +15,7 @@ exec *args:
 
 # Run the CLI version of the file-search crate.
 file-search *args:
-    cargo run --bin lha-file-search -- "$@"
+    cargo run -p lha-cli -- dev file-search "$@"
 
 # format code
 fmt:
@@ -54,4 +54,4 @@ write-app-server-schema:
 
 # Tail logs from the state SQLite database
 log *args:
-    if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p lha-state --bin logs_client -- "$@"
+    if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p lha-cli -- dev logs "$@"

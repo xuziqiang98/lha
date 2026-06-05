@@ -1,64 +1,63 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::Context;
-use chrono::DateTime;
-use clap::Parser;
-use dirs::home_dir;
 use crate::product::state::LogQuery;
 use crate::product::state::LogRow;
 use crate::product::state::MemoryStoreMode;
 use crate::product::state::STATE_DB_FILENAME;
 use crate::product::state::StateRuntime;
+use anyhow::Context;
+use chrono::DateTime;
+use clap::Args as ClapArgs;
+use dirs::home_dir;
 use owo_colors::OwoColorize;
 
-#[derive(Debug, Parser)]
-#[command(name = "codex-state-logs")]
+#[derive(Debug, ClapArgs)]
 #[command(about = "Tail LHA logs from state.sqlite with simple filters")]
-struct Args {
+pub(crate) struct Args {
     /// Path to LHA_HOME. Defaults to $LHA_HOME or ~/.lha.
-    #[arg(long, env = "LHA_HOME")]
-    lha_home: Option<PathBuf>,
-
-    /// Direct path to the SQLite database. Overrides --codex-home.
     #[arg(long)]
-    db: Option<PathBuf>,
+    pub(crate) lha_home: Option<PathBuf>,
+
+    /// Direct path to the SQLite database. Overrides --lha-home.
+    #[arg(long)]
+    pub(crate) db: Option<PathBuf>,
 
     /// Log level to match exactly (case-insensitive).
     #[arg(long)]
-    level: Option<String>,
+    pub(crate) level: Option<String>,
 
     /// Start timestamp (RFC3339 or unix seconds).
     #[arg(long, value_name = "RFC3339|UNIX")]
-    from: Option<String>,
+    pub(crate) from: Option<String>,
 
     /// End timestamp (RFC3339 or unix seconds).
     #[arg(long, value_name = "RFC3339|UNIX")]
-    to: Option<String>,
+    pub(crate) to: Option<String>,
 
     /// Substring match on module_path. Repeat to include multiple substrings.
     #[arg(long = "module")]
-    module: Vec<String>,
+    pub(crate) module: Vec<String>,
 
     /// Substring match on file path. Repeat to include multiple substrings.
     #[arg(long = "file")]
-    file: Vec<String>,
+    pub(crate) file: Vec<String>,
 
     /// Match one or more thread ids. Repeat to include multiple threads.
     #[arg(long = "thread-id")]
-    thread_id: Vec<String>,
+    pub(crate) thread_id: Vec<String>,
 
     /// Include logs that do not have a thread id.
     #[arg(long)]
-    threadless: bool,
+    pub(crate) threadless: bool,
 
     /// Number of matching rows to show before tailing.
     #[arg(long, default_value_t = 200)]
-    backfill: usize,
+    pub(crate) backfill: usize,
 
     /// Poll interval in milliseconds.
     #[arg(long, default_value_t = 500)]
-    poll_ms: u64,
+    pub(crate) poll_ms: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -72,9 +71,7 @@ struct LogFilter {
     include_threadless: bool,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
+pub(crate) async fn run(args: Args) -> anyhow::Result<()> {
     let db_path = resolve_db_path(&args)?;
     let filter = build_filter(&args)?;
     let lha_home = db_path
@@ -115,6 +112,11 @@ fn resolve_db_path(args: &Args) -> anyhow::Result<PathBuf> {
 }
 
 fn default_lha_home() -> PathBuf {
+    if let Ok(lha_home) = std::env::var("LHA_HOME")
+        && !lha_home.is_empty()
+    {
+        return PathBuf::from(lha_home);
+    }
     if let Some(home) = home_dir() {
         return home.join(".lha");
     }

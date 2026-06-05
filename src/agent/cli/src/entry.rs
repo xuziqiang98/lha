@@ -273,6 +273,10 @@ struct DevCommand {
 
 #[derive(Debug, clap::Subcommand)]
 enum DevSubcommand {
+    /// Fuzzy-match files from the command line.
+    FileSearch(crate::product::file_search::Cli),
+    /// Tail logs from the state SQLite database.
+    Logs(crate::product::state::logs_client::Args),
     /// Write the config.toml JSON schema.
     WriteConfigSchema(SchemaOutCommand),
     /// Write the models.json JSON schema.
@@ -633,7 +637,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             })
             .await??;
         }
-        Some(Subcommand::Dev(dev)) => run_dev_command(dev)?,
+        Some(Subcommand::Dev(dev)) => run_dev_command(dev).await?,
         #[cfg(target_os = "windows")]
         Some(Subcommand::WindowsSandboxSetup(WindowsSandboxSetupCommand { payload })) => {
             crate::product::windows_sandbox::run_setup_helper_main(payload)?;
@@ -696,8 +700,14 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
     Ok(())
 }
 
-fn run_dev_command(dev: DevCommand) -> anyhow::Result<()> {
+async fn run_dev_command(dev: DevCommand) -> anyhow::Result<()> {
     match dev.sub {
+        DevSubcommand::FileSearch(cli) => {
+            crate::product::file_search::run_cli(cli).await?;
+        }
+        DevSubcommand::Logs(args) => {
+            crate::product::state::logs_client::run(args).await?;
+        }
         DevSubcommand::WriteConfigSchema(cmd) => {
             let out = cmd.out.unwrap_or_else(|| {
                 PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1353,5 +1363,53 @@ mod tests {
             .to_overrides()
             .expect_err("feature should be rejected");
         assert_eq!(err.to_string(), "Unknown feature flag: does_not_exist");
+    }
+
+    #[test]
+    fn single_binary_compat_dev_file_search_parses() {
+        let cli = match MultitoolCli::try_parse_from([
+            "lha",
+            "dev",
+            "file-search",
+            "--limit",
+            "5",
+            "foo",
+        ]) {
+            Ok(cli) => cli,
+            Err(err) => panic!("parse should succeed: {err}"),
+        };
+        let Some(Subcommand::Dev(DevCommand {
+            sub: DevSubcommand::FileSearch(file_search),
+        })) = cli.subcommand
+        else {
+            panic!("expected dev file-search subcommand");
+        };
+
+        assert_eq!(file_search.limit.get(), 5);
+        assert_eq!(file_search.pattern.as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn single_binary_compat_dev_logs_parses() {
+        let cli = match MultitoolCli::try_parse_from([
+            "lha",
+            "dev",
+            "logs",
+            "--backfill",
+            "10",
+            "--threadless",
+        ]) {
+            Ok(cli) => cli,
+            Err(err) => panic!("parse should succeed: {err}"),
+        };
+        let Some(Subcommand::Dev(DevCommand {
+            sub: DevSubcommand::Logs(logs),
+        })) = cli.subcommand
+        else {
+            panic!("expected dev logs subcommand");
+        };
+
+        assert_eq!(logs.backfill, 10);
+        assert!(logs.threadless);
     }
 }

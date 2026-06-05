@@ -2,11 +2,10 @@ use std::num::NonZero;
 use std::path::PathBuf;
 
 use clap::ArgAction;
-use clap::Parser;
+use clap::Args;
 
 /// Fuzzy matches filenames under a directory.
-#[derive(Parser)]
-#[command(version)]
+#[derive(Debug, Args)]
 pub struct Cli {
     /// Whether to output results in JSON format.
     #[clap(long, default_value = "false")]
