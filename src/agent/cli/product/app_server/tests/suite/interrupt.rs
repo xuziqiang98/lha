@@ -144,9 +144,11 @@ fn create_config_toml(lha_home: &Path, server_uri: String) -> std::io::Result<()
         20_000,
         Some(false),
         "mock_provider",
-        "mock-model",
-        "",
-        "never",
-        "read-only",
+        crate::test_support::app_server::MockResponsesConfigTomlOptions {
+            model: "mock-model",
+            compact_prompt: "",
+            approval_policy: "never",
+            sandbox_mode: "read-only",
+        },
     )
 }

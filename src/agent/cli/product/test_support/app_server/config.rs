@@ -3,6 +3,13 @@ use crate::product::agent::features::Feature;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+pub struct MockResponsesConfigTomlOptions<'a> {
+    pub model: &'a str,
+    pub compact_prompt: &'a str,
+    pub approval_policy: &'a str,
+    pub sandbox_mode: &'a str,
+}
+
 pub fn write_mock_responses_config_toml(
     lha_home: &Path,
     server_uri: &str,
@@ -19,10 +26,12 @@ pub fn write_mock_responses_config_toml(
         auto_compact_limit,
         requires_openai_auth,
         model_provider_id,
-        "mock-model",
-        compact_prompt,
-        "never",
-        "read-only",
+        MockResponsesConfigTomlOptions {
+            model: "mock-model",
+            compact_prompt,
+            approval_policy: "never",
+            sandbox_mode: "read-only",
+        },
     )
 }
 
@@ -33,10 +42,7 @@ pub fn write_mock_responses_config_toml_with_options(
     auto_compact_limit: i64,
     requires_openai_auth: Option<bool>,
     model_provider_id: &str,
-    model: &str,
-    compact_prompt: &str,
-    approval_policy: &str,
-    sandbox_mode: &str,
+    options: MockResponsesConfigTomlOptions<'_>,
 ) -> std::io::Result<()> {
     // Phase 1: build the features block for config.toml.
     let mut features = BTreeMap::from([(Feature::RemoteModels, false)]);
@@ -61,9 +67,12 @@ pub fn write_mock_responses_config_toml_with_options(
         model_provider_id,
         requires_openai_auth.unwrap_or(false),
         Some(auto_compact_limit),
-        model,
+        options.model,
     )?;
-    write_state_json(lha_home, &format!("{model_provider_id}.main:{model}"))?;
+    write_state_json(
+        lha_home,
+        &format!("{model_provider_id}.main:{}", options.model),
+    )?;
     let config_toml = lha_home.join("config.toml");
     std::fs::write(
         config_toml,
@@ -75,7 +84,10 @@ compact_prompt = "{compact_prompt}"
 
 [features]
 {feature_entries}
-"#
+"#,
+            approval_policy = options.approval_policy,
+            compact_prompt = options.compact_prompt,
+            sandbox_mode = options.sandbox_mode,
         ),
     )
 }

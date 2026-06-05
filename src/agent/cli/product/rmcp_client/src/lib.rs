@@ -1,3 +1,6 @@
+// Keep consolidated legacy module paths stable after moving crates under lha-cli.
+#![allow(clippy::module_inception)]
+
 mod auth_status;
 mod logging_client_handler;
 mod oauth;

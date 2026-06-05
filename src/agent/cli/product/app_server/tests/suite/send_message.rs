@@ -79,7 +79,7 @@ async fn test_send_message_success() -> Result<()> {
     Ok(())
 }
 
-#[expect(clippy::expect_used)]
+#[allow(clippy::expect_used)]
 async fn send_message(
     message: &str,
     conversation_id: ThreadId,
@@ -175,9 +175,11 @@ fn create_config_toml(lha_home: &Path, server_uri: &str) -> std::io::Result<()> 
         20_000,
         Some(false),
         "mock_provider",
-        "mock-model",
-        "",
-        "never",
-        "danger-full-access",
+        crate::test_support::app_server::MockResponsesConfigTomlOptions {
+            model: "mock-model",
+            compact_prompt: "",
+            approval_policy: "never",
+            sandbox_mode: "danger-full-access",
+        },
     )
 }

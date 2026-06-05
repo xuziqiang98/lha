@@ -134,12 +134,12 @@ impl wiremock::Respond for MessagesSeqResponder {
     }
 }
 
-#[expect(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used)]
 fn assert_message_role(request_body: &serde_json::Value, role: &str) {
     assert_eq!(request_body["role"].as_str().unwrap(), role);
 }
 
-#[expect(clippy::expect_used)]
+#[allow(clippy::expect_used)]
 fn assert_message_equals(request_body: &serde_json::Value, text: &str) {
     let content = request_body["content"][0]["text"]
         .as_str()
@@ -151,7 +151,7 @@ fn assert_message_equals(request_body: &serde_json::Value, text: &str) {
     );
 }
 
-#[expect(clippy::expect_used)]
+#[allow(clippy::expect_used)]
 fn assert_message_starts_with(request_body: &serde_json::Value, text: &str) {
     let content = request_body["content"][0]["text"]
         .as_str()
@@ -163,7 +163,7 @@ fn assert_message_starts_with(request_body: &serde_json::Value, text: &str) {
     );
 }
 
-#[expect(clippy::expect_used)]
+#[allow(clippy::expect_used)]
 fn assert_message_ends_with(request_body: &serde_json::Value, text: &str) {
     let content = request_body["content"][0]["text"]
         .as_str()

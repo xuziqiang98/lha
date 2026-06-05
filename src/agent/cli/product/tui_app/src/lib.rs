@@ -126,6 +126,15 @@ pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
+const DEFAULT_TUI_LOG_FILTER: &str = concat!(
+    "lha_cli::product::agent=info,",
+    "lha_cli::product::tui_app=info,",
+    "lha_cli::product::rmcp_client=info,",
+    "lha_agent=info,",
+    "lha_tui=info,",
+    "lha_rmcp_client=info",
+);
+
 pub async fn run_main(
     mut cli: Cli,
     codex_linux_sandbox_exe: Option<PathBuf>,
@@ -273,10 +282,9 @@ pub async fn run_main(
     // Wrap file in non‑blocking writer.
     let (non_blocking, _guard) = non_blocking(log_file);
 
-    // use RUST_LOG env var, default to info for codex crates.
+    // Use RUST_LOG env var, defaulting to info for LHA product modules.
     let env_filter = || {
-        EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("lha_agent=info,lha_tui=info,lha_rmcp_client=info"))
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_TUI_LOG_FILTER))
     };
 
     let file_layer = tracing_subscriber::fmt::layer()
@@ -766,6 +774,7 @@ mod tests {
     use crate::product::protocol::protocol::SessionMetaLine;
     use crate::product::protocol::protocol::TurnContextItem;
     use chrono::Utc;
+    use pretty_assertions::assert_eq;
     use serial_test::serial;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -776,6 +785,22 @@ mod tests {
             .lha_home(temp_dir.path().to_path_buf())
             .build()
             .await
+    }
+
+    #[test]
+    fn default_tui_log_filter_includes_current_and_legacy_targets() {
+        let targets: Vec<_> = DEFAULT_TUI_LOG_FILTER.split(',').collect();
+        assert_eq!(
+            targets,
+            vec![
+                "lha_cli::product::agent=info",
+                "lha_cli::product::tui_app=info",
+                "lha_cli::product::rmcp_client=info",
+                "lha_agent=info",
+                "lha_tui=info",
+                "lha_rmcp_client=info",
+            ]
+        );
     }
 
     #[tokio::test]

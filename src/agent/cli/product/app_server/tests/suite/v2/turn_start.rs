@@ -1752,9 +1752,11 @@ fn create_config_toml(
         20_000,
         Some(false),
         "mock_provider",
-        "mock-model",
-        "",
-        approval_policy,
-        "read-only",
+        crate::test_support::app_server::MockResponsesConfigTomlOptions {
+            model: "mock-model",
+            compact_prompt: "",
+            approval_policy,
+            sandbox_mode: "read-only",
+        },
     )
 }

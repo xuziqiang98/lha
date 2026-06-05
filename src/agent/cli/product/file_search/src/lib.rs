@@ -21,6 +21,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Condvar;
+use std::sync::LockResult;
 use std::sync::Mutex;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
@@ -667,14 +668,13 @@ struct RunReporter {
 
 impl SessionReporter for RunReporter {
     fn on_update(&self, snapshot: &FileSearchSnapshot) {
-        #[expect(clippy::unwrap_used)]
-        let mut guard = self.snapshot.write().unwrap();
+        let mut guard = recover_lock(self.snapshot.write());
         *guard = snapshot.clone();
     }
 
     fn on_complete(&self) {
         let (cv, mutex) = &self.completed;
-        let mut completed = mutex.lock().unwrap();
+        let mut completed = recover_lock(mutex.lock());
         *completed = true;
         cv.notify_all();
     }
@@ -683,11 +683,18 @@ impl SessionReporter for RunReporter {
 impl RunReporter {
     fn wait_for_complete(&self) -> FileSearchSnapshot {
         let (cv, mutex) = &self.completed;
-        let mut completed = mutex.lock().unwrap();
+        let mut completed = recover_lock(mutex.lock());
         while !*completed {
-            completed = cv.wait(completed).unwrap();
+            completed = recover_lock(cv.wait(completed));
         }
-        self.snapshot.read().unwrap().clone()
+        recover_lock(self.snapshot.read()).clone()
+    }
+}
+
+fn recover_lock<T>(result: LockResult<T>) -> T {
+    match result {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
     }
 }
 

@@ -433,9 +433,9 @@ fn finalize_exec_result(
                 exit_code = EXEC_TIMEOUT_EXIT_CODE;
             }
 
-            let stdout = raw_output.stdout.from_utf8_lossy();
-            let stderr = raw_output.stderr.from_utf8_lossy();
-            let aggregated_output = raw_output.aggregated_output.from_utf8_lossy();
+            let stdout = raw_output.stdout.to_utf8_lossy();
+            let stderr = raw_output.stderr.to_utf8_lossy();
+            let aggregated_output = raw_output.aggregated_output.to_utf8_lossy();
             let exec_output = ExecToolCallOutput {
                 exit_code,
                 stdout,
@@ -572,7 +572,7 @@ impl StreamOutput<String> {
 }
 
 impl StreamOutput<Vec<u8>> {
-    pub fn from_utf8_lossy(&self) -> StreamOutput<String> {
+    pub fn to_utf8_lossy(&self) -> StreamOutput<String> {
         StreamOutput {
             text: bytes_to_string_smart(&self.text),
             truncated_after_lines: self.truncated_after_lines,
@@ -1059,7 +1059,7 @@ mod tests {
         let output = exec(params, SandboxType::None, &SandboxPolicy::ReadOnly, None).await?;
         assert!(output.timed_out);
 
-        let stdout = output.stdout.from_utf8_lossy().text;
+        let stdout = output.stdout.to_utf8_lossy().text;
         let pid_line = stdout.lines().next().unwrap_or("").trim();
         let pid: i32 = pid_line.parse().map_err(|error| {
             io::Error::new(

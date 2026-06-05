@@ -265,7 +265,7 @@ async fn java_home_finds_runtime_under_seatbelt() {
     );
 }
 
-#[expect(clippy::expect_used)]
+#[allow(clippy::expect_used)]
 fn create_test_scenario(tmp: &TempDir) -> TestScenario {
     let repo_parent = tmp.path().to_path_buf();
     let repo_root = repo_parent.join("repo");
@@ -283,7 +283,7 @@ fn create_test_scenario(tmp: &TempDir) -> TestScenario {
     }
 }
 
-#[expect(clippy::expect_used)]
+#[allow(clippy::expect_used)]
 /// Note that `path` must be absolute.
 async fn touch(path: &Path, policy: &SandboxPolicy) -> bool {
     assert!(path.is_absolute(), "Path must be absolute: {path:?}");

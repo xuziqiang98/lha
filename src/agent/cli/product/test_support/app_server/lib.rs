@@ -13,6 +13,7 @@ pub use crate::test_support::core::format_with_current_shell_non_login;
 pub use crate::test_support::core::test_path_buf_with_windows;
 pub use crate::test_support::core::test_tmp_path;
 pub use crate::test_support::core::test_tmp_path_buf;
+pub use config::MockResponsesConfigTomlOptions;
 pub use config::write_mock_responses_config_toml;
 pub use config::write_mock_responses_config_toml_with_options;
 pub use config::write_mock_responses_models_json;

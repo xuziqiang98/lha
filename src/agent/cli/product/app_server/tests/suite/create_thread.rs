@@ -123,9 +123,11 @@ fn create_config_toml(lha_home: &Path, server_uri: &str) -> std::io::Result<()> 
         20_000,
         Some(false),
         "mock_provider",
-        "o3",
-        "",
-        "never",
-        "danger-full-access",
+        crate::test_support::app_server::MockResponsesConfigTomlOptions {
+            model: "o3",
+            compact_prompt: "",
+            approval_policy: "never",
+            sandbox_mode: "danger-full-access",
+        },
     )
 }

@@ -14,12 +14,12 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 fn repo_root() -> std::path::PathBuf {
-    #[expect(clippy::expect_used)]
+    #[allow(clippy::expect_used)]
     crate::test_support::cargo_bin::repo_root().expect("failed to resolve repo root")
 }
 
 fn cli_responses_fixture() -> std::path::PathBuf {
-    #[expect(clippy::expect_used)]
+    #[allow(clippy::expect_used)]
     find_resource!("product/agent_runtime/tests/cli_responses_fixture.sse")
         .expect("failed to resolve fixture path")
 }

@@ -1075,7 +1075,7 @@ async fn start_responses_server_with_sse(
 }
 
 /// Create a conversation configured to talk to the provided mock server.
-#[expect(clippy::expect_used)]
+#[allow(clippy::expect_used)]
 async fn new_conversation_for_server<F>(
     server: &MockServer,
     lha_home: Arc<TempDir>,
@@ -1097,7 +1097,7 @@ where
 }
 
 /// Create a conversation resuming from a rollout file, configured to talk to the provided mock server.
-#[expect(clippy::expect_used)]
+#[allow(clippy::expect_used)]
 async fn resume_conversation_for_server<F>(
     server: &MockServer,
     lha_home: Arc<TempDir>,

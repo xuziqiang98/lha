@@ -45,6 +45,8 @@ pub struct WorkflowStepDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(export_to = "workflow/")]
+// Validator names are serialized into workflow definitions, so keep the wire names stable.
+#[allow(clippy::enum_variant_names)]
 pub enum WorkflowValidatorDefinition {
     UniqueIds {
         path: String,

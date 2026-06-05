@@ -7,7 +7,6 @@ use crate::product::exec_cli::Cli as ExecCli;
 use crate::product::exec_cli::Command as ExecCommand;
 use crate::product::exec_cli::ReviewArgs;
 use crate::product::execpolicy::ExecPolicyCheckCommand;
-use crate::product::responses_api_proxy::Args as ResponsesApiProxyArgs;
 use crate::product::tui_app::AppExitInfo;
 use crate::product::tui_app::Cli as TuiCli;
 use crate::product::tui_app::ExitReason;
@@ -102,9 +101,9 @@ enum Subcommand {
     /// Fork a previous interactive session (picker by default; use --last to fork the most recent).
     Fork(ForkCommand),
 
-    /// Internal: run the responses API proxy.
-    #[clap(hide = true)]
-    ResponsesApiProxy(ResponsesApiProxyArgs),
+    /// Internal: removed responses API proxy entrypoint.
+    #[clap(hide = true, name = "responses-api-proxy")]
+    RemovedResponsesApiProxy(RemovedResponsesProxyArgs),
 
     /// Internal: relay stdio to a Unix domain socket.
     #[clap(hide = true, name = "stdio-to-uds")]
@@ -263,6 +262,17 @@ struct StdioToUdsCommand {
     /// Path to the Unix domain socket to connect to.
     #[arg(value_name = "SOCKET_PATH")]
     socket_path: PathBuf,
+}
+
+#[derive(Debug, Parser)]
+#[command(disable_help_flag = true, disable_version_flag = true)]
+struct RemovedResponsesProxyArgs {
+    #[arg(
+        value_name = "ARGS",
+        allow_hyphen_values = true,
+        trailing_var_arg = true
+    )]
+    _args: Vec<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -623,12 +633,8 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         Some(Subcommand::Execpolicy(ExecpolicyCommand { sub })) => match sub {
             ExecpolicySubcommand::Check(cmd) => run_execpolicycheck(cmd)?,
         },
-        Some(Subcommand::ResponsesApiProxy(args)) => {
-            crate::product::process_hardening::pre_main_hardening();
-            tokio::task::spawn_blocking(move || {
-                crate::product::responses_api_proxy::run_main(args)
-            })
-            .await??;
+        Some(Subcommand::RemovedResponsesApiProxy(_)) => {
+            exit_removed_responses_api_proxy_subcommand();
         }
         Some(Subcommand::StdioToUds(cmd)) => {
             let socket_path = cmd.socket_path;
@@ -698,6 +704,15 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
     }
 
     Ok(())
+}
+
+fn exit_removed_responses_api_proxy_subcommand() -> ! {
+    MultitoolCli::command()
+        .error(
+            clap::error::ErrorKind::InvalidSubcommand,
+            "unrecognized subcommand 'responses-api-proxy'",
+        )
+        .exit()
 }
 
 async fn run_dev_command(dev: DevCommand) -> anyhow::Result<()> {
@@ -1037,6 +1052,39 @@ mod tests {
             unreachable!()
         };
         app_server
+    }
+
+    #[test]
+    fn removed_responses_proxy_parses_as_tombstone_after_global_config_flag() {
+        let cli = MultitoolCli::try_parse_from([
+            "lha",
+            "-c",
+            "model=gpt-5.1",
+            "responses-api-proxy",
+            "--help",
+        ])
+        .expect("removed proxy tombstone should parse before rejection");
+
+        assert_matches!(
+            cli.subcommand,
+            Some(Subcommand::RemovedResponsesApiProxy(_))
+        );
+    }
+
+    #[test]
+    fn removed_responses_proxy_parses_as_tombstone_without_global_flags() {
+        let cli = MultitoolCli::try_parse_from([
+            "lha",
+            "responses-api-proxy",
+            "--upstream-url",
+            "http://example.invalid",
+        ])
+        .expect("removed proxy tombstone should parse before rejection");
+
+        assert_matches!(
+            cli.subcommand,
+            Some(Subcommand::RemovedResponsesApiProxy(_))
+        );
     }
 
     fn sample_exit_info(conversation_id: Option<&str>, thread_name: Option<&str>) -> AppExitInfo {

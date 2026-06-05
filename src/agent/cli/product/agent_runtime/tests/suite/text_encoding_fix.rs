@@ -72,6 +72,6 @@ fn decode_shell_output(bytes: &[u8]) -> String {
         text: bytes.to_vec(),
         truncated_after_lines: None,
     }
-    .from_utf8_lossy()
+    .to_utf8_lossy()
     .text
 }

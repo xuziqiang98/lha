@@ -1,10 +1,11 @@
-# lha-otel
+# LHA CLI OTEL module
 
-`lha-otel` is the OpenTelemetry integration crate for LHA. It provides:
+This directory is the private OpenTelemetry integration module embedded in
+`lha-cli`. It provides:
 
-- Trace/log/metrics exporters and tracing subscriber layers (`lha_otel::otel_provider`).
-- A structured event helper (`lha_otel::OtelManager`).
-- OpenTelemetry metrics support via OTLP exporters (`lha_otel::metrics`).
+- Trace/log/metrics exporters and tracing subscriber layers (`crate::product::otel::otel_provider`).
+- A structured event helper (`crate::product::otel::OtelManager`).
+- OpenTelemetry metrics support via OTLP exporters (`crate::product::otel::metrics`).
 - A metrics facade on `OtelManager` so tracing + metrics share metadata.
 
 ## Tracing and logs
@@ -14,10 +15,10 @@ metrics (when enabled), then attach its layers to your `tracing_subscriber`
 registry:
 
 ```rust
-use lha_otel::config::OtelExporter;
-use lha_otel::config::OtelHttpProtocol;
-use lha_otel::config::OtelSettings;
-use lha_otel::otel_provider::OtelProvider;
+use crate::product::otel::config::OtelExporter;
+use crate::product::otel::config::OtelHttpProtocol;
+use crate::product::otel::config::OtelSettings;
+use crate::product::otel::otel_provider::OtelProvider;
 use tracing_subscriber::prelude::*;
 
 let settings = OtelSettings {
@@ -54,7 +55,7 @@ if let Some(provider) = OtelProvider::from(&settings)? {
 LHA-specific events.
 
 ```rust
-use lha_otel::OtelManager;
+use crate::product::otel::OtelManager;
 
 let manager = OtelManager::new(
     conversation_id,
@@ -78,13 +79,13 @@ Modes:
 - OTLP: exports metrics via the OpenTelemetry OTLP exporter (HTTP or gRPC).
 - In-memory: records via `opentelemetry_sdk::metrics::InMemoryMetricExporter` for tests/assertions; call `shutdown()` to flush.
 
-`lha-otel` also provides `OtelExporter::Statsig`, a shorthand for exporting OTLP/HTTP JSON metrics
-to Statsig using LHA-internal defaults.
+This module also provides `OtelExporter::Statsig`, a shorthand for exporting
+OTLP/HTTP JSON metrics to Statsig using LHA-internal defaults.
 
 Statsig ingestion (OTLP/HTTP JSON) example:
 
 ```rust
-use lha_otel::config::{OtelExporter, OtelHttpProtocol};
+use crate::product::otel::config::{OtelExporter, OtelHttpProtocol};
 
 let metrics = MetricsClient::new(MetricsConfig::otlp(
     "dev",

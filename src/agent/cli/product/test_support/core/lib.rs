@@ -1,4 +1,4 @@
-#![expect(clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use crate::test_support::cargo_bin::CargoBinError;
 use tempfile::TempDir;

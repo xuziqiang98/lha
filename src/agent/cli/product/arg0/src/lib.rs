@@ -37,8 +37,8 @@ pub fn arg0_dispatch() -> Option<TempDir> {
     } else if exe_name == APPLY_PATCH_ARG0 || exe_name == MISSPELLED_APPLY_PATCH_ARG0 {
         crate::product::apply_patch::main();
     } else if is_sensitive_early_alias(exe_name) {
-        let args = crate::product::responses_api_proxy::Args::parse();
         crate::product::process_hardening::pre_main_hardening();
+        let args = crate::product::responses_api_proxy::Args::parse();
         exit_with_result(crate::product::responses_api_proxy::run_main(args));
     }
 

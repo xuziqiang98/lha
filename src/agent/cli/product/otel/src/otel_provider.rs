@@ -48,6 +48,14 @@ static TRACEPARENT_CONTEXT: OnceLock<Option<Context>> = OnceLock::new();
 thread_local! {
     static TRACEPARENT_GUARD: RefCell<Option<ContextGuard>> = const { RefCell::new(None) };
 }
+
+pub(crate) fn is_lha_otel_target(target: &str) -> bool {
+    target == "lha_cli::product::otel"
+        || target.starts_with("lha_cli::product::otel::")
+        || target == "lha_otel"
+        || target.starts_with("lha_otel::")
+}
+
 pub struct OtelProvider {
     pub logger: Option<SdkLoggerProvider>,
     pub tracer_provider: Option<SdkTracerProvider>,
@@ -160,7 +168,7 @@ impl OtelProvider {
     }
 
     pub fn codex_export_filter(meta: &tracing::Metadata<'_>) -> bool {
-        meta.target().starts_with("lha_otel")
+        is_lha_otel_target(meta.target())
     }
 
     pub fn metrics(&self) -> Option<&MetricsClient> {
@@ -402,6 +410,30 @@ mod tests {
     use opentelemetry::trace::SpanId;
     use opentelemetry::trace::TraceContextExt;
     use opentelemetry::trace::TraceId;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn is_lha_otel_target_matches_current_and_legacy_modules() {
+        let targets = [
+            "lha_cli::product::otel::otel_provider",
+            "lha_otel::otel_provider",
+            "lha_cli::product::agent::codex",
+            "lha_cli::product::tui_app::lib",
+        ];
+        let actual: Vec<_> = targets
+            .iter()
+            .map(|target| (*target, is_lha_otel_target(target)))
+            .collect();
+        assert_eq!(
+            actual,
+            vec![
+                ("lha_cli::product::otel::otel_provider", true),
+                ("lha_otel::otel_provider", true),
+                ("lha_cli::product::agent::codex", false),
+                ("lha_cli::product::tui_app::lib", false),
+            ]
+        );
+    }
 
     #[test]
     fn parses_valid_traceparent() {

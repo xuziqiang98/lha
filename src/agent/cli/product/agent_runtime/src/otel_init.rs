@@ -92,8 +92,7 @@ pub fn build_provider(
     })
 }
 
-/// Filter predicate for exporting only LHA-owned events via OTEL.
-/// Keeps events that originated from lha_otel module
+/// Filter predicate for exporting LHA OTEL-owned log records.
 pub fn codex_export_filter(meta: &tracing::Metadata<'_>) -> bool {
-    meta.target().starts_with("lha_otel")
+    crate::product::otel::otel_provider::is_lha_otel_target(meta.target())
 }

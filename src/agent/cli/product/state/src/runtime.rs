@@ -70,6 +70,8 @@ pub enum GoalAccountingOutcome {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+// The shared prefix documents that every mode accounts against an active goal baseline.
+#[allow(clippy::enum_variant_names)]
 pub enum GoalAccountingMode {
     ActiveStatusOnly,
     ActiveOnly,

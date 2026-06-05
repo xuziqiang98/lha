@@ -1,3 +1,6 @@
+// Keep consolidated legacy module paths stable after moving crates under lha-cli.
+#![allow(clippy::module_inception)]
+
 pub mod account;
 mod thread_id;
 pub use thread_id::ThreadId;

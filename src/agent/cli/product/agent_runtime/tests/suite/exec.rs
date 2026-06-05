@@ -26,7 +26,7 @@ fn skip_test() -> bool {
     false
 }
 
-#[expect(clippy::expect_used)]
+#[allow(clippy::expect_used)]
 async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput> {
     let sandbox_type = get_platform_sandbox(false).expect("should be able to get sandbox type");
     assert_eq!(sandbox_type, SandboxType::MacosSeatbelt);

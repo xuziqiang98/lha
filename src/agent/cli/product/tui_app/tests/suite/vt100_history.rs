@@ -1,5 +1,5 @@
 #![cfg(feature = "vt100-tests")]
-#![expect(clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use crate::product::tui_app::test_backend::VT100Backend;
 use ratatui::layout::Rect;

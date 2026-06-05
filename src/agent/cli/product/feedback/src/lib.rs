@@ -8,6 +8,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -95,11 +96,11 @@ impl CodexFeedback {
 
     pub fn snapshot(&self, session_id: Option<ThreadId>) -> CodexLogSnapshot {
         let bytes = {
-            let guard = self.inner.ring.lock().expect("mutex poisoned");
+            let guard = lock_or_recover(&self.inner.ring);
             guard.snapshot_bytes()
         };
         let tags = {
-            let guard = self.inner.tags.lock().expect("mutex poisoned");
+            let guard = lock_or_recover(&self.inner.tags);
             guard.clone()
         };
         CodexLogSnapshot {
@@ -123,6 +124,13 @@ impl FeedbackInner {
             ring: Mutex::new(RingBuffer::new(max_bytes)),
             tags: Mutex::new(BTreeMap::new()),
         }
+    }
+}
+
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
     }
 }
 
@@ -423,7 +431,7 @@ where
             return;
         }
 
-        let mut guard = self.inner.tags.lock().expect("mutex poisoned");
+        let mut guard = lock_or_recover(&self.inner.tags);
         for (key, value) in visitor.tags {
             if guard.len() >= MAX_FEEDBACK_TAGS && !guard.contains_key(&key) {
                 continue;

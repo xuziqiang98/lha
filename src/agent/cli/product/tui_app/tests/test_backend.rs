@@ -1,4 +1,1 @@
-#[path = "../src/test_backend.rs"]
-mod inner;
-
-pub use inner::VT100Backend;
+pub use crate::product::tui_app::test_backend::VT100Backend;

@@ -129,9 +129,11 @@ fn create_config_toml(lha_home: &std::path::Path, server_uri: &str) -> std::io::
         20_000,
         Some(false),
         "mock_provider",
-        "mock-model",
-        "",
-        "never",
-        "workspace-write",
+        crate::test_support::app_server::MockResponsesConfigTomlOptions {
+            model: "mock-model",
+            compact_prompt: "",
+            approval_policy: "never",
+            sandbox_mode: "workspace-write",
+        },
     )
 }

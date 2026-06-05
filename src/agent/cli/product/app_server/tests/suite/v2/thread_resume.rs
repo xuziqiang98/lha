@@ -546,10 +546,12 @@ fn create_config_toml(lha_home: &std::path::Path, server_uri: &str) -> std::io::
         20_000,
         Some(false),
         "mock_provider",
-        "gpt-5.2-codex",
-        "",
-        "never",
-        "read-only",
+        crate::test_support::app_server::MockResponsesConfigTomlOptions {
+            model: "gpt-5.2-codex",
+            compact_prompt: "",
+            approval_policy: "never",
+            sandbox_mode: "read-only",
+        },
     )
 }
 

@@ -407,7 +407,7 @@ macro_rules! server_notification_definitions {
         }
 
         impl ServerNotification {
-            pub fn to_params(self) -> Result<serde_json::Value, serde_json::Error> {
+            pub fn into_params(self) -> Result<serde_json::Value, serde_json::Error> {
                 match self {
                     $(Self::$variant(params) => serde_json::to_value(params),)*
                 }
