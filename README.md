@@ -1,9 +1,30 @@
 ## Quickstart
 
-### Building
+### Install
+
+Install the published CLI from crates.io:
+
+```sh
+cargo install lha --locked
+```
+
+Run the installed command:
+
+```sh
+lha
+```
+
+To confirm the installed version:
+
+```sh
+lha --version
+```
+
+### Build From Source
+
 From the repository root:
 
-```
+```sh
 cargo build -p lha --bin lha --release
 
 export PATH="<lha binary path>:$PATH" >> ~/.bashrc
