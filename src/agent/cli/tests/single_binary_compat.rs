@@ -85,6 +85,30 @@ fn single_binary_compat_lha_responses_proxy_after_global_flags_is_rejected() -> 
 }
 
 #[test]
+fn single_binary_compat_lha_exec_arg0_accepts_root_config_override() -> Result<()> {
+    let lha_home = TempDir::new()?;
+    let output = Command::new(common::cargo_bin::cargo_bin("lha-exec")?)
+        .env("LHA_HOME", lha_home.path())
+        .args(["-c", "model=gpt-5.1", "--help"])
+        .output()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        output.status.success(),
+        "lha-exec help with -c failed: {combined}"
+    );
+    assert!(
+        combined.contains("Usage:") || combined.contains("Usage"),
+        "lha-exec help did not render usage: {combined}"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn single_binary_compat_npm_wrapper_keeps_proxy_binary_name() -> Result<()> {
     let wrapper_path = common::cargo_bin::repo_root()?
         .join("src/agent/cli/product/responses_api_proxy/npm/bin/codex-responses-api-proxy.js");

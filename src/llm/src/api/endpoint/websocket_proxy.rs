@@ -171,7 +171,10 @@ fn proxy_from_env_lookup(
 }
 
 fn env_first(env: &mut impl FnMut(&str) -> Option<String>, names: &[&str]) -> Option<String> {
-    names.iter().find_map(|name| env(name))
+    names
+        .iter()
+        .filter_map(|name| env(name))
+        .find(|value| !value.is_empty())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -647,6 +650,65 @@ mod tests {
                 }),
             })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn websocket_proxy_env_skips_empty_uppercase_and_uses_lowercase()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let proxy = proxy_for_uri_with_env(
+            "wss://api.example.com/v1/responses",
+            &[
+                ("HTTPS_PROXY", ""),
+                ("https_proxy", "http://proxy-lower.local:8443"),
+            ],
+        )?;
+
+        assert_eq!(
+            proxy,
+            Some(ProxyConfig {
+                scheme: ProxyScheme::Http,
+                host: "proxy-lower.local".to_string(),
+                port: 8443,
+                auth: None,
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn websocket_proxy_env_skips_empty_scheme_proxy_and_uses_all_proxy()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let proxy = proxy_for_uri_with_env(
+            "wss://api.example.com/v1/responses",
+            &[
+                ("HTTPS_PROXY", ""),
+                ("HTTP_PROXY", ""),
+                ("ALL_PROXY", "socks5://proxy.local"),
+            ],
+        )?;
+
+        assert_eq!(
+            proxy,
+            Some(ProxyConfig {
+                scheme: ProxyScheme::Socks5,
+                host: "proxy.local".to_string(),
+                port: 1080,
+                auth: None,
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn websocket_proxy_env_only_empty_values_uses_direct_path()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let proxy = proxy_for_uri_with_env(
+            "wss://api.example.com/v1/responses",
+            &[("HTTPS_PROXY", ""), ("HTTP_PROXY", ""), ("ALL_PROXY", "")],
+        )?;
+
+        assert_eq!(proxy, None);
         Ok(())
     }
 

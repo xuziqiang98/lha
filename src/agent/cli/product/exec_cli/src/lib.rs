@@ -47,6 +47,7 @@ use crate::product::utils_absolute_path::AbsolutePathBuf;
 pub use cli::Cli;
 pub use cli::Command;
 pub use cli::ReviewArgs;
+pub(crate) use cli::parse_with_config_overrides;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use event_processor_with_raw_event_output::EventProcessorWithRawEventOutput;

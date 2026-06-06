@@ -89,7 +89,7 @@ fn normalize_exe_name(name: &str) -> &str {
 fn dispatch_single_binary_alias(exe_name: &str, _path_entry: Option<&TempDir>) {
     match exe_name {
         EXEC_ARG0 => {
-            let cli = crate::product::exec_cli::Cli::parse();
+            let cli = crate::product::exec_cli::parse_with_config_overrides();
             exit_after_block_on(async move {
                 crate::product::exec_cli::run_main(cli, linux_sandbox_exe()).await
             });

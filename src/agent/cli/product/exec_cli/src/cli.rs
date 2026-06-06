@@ -101,6 +101,29 @@ pub struct Cli {
     pub prompt: Option<String>,
 }
 
+#[derive(Parser, Debug)]
+pub(crate) struct CliWithConfigOverrides {
+    #[clap(flatten)]
+    config_overrides: CliConfigOverrides,
+
+    #[clap(flatten)]
+    inner: Cli,
+}
+
+impl CliWithConfigOverrides {
+    pub(crate) fn into_inner(mut self) -> Cli {
+        self.inner
+            .config_overrides
+            .raw_overrides
+            .splice(0..0, self.config_overrides.raw_overrides);
+        self.inner
+    }
+}
+
+pub(crate) fn parse_with_config_overrides() -> Cli {
+    CliWithConfigOverrides::parse().into_inner()
+}
+
 #[derive(Debug, clap::Subcommand)]
 pub enum Command {
     /// Resume a previous session by id or pick the most recent with --last.
@@ -298,6 +321,34 @@ mod tests {
             }
         });
         assert_eq!(effective_prompt.as_deref(), Some(PROMPT));
+    }
+
+    #[test]
+    fn root_config_overrides_are_merged_into_exec_cli() {
+        let cli = CliWithConfigOverrides::parse_from([
+            "lha-exec",
+            "resume",
+            "--last",
+            "--json",
+            "--model",
+            "gpt-5.2-codex",
+            "--config",
+            "reasoning_level=xhigh",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--skip-git-repo-check",
+            "echo resume",
+        ])
+        .into_inner();
+
+        assert_eq!(
+            cli.config_overrides.raw_overrides,
+            vec!["reasoning_level=xhigh".to_string()]
+        );
+
+        let Some(Command::Resume(args)) = cli.command else {
+            panic!("expected resume command");
+        };
+        assert_eq!(args.prompt.as_deref(), Some("echo resume"));
     }
 
     #[test]
