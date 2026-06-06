@@ -20,6 +20,19 @@ skill abstractions, and an optional `mcp` feature for MCP-to-tool adapter types.
 Product-specific tools such as shell execution, memories, image generation, and
 approval UX remain outside this crate.
 
+With the `mcp` feature enabled, SDK users can adapt an MCP client into normal
+agent tools:
+
+```rust
+let provider = lha_core::mcp::McpToolProvider::load("server", client).await?;
+let manager = lha_core::AgentBuilder::new(runtime)
+    .try_register_mcp_provider(provider)?
+    .build();
+```
+
+MCP tool names are qualified as `mcp__server__tool` for model-visible function
+tools, while calls are forwarded to the MCP client with the original tool name.
+
 ## Product boundary
 
 `lha-core` intentionally does not include the TUI, CLI parsing, persistence,

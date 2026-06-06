@@ -84,7 +84,11 @@ impl ToolRegistry {
         let output = handler
             .handle(invocation.clone(), cancellation_token)
             .await?;
-        Ok(output.into_response(invocation.call_id.as_str(), &invocation.payload))
+        Ok(output.into_response(
+            invocation.call_id.as_str(),
+            invocation.tool_name.as_str(),
+            &invocation.payload,
+        ))
     }
 }
 

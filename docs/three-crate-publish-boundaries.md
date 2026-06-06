@@ -390,9 +390,27 @@ pub mod mcp {
     pub struct McpToolProvider<C> {
         pub server_name: String,
         pub client: C,
+        pub tools: Vec<McpTool>,
+    }
+
+    impl<C> McpToolProvider<C>
+    where
+        C: McpClient + Send + Sync + 'static,
+    {
+        pub async fn load(server_name: impl Into<String>, client: C) -> Result<Self, McpError>;
+
+        pub fn from_tools(
+            server_name: impl Into<String>,
+            client: C,
+            tools: Vec<McpTool>,
+        ) -> Self;
     }
 }
 ```
+
+`AgentBuilder` then registers the provider with `try_register_mcp_provider`,
+which converts MCP tools into normal `ToolHandler` registrations while returning
+schema conversion errors to the caller.
 
 `lha-cli` keeps:
 

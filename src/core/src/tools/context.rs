@@ -35,7 +35,12 @@ pub enum ToolOutput {
 }
 
 impl ToolOutput {
-    pub fn into_response(self, call_id: &str, payload: &ToolPayload) -> ToolResultItem {
+    pub fn into_response(
+        self,
+        call_id: &str,
+        tool_name: &str,
+        payload: &ToolPayload,
+    ) -> ToolResultItem {
         match self {
             Self::Function {
                 content,
@@ -53,7 +58,7 @@ impl ToolOutput {
 
                 ToolResultItem {
                     call_id: call_id.to_string(),
-                    tool_name: String::new(),
+                    tool_name: tool_name.to_string(),
                     payload,
                 }
             }

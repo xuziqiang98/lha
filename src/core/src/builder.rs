@@ -61,6 +61,20 @@ impl AgentBuilder {
         self
     }
 
+    #[cfg(feature = "mcp")]
+    pub fn try_register_mcp_provider<C>(
+        mut self,
+        provider: crate::mcp::McpToolProvider<C>,
+    ) -> std::result::Result<Self, crate::mcp::McpError>
+    where
+        C: crate::mcp::McpClient + Send + Sync + 'static,
+    {
+        for handler in provider.into_tool_handlers()? {
+            self.tools.register_handler(handler);
+        }
+        Ok(self)
+    }
+
     pub fn register_skill_provider(mut self, provider: Arc<dyn SkillProvider>) -> Self {
         self.skill_providers.push(provider);
         self

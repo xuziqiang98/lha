@@ -98,13 +98,8 @@ impl AgentSession {
     pub async fn run(&self, input: SessionInput) -> Result<SubmissionId> {
         let items = input.into_items();
         self.inner
-            .emit_event(AgentEvent::InputQueued {
-                session_id: self.inner.session_id,
-                queue: InputQueue::Primary,
-                items: items.clone(),
-            })
-            .await;
-        self.inner.spawn_turn_loop(items).await
+            .spawn_turn_loop(items.clone(), Some((InputQueue::Primary, items)))
+            .await
     }
 
     pub async fn continue_turn(&self) -> Result<SubmissionId> {
@@ -120,7 +115,7 @@ impl AgentSession {
                 return Err(Error::InvalidContinuation);
             }
         }
-        self.inner.spawn_turn_loop(Vec::new()).await
+        self.inner.spawn_turn_loop(Vec::new(), None).await
     }
 
     pub async fn steer(&self, input: SessionInput) {
@@ -230,20 +225,31 @@ impl AgentSessionInner {
     async fn spawn_turn_loop(
         self: &Arc<Self>,
         initial_items: Vec<TranscriptItem>,
+        queued_event: Option<(InputQueue, Vec<TranscriptItem>)>,
     ) -> Result<SubmissionId> {
-        let submission_id = self.next_submission_id.fetch_add(1, Ordering::SeqCst);
         let cancellation_token = CancellationToken::new();
 
-        {
+        let submission_id = {
             let mut state = self.state.lock().await;
             if state.active_turn.is_some() {
                 return Err(Error::SessionBusy);
             }
+            let submission_id = self.next_submission_id.fetch_add(1, Ordering::SeqCst);
             state.status = SessionStatus::Running;
             state.active_turn = Some(ActiveTurnState {
                 submission_id,
                 cancellation_token: cancellation_token.clone(),
             });
+            submission_id
+        };
+
+        if let Some((queue, items)) = queued_event {
+            self.emit_event(AgentEvent::InputQueued {
+                session_id: self.session_id,
+                queue,
+                items,
+            })
+            .await;
         }
 
         self.emit_event(AgentEvent::SessionStatusChanged {
@@ -550,6 +556,7 @@ mod tests {
     use lha_llm::ToolCallRequest;
     use lha_llm::ToolDescriptor;
     use lha_llm::ToolInputSchema;
+    use lha_llm::ToolResultPayload;
     use lha_llm::TranscriptItem;
     use lha_llm::TurnEvent;
     use lha_llm::TurnEventStream;
@@ -911,13 +918,40 @@ mod tests {
                 .count()
                 >= 2
         );
+        let completed_tool_call = events
+            .iter()
+            .find_map(|event| match event {
+                AgentEvent::ToolCallCompleted { response, .. } => Some(response),
+                _ => None,
+            })
+            .expect("tool completion should be emitted");
+        assert_eq!(
+            completed_tool_call,
+            &lha_llm::ToolResultItem {
+                call_id: "call-1".to_string(),
+                tool_name: "echo_tool".to_string(),
+                payload: ToolResultPayload::Structured {
+                    content: "handled echo_tool".to_string(),
+                    content_items: None,
+                    success: Some(true),
+                },
+            }
+        );
 
         let snapshot = session.snapshot().await;
         assert_eq!(snapshot.conversation.len(), 4);
-        assert!(matches!(
+        assert_eq!(
             snapshot.conversation[2],
-            TranscriptItem::ToolResult { .. }
-        ));
+            TranscriptItem::ToolResult {
+                call_id: "call-1".to_string(),
+                tool_name: "echo_tool".to_string(),
+                payload: ToolResultPayload::Structured {
+                    content: "handled echo_tool".to_string(),
+                    content_items: None,
+                    success: Some(true),
+                },
+            }
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1116,6 +1150,62 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, AgentEvent::TurnAborted { .. }))
         );
+        assert_eq!(session.status().await, SessionStatus::Idle);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn busy_run_rejects_without_primary_input_queued_event() {
+        let hold_open = Arc::new(Notify::new());
+        let runtime = fake_runtime(vec![FakeTurnScript {
+            events: Vec::new(),
+            gate: None,
+            hold_open: Some(Arc::clone(&hold_open)),
+        }]);
+
+        let manager = AgentBuilder::new(runtime).build();
+        let session = manager.create_session();
+        session
+            .run(SessionInput::from_user_text("first"))
+            .await
+            .expect("first run should be accepted");
+
+        loop {
+            let event = timeout(Duration::from_secs(2), session.next_event())
+                .await
+                .expect("event should arrive")
+                .expect("session event should succeed");
+            if matches!(event, AgentEvent::TurnStarted { .. }) {
+                break;
+            }
+        }
+
+        let err = session
+            .run(SessionInput::from_user_text("second"))
+            .await
+            .expect_err("second run should be rejected while busy");
+        assert_eq!(err.to_string(), Error::SessionBusy.to_string());
+        let event = timeout(Duration::from_millis(50), session.next_event()).await;
+        assert!(
+            event.is_err(),
+            "busy run should not emit a primary input event, got {event:?}"
+        );
+
+        hold_open.notify_waiters();
+        loop {
+            let event = timeout(Duration::from_secs(2), session.next_event())
+                .await
+                .expect("event should arrive")
+                .expect("session event should succeed");
+            if matches!(
+                event,
+                AgentEvent::SessionStatusChanged {
+                    status: SessionStatus::Idle,
+                    ..
+                }
+            ) {
+                break;
+            }
+        }
         assert_eq!(session.status().await, SessionStatus::Idle);
     }
 }
