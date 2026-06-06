@@ -248,7 +248,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     let output = cmd.output().unwrap();
     assert!(
         output.status.success(),
-        "lha-cli exec failed: {}",
+        "lha exec failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -368,7 +368,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .env("OPENAI_BASE_URL", "http://unused.local");
 
     let output2 = cmd2.output().unwrap();
-    assert!(output2.status.success(), "resume lha-cli run failed");
+    assert!(output2.status.success(), "resume lha run failed");
 
     // Find the new session file containing the resumed marker.
     let marker2_clone = marker2.clone();

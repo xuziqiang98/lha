@@ -1,4 +1,4 @@
-// Former standalone product crates now live as private modules in `lha-cli`.
+// Former standalone product crates now live as private modules in `lha`.
 // Their crate-level public facades are intentionally preserved for internal
 // compatibility, even when not every re-export is used by the single binary.
 #![allow(dead_code, unused_imports)]

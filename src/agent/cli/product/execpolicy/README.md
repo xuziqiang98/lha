@@ -32,10 +32,10 @@ lha execpolicy check --rules path/to/policy.rules git status
 ```
 
 - Pass multiple `--rules` flags to merge rules, evaluated in the order provided, and use `--pretty` for formatted JSON.
-- During development, run the same command through the `lha-cli` package:
+- During development, run the same command through the `lha` package:
 
 ```bash
-cargo run -p lha-cli -- execpolicy check --rules path/to/policy.rules git status
+cargo run -p lha -- execpolicy check --rules path/to/policy.rules git status
 ```
 
 - Example outcomes:

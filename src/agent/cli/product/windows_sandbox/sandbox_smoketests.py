@@ -39,9 +39,9 @@ def _resolve_codex_cmd() -> List[str]:
 
     raise FileNotFoundError(
         "LHA CLI not found. Build it first, e.g.\n"
-        "  cargo build -p lha-cli --release\n"
+        "  cargo build -p lha --release\n"
         "or for debug:\n"
-        "  cargo build -p lha-cli\n"
+        "  cargo build -p lha\n"
     )
 
 CODEX_CMD = _resolve_codex_cmd()

@@ -1,7 +1,7 @@
 # LHA CLI OTEL module
 
 This directory is the private OpenTelemetry integration module embedded in
-`lha-cli`. It provides:
+`lha`. It provides:
 
 - Trace/log/metrics exporters and tracing subscriber layers (`crate::product::otel::otel_provider`).
 - A structured event helper (`crate::product::otel::OtelManager`).

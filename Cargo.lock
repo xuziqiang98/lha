@@ -2901,30 +2901,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "lha-agent-core"
-version = "1.0.0"
-dependencies = [
- "lha-core",
-]
-
-[[package]]
-name = "lha-agent-runtime"
-version = "1.0.0"
-dependencies = [
- "lha-core",
-]
-
-[[package]]
-name = "lha-backend-openapi-models"
-version = "1.0.0"
-dependencies = [
- "serde",
- "serde_json",
- "serde_with",
-]
-
-[[package]]
-name = "lha-cli"
+name = "lha"
 version = "1.0.0"
 dependencies = [
  "ansi-to-tui",
@@ -3065,6 +3042,29 @@ dependencies = [
  "wiremock",
  "zeroize",
  "zstd",
+]
+
+[[package]]
+name = "lha-agent-core"
+version = "1.0.0"
+dependencies = [
+ "lha-core",
+]
+
+[[package]]
+name = "lha-agent-runtime"
+version = "1.0.0"
+dependencies = [
+ "lha-core",
+]
+
+[[package]]
+name = "lha-backend-openapi-models"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_with",
 ]
 
 [[package]]

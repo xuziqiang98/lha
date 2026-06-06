@@ -1,6 +1,6 @@
 # LHA Config Loader
 
-This private `lha-cli` module is the canonical place to load and describe LHA
+This private `lha` module is the canonical place to load and describe LHA
 configuration layers (user config, CLI/session overrides, managed config, and
 MDM-managed preferences) and to produce:
 

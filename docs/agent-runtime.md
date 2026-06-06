@@ -2,7 +2,7 @@
 
 `lha-core` is the reusable, product-neutral agent SDK that sits between
 `lha-llm` and product runtimes such as the LHA runtime modules inside
-`lha-cli`.
+the `lha` package.
 
 `lha-agent-core` and `lha-agent-runtime` are now transitional workspace
 compatibility shims that re-export the consolidated `lha-core` SDK. See
@@ -18,7 +18,7 @@ The intended stack is:
 - `lha-llm` is the model/runtime SDK boundary.
 - `lha-core::kernel` is the low-level turn-stream kernel.
 - `lha-core` is the stateful session SDK.
-- `lha-cli` contains the LHA product-specific runtime modules built on top of
+- `lha` contains the LHA product-specific runtime modules built on top of
   that layer.
 
 ## What `lha-core` owns
@@ -48,7 +48,7 @@ It should also treat tool names such as `local_shell` as ordinary semantic tool
 identifiers; product-specific interpretation and defaulting stays in higher
 layers.
 
-Those concerns remain in the `lha-cli` product runtime or other higher-level
+Those concerns remain in the `lha` product runtime or other higher-level
 product crates.
 
 ## Current migration shape
@@ -56,7 +56,7 @@ product crates.
 The current migration path is:
 
 1. Build new generic agents directly on `lha-core`.
-2. Keep the `lha-cli` product runtime modules as the compatibility/product
+2. Keep the `lha` product runtime modules as the compatibility/product
    layer.
 3. Keep `lha-agent-core` and `lha-agent-runtime` only as temporary re-export shims while downstream imports migrate.
 

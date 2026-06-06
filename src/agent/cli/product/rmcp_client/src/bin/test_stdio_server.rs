@@ -99,7 +99,7 @@ impl TestToolServer {
     /// that aren't the first item (or includes invalid image blocks before a valid image).
     ///
     /// Manual testing approach (LHA TUI):
-    /// - Build the `lha` binary: `cargo build -p lha-cli --bin lha`
+    /// - Build the `lha` binary: `cargo build -p lha --bin lha`
     /// - Create an arg0 alias: `ln -sf "$(pwd)/target/debug/lha" /tmp/test_stdio_server`
     /// - Register it:
     ///   - `lha mcp add mcpimg -- /tmp/test_stdio_server`

@@ -27,7 +27,7 @@ The Rust workspace is organized around three main package boundaries under
   - `src/agent/cli/product/tui_app`, `exec_cli`, `app_server`,
     `app_server_protocol`, `mcp_server`, `rmcp_client`, `responses_api_proxy`,
     `state`, `protocol`, and `windows_sandbox` are private modules inside the
-    `lha-cli` package, not separate publishable crates.
+    `lha` package, not separate publishable crates.
 
 ## Primary Product Stack
 
@@ -53,7 +53,7 @@ The long-term crates.io publishing target is three public packages:
 - `lha-core`: minimal agent SDK rooted at `src/core`, with tools, lightweight
   skills, and optional MCP-to-tool support. `src/core/agent-core` and
   `src/core/agent-runtime` are compatibility shims.
-- `lha-cli`: the complete LHA product package that depends on `lha-llm` and
+- `lha`: the complete LHA product package that depends on `lha-llm` and
   `lha-core` and installs the `lha` command.
 
 See [Three-Crate Publish Boundary Refactor](./three-crate-publish-boundaries.md)
@@ -78,7 +78,7 @@ The intended dependency flow is:
   on top of those primitives.
 - UI, CLI, protocol, app-server, sandbox, and helper modules under
   `src/agent/cli/product` sit above the coding-agent runtime while remaining
-  private to the `lha-cli` package.
+  private to the `lha` package.
 
 This is the target mental model for the workspace. Some older crates still reflect historical layering decisions, but new work should follow this direction.
 
@@ -121,8 +121,8 @@ The repository root is the only Cargo workspace root. Build and test commands sh
 Examples:
 
 ```sh
-cargo build -p lha-cli --bin lha
-cargo test -p lha-cli
+cargo build -p lha --bin lha
+cargo test -p lha
 just fmt
 ```
 

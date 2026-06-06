@@ -2,7 +2,7 @@
 
 Minimal agent SDK for LHA. This package provides the reusable in-memory agent
 loop and session runtime that sit between model-facing code in `lha-llm` and
-product-specific orchestration in `lha-cli`.
+product-specific orchestration in `lha`.
 
 ## Runtime and sessions
 
@@ -37,4 +37,4 @@ tools, while calls are forwarded to the MCP client with the original tool name.
 
 `lha-core` intentionally does not include the TUI, CLI parsing, persistence,
 sandbox approval UX, telemetry backend, or LHA product protocol events. Those
-belong to `lha-cli`.
+belong to `lha`.

@@ -39,5 +39,5 @@ state or UI code.
 
 ## Telemetry hooks
 
-The crate exposes product-neutral telemetry hooks. The `lha-cli` product layer
+The crate exposes product-neutral telemetry hooks. The `lha` product layer
 is responsible for adapting those hooks to its OpenTelemetry backend.

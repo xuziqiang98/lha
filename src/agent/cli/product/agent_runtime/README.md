@@ -1,13 +1,13 @@
 # LHA Product Runtime
 
-This private module implements the business logic for LHA inside the `lha-cli`
+This private module implements the business logic for LHA inside the `lha`
 package. It is used by the `lha` TUI, `lha exec`, `lha app-server`, and related
 product surfaces.
 
 ## Architecture Position
 
 The runtime sits above `lha-llm` and `lha-core`, and below user-facing surfaces
-that are now private modules in `lha-cli`.
+that are now private modules in `lha`.
 
 - `lha-llm` is the model/runtime SDK boundary.
 - `lha-core` provides the reusable turn-stream kernel and in-memory session SDK

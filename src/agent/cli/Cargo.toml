@@ -1,9 +1,9 @@
 [package]
-name = "lha-cli"
+name = "lha"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Long-Horizon Agent command-line product package that installs the lha binary."
+description = "Long-Horizon Agent command-line package that installs the lha binary."
 homepage.workspace = true
 readme = "README.md"
 repository.workspace = true

@@ -5,7 +5,10 @@ multi-crate workspace into three crates.io packages:
 
 - `lha-llm`
 - `lha-core`
-- `lha-cli`
+- `lha`
+
+The CLI package was originally planned as `lha-cli`, but was renamed to `lha`
+before publishing so `cargo install lha` matches the installed `lha` command.
 
 The goal is not to immediately move code. The goal is to make the intended
 publish boundaries explicit so future refactors can move code without
@@ -17,7 +20,7 @@ re-deciding what belongs where.
 - Keep `lha-llm` reusable as a model API and semantic runtime SDK.
 - Keep `lha-core` reusable as a minimal agent SDK with tools, lightweight
   skills, and optional MCP-to-tool support.
-- Keep `lha-cli` as the full LHA product package that installs the `lha`
+- Keep `lha` as the full LHA product package that installs the `lha`
   command.
 - Avoid publishing internal helper crates solely because they are current
   workspace package boundaries.
@@ -32,7 +35,7 @@ re-deciding what belongs where.
   sandbox UX, or LHA-specific protocol events.
 - Do not move LHA product telemetry, OAuth, config loading, or bundled skill
   management into the minimal SDK.
-- Do not change the installed command name; `lha-cli` still installs `lha`.
+- Do not change the installed command name; the `lha` package still installs `lha`.
 
 ## Target crates
 
@@ -54,16 +57,16 @@ execution, lightweight skills abstractions, and optional MCP-to-tool adapters.
 It can depend on `lha-llm` and third-party crates from crates.io. Its default
 feature set should stay small and product-neutral.
 
-### `lha-cli`
+### `lha`
 
-`lha-cli` is the full LHA product package. It depends on `lha-llm` and
+`lha` is the full LHA product package. It depends on `lha-llm` and
 `lha-core`, contains the remaining product code, and keeps the binary target
 named `lha`.
 
 Users install it with:
 
 ```sh
-cargo install lha-cli --locked
+cargo install lha --locked
 ```
 
 ## Repository and dependency style
@@ -91,7 +94,7 @@ Target `lha-core` dependency shape:
 lha-llm = { workspace = true }
 ```
 
-Target `lha-cli` dependency shape:
+Target `lha` dependency shape:
 
 ```toml
 [dependencies]
@@ -141,10 +144,10 @@ publishable `lha-core` package is now rooted at `src/core` and contains:
 The old `lha-agent-core` and `lha-agent-runtime` workspace packages are
 temporary compatibility shims that re-export `lha-core`.
 
-### Maps to `lha-cli`
+### Maps to `lha`
 
 Phase 3 has been implemented in the current checkout. Everything
-product-facing now lives inside the `lha-cli` package rooted at
+product-facing now lives inside the `lha` package rooted at
 `src/agent/cli`:
 
 - `src/agent/cli/src` contains the `lha` binary entrypoint, CLI dispatch, and
@@ -157,7 +160,7 @@ product-facing now lives inside the `lha-cli` package rooted at
   replacing the former test-helper crates.
 
 The former product packages are no longer Cargo workspace members or
-`lha-cli` dependencies. `lha-cli` depends internally only on `lha-llm`,
+`lha` dependencies. `lha` depends internally only on `lha-llm`,
 `lha-core`, and third-party crates from crates.io.
 
 ## lha-llm boundary
@@ -193,7 +196,7 @@ Product coupling removed in Phase 1:
 - any LHA protocol or MCP product types that leak into model-only APIs
 
 Telemetry should be represented by generic hooks or traits inside `lha-llm`.
-The `lha-cli` product layer is responsible for adapting those hooks to the
+The `lha` product layer is responsible for adapting those hooks to the
 current `lha-otel` implementation through `lha_llm::RuntimeTelemetry`.
 
 ## lha-core boundary
@@ -242,9 +245,9 @@ use lha_core::tools::ToolOutput;
 - skill installer, bundled skill assets, or dependency install prompts
 - telemetry backend
 
-## lha-cli boundary
+## lha boundary
 
-`lha-cli` is the complete LHA product. It owns:
+`lha` is the complete LHA product. It owns:
 
 - CLI parsing and binary entrypoint
 - TUI
@@ -259,15 +262,15 @@ use lha_core::tools::ToolOutput;
 - local skills directory, skill installer, bundled skills, and skill dependency
   prompts
 
-`lha-cli` depends on the public `lha-llm` and `lha-core` crates, plus
+`lha` depends on the public `lha-llm` and `lha-core` crates, plus
 third-party crates from crates.io. It should not depend on unpublished sibling
 workspace crates in the final publishable shape.
 
 Package and binary names:
 
-- package: `lha-cli`
+- package: `lha`
 - binary: `lha`
-- install command: `cargo install lha-cli --locked`
+- install command: `cargo install lha --locked`
 
 ## Tools, Skills, and MCP
 
@@ -302,12 +305,12 @@ pub trait ToolHandler: Send + Sync {
 ```
 
 Product-specific tools such as shell execution, apply_patch, memories, image
-generation, delegated jobs, and request-user-input remain in `lha-cli`.
+generation, delegated jobs, and request-user-input remain in `lha`.
 
 ### Skills
 
 Skills should have a lightweight SDK abstraction in `lha-core`, but the LHA
-product skill system remains in `lha-cli`.
+product skill system remains in `lha`.
 
 `lha-core` owns:
 
@@ -332,7 +335,7 @@ pub trait SkillProvider: Send + Sync {
 }
 ```
 
-`lha-cli` owns:
+`lha` owns:
 
 - `$LHA_HOME/skills`
 - skill installer
@@ -412,7 +415,7 @@ pub mod mcp {
 which converts MCP tools into normal `ToolHandler` registrations while returning
 schema conversion errors to the caller.
 
-`lha-cli` keeps:
+`lha` keeps:
 
 - `config.toml` `mcp_servers`
 - stdio and streamable HTTP server startup
@@ -453,7 +456,7 @@ schema conversion errors to the caller.
 - Implemented: `lha_core::mcp` is feature-gated behind `mcp` and provides
   skeleton adapter traits, naming helpers, and SDK-owned MCP types.
 - Intentional limitation: full product MCP startup, OAuth, approval prompts,
-  resource tools, telemetry, and `lha mcp-server` remain in `lha-cli`.
+  resource tools, telemetry, and `lha mcp-server` remain in `lha`.
 
 #### Phase 2C: Internal import migration and packaging validation
 
@@ -464,17 +467,18 @@ schema conversion errors to the caller.
 - Implemented target: `cargo package -p lha-core --no-verify` should not
   require any internal unpublished crate.
 
-### Phase 3: Collapse product crates into `lha-cli`
+### Phase 3: Collapse product crates into `lha`
 
-- Implemented: package name remains `lha-cli`.
+- Implemented: product crate collapse is rooted at `src/agent/cli`; the publish
+  package was later renamed from `lha-cli` to `lha` before publication.
 - Implemented: binary name remains `lha`.
 - Implemented: product crates have been moved or inlined under
-  `src/agent/cli/product` so `lha-cli` depends only on:
+  `src/agent/cli/product` so `lha` depends only on:
   - `lha-llm`
   - `lha-core`
   - third-party crates from crates.io
-- Implemented: product modules are private to `lha-cli` unless intentionally
-  exposed through the existing `lha-cli` library surface.
+- Implemented: product modules are private to `lha` unless intentionally
+  exposed through the existing `lha_cli` library surface.
 - Implemented target: CLI behavior is routed through the single `lha` binary,
   hidden developer schema commands, and arg0/hidden helper dispatch instead of
   standalone product package binaries.
@@ -495,7 +499,7 @@ schema conversion errors to the caller.
   crates.io.
 - Wait until crates.io index resolution can see the published `lha-core`
   version.
-- Publish `lha-cli` last; its packaged dependencies on `lha-core` and
+- Publish `lha` last; its packaged dependencies on `lha-core` and
   `lha-llm` resolve from crates.io.
 
 ## Publishing readiness
@@ -505,7 +509,7 @@ Before publishing, each public package must pass:
 ```sh
 cargo package -p lha-llm --no-verify
 cargo package -p lha-core --no-verify
-cargo package -p lha-cli --no-verify
+cargo package -p lha --no-verify
 ```
 
 Validate the CLI install path:
@@ -524,18 +528,18 @@ cargo publish -p lha-llm
 cargo publish -p lha-core
 
 # Wait until crates.io can resolve lha-core 1.0.0.
-cargo publish -p lha-cli
+cargo publish -p lha
 ```
 
 Use `cargo publish --dry-run` for each package before the real publish. Do not
 publish `lha-core` until the `lha-llm` version it depends on is visible to
-Cargo, and do not publish `lha-cli` until both `lha-core` and `lha-llm` are
+Cargo, and do not publish `lha` until both `lha-core` and `lha-llm` are
 visible.
 
 The final published dependency graph should be:
 
 ```text
-lha-cli
+lha
   -> lha-core
       -> lha-llm
   -> lha-llm
@@ -553,7 +557,7 @@ For future code movement phases, validate with:
 ```sh
 cargo test -p lha-llm
 cargo test -p lha-core
-cargo test -p lha-cli
+cargo test -p lha
 ```
 
 When shared, core, or protocol code has moved, ask before running the full
@@ -568,7 +572,7 @@ Before publishing, also validate package and install commands:
 ```sh
 cargo package -p lha-llm --no-verify
 cargo package -p lha-core --no-verify
-cargo package -p lha-cli --no-verify
+cargo package -p lha --no-verify
 cargo install --path src/agent/cli --locked --force
 lha --version
 ```

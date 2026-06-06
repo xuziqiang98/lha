@@ -4,7 +4,7 @@
 From the repository root:
 
 ```
-cargo build -p lha-cli --bin lha --release
+cargo build -p lha --bin lha --release
 
 export PATH="<lha binary path>:$PATH" >> ~/.bashrc
 ```
@@ -23,7 +23,7 @@ The workspace is organized under [`src/`](./src) around three crates.io publish 
 
 - `src/llm`: `lha-llm`, the reusable model runtime SDK, provider adapters, and wire-level API clients
 - `src/core`: `lha-core`, the reusable agent core APIs
-- `src/agent/cli`: `lha-cli`, the LHA product package that installs `lha`; its private `product/` modules include the TUI, runtime, state, app-server, MCP, sandboxing, and related tooling
+- `src/agent/cli`: `lha`, the LHA product package that installs the `lha` command; its private `product/` modules include the TUI, runtime, state, app-server, MCP, sandboxing, and related tooling
 
 ## TUI Copying
 

@@ -1,4 +1,4 @@
-// Keep consolidated legacy module paths stable after moving crates under lha-cli.
+// Keep consolidated legacy module paths stable after moving crates under lha.
 #![allow(clippy::module_inception)]
 
 pub mod account;
