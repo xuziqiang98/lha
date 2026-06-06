@@ -62,7 +62,7 @@ yarn-error.log*
 .netlify/
 
 # patches
-apply_patch/
+/apply_patch/
 
 # coverage
 coverage/
