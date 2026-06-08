@@ -2992,6 +2992,10 @@ mod tests {
             .collect()
     }
 
+    fn compact_text(text: &str) -> String {
+        text.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines(u16::MAX))
     }
@@ -3387,6 +3391,42 @@ mod tests {
             rendered.iter().skip(1).any(|line| line.starts_with("    ")),
             "expected continuation lines to keep list indentation: {rendered:?}"
         );
+    }
+
+    #[test]
+    fn markdown_agent_message_cell_preserves_cjk_ascii_order() {
+        let source = "不是说本地开发或合 main 绝对不能有 Git 依赖；我说的是：如果这个分支的目标是让 `lha-llm` / `lha-core` / `lha-cli` 进入 crates.io 发布准备状态，就不能让发布后的依赖图依赖 Git 源。\n\n- 如果这个分支合到 `main` 后要被认为是 crates.io 发布就绪，那么现在还不满足发布条件。";
+        let cell = AgentMessageCell::new_markdown(source.to_string(), true);
+
+        for width in [32, 40, 48, 56, 72, 100] {
+            let rendered = render_lines(&cell.display_lines(width));
+            let compact = compact_text(&rendered.join(""));
+
+            assert!(
+                compact.contains(&compact_text("Git 依赖；我说的是")),
+                "width {width} reordered Git dependency text: {rendered:?}"
+            );
+            assert!(
+                compact.contains(&compact_text("被认为是 crates.io 发布就绪")),
+                "width {width} reordered crates.io readiness text: {rendered:?}"
+            );
+            assert!(
+                !compact.contains("依；赖"),
+                "width {width} rendered the known CJK punctuation corruption: {rendered:?}"
+            );
+            assert!(
+                !compact.contains("crates是.io"),
+                "width {width} rendered the known crates.io corruption: {rendered:?}"
+            );
+            assert!(
+                !compact.contains("crates.io是"),
+                "width {width} moved the Chinese predicate after crates.io: {rendered:?}"
+            );
+        }
+
+        let wide = render_lines(&cell.display_lines(100)).join("\n");
+        assert!(wide.contains("Git 依赖；我说的是"));
+        assert!(wide.contains("被认为是 crates.io 发布就绪"));
     }
 
     #[test]

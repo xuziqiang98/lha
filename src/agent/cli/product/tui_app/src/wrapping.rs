@@ -556,6 +556,41 @@ mod tests {
     }
 
     #[test]
+    fn word_wrap_line_preserves_cjk_ascii_span_order() {
+        let line = Line::from(vec![
+            "后要被认为是 ".into(),
+            "crates.io".cyan(),
+            " 发布就绪".into(),
+            "Git 依赖；我说的是".green(),
+        ]);
+        let expected = "后要被认为是crates.io发布就绪Git依赖；我说的是";
+
+        for width in 8..=40 {
+            let out = word_wrap_line(&line, width);
+            let rendered = out
+                .iter()
+                .map(concat_line)
+                .collect::<String>()
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect::<String>();
+
+            assert_eq!(
+                rendered, expected,
+                "width {width} should preserve original CJK/ASCII order"
+            );
+            assert!(
+                !rendered.contains("依；赖"),
+                "width {width} rendered the known CJK punctuation corruption: {out:?}"
+            );
+            assert!(
+                !rendered.contains("crates是.io"),
+                "width {width} rendered the known crates.io corruption: {out:?}"
+            );
+        }
+    }
+
+    #[test]
     fn styled_split_within_span_preserves_style() {
         use ratatui::style::Stylize;
         let line = Line::from(vec!["abcd".red()]);

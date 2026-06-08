@@ -43,6 +43,42 @@ use ratatui::layout::Size;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::widgets::WidgetRef;
+use unicode_width::UnicodeWidthStr;
+
+fn display_width(symbol: &str) -> usize {
+    if !symbol.contains('\x1b') {
+        return symbol.width();
+    }
+
+    // OSC escape sequences are terminal controls and do not consume columns.
+    let mut visible = String::with_capacity(symbol.len());
+    let mut chars = symbol.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.peek() == Some(&']') {
+            chars.next();
+            while let Some(ch) = chars.next() {
+                if ch == '\x07' {
+                    break;
+                }
+                if ch == '\x1b' && chars.peek() == Some(&'\\') {
+                    chars.next();
+                    break;
+                }
+            }
+        } else {
+            visible.push(ch);
+        }
+    }
+    visible.width()
+}
+
+fn cursor_after_put(x: u16, y: u16, symbol: &str) -> Position {
+    let width = u16::try_from(display_width(symbol).max(1)).unwrap_or(u16::MAX);
+    Position {
+        x: x.saturating_add(width),
+        y,
+    }
+}
 
 #[derive(Debug, Hash)]
 pub struct Frame<'a> {
@@ -225,9 +261,10 @@ where
             }
             self.clear_tail_after_viewport = false;
         }
-        let last_put_command = updates.iter().rfind(|command| command.is_put());
-        if let Some(&DrawCommand::Put { x, y, .. }) = last_put_command {
-            self.last_known_cursor_pos = Position { x, y };
+        if let Some(DrawCommand::Put { x, y, cell }) =
+            updates.iter().rfind(|command| command.is_put())
+        {
+            self.last_known_cursor_pos = cursor_after_put(*x, *y, cell.symbol());
         }
         draw(&mut self.backend, updates.into_iter())
     }
@@ -469,7 +506,6 @@ where
 }
 
 use ratatui::buffer::Cell;
-use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, IsVariant)]
 enum DrawCommand {
@@ -504,7 +540,7 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
         let mut column = 0usize;
         while column < row.len() {
             let cell = &row[column];
-            let width = cell.symbol().width();
+            let width = display_width(cell.symbol());
             if cell.symbol() != " " || cell.bg != bg || cell.modifier != Modifier::empty() {
                 last_nonblank_column = last_nonblank_column.max(column + (width.saturating_sub(1)));
             }
@@ -537,9 +573,12 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
             }
         }
 
-        to_skip = current.symbol().width().saturating_sub(1);
+        to_skip = display_width(current.symbol()).saturating_sub(1);
 
-        let affected_width = std::cmp::max(current.symbol().width(), previous.symbol().width());
+        let affected_width = std::cmp::max(
+            display_width(current.symbol()),
+            display_width(previous.symbol()),
+        );
         invalidated = std::cmp::max(affected_width, invalidated).saturating_sub(1);
     }
     updates
@@ -552,17 +591,16 @@ where
     let mut fg = Color::Reset;
     let mut bg = Color::Reset;
     let mut modifier = Modifier::empty();
-    let mut last_pos: Option<Position> = None;
+    let mut next_cursor_pos: Option<Position> = None;
     for command in commands {
         let (x, y) = match command {
             DrawCommand::Put { x, y, .. } => (x, y),
             DrawCommand::ClearToEnd { x, y, .. } => (x, y),
         };
-        // Move the cursor if the previous location was not (x - 1, y)
-        if !matches!(last_pos, Some(p) if x == p.x + 1 && y == p.y) {
+        let command_pos = Position { x, y };
+        if next_cursor_pos != Some(command_pos) {
             queue!(writer, MoveTo(x, y))?;
         }
-        last_pos = Some(Position { x, y });
         match command {
             DrawCommand::Put { cell, .. } => {
                 if cell.modifier != modifier {
@@ -583,6 +621,7 @@ where
                 }
 
                 queue!(writer, Print(cell.symbol()))?;
+                next_cursor_pos = Some(cursor_after_put(x, y, cell.symbol()));
             }
             DrawCommand::ClearToEnd { bg: clear_bg, .. } => {
                 queue!(writer, SetAttribute(crossterm::style::Attribute::Reset))?;
@@ -590,6 +629,7 @@ where
                 queue!(writer, SetBackgroundColor(clear_bg.into()))?;
                 bg = clear_bg;
                 queue!(writer, Clear(crossterm::terminal::ClearType::UntilNewLine))?;
+                next_cursor_pos = Some(command_pos);
             }
         }
     }
@@ -679,6 +719,24 @@ mod tests {
     use ratatui::style::Color;
     use ratatui::style::Style;
 
+    fn compact_screen(contents: &str) -> String {
+        contents.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    fn cell_with_symbol(symbol: &str) -> Cell {
+        let mut cell = Cell::default();
+        cell.set_symbol(symbol);
+        cell
+    }
+
+    #[test]
+    fn display_width_ignores_osc_sequences() {
+        assert_eq!(
+            display_width("\x1b]8;;https://example.test\x07依\x1b]8;;\x07"),
+            2
+        );
+    }
+
     #[test]
     fn diff_buffers_does_not_emit_clear_to_end_for_full_width_row() {
         let area = Rect::new(0, 0, 3, 2);
@@ -705,6 +763,128 @@ mod tests {
                 .any(|command| matches!(command, DrawCommand::Put { x: 2, y: 0, .. })),
             "expected diff_buffers to update the final cell; commands: {commands:?}",
         );
+    }
+
+    #[test]
+    fn custom_terminal_preserves_cjk_ascii_order_across_repainted_frames() {
+        for width in [80, 100, 120] {
+            let backend = crate::product::tui_app::test_backend::VT100Backend::new(width, 4);
+            let mut terminal = Terminal::with_options(backend).expect("terminal");
+            terminal.set_viewport_area(Rect::new(0, 0, width, 4));
+
+            terminal
+                .draw(|frame| {
+                    frame.buffer.set_string(
+                        0,
+                        0,
+                        "不是说本地开发或合 main 绝对不能有 Git 依；赖我说的是：",
+                        Style::default(),
+                    );
+                    frame.buffer.set_string(
+                        0,
+                        1,
+                        "- 如果这个分支合到 main 后要被认为 crates是.io 发布就绪",
+                        Style::default(),
+                    );
+                })
+                .expect("draw stale frame");
+
+            terminal
+                .draw(|frame| {
+                    frame.buffer.set_string(
+                        0,
+                        0,
+                        "不是说本地开发或合 main 绝对不能有 Git 依赖；我说的是：",
+                        Style::default(),
+                    );
+                    frame.buffer.set_string(
+                        0,
+                        1,
+                        "- 如果这个分支合到 main 后要被认为是 crates.io 发布就绪，那么现在还不满足发布条件。",
+                        Style::default(),
+                    );
+                })
+                .expect("draw corrected frame");
+
+            let contents = terminal.backend().vt100().screen().contents();
+            let compact = compact_screen(&contents);
+            assert!(
+                contents.contains("Git 依赖；我说的是"),
+                "width {width} reordered Git dependency text: {contents:?}"
+            );
+            assert!(
+                contents.contains("被认为是 crates.io 发布就绪"),
+                "width {width} reordered crates.io readiness text: {contents:?}"
+            );
+            assert!(
+                !compact.contains("依；赖"),
+                "width {width} kept stale CJK punctuation corruption: {contents:?}"
+            );
+            assert!(
+                !compact.contains("crates是.io"),
+                "width {width} kept stale crates.io corruption: {contents:?}"
+            );
+            assert!(
+                !compact.contains("crates.io是"),
+                "width {width} moved the Chinese predicate after crates.io: {contents:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn draw_preserves_cjk_ascii_order_after_wide_cells() {
+        let mut backend = crate::product::tui_app::test_backend::VT100Backend::new(24, 1);
+        let commands = vec![
+            DrawCommand::Put {
+                x: 0,
+                y: 0,
+                cell: cell_with_symbol("依"),
+            },
+            DrawCommand::Put {
+                x: 2,
+                y: 0,
+                cell: cell_with_symbol("赖"),
+            },
+            DrawCommand::Put {
+                x: 4,
+                y: 0,
+                cell: cell_with_symbol("；"),
+            },
+            DrawCommand::Put {
+                x: 6,
+                y: 0,
+                cell: cell_with_symbol("我"),
+            },
+            DrawCommand::Put {
+                x: 8,
+                y: 0,
+                cell: cell_with_symbol("说"),
+            },
+            DrawCommand::Put {
+                x: 10,
+                y: 0,
+                cell: cell_with_symbol("的"),
+            },
+            DrawCommand::Put {
+                x: 12,
+                y: 0,
+                cell: cell_with_symbol("是"),
+            },
+            DrawCommand::Put {
+                x: 14,
+                y: 0,
+                cell: cell_with_symbol("c"),
+            },
+        ];
+
+        draw(&mut backend, commands.into_iter()).expect("draw cjk commands");
+
+        let contents = backend.vt100().screen().contents();
+        assert!(
+            contents.contains("依赖；我说的是c"),
+            "draw should preserve CJK/ASCII order: {contents:?}"
+        );
+        assert!(!compact_screen(&contents).contains("依；赖"));
     }
 
     #[test]
