@@ -3742,6 +3742,53 @@ async fn streamed_proposed_plan_background_fills_rendered_row() {
 }
 
 #[tokio::test]
+async fn streamed_proposed_plan_background_covers_lines_after_literal_plan_tags() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+
+    let plan = concat!(
+        "# Plan\n",
+        "```text\n",
+        "<proposed_plan>\n",
+        "- Example Step\n",
+        "</proposed_plan>\n",
+        "```\n",
+        "After code fence\n",
+    );
+    chat.on_task_started();
+    chat.on_plan_delta(plan.to_string());
+    chat.on_plan_item_completed(plan.to_string());
+    chat.on_task_complete(None, false);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+
+    let Some(plan_bg) = proposed_plan_style().bg else {
+        return;
+    };
+    let after_fence_row = (0..area.height)
+        .find(|y| {
+            (0..area.width)
+                .map(|x| buf[(x, *y)].symbol())
+                .collect::<String>()
+                .contains("After code fence")
+        })
+        .expect("expected rendered post-fence proposed plan row");
+
+    for x in 0..area.width {
+        assert_eq!(
+            buf[(x, after_fence_row)].style().bg,
+            Some(plan_bg),
+            "expected post-fence proposed plan background at x={x}, y={after_fence_row}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn streamed_proposed_plan_reflows_after_narrow_stream_width() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::Identities, true);

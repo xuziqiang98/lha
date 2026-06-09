@@ -102,6 +102,7 @@ pub(crate) fn extract_proposed_plan_text(text: &str) -> Option<String> {
 mod tests {
     use super::ProposedPlanParser;
     use super::ProposedPlanSegment;
+    use super::extract_proposed_plan_text;
     use super::strip_proposed_plan_blocks;
     use pretty_assertions::assert_eq;
 
@@ -180,6 +181,55 @@ mod tests {
     #[test]
     fn strips_proposed_plan_blocks_from_text() {
         let text = "before\n<proposed_plan>\n- step\n</proposed_plan>\nafter";
+        assert_eq!(strip_proposed_plan_blocks(text), "before\nafter");
+    }
+
+    #[test]
+    fn keeps_literal_plan_tags_inside_fenced_code_blocks() {
+        let text = concat!(
+            "before\n",
+            "<proposed_plan>\n",
+            "# Title\n",
+            "```text\n",
+            "<proposed_plan>\n",
+            "- Example Step\n",
+            "</proposed_plan>\n",
+            "```\n",
+            "After code fence\n",
+            "</proposed_plan>\n",
+            "after",
+        );
+        let expected_plan = concat!(
+            "# Title\n",
+            "```text\n",
+            "<proposed_plan>\n",
+            "- Example Step\n",
+            "</proposed_plan>\n",
+            "```\n",
+            "After code fence\n",
+        );
+
+        assert_eq!(
+            extract_proposed_plan_text(text),
+            Some(expected_plan.to_string())
+        );
+        assert_eq!(strip_proposed_plan_blocks(text), "before\nafter");
+    }
+
+    #[test]
+    fn treats_four_space_indented_fences_as_plan_text() {
+        let text = concat!(
+            "before\n",
+            "<proposed_plan>\n",
+            "    ```\n",
+            "</proposed_plan>\n",
+            "after",
+        );
+
+        assert_eq!(
+            extract_proposed_plan_text(text),
+            Some("    ```\n".to_string())
+        );
         assert_eq!(strip_proposed_plan_blocks(text), "before\nafter");
     }
 }
