@@ -290,6 +290,14 @@ pub struct UnexpectedResponseError {
 const CLOUDFLARE_BLOCKED_MESSAGE: &str =
     "Access blocked by Cloudflare. This usually happens when connecting from a restricted region";
 
+fn empty_unexpected_status_body_message(status: StatusCode) -> &'static str {
+    if status == StatusCode::UNAUTHORIZED {
+        "authentication failed; provider returned an empty response body"
+    } else {
+        "empty response body"
+    }
+}
+
 impl UnexpectedResponseError {
     fn friendly_message(&self) -> Option<String> {
         if self.status != StatusCode::FORBIDDEN {
@@ -319,7 +327,11 @@ impl std::fmt::Display for UnexpectedResponseError {
             write!(f, "{friendly}")
         } else {
             let status = self.status;
-            let body = &self.body;
+            let body = if self.body.trim().is_empty() {
+                empty_unexpected_status_body_message(status)
+            } else {
+                &self.body
+            };
             let mut message = format!("unexpected status {status}: {body}");
             if let Some(url) = &self.url {
                 message.push_str(&format!(", url: {url}"));
@@ -822,6 +834,51 @@ mod tests {
         assert_eq!(
             err.to_string(),
             format!("unexpected status {status}: plain text error, url: {url}")
+        );
+    }
+
+    #[test]
+    fn unexpected_status_unauthorized_empty_body_reports_authentication_failure() {
+        let err = UnexpectedResponseError {
+            status: StatusCode::UNAUTHORIZED,
+            body: String::new(),
+            url: None,
+            request_id: None,
+        };
+
+        assert_eq!(
+            err.to_string(),
+            "unexpected status 401 Unauthorized: authentication failed; provider returned an empty response body"
+        );
+    }
+
+    #[test]
+    fn unexpected_status_unauthorized_blank_body_reports_authentication_failure() {
+        let err = UnexpectedResponseError {
+            status: StatusCode::UNAUTHORIZED,
+            body: "   \n\t".to_string(),
+            url: None,
+            request_id: None,
+        };
+
+        assert_eq!(
+            err.to_string(),
+            "unexpected status 401 Unauthorized: authentication failed; provider returned an empty response body"
+        );
+    }
+
+    #[test]
+    fn unexpected_status_empty_body_reports_empty_body_with_url_and_request_id() {
+        let err = UnexpectedResponseError {
+            status: StatusCode::BAD_GATEWAY,
+            body: String::new(),
+            url: Some("http://example.com/api".to_string()),
+            request_id: Some("req-123".to_string()),
+        };
+
+        assert_eq!(
+            err.to_string(),
+            "unexpected status 502 Bad Gateway: empty response body, url: http://example.com/api, request id: req-123"
         );
     }
 }
