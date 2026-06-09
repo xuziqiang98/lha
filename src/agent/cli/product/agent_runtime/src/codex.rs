@@ -320,18 +320,12 @@ fn epoch_seconds_to_datetime(seconds: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(seconds, 0).unwrap_or_else(Utc::now)
 }
 
-const MAX_PROPOSED_PLAN_GOAL_TEXT_CHARS: usize = 20_000;
 const PROPOSED_PLAN_GOAL_OBJECTIVE_PREFIX: &str = "Implement the proposed plan stored at:\n";
 const PROPOSED_PLAN_GOAL_OBJECTIVE_SUFFIX: &str = "\n\nBefore marking this goal complete, verify every explicit requirement in that plan, including docs, formatting, tests, and cleanup.";
 
 fn validate_proposed_plan_goal_text(value: &str) -> Result<(), String> {
     if value.trim().is_empty() {
         return Err("proposed plan text must not be empty".to_string());
-    }
-    if value.chars().count() > MAX_PROPOSED_PLAN_GOAL_TEXT_CHARS {
-        return Err(format!(
-            "proposed plan text must be at most {MAX_PROPOSED_PLAN_GOAL_TEXT_CHARS} characters"
-        ));
     }
     Ok(())
 }
@@ -10006,6 +10000,50 @@ mod tests {
                 .await
                 .expect("goal read should succeed")
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn start_goal_from_proposed_plan_allows_long_plan_text() {
+        let (sess, state_db, rx, _state_home) = make_goal_session_with_state().await;
+        set_programmer_identity(&sess).await;
+        let plan_text = "a".repeat(20_001);
+
+        assert!(
+            sess.start_thread_goal_from_proposed_plan(
+                "start-long-plan-goal".to_string(),
+                plan_text.clone(),
+            )
+            .await
+        );
+
+        let updated = wait_for_goal_updated(&rx).await;
+        let plan_path = sess.proposed_plan_goal_path().await;
+        let expected_objective = proposed_plan_goal_objective(&plan_path);
+        assert_eq!(
+            plan_text,
+            tokio::fs::read_to_string(&plan_path)
+                .await
+                .expect("plan text should be written")
+        );
+        assert_eq!(expected_objective, updated.objective);
+
+        let stored = state_db
+            .get_thread_goal(sess.conversation_id)
+            .await
+            .expect("goal read should succeed")
+            .expect("goal should exist");
+        let expected = crate::product::state::ThreadGoal {
+            thread_id: sess.conversation_id,
+            goal_id: stored.goal_id.clone(),
+            objective: expected_objective,
+            status: crate::product::state::ThreadGoalStatus::Active,
+            token_budget: None,
+            tokens_used: 0,
+            time_used_seconds: 0,
+            created_at: stored.created_at,
+            updated_at: stored.updated_at,
+        };
+        assert_eq!(expected, stored);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
