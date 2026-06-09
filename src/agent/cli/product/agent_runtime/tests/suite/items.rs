@@ -13,6 +13,8 @@ use crate::product::protocol::items::TurnItem;
 use crate::product::protocol::memory_citation::MemoryCitation;
 use crate::product::protocol::memory_citation::MemoryCitationEntry;
 use crate::product::protocol::models::WebSearchAction;
+use crate::product::protocol::protocol::RolloutItem;
+use crate::product::protocol::protocol::RolloutLine;
 use crate::product::protocol::user_input::ByteRange;
 use crate::product::protocol::user_input::TextElement;
 use crate::product::protocol::user_input::UserInput;
@@ -38,6 +40,7 @@ use crate::test_support::core::wait_for_event_match;
 use anyhow::Ok;
 use pretty_assertions::assert_eq;
 use std::fs;
+use std::path::Path;
 
 const MEMORY_CITATION_ROLLOUT_ID: &str = "00000000-0000-0000-0000-000000000001";
 
@@ -77,6 +80,19 @@ fn write_memory_summary(lha_home: &std::path::Path) {
         "Planner memory citations are available.",
     )
     .unwrap_or_else(|err| panic!("failed to write memory summary: {err}"));
+}
+
+async fn read_rollout_items(path: &Path) -> anyhow::Result<Vec<RolloutItem>> {
+    let contents = tokio::fs::read_to_string(path).await?;
+    contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str::<RolloutLine>(line)
+                .map(|rollout_line| rollout_line.item)
+                .map_err(Into::into)
+        })
+        .collect()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -465,6 +481,10 @@ async fn plan_mode_strips_plan_from_agent_messages() -> anyhow::Result<()> {
         session_configured,
         ..
     } = test_codex().build(&server).await?;
+    let rollout_path = session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
 
     let plan_block = "<proposed_plan>\n- Step 1\n- Step 2\n</proposed_plan>\n";
     let full_message = format!("Intro\n{plan_block}Outro");
@@ -509,12 +529,16 @@ async fn plan_mode_strips_plan_from_agent_messages() -> anyhow::Result<()> {
     let mut plan_delta = None;
     let mut agent_item = None;
     let mut plan_item = None;
+    let mut legacy_agent_messages = Vec::new();
 
-    while plan_delta.is_none() || agent_item.is_none() || plan_item.is_none() {
+    loop {
         let ev = wait_for_event(&codex, |_| true).await;
         match ev {
             EventMsg::AgentMessageContentDelta(event) => {
                 agent_deltas.push(event.delta);
+            }
+            EventMsg::AgentMessage(event) => {
+                legacy_agent_messages.push(event.message);
             }
             EventMsg::PlanDelta(event) => {
                 plan_delta = Some(event.delta);
@@ -531,6 +555,7 @@ async fn plan_mode_strips_plan_from_agent_messages() -> anyhow::Result<()> {
             }) => {
                 plan_item = Some(item);
             }
+            EventMsg::TurnComplete(_) => break,
             _ => {}
         }
     }
@@ -539,6 +564,7 @@ async fn plan_mode_strips_plan_from_agent_messages() -> anyhow::Result<()> {
     assert_eq!(agent_text, "Intro\nOutro");
     assert_eq!(plan_delta.unwrap(), "- Step 1\n- Step 2\n");
     assert_eq!(plan_item.unwrap().text, "- Step 1\n- Step 2\n");
+    assert_eq!(legacy_agent_messages, Vec::<String>::new());
     let agent_text_from_item: String = agent_item
         .unwrap()
         .content
@@ -548,6 +574,100 @@ async fn plan_mode_strips_plan_from_agent_messages() -> anyhow::Result<()> {
         })
         .collect();
     assert_eq!(agent_text_from_item, "Intro\nOutro");
+    let persisted_agent_messages = read_rollout_items(&rollout_path)
+        .await?
+        .into_iter()
+        .filter_map(|item| match item {
+            RolloutItem::EventMsg(EventMsg::AgentMessage(message)) => Some(message.message),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(persisted_agent_messages, vec!["Intro\nOutro".to_string()]);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plan_mode_keeps_non_streamed_agent_message_visible() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let TestCodex {
+        codex,
+        session_configured,
+        ..
+    } = test_codex().build(&server).await?;
+
+    let full_message = "Planner note without streaming.";
+    let stream = sse(vec![
+        ev_response_created("resp-1"),
+        ev_message_item_added("msg-1", ""),
+        ev_assistant_message("msg-1", full_message),
+        ev_completed("resp-1"),
+    ]);
+    mount_sse_once(&server, stream).await;
+
+    let identity = Identity {
+        kind: IdentityKind::Planner,
+        settings: Settings {
+            model: session_configured.model.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "please plan".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: std::env::current_dir()?,
+            approval_policy: crate::product::agent::protocol::AskForApproval::Never,
+            sandbox_policy: crate::product::agent::protocol::SandboxPolicy::DangerFullAccess,
+            model: session_configured.model.clone(),
+            effort: None,
+            summary: crate::product::protocol::config_types::ReasoningSummary::Auto,
+            identity: Some(identity),
+            personality: None,
+            tui_buddy: None,
+        })
+        .await?;
+
+    let mut agent_deltas = Vec::new();
+    let mut agent_items = Vec::new();
+    let mut legacy_agent_messages = Vec::new();
+    loop {
+        let ev = wait_for_event(&codex, |_| true).await;
+        match ev {
+            EventMsg::AgentMessageContentDelta(event) => {
+                agent_deltas.push(event.delta);
+            }
+            EventMsg::AgentMessage(event) => {
+                legacy_agent_messages.push(event.message);
+            }
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::AgentMessage(item),
+                ..
+            }) => {
+                agent_items.push(item);
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!(agent_deltas, Vec::<String>::new());
+    assert_eq!(legacy_agent_messages, vec![full_message.to_string()]);
+    assert_eq!(
+        agent_items
+            .iter()
+            .map(agent_message_text)
+            .collect::<Vec<_>>(),
+        vec![full_message.to_string()]
+    );
 
     Ok(())
 }

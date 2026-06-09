@@ -3062,6 +3062,15 @@ impl Session {
         }
     }
 
+    async fn persist_rollout_event_msgs(&self, events: &[EventMsg]) {
+        let rollout_items = events
+            .iter()
+            .cloned()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        self.persist_rollout_items(&rollout_items).await;
+    }
+
     /// Persist the event to the rollout file, flush it, and only then deliver it to clients.
     ///
     /// Most events can be delivered immediately after queueing the rollout write, but some
@@ -3109,6 +3118,22 @@ impl Session {
             }),
         )
         .await;
+    }
+
+    async fn emit_turn_item_completed_without_legacy_events(
+        &self,
+        turn_context: &TurnContext,
+        item: TurnItem,
+    ) {
+        let event = Event {
+            id: turn_context.sub_id.clone(),
+            msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id: self.conversation_id,
+                turn_id: turn_context.sub_id.clone(),
+                item,
+            }),
+        };
+        self.send_event_raw(event).await;
     }
 
     /// Adds an execpolicy amendment to both the in-memory and on-disk policies so future
@@ -5939,6 +5964,8 @@ struct PlanModeStreamState {
     pending_agent_message_items: HashMap<String, TurnItem>,
     /// Agent message items whose start notification has been emitted.
     started_agent_message_items: HashSet<String>,
+    /// Agent message items whose normal (non-plan) text has already been streamed.
+    streamed_normal_agent_message_items: HashSet<String>,
     /// Leading whitespace buffered until we see non-whitespace text for an item.
     leading_whitespace_by_item: HashMap<String, String>,
     /// Tracks plan item lifecycle while streaming plan output.
@@ -5951,6 +5978,7 @@ impl PlanModeStreamState {
             plan_parsers: PlanParsers::new(),
             pending_agent_message_items: HashMap::new(),
             started_agent_message_items: HashSet::new(),
+            streamed_normal_agent_message_items: HashSet::new(),
             leading_whitespace_by_item: HashMap::new(),
             plan_item_state: ProposedPlanItemState::new(turn_id),
         }
@@ -6078,6 +6106,9 @@ async fn handle_plan_segments(
                     delta
                 };
                 maybe_emit_pending_agent_message_start(sess, turn_context, state, item_id).await;
+                state
+                    .streamed_normal_agent_message_items
+                    .insert(item_id.to_string());
 
                 let event = AgentMessageContentDeltaEvent {
                     thread_id: sess.conversation_id.to_string(),
@@ -6175,12 +6206,16 @@ async fn emit_agent_message_in_plan_mode(
     turn_context: &TurnContext,
     agent_message: crate::product::protocol::items::AgentMessageItem,
     state: &mut PlanModeStreamState,
+    suppress_legacy_agent_message: bool,
 ) {
     let agent_message_id = agent_message.id.clone();
     let text = agent_message_text(&agent_message);
     if text.trim().is_empty() {
         state.pending_agent_message_items.remove(&agent_message_id);
         state.started_agent_message_items.remove(&agent_message_id);
+        state
+            .streamed_normal_agent_message_items
+            .remove(&agent_message_id);
         return;
     }
 
@@ -6206,9 +6241,19 @@ async fn emit_agent_message_in_plan_mode(
             .insert(agent_message_id.clone());
     }
 
-    sess.emit_turn_item_completed(turn_context, TurnItem::AgentMessage(agent_message))
-        .await;
+    let item = TurnItem::AgentMessage(agent_message);
+    if suppress_legacy_agent_message {
+        let legacy_events = item.as_legacy_events(sess.show_raw_agent_reasoning());
+        sess.persist_rollout_event_msgs(&legacy_events).await;
+        sess.emit_turn_item_completed_without_legacy_events(turn_context, item)
+            .await;
+    } else {
+        sess.emit_turn_item_completed(turn_context, item).await;
+    }
     state.started_agent_message_items.remove(&agent_message_id);
+    state
+        .streamed_normal_agent_message_items
+        .remove(&agent_message_id);
 }
 
 /// Emit completion for a plan-mode turn item, handling agent messages specially.
@@ -6221,7 +6266,17 @@ async fn emit_turn_item_in_plan_mode(
 ) {
     match turn_item {
         TurnItem::AgentMessage(agent_message) => {
-            emit_agent_message_in_plan_mode(sess, turn_context, agent_message, state).await;
+            let suppress_legacy_agent_message = state
+                .streamed_normal_agent_message_items
+                .contains(&agent_message.id);
+            emit_agent_message_in_plan_mode(
+                sess,
+                turn_context,
+                agent_message,
+                state,
+                suppress_legacy_agent_message,
+            )
+            .await;
         }
         _ => {
             if previously_active_item.is_none() {

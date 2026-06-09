@@ -3668,6 +3668,42 @@ async fn plan_implementation_popup_shows_after_proposed_plan_output() {
 }
 
 #[tokio::test]
+async fn plan_implementation_popup_does_not_repeat_streamed_intro() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+
+    let intro = "我建议你锁定这版。";
+    let plan = "- Step 1\n";
+    chat.on_task_started();
+    chat.on_agent_message_delta(intro.to_string());
+    chat.on_plan_delta(plan.to_string());
+    chat.on_plan_item_completed(plan.to_string());
+    chat.on_task_complete(None, false);
+
+    let history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_eq!(
+        history.matches(intro).count(),
+        1,
+        "expected streamed intro once, got {history:?}"
+    );
+    assert!(
+        history.contains("- Step 1"),
+        "expected proposed plan in history, got {history:?}"
+    );
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected plan popup after proposed plan output, got {popup:?}"
+    );
+}
+
+#[tokio::test]
 async fn streamed_proposed_plan_background_fills_rendered_row() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::Identities, true);
