@@ -396,11 +396,12 @@ fn format_goal_summary_title(goal: &ThreadGoal) -> String {
     let first_line = objective_lines.next().unwrap_or_default();
     let mut title = format!("Goal ({}) - {first_line}", goal_status_label(goal.status));
     for line in objective_lines {
-        title.push('\n');
-        if !line.is_empty() {
-            title.push_str("  ");
-            title.push_str(line);
+        if line.trim().is_empty() {
+            continue;
         }
+        title.push('\n');
+        title.push_str("  ");
+        title.push_str(line);
     }
     title
 }

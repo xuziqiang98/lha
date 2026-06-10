@@ -3431,10 +3431,21 @@ async fn goal_summary_preserves_multiline_proposed_plan_objective_spacing() {
         .next()
         .expect("goal update should insert summary cell");
     for width in [80, 60] {
-        let text = lines_to_single_string(&cell.display_lines(width));
+        let lines = lines_to_strings(&cell.display_lines(width));
+        let text = lines.join("\n");
         assert!(text.contains("proposed_plan.md"));
         assert!(text.contains("Before marking this goal complete"));
         assert!(!text.contains("proposed_plan.mdBefore marking"));
+
+        let plan_path_index = lines
+            .iter()
+            .position(|line| line.contains("proposed_plan.md"))
+            .expect("goal summary should include the proposed plan path");
+        let completion_reminder_index = lines
+            .iter()
+            .position(|line| line.contains("Before marking this goal complete"))
+            .expect("goal summary should include the completion reminder");
+        assert_eq!(completion_reminder_index, plan_path_index + 1);
     }
 }
 
