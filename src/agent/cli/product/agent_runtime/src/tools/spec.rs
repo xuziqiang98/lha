@@ -366,7 +366,10 @@ fn create_write_stdin_tool() -> ToolDescriptor {
         (
             "chars".to_string(),
             JsonSchema::String {
-                description: Some("Bytes to write to stdin (may be empty to poll).".to_string()),
+                description: Some(
+                    "Bytes to write to stdin. Pass an empty string to poll process output without writing to stdin; use this for long-running commands."
+                        .to_string(),
+                ),
                 enum_values: None,
             },
         ),
@@ -391,9 +394,7 @@ fn create_write_stdin_tool() -> ToolDescriptor {
 
     ToolDescriptor::Function(ResponsesApiTool {
         name: "write_stdin".to_string(),
-        description:
-            "Writes characters to an existing unified exec session and returns recent output."
-                .to_string(),
+        description: "Writes characters to an existing unified exec session and returns recent output. Calling with empty `chars` intentionally polls process output; it is not a no-op or accidental tool call.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -2355,6 +2356,36 @@ mod tests {
         assert!(tools.iter().any(|tool| tool.spec.name() == "write_stdin"));
         assert!(registry.handler("exec_command").is_some());
         assert!(registry.handler("write_stdin").is_some());
+    }
+
+    #[test]
+    fn write_stdin_tool_documents_empty_chars_polling() {
+        let ToolDescriptor::Function(tool) = create_write_stdin_tool() else {
+            panic!("write_stdin should be a function tool");
+        };
+
+        let tool_description = tool.description.to_ascii_lowercase();
+        assert!(tool_description.contains("empty"));
+        assert!(tool_description.contains("poll"));
+        assert!(tool_description.contains("not a no-op"));
+
+        let JsonSchema::Object { properties, .. } = tool.parameters else {
+            panic!("write_stdin should use an object schema");
+        };
+        let chars_schema = properties
+            .get("chars")
+            .expect("write_stdin should expose chars");
+        let JsonSchema::String {
+            description: Some(chars_description),
+            enum_values: _,
+        } = chars_schema
+        else {
+            panic!("chars should be a documented string parameter");
+        };
+        let chars_description = chars_description.to_ascii_lowercase();
+        assert!(chars_description.contains("empty"));
+        assert!(chars_description.contains("poll"));
+        assert!(chars_description.contains("output"));
     }
 
     #[test]

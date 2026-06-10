@@ -124,7 +124,7 @@ impl ToolHandler for UnifiedExecHandler {
         let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
         let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
 
-        let response = match tool_name.as_str() {
+        let (response, polled_output) = match tool_name.as_str() {
             "exec_command" => {
                 let args: ExecCommandArgs = parse_arguments(&arguments)?;
                 validate_exec_command_args(&args)?;
@@ -185,28 +185,34 @@ impl ToolHandler for UnifiedExecHandler {
                     return Ok(output);
                 }
 
-                manager
-                    .exec_command(
-                        ExecCommandRequest {
-                            command,
-                            process_id,
-                            yield_time_ms,
-                            max_output_tokens,
-                            workdir,
-                            tty,
-                            sandbox_permissions,
-                            justification,
-                            prefix_rule,
-                        },
-                        &context,
-                    )
-                    .await
-                    .map_err(|err| {
-                        FunctionCallError::RespondToModel(format!("exec_command failed: {err:?}"))
-                    })?
+                (
+                    manager
+                        .exec_command(
+                            ExecCommandRequest {
+                                command,
+                                process_id,
+                                yield_time_ms,
+                                max_output_tokens,
+                                workdir,
+                                tty,
+                                sandbox_permissions,
+                                justification,
+                                prefix_rule,
+                            },
+                            &context,
+                        )
+                        .await
+                        .map_err(|err| {
+                            FunctionCallError::RespondToModel(format!(
+                                "exec_command failed: {err:?}"
+                            ))
+                        })?,
+                    false,
+                )
             }
             "write_stdin" => {
                 let args: WriteStdinArgs = parse_arguments(&arguments)?;
+                let polled_output = args.chars.is_empty();
                 let response = manager
                     .write_stdin(WriteStdinRequest {
                         process_id: &args.session_id.to_string(),
@@ -228,7 +234,7 @@ impl ToolHandler for UnifiedExecHandler {
                     .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
                     .await;
 
-                response
+                (response, polled_output)
             }
             other => {
                 return Err(FunctionCallError::RespondToModel(format!(
@@ -237,7 +243,7 @@ impl ToolHandler for UnifiedExecHandler {
             }
         };
 
-        let content = format_response(&response);
+        let content = format_response(&response, polled_output);
 
         Ok(ToolOutput::Function {
             content,
@@ -269,11 +275,15 @@ fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String>
     shell.derive_exec_args(&args.cmd, args.login)
 }
 
-fn format_response(response: &UnifiedExecResponse) -> String {
+fn format_response(response: &UnifiedExecResponse, polled_output: bool) -> String {
     let mut sections = Vec::new();
 
     if !response.chunk_id.is_empty() {
         sections.push(format!("Chunk ID: {}", response.chunk_id));
+    }
+
+    if polled_output {
+        sections.push("Polled process output without writing to stdin.".to_string());
     }
 
     let wall_time_seconds = response.wall_time.as_secs_f64();
@@ -303,6 +313,7 @@ mod tests {
     use super::*;
     use crate::product::agent::shell::default_user_shell;
     use std::sync::Arc;
+    use std::time::Duration;
 
     #[test]
     fn validate_exec_command_args_rejects_empty_cmd() -> anyhow::Result<()> {
@@ -336,6 +347,45 @@ mod tests {
 
         assert_eq!(validate_exec_command_args(&args), Ok(()));
         Ok(())
+    }
+
+    #[test]
+    fn format_response_marks_empty_write_stdin_as_polling() {
+        let response = UnifiedExecResponse {
+            event_call_id: "call".to_string(),
+            chunk_id: "chunk".to_string(),
+            wall_time: Duration::from_millis(25),
+            output: "still running".to_string(),
+            raw_output: b"still running".to_vec(),
+            process_id: Some("123".to_string()),
+            exit_code: None,
+            original_token_count: Some(2),
+            session_command: None,
+        };
+
+        let output = format_response(&response, true);
+
+        assert!(output.contains("Polled process output without writing to stdin."));
+        assert!(output.contains("Output:\nstill running"));
+    }
+
+    #[test]
+    fn format_response_omits_polling_marker_for_stdin_writes() {
+        let response = UnifiedExecResponse {
+            event_call_id: "call".to_string(),
+            chunk_id: "chunk".to_string(),
+            wall_time: Duration::from_millis(25),
+            output: "ok".to_string(),
+            raw_output: b"ok".to_vec(),
+            process_id: Some("123".to_string()),
+            exit_code: None,
+            original_token_count: Some(1),
+            session_command: None,
+        };
+
+        let output = format_response(&response, false);
+
+        assert!(!output.contains("Polled process output"));
     }
 
     #[test]

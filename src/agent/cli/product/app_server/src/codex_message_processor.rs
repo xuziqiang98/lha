@@ -4244,6 +4244,17 @@ fn validate_dynamic_tools(
                 tool.name
             ));
         }
+        let description = tool.description.trim();
+        if description.is_empty() {
+            return Err(format!(
+                "dynamic tool description must not be empty for {name}"
+            ));
+        }
+        if description != tool.description {
+            return Err(format!(
+                "dynamic tool description has leading/trailing whitespace: {name}"
+            ));
+        }
         if name == "mcp" || name.starts_with("mcp__") {
             return Err(format!("dynamic tool name is reserved: {name}"));
         }
@@ -4254,11 +4265,9 @@ fn validate_dynamic_tools(
             return Err(format!("duplicate dynamic tool name: {name}"));
         }
 
-        if let Err(err) = crate::product::agent::parse_tool_input_schema(&tool.input_schema) {
-            return Err(format!(
-                "dynamic tool input schema is not supported for {name}: {err}"
-            ));
-        }
+        crate::product::agent::parse_tool_input_schema(&tool.input_schema).map_err(|err| {
+            format!("dynamic tool input schema is not supported for {name}: {err}")
+        })?;
     }
     Ok(())
 }
@@ -4566,10 +4575,66 @@ mod tests {
     }
 
     #[test]
+    fn validate_dynamic_tools_rejects_empty_description() {
+        let tools = vec![ApiDynamicToolSpec {
+            name: "zz".to_string(),
+            description: String::new(),
+            input_schema: json!({"type": "object", "properties": {}, "required": []}),
+        }];
+
+        let err = validate_dynamic_tools(&tools, &HashSet::new()).expect_err("empty description");
+
+        assert!(err.contains("description"), "unexpected error: {err}");
+        assert!(err.contains("zz"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_dynamic_tools_rejects_whitespace_description() {
+        let tools = vec![ApiDynamicToolSpec {
+            name: "zz".to_string(),
+            description: "   ".to_string(),
+            input_schema: json!({"type": "object", "properties": {}, "required": []}),
+        }];
+
+        let err =
+            validate_dynamic_tools(&tools, &HashSet::new()).expect_err("whitespace description");
+
+        assert!(err.contains("description"), "unexpected error: {err}");
+        assert!(err.contains("zz"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_dynamic_tools_rejects_description_with_outer_whitespace() {
+        let tools = vec![ApiDynamicToolSpec {
+            name: "zz".to_string(),
+            description: " test ".to_string(),
+            input_schema: json!({"type": "object", "properties": {}, "required": []}),
+        }];
+
+        let err = validate_dynamic_tools(&tools, &HashSet::new())
+            .expect_err("description with outer whitespace");
+
+        assert!(err.contains("description"), "unexpected error: {err}");
+        assert!(err.contains("zz"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_dynamic_tools_accepts_localized_zero_argument_description() {
+        let tools = vec![ApiDynamicToolSpec {
+            name: "current_status".to_string(),
+            description: "获取当前状态".to_string(),
+            input_schema: json!({"type": "object", "properties": {}, "required": []}),
+        }];
+
+        validate_dynamic_tools(&tools, &HashSet::new())
+            .expect("localized zero-argument description should be valid");
+    }
+
+    #[test]
     fn validate_dynamic_tools_accepts_sanitizable_input_schema() {
         let tools = vec![ApiDynamicToolSpec {
             name: "my_tool".to_string(),
-            description: "test".to_string(),
+            description: "Fetch current status".to_string(),
             // Missing `type` is common; core sanitizes these to a supported schema.
             input_schema: json!({"properties": {}}),
         }];
