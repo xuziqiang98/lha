@@ -4388,6 +4388,7 @@ async fn exec_approval_shows_immediately_during_active_answer_stream() {
 
     chat.on_agent_message_delta("partial answer".to_string());
     assert!(chat.stream_controller.is_some());
+    let _ = drain_events(&mut rx);
 
     chat.handle_codex_event(Event {
         id: "approval-submission".into(),
@@ -4405,9 +4406,17 @@ async fn exec_approval_shows_immediately_during_active_answer_stream() {
     assert!(chat.stream_controller.is_none());
     assert!(chat.interrupts.is_empty());
 
-    let history = drain_insert_history(&mut rx)
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
+    let events = drain_events(&mut rx);
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::StopCommitAnimation))
+    );
+
+    let history = events
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .map(|cell| lines_to_single_string(&cell.display_lines(80)))
         .collect::<String>();
     assert!(history.contains("partial answer"));
 
@@ -7611,6 +7620,7 @@ async fn request_user_input_shows_immediately_during_active_answer_stream() {
 
     chat.on_agent_message_delta("partial answer".to_string());
     assert!(chat.stream_controller.is_some());
+    let _ = drain_events(&mut rx);
 
     chat.handle_codex_event(Event {
         id: "request-user-input".into(),
@@ -7620,9 +7630,17 @@ async fn request_user_input_shows_immediately_during_active_answer_stream() {
     assert!(chat.stream_controller.is_none());
     assert!(chat.interrupts.is_empty());
 
-    let history = drain_insert_history(&mut rx)
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
+    let events = drain_events(&mut rx);
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::StopCommitAnimation))
+    );
+
+    let history = events
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .map(|cell| lines_to_single_string(&cell.display_lines(80)))
         .collect::<String>();
     assert!(history.contains("partial answer"));
 

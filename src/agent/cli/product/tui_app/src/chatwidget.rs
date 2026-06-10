@@ -928,6 +928,8 @@ impl ChatWidget {
             return;
         };
 
+        self.app_event_tx.send(AppEvent::StopCommitAnimation);
+
         let source = controller.finalize();
         if source.is_empty() {
             return;
