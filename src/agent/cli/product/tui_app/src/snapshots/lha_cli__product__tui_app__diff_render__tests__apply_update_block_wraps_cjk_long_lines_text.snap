@@ -1,0 +1,11 @@
+---
+source: src/agent/cli/src/../product/tui_app/src/diff_render.rs
+expression: text
+---
+• Edited cjk_wrap.md (+1 -1)
+    1 -妖族仍是二界本土生灵，可以立约、
+       共治、被册封或被压迫。
+    1 +妖族仍是二界本土生灵，可以立约、
+       共治、被册封或被压迫；只有堕入吞
+       噬秩序、以魂灵为兵粮者，才会成为
+       真正意义上的妖魔。

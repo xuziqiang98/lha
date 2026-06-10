@@ -11,6 +11,7 @@ use ratatui::widgets::Paragraph;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use unicode_width::UnicodeWidthChar;
 
 use crate::product::agent::git_info::get_git_repo_root;
 use crate::product::agent::protocol::FileChange;
@@ -483,12 +484,7 @@ fn push_wrapped_diff_line_with_style_context(
         // compute how many columns are available after the prefix, then split
         // at a UTF-8 character boundary so this row's chunk fits exactly.
         let available_content_cols = width.saturating_sub(prefix_cols + 1).max(1);
-        let split_at_byte_index = remaining_text
-            .char_indices()
-            .nth(available_content_cols)
-            .map(|(i, _)| i)
-            .unwrap_or_else(|| remaining_text.len());
-        let (chunk, rest) = remaining_text.split_at(split_at_byte_index);
+        let (chunk, rest) = split_prefix_by_display_width(remaining_text, available_content_cols);
         remaining_text = rest;
 
         if first {
@@ -525,6 +521,31 @@ fn line_number_width(max_line_number: usize) -> usize {
     } else {
         max_line_number.to_string().len()
     }
+}
+
+fn split_prefix_by_display_width(text: &str, max_cols: usize) -> (&str, &str) {
+    if max_cols == 0 || text.is_empty() {
+        return ("", text);
+    }
+
+    let mut cols = 0usize;
+    let mut split_idx = 0usize;
+    for (idx, ch) in text.char_indices() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if cols.saturating_add(ch_width) > max_cols {
+            if split_idx == 0 {
+                return text.split_at(idx + ch.len_utf8());
+            }
+            break;
+        }
+        cols += ch_width;
+        split_idx = idx + ch.len_utf8();
+        if cols == max_cols {
+            break;
+        }
+    }
+
+    text.split_at(split_idx)
 }
 
 fn diff_theme_for_bg(bg: Option<(u8, u8, u8)>) -> DiffTheme {
@@ -745,6 +766,8 @@ mod tests {
     use ratatui::widgets::Paragraph;
     use ratatui::widgets::WidgetRef;
     use ratatui::widgets::Wrap;
+    use unicode_width::UnicodeWidthStr;
+
     fn diff_summary_for_tests(changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine<'static>> {
         create_diff_summary(changes, &PathBuf::from("/"), 80)
     }
@@ -778,6 +801,22 @@ mod tests {
         assert_snapshot!(name, text);
     }
 
+    fn line_display_width(line: &RtLine<'static>) -> usize {
+        line.spans
+            .iter()
+            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+            .sum()
+    }
+
+    fn assert_lines_fit(lines: &[RtLine<'static>], width: usize) {
+        for line in lines {
+            assert!(
+                line_display_width(line) <= width,
+                "line exceeds {width} cols: {line:?}"
+            );
+        }
+    }
+
     #[test]
     fn display_path_prefers_cwd_without_git_repo() {
         let cwd = if cfg!(windows) {
@@ -795,6 +834,21 @@ mod tests {
                 .join("example.png")
                 .display()
                 .to_string()
+        );
+    }
+
+    #[test]
+    fn split_prefix_by_display_width_handles_ascii_cjk_and_narrow_columns() {
+        assert_eq!(split_prefix_by_display_width("abcdef", 3), ("abc", "def"));
+        assert_eq!(
+            split_prefix_by_display_width("天地玄黄", 4),
+            ("天地", "玄黄")
+        );
+        assert_eq!(split_prefix_by_display_width("a天b地", 4), ("a天b", "地"));
+        assert_eq!(split_prefix_by_display_width("天", 1), ("天", ""));
+        assert_eq!(
+            split_prefix_by_display_width("天地玄黄", 0),
+            ("", "天地玄黄")
         );
     }
 
@@ -1241,6 +1295,26 @@ mod tests {
 
         let lines = create_diff_summary(&changes, &PathBuf::from("/"), 28);
         snapshot_lines_text("apply_update_block_wraps_long_lines_text", &lines);
+    }
+
+    #[test]
+    fn ui_snapshot_apply_update_block_wraps_cjk_long_lines_text() {
+        let original = "妖族仍是二界本土生灵，可以立约、共治、被册封或被压迫。\n";
+        let modified = "妖族仍是二界本土生灵，可以立约、共治、被册封或被压迫；只有堕入吞噬秩序、以魂灵为兵粮者，才会成为真正意义上的妖魔。\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("cjk_wrap.md"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: None,
+            },
+        );
+
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 40);
+        assert_lines_fit(&lines, 40);
+        snapshot_lines_text("apply_update_block_wraps_cjk_long_lines_text", &lines);
     }
 
     #[test]
