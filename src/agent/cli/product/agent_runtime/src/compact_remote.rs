@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::product::agent::codex::Session;
 use crate::product::agent::codex::TurnContext;
+use crate::product::agent::compact::active_goal_plan_reminder_items;
 use crate::product::agent::compact::backfilled_skill_items;
 use crate::product::agent::compact::backfilled_update_plan_items;
 use crate::product::agent::compact::last_backfillable_update_plan_from_history;
@@ -51,11 +52,13 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
     let history = sess.clone_history().await;
-    let (backfilled_plan_text, backfilled_update_plan, backfilled_skills) = (
-        last_completed_plan_from_history(history.raw_items()),
-        last_backfillable_update_plan_from_history(history.raw_items()),
-        recent_backfillable_skills_from_history(history.raw_items()),
-    );
+    let active_goal_plan_path = sess.active_proposed_plan_goal_path().await;
+    let backfilled_plan_text = active_goal_plan_path
+        .is_none()
+        .then(|| last_completed_plan_from_history(history.raw_items()))
+        .flatten();
+    let backfilled_update_plan = last_backfillable_update_plan_from_history(history.raw_items());
+    let backfilled_skills = recent_backfillable_skills_from_history(history.raw_items());
 
     let prompt = TurnRequest {
         conversation: history.for_compaction_prompt().into_iter().collect(),
@@ -66,8 +69,15 @@ async fn run_remote_compact_task_inner_impl(
 
     let mut new_history = turn_context.runtime.compact_turn_request(&prompt).await?;
 
-    if let Some(plan_text) = backfilled_plan_text.as_deref() {
-        new_history.extend(proposed_plan_backfill_items(plan_text));
+    match active_goal_plan_path.as_deref() {
+        Some(path) => {
+            new_history.extend(active_goal_plan_reminder_items(path));
+        }
+        None => {
+            if let Some(plan_text) = backfilled_plan_text.as_deref() {
+                new_history.extend(proposed_plan_backfill_items(plan_text));
+            }
+        }
     }
     if let Some(update_plan) = backfilled_update_plan.as_ref() {
         new_history.extend(backfilled_update_plan_items(update_plan));

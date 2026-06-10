@@ -67,6 +67,7 @@ pub(crate) fn truncate_rollout_before_nth_user_message_from_start(
 mod tests {
     use super::*;
     use crate::product::agent::codex::make_session_and_context;
+    use crate::product::agent::compact::active_goal_plan_reminder_items;
     use crate::product::agent::compact::proposed_plan_backfill_items;
     use crate::product::protocol::models::ContentItem;
     use crate::product::protocol::models::ReasoningItemReasoningSummary;
@@ -74,6 +75,7 @@ mod tests {
     use crate::product::protocol::protocol::ThreadRolledBackEvent;
     use assert_matches::assert_matches;
     use pretty_assertions::assert_eq;
+    use std::path::Path;
 
     fn user_msg(text: &str) -> TranscriptItem {
         TranscriptItem::Message {
@@ -178,6 +180,31 @@ mod tests {
 
         let truncated = truncate_rollout_before_nth_user_message_from_start(&rollout_items, 1);
         let expected = rollout_items[..5].to_vec();
+        assert_eq!(
+            serde_json::to_value(&truncated).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn ignores_active_goal_plan_reminder_when_truncating_rollout_from_start() {
+        let mut items = vec![user_msg("u1"), assistant_msg("a1")];
+        items.extend(active_goal_plan_reminder_items(Path::new(
+            "/tmp/proposed_plan.md",
+        )));
+        items.extend([user_msg("u2"), assistant_msg("a2")]);
+
+        let rollout_items: Vec<RolloutItem> = items
+            .iter()
+            .cloned()
+            .map(RolloutItem::TranscriptItem)
+            .collect();
+
+        let user_positions = user_message_positions_in_rollout(&rollout_items);
+        assert_eq!(user_positions, vec![0, 3]);
+
+        let truncated = truncate_rollout_before_nth_user_message_from_start(&rollout_items, 1);
+        let expected = rollout_items[..3].to_vec();
         assert_eq!(
             serde_json::to_value(&truncated).unwrap(),
             serde_json::to_value(&expected).unwrap()

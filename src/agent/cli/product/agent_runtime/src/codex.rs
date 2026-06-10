@@ -1739,6 +1739,22 @@ impl Session {
         self.services.state_db.clone()
     }
 
+    pub(crate) async fn active_proposed_plan_goal_path(&self) -> Option<PathBuf> {
+        let state_db = self.state_db()?;
+        let goal = state_db
+            .get_thread_goal(self.conversation_id)
+            .await
+            .ok()??;
+        if goal.status != crate::product::state::ThreadGoalStatus::Active {
+            return None;
+        }
+        let path_text = proposed_plan_goal_objective_path(&goal.objective)?;
+        if !proposed_plan_goal_objective_path_matches_thread(path_text, self.conversation_id) {
+            return None;
+        }
+        Some(PathBuf::from(path_text))
+    }
+
     pub(crate) fn request_goal_continuation(&self) {
         self.goal_continuation_notify.notify_one();
     }
@@ -3445,7 +3461,10 @@ impl Session {
                         let rebuilt = compact::build_compacted_history(
                             self.build_initial_context(turn_context).await,
                             &user_messages,
-                            backfilled_plan_text.as_deref(),
+                            backfilled_plan_text
+                                .as_deref()
+                                .map(compact::ProposedPlanBackfill::FullText)
+                                .unwrap_or(compact::ProposedPlanBackfill::None),
                             backfilled_update_plan.as_ref(),
                             &backfilled_skills,
                             &compacted.message,
@@ -8943,7 +8962,7 @@ mod tests {
         let compacted_history = compact::build_compacted_history(
             initial_context.clone(),
             &["source user".to_string()],
-            None,
+            compact::ProposedPlanBackfill::None,
             None,
             &[],
             summary,
@@ -10684,7 +10703,7 @@ mod tests {
         let rebuilt1 = compact::build_compacted_history(
             session.build_initial_context(turn_context).await,
             &user_messages1,
-            None,
+            compact::ProposedPlanBackfill::None,
             None,
             &[],
             summary1,
@@ -10724,7 +10743,7 @@ mod tests {
         let rebuilt2 = compact::build_compacted_history(
             session.build_initial_context(turn_context).await,
             &user_messages2,
-            None,
+            compact::ProposedPlanBackfill::None,
             None,
             &[],
             summary2,

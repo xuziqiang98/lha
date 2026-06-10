@@ -1,4 +1,5 @@
 use super::*;
+use crate::product::agent::compact::active_goal_plan_reminder_items;
 use crate::product::agent::compact::proposed_plan_backfill_items;
 use crate::product::agent::instructions::SkillInstructions;
 use crate::product::agent::truncate;
@@ -13,6 +14,7 @@ use lha_llm::ToolResultPayload;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
+use std::path::Path;
 
 const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
@@ -514,6 +516,25 @@ fn drop_last_n_user_turns_ignores_backfilled_plan_reminder() {
     let mut expected = vec![user_msg("u1"), assistant_msg("a1")];
     expected.extend(proposed_plan_backfill_items("- Step 1\n"));
     assert_eq!(history.for_prompt(), expected);
+}
+
+#[test]
+fn active_goal_plan_reminder_is_not_user_turn_boundary() {
+    let reminder = active_goal_plan_reminder_items(Path::new("/tmp/proposed_plan.md"))
+        .into_iter()
+        .next()
+        .expect("active-goal reminder");
+
+    assert!(!is_user_turn_boundary(&reminder));
+}
+
+#[test]
+fn legacy_user_role_active_goal_plan_reminder_is_not_user_turn_boundary() {
+    let reminder = user_input_text_msg(
+        "The active programmer goal references a proposed plan stored at:\n/tmp/proposed_plan.md",
+    );
+
+    assert!(!is_user_turn_boundary(&reminder));
 }
 
 #[test]

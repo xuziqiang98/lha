@@ -2066,12 +2066,21 @@ pub(crate) fn new_mcp_tools_output(
     PlainHistoryCell { lines }
 }
 pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHistoryCell {
-    let mut line = vec!["• ".dim(), message.into()];
-    if let Some(hint) = hint {
-        line.push(" ".into());
-        line.push(hint.dark_gray());
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut message_lines = message.split('\n').peekable();
+    let mut is_first_line = true;
+    while let Some(message_line) = message_lines.next() {
+        let prefix = if is_first_line { "• " } else { "  " };
+        let mut line = vec![prefix.dim(), message_line.to_string().into()];
+        if message_lines.peek().is_none()
+            && let Some(hint) = hint.as_ref()
+        {
+            line.push(" ".into());
+            line.push(hint.clone().dark_gray());
+        }
+        lines.push(line.into());
+        is_first_line = false;
     }
-    let lines: Vec<Line<'static>> = vec![line.into()];
     PlainHistoryCell { lines }
 }
 

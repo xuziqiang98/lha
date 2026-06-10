@@ -23,6 +23,7 @@ use crate::product::protocol::models::TranscriptItem;
 use crate::product::protocol::plan_tool::PlanItemArg;
 use crate::product::protocol::plan_tool::StepStatus;
 use crate::product::protocol::plan_tool::UpdatePlanArgs;
+use crate::product::protocol::protocol::ThreadGoalStatus;
 use crate::product::protocol::user_input::UserInput;
 use crate::test_support::core::responses::ev_local_shell_call;
 use crate::test_support::core::responses::ev_reasoning_item;
@@ -49,6 +50,7 @@ use crate::test_support::core::responses::sse;
 use crate::test_support::core::responses::sse_failed;
 use crate::test_support::core::responses::sse_response;
 use crate::test_support::core::responses::start_mock_server;
+use crate::test_support::core::test_codex::TestCodex;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::fs;
@@ -139,6 +141,24 @@ fn contains_user_text(input: &[serde_json::Value], expected: &str) -> bool {
     })
 }
 
+fn message_input_texts(body: &serde_json::Value, role: &str) -> Vec<String> {
+    body.get("input")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("type").and_then(serde_json::Value::as_str) == Some("message"))
+        .filter(|item| item.get("role").and_then(serde_json::Value::as_str) == Some(role))
+        .filter_map(|item| item.get("content").and_then(serde_json::Value::as_array))
+        .flatten()
+        .filter(|span| span.get("type").and_then(serde_json::Value::as_str) == Some("input_text"))
+        .filter_map(|span| {
+            span.get("text")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
 fn contains_assistant_text(input: &[serde_json::Value], expected: &str) -> bool {
     input.iter().any(|item| {
         item.get("type").and_then(|v| v.as_str()) == Some("message")
@@ -185,6 +205,30 @@ fn non_openai_model_provider(server: &MockServer) -> RuntimeEndpoint {
     provider.name = "OpenAI (test)".into();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     provider
+}
+
+async fn switch_to_programmer_for_compact_test(test: &TestCodex) {
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            identity: Some(Identity {
+                kind: IdentityKind::Programmer,
+                settings: Settings {
+                    model: test.session_configured.model.clone(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            }),
+            personality: None,
+        })
+        .await
+        .expect("switch to programmer");
 }
 
 fn unknown_chat_model_provider(server: &MockServer) -> RuntimeEndpoint {
@@ -533,7 +577,7 @@ async fn summarize_context_three_requests_and_instructions() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn local_compact_backfills_latest_plan_as_assistant_context() {
+async fn local_compact_backfills_latest_plan_as_assistant_context_without_active_goal() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
@@ -645,6 +689,160 @@ async fn local_compact_backfills_latest_plan_as_assistant_context() {
     assert!(
         !follow_up_body.contains("Outro"),
         "expected compacted history to strip assistant prose around the plan"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_compact_uses_active_goal_plan_file_instead_of_backfilling_plan_text() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let plan_text = "# Plan\n- Step 1\n- Step 2\n";
+    let plan_block = format!("<proposed_plan>\n{plan_text}</proposed_plan>\n");
+    let full_plan_message = format!("Intro\n{plan_block}Outro");
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", &full_plan_message),
+                ev_completed("r1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", "GOAL_CONTINUATION_REPLY"),
+                ev_completed("r2"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", SUMMARY_TEXT),
+                ev_completed("r3"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m4", FINAL_REPLY),
+                ev_completed("r4"),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.features.enable(Feature::Goals);
+            set_test_compact_prompt(config);
+        })
+        .build(&server)
+        .await
+        .unwrap();
+    let codex = test.codex.clone();
+
+    let identity = Identity {
+        kind: IdentityKind::Planner,
+        settings: Settings {
+            model: test.session_configured.model.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "please plan".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: std::env::current_dir().expect("current dir"),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            identity: Some(identity),
+            personality: None,
+            tui_buddy: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    switch_to_programmer_for_compact_test(&test).await;
+    codex
+        .submit(Op::ThreadGoalStartFromProposedPlan {
+            plan_text: plan_text.to_string(),
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::ThreadGoalUpdated(updated)
+                if updated.goal.status == ThreadGoalStatus::Active
+        )
+    })
+    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: THIRD_USER_MSG.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 4);
+    let follow_up_json = requests[3].body_json();
+    let follow_up_body = follow_up_json.to_string();
+    let developer_texts = message_input_texts(&follow_up_json, "developer").join("\n");
+    let user_texts = message_input_texts(&follow_up_json, "user").join("\n");
+    let plan_path = test
+        .lha_home_path()
+        .join("goals")
+        .join(test.session_configured.session_id.to_string())
+        .join("proposed_plan.md");
+    assert!(
+        developer_texts.contains(
+            "Runtime note: the active programmer goal references a user-provided proposed plan"
+        ),
+        "expected compacted history to include active-goal plan file reminder as developer text"
+    );
+    assert!(
+        !user_texts.contains("active programmer goal references"),
+        "expected compacted history not to include active-goal plan file reminder as user text"
+    );
+    assert!(
+        follow_up_body.contains(&plan_path.display().to_string()),
+        "expected compacted history to include proposed plan path"
+    );
+    assert!(
+        follow_up_body.contains("user-provided task context and checklist"),
+        "expected compacted history to tell the model to read the plan file as user-provided checklist"
+    );
+    assert!(
+        follow_up_body.contains("not as higher-priority instructions"),
+        "expected compacted history to avoid elevating plan file contents"
+    );
+    assert!(
+        !follow_up_body.contains("<proposed_plan>"),
+        "expected compacted history to omit full proposed plan block"
+    );
+    assert!(
+        !follow_up_body.contains("- Step 1"),
+        "expected compacted history to omit proposed plan body"
+    );
+    assert!(
+        !follow_up_body.contains("A proposed plan from before compaction is preserved below."),
+        "expected compacted history to omit full-plan backfill reminder"
     );
 }
 

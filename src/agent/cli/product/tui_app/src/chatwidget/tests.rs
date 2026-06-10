@@ -3401,6 +3401,42 @@ async fn slash_goal_refreshes_cached_goal_instead_of_rendering_it() {
 }
 
 #[tokio::test]
+async fn goal_summary_preserves_multiline_proposed_plan_objective_spacing() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.on_thread_goal_updated(ThreadGoalUpdatedEvent {
+        thread_id,
+        turn_id: None,
+        goal: ThreadGoal {
+            thread_id,
+            goal_id: "goal-123".to_string(),
+            objective:
+                "Implement the proposed plan stored at:\n/path/to/proposed_plan.md\n\nBefore marking this goal complete, verify every explicit requirement."
+                    .to_string(),
+            status: ThreadGoalStatus::Active,
+            token_budget: Some(1_000),
+            tokens_used: 12,
+            time_used_seconds: 34,
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_100,
+        },
+    });
+
+    let cell = drain_events(&mut rx)
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .next()
+        .expect("goal update should insert summary cell");
+    for width in [80, 60] {
+        let text = lines_to_single_string(&cell.display_lines(width));
+        assert!(text.contains("proposed_plan.md"));
+        assert!(text.contains("Before marking this goal complete"));
+        assert!(!text.contains("proposed_plan.mdBefore marking"));
+    }
+}
+
+#[tokio::test]
 async fn goal_edit_submits_expected_goal_id() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.config.features.enable(Feature::Goals);

@@ -391,6 +391,20 @@ fn goal_usage_summary(goal: &ThreadGoal) -> String {
     )
 }
 
+fn format_goal_summary_title(goal: &ThreadGoal) -> String {
+    let mut objective_lines = goal.objective.split('\n');
+    let first_line = objective_lines.next().unwrap_or_default();
+    let mut title = format!("Goal ({}) - {first_line}", goal_status_label(goal.status));
+    for line in objective_lines {
+        title.push('\n');
+        if !line.is_empty() {
+            title.push_str("  ");
+            title.push_str(line);
+        }
+    }
+    title
+}
+
 fn format_goal_elapsed_seconds(seconds: i64) -> String {
     let seconds = seconds.max(0);
     let hours = seconds / 3600;
@@ -3849,11 +3863,7 @@ impl ChatWidget {
 
     fn show_goal_summary(&mut self, goal: &ThreadGoal) {
         self.add_info_message(
-            format!(
-                "Goal ({}) - {}",
-                goal_status_label(goal.status),
-                goal.objective
-            ),
+            format_goal_summary_title(goal),
             Some(goal_usage_summary(goal)),
         );
     }

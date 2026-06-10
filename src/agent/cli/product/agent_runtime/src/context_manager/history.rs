@@ -1,6 +1,7 @@
 use std::ops::Deref;
 
 use crate::product::agent::codex::TurnContext;
+use crate::product::agent::compact::is_active_goal_plan_reminder;
 use crate::product::agent::compact::is_backfilled_proposed_plan_reminder;
 use crate::product::agent::context_manager::normalize;
 use crate::product::agent::instructions::SkillInstructionSource;
@@ -373,12 +374,13 @@ pub(crate) fn is_user_turn_boundary(item: &TranscriptItem) -> bool {
                 if is_session_prefix(text)
                     || is_user_shell_command_text(text)
                     || is_backfilled_proposed_plan_reminder(text)
+                    || is_active_goal_plan_reminder(text)
                 {
                     return false;
                 }
             }
             ContentItem::OutputText { text } => {
-                if is_session_prefix(text) {
+                if is_session_prefix(text) || is_active_goal_plan_reminder(text) {
                     return false;
                 }
             }
