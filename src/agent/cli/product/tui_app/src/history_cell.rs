@@ -1772,7 +1772,11 @@ impl HistoryCell for WebSearchCell {
         let header = web_search_header(self.completed);
         let detail = web_search_detail(self.action.as_ref(), &self.query);
         let text: Text<'static> = if detail.is_empty() {
-            Line::from(vec![header.bold()]).into()
+            if self.completed {
+                Line::from(vec![header.bold(), " the web".into()]).into()
+            } else {
+                Line::from(vec![header.bold()]).into()
+            }
         } else {
             Line::from(vec![header.bold(), " ".into(), detail.into()]).into()
         };
@@ -3515,6 +3519,18 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(64));
 
         assert_eq!(rendered, vec!["• Searched short query".to_string()]);
+    }
+
+    #[test]
+    fn web_search_history_cell_empty_detail_uses_web_fallback() {
+        let cell = new_web_search_call(
+            "call-1".to_string(),
+            String::new(),
+            WebSearchAction::OpenPage { url: None },
+        );
+        let rendered = render_lines(&cell.display_lines(64));
+
+        assert_eq!(rendered, vec!["• Searched the web".to_string()]);
     }
 
     #[test]
