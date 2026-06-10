@@ -4382,6 +4382,42 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
     );
 }
 
+#[tokio::test]
+async fn exec_approval_shows_immediately_during_active_answer_stream() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_agent_message_delta("partial answer".to_string());
+    assert!(chat.stream_controller.is_some());
+
+    chat.handle_codex_event(Event {
+        id: "approval-submission".into(),
+        msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+            call_id: "call-approval".into(),
+            turn_id: "turn-approval".into(),
+            command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            reason: Some("confirm command".into()),
+            proposed_execpolicy_amendment: None,
+            parsed_cmd: vec![],
+        }),
+    });
+
+    assert!(chat.stream_controller.is_none());
+    assert!(chat.interrupts.is_empty());
+
+    let history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(history.contains("partial answer"));
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("echo hello world"),
+        "expected approval modal with command, got {popup:?}"
+    );
+}
+
 // --- Small helpers to tersely drive exec begin/end and snapshot active cell ---
 fn begin_exec_with_source(
     chat: &mut ChatWidget,
@@ -7567,6 +7603,38 @@ async fn request_user_input_allows_transcript_page_scroll() {
     chat.handle_key_event(KeyEvent::from(KeyCode::PageUp));
 
     assert!(chat.transcript_scroll_offset() < at_tail);
+}
+
+#[tokio::test]
+async fn request_user_input_shows_immediately_during_active_answer_stream() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_agent_message_delta("partial answer".to_string());
+    assert!(chat.stream_controller.is_some());
+
+    chat.handle_codex_event(Event {
+        id: "request-user-input".into(),
+        msg: EventMsg::RequestUserInput(request_user_input_event()),
+    });
+
+    assert!(chat.stream_controller.is_none());
+    assert!(chat.interrupts.is_empty());
+
+    let history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(history.contains("partial answer"));
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Choose an option."),
+        "expected request_user_input prompt, got {popup:?}"
+    );
+    assert!(
+        popup.contains("Option 1"),
+        "expected request_user_input options, got {popup:?}"
+    );
 }
 
 #[tokio::test]
