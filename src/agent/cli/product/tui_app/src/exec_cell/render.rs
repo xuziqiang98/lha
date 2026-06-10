@@ -281,7 +281,7 @@ impl ExecCell {
         ]));
 
         let mut calls = self.calls.clone();
-        let mut out_indented = Vec::new();
+        let mut detail_line_index = 0usize;
         while !calls.is_empty() {
             let mut call = calls.remove(0);
             if call
@@ -351,19 +351,27 @@ impl ExecCell {
 
             for (title, line) in call_lines {
                 let line = Line::from(line);
-                let initial_indent = Line::from(vec![title.cyan(), " ".into()]);
-                let subsequent_indent = " ".repeat(initial_indent.width()).into();
+                let title_indent = Line::from(vec![title.cyan(), " ".into()]);
+                let title_indent_width = title_indent.width();
+                let detail_prefix = if detail_line_index == 0 {
+                    "  └ ".dim()
+                } else {
+                    "    ".into()
+                };
+                let initial_indent = Line::from(vec![detail_prefix, title.cyan(), " ".into()]);
+                let subsequent_indent =
+                    Line::from(vec!["    ".into(), " ".repeat(title_indent_width).into()]);
                 let wrapped = word_wrap_line(
                     &line,
                     RtOptions::new(width as usize)
                         .initial_indent(initial_indent)
                         .subsequent_indent(subsequent_indent),
                 );
-                push_owned_lines(&wrapped, &mut out_indented);
+                push_owned_lines(&wrapped, &mut out);
+                detail_line_index += 1;
             }
         }
 
-        out.extend(prefix_lines(out_indented, "  └ ".dim(), "    ".into()));
         out
     }
 
@@ -730,12 +738,47 @@ const EXEC_DISPLAY_LAYOUT: ExecDisplayLayout = ExecDisplayLayout::new(
 mod tests {
     use super::*;
     use crate::product::agent::protocol::ExecCommandSource;
+    use pretty_assertions::assert_eq;
     use std::time::Duration;
 
     fn output_rows(lines: &[Line<'static>], width: u16) -> usize {
         Paragraph::new(Text::from(lines.to_vec()))
             .wrap(Wrap { trim: false })
             .line_count(width)
+    }
+
+    #[test]
+    fn exploring_search_lines_account_for_detail_prefix_width() {
+        let width = 80;
+        let query = r#"feature = \"cli\|elapsed\|sandbox_summary\"|cfg\(feature = \"cli\"\|cfg\(feature = \"elapsed\"|cfg\(feature = \"sandbox_summary\""#;
+        let cell = ExecCell::new(
+            ExecCall {
+                call_id: "call-id".to_string(),
+                command: vec!["rg".into(), query.into(), "product".into()],
+                parsed: vec![ParsedCommand::Search {
+                    cmd: format!("rg {query} product"),
+                    query: Some(query.to_string()),
+                    path: Some("product".to_string()),
+                }],
+                output: Some(CommandOutput::default()),
+                completed: true,
+                source: ExecCommandSource::Agent,
+                start_time: None,
+                duration: Some(Duration::from_millis(1)),
+                interaction_input: None,
+            },
+            false,
+        );
+
+        let lines = cell.display_lines(width);
+        for line in &lines {
+            assert!(
+                line.width() <= usize::from(width),
+                "line exceeded width {width}: {line:?}"
+            );
+        }
+        let physical_rows = output_rows(&lines, width);
+        assert_eq!(physical_rows, lines.len());
     }
 
     #[test]
