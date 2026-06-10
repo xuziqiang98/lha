@@ -2402,6 +2402,7 @@ async fn make_chatwidget_manual_inner(
         initial_user_message: None,
         token_info: None,
         stream_controller: None,
+        pending_streamed_agent_message_echo: None,
         plan_stream_controller: None,
         answer_stream_started_this_turn: false,
         running_commands: HashMap::new(),
@@ -2579,6 +2580,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         initial_user_message: None,
         token_info: None,
         stream_controller: None,
+        pending_streamed_agent_message_echo: None,
         plan_stream_controller: None,
         answer_stream_started_this_turn: false,
         running_commands: HashMap::new(),
@@ -7652,6 +7654,197 @@ async fn request_user_input_shows_immediately_during_active_answer_stream() {
     assert!(
         popup.contains("Option 1"),
         "expected request_user_input options, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn request_user_input_suppresses_final_agent_message_after_midstream_prompt() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "answer-delta".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "partial answer".to_string(),
+        }),
+    });
+    assert!(chat.stream_controller.is_some());
+    let _ = drain_events(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "request-user-input".into(),
+        msg: EventMsg::RequestUserInput(request_user_input_event()),
+    });
+
+    assert!(chat.stream_controller.is_none());
+
+    let prompt_events = drain_events(&mut rx);
+    let prompt_history = prompt_events
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .map(|cell| lines_to_single_string(&cell.display_lines(80)))
+        .collect::<String>();
+    assert!(
+        prompt_history.contains("partial answer"),
+        "expected forced stream flush before prompt, got {prompt_history:?}"
+    );
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Choose an option."),
+        "expected request_user_input prompt, got {popup:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "final-agent-message".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "partial answer".to_string(),
+            memory_citation: None,
+        }),
+    });
+
+    let final_history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    let combined_history = format!("{prompt_history}{final_history}");
+    assert_eq!(
+        combined_history.matches("partial answer").count(),
+        1,
+        "expected final legacy echo to be suppressed, got {combined_history:?}"
+    );
+}
+
+#[tokio::test]
+async fn request_user_input_accumulates_forced_flushes_before_final_agent_message_echo() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "first-delta".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "first ".to_string(),
+        }),
+    });
+    assert!(chat.stream_controller.is_some());
+    let _ = drain_events(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "first-request-user-input".into(),
+        msg: EventMsg::RequestUserInput(request_user_input_event()),
+    });
+
+    assert!(chat.stream_controller.is_none());
+
+    let first_prompt_history = drain_events(&mut rx)
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .map(|cell| lines_to_single_string(&cell.display_lines(80)))
+        .collect::<String>();
+    assert!(
+        first_prompt_history.contains("first"),
+        "expected first forced stream flush before prompt, got {first_prompt_history:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "second-delta".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "second".to_string(),
+        }),
+    });
+    assert!(chat.stream_controller.is_some());
+    let _ = drain_events(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "second-request-user-input".into(),
+        msg: EventMsg::RequestUserInput(request_user_input_event()),
+    });
+
+    assert!(chat.stream_controller.is_none());
+
+    let second_prompt_history = drain_events(&mut rx)
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .map(|cell| lines_to_single_string(&cell.display_lines(80)))
+        .collect::<String>();
+    assert!(
+        second_prompt_history.contains("second"),
+        "expected second forced stream flush before prompt, got {second_prompt_history:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "final-agent-message".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "first second".to_string(),
+            memory_citation: None,
+        }),
+    });
+
+    let final_history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    let combined_history = format!("{first_prompt_history}{second_prompt_history}{final_history}");
+    assert_eq!(
+        combined_history.matches("first").count(),
+        1,
+        "expected final legacy echo to be suppressed, got {combined_history:?}"
+    );
+    assert_eq!(
+        combined_history.matches("second").count(),
+        1,
+        "expected final legacy echo to be suppressed, got {combined_history:?}"
+    );
+}
+
+#[tokio::test]
+async fn request_user_input_renders_mismatched_final_agent_message_after_midstream_prompt() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "answer-delta".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "draft answer".to_string(),
+        }),
+    });
+    assert!(chat.stream_controller.is_some());
+    let _ = drain_events(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "request-user-input".into(),
+        msg: EventMsg::RequestUserInput(request_user_input_event()),
+    });
+
+    assert!(chat.stream_controller.is_none());
+
+    let prompt_history = drain_events(&mut rx)
+        .into_iter()
+        .filter_map(into_insert_history_cell)
+        .map(|cell| lines_to_single_string(&cell.display_lines(80)))
+        .collect::<String>();
+    assert!(
+        prompt_history.contains("draft answer"),
+        "expected forced stream flush before prompt, got {prompt_history:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "final-agent-message".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "final answer".to_string(),
+            memory_citation: None,
+        }),
+    });
+
+    let final_history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    let combined_history = format!("{prompt_history}{final_history}");
+    assert!(
+        combined_history.contains("draft answer"),
+        "expected flushed draft answer to remain visible, got {combined_history:?}"
+    );
+    assert!(
+        combined_history.contains("final answer"),
+        "expected mismatched final message to render, got {combined_history:?}"
     );
 }
 

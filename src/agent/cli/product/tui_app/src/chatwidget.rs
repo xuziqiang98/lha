@@ -549,6 +549,8 @@ pub(crate) struct ChatWidget {
     token_info: Option<TokenUsageInfo>,
     // Stream lifecycle controller
     stream_controller: Option<AgentMarkdownStreamController>,
+    // Final legacy AgentMessage echo expected after a blocking prompt forced an answer stream flush.
+    pending_streamed_agent_message_echo: Option<String>,
     // Stream lifecycle controller for proposed plan output.
     plan_stream_controller: Option<PlanStreamController>,
     // Whether the current turn has started streaming visible assistant answer content.
@@ -924,6 +926,14 @@ impl ChatWidget {
     }
 
     fn flush_answer_stream_with_separator(&mut self) {
+        self.flush_answer_stream_with_separator_impl(false);
+    }
+
+    fn flush_answer_stream_for_blocking_prompt(&mut self) {
+        self.flush_answer_stream_with_separator_impl(true);
+    }
+
+    fn flush_answer_stream_with_separator_impl(&mut self, remember_final_echo: bool) {
         let Some(controller) = self.stream_controller.take() else {
             return;
         };
@@ -933,6 +943,12 @@ impl ChatWidget {
         let source = controller.finalize();
         if source.is_empty() {
             return;
+        }
+
+        if remember_final_echo {
+            self.pending_streamed_agent_message_echo
+                .get_or_insert_with(String::new)
+                .push_str(&source);
         }
 
         if !self.active_cell_is_answer_stream() {
@@ -1389,7 +1405,11 @@ impl ChatWidget {
     fn on_agent_message(&mut self, message: String) {
         // If we have a stream_controller, then the final agent message is redundant and will be a
         // duplicate of what has already been streamed.
-        if self.stream_controller.is_none() && !message.is_empty() {
+        let repeats_forced_stream = self
+            .pending_streamed_agent_message_echo
+            .take()
+            .is_some_and(|pending| pending == message);
+        if !repeats_forced_stream && self.stream_controller.is_none() && !message.is_empty() {
             self.handle_streaming_delta(message);
         }
         self.flush_answer_stream_with_separator();
@@ -1554,6 +1574,7 @@ impl ChatWidget {
         self.plan_item_active = false;
         self.plan_stream_controller = None;
         self.answer_stream_started_this_turn = false;
+        self.pending_streamed_agent_message_echo = None;
         self.otel_manager.reset_runtime_metrics();
         if defer_review_redraw {
             self.bottom_pane.clear_quit_shortcut_hint_with_redraw(false);
@@ -1608,6 +1629,7 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
+        self.pending_streamed_agent_message_echo = None;
         self.clear_unified_exec_processes();
         self.request_redraw();
 
@@ -1774,6 +1796,7 @@ impl ChatWidget {
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
         self.stream_controller = None;
+        self.pending_streamed_agent_message_echo = None;
     }
 
     fn on_model_cap_error(&mut self, model: String, reset_after_seconds: Option<u64>) {
@@ -2423,7 +2446,7 @@ impl ChatWidget {
     }
 
     fn handle_blocking_prompt(&mut self, handle: impl FnOnce(&mut Self)) {
-        self.flush_answer_stream_with_separator();
+        self.flush_answer_stream_for_blocking_prompt();
         if !self.interrupts.is_empty() {
             self.flush_interrupt_queue();
         }
@@ -2869,6 +2892,7 @@ impl ChatWidget {
             initial_user_message,
             token_info: None,
             stream_controller: None,
+            pending_streamed_agent_message_echo: None,
             plan_stream_controller: None,
             answer_stream_started_this_turn: false,
             running_commands: HashMap::new(),
@@ -3045,6 +3069,7 @@ impl ChatWidget {
             initial_user_message,
             token_info: None,
             stream_controller: None,
+            pending_streamed_agent_message_echo: None,
             plan_stream_controller: None,
             answer_stream_started_this_turn: false,
             running_commands: HashMap::new(),
