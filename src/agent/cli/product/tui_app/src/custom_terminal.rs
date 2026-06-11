@@ -518,11 +518,14 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
     let next_buffer = &b.content;
 
     let mut updates = vec![];
-    let mut last_nonblank_columns = vec![0; a.area.height as usize];
     for y in 0..a.area.height {
         let row_start = y as usize * a.area.width as usize;
         let row_end = row_start + a.area.width as usize;
         let row = &next_buffer[row_start..row_end];
+        let previous_row = &previous_buffer[row_start..row_end];
+        if row.is_empty() {
+            continue;
+        }
         let bg = row.last().map(|cell| cell.bg).unwrap_or(Color::Reset);
 
         // Scan the row to find the rightmost column that still matters: any non-space glyph,
@@ -547,39 +550,40 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
             column += width.max(1); // treat zero-width symbols as width 1
         }
 
+        let row_is_dirty = row
+            .iter()
+            .zip(previous_row.iter())
+            .any(|(current, previous)| current != previous);
+        if !row_is_dirty {
+            continue;
+        }
+
         if !paints_explicit_background && last_nonblank_column + 1 < row.len() {
             let (x, y) = a.pos_of(row_start + last_nonblank_column + 1);
             updates.push(DrawCommand::ClearToEnd { x, y, bg });
         }
 
-        last_nonblank_columns[y as usize] = last_nonblank_column as u16;
-    }
-
-    // Cells invalidated by drawing/replacing preceding multi-width characters:
-    let mut invalidated: usize = 0;
-    // Cells from the current buffer to skip due to preceding multi-width characters taking
-    // their place (the skipped cells should be blank anyway), or due to per-cell-skipping:
-    let mut to_skip: usize = 0;
-    for (i, (current, previous)) in next_buffer.iter().zip(previous_buffer.iter()).enumerate() {
-        if !current.skip && (current != previous || invalidated > 0) && to_skip == 0 {
-            let (x, y) = a.pos_of(i);
-            let row = i / a.area.width as usize;
-            if x <= last_nonblank_columns[row] {
+        // Repaint dirty rows left-to-right instead of sending only sparse changed cells. This
+        // repairs rare cases where the real terminal screen has stale cells even though the
+        // previous in-memory buffer still matches most of the row.
+        let repaint_end = if paints_explicit_background {
+            row.len().saturating_sub(1)
+        } else {
+            last_nonblank_column
+        };
+        let mut to_skip = 0usize;
+        for column in 0..=repaint_end {
+            let i = row_start + column;
+            if !next_buffer[i].skip && to_skip == 0 {
+                let (x, y) = a.pos_of(i);
                 updates.push(DrawCommand::Put {
                     x,
                     y,
                     cell: next_buffer[i].clone(),
                 });
             }
+            to_skip = display_width(next_buffer[i].symbol()).saturating_sub(1);
         }
-
-        to_skip = display_width(current.symbol()).saturating_sub(1);
-
-        let affected_width = std::cmp::max(
-            display_width(current.symbol()),
-            display_width(previous.symbol()),
-        );
-        invalidated = std::cmp::max(affected_width, invalidated).saturating_sub(1);
     }
     updates
 }
@@ -729,6 +733,31 @@ mod tests {
         cell
     }
 
+    fn corrupt_backend_row(
+        terminal: &mut Terminal<crate::product::tui_app::test_backend::VT100Backend>,
+        y: u16,
+        text: &str,
+    ) {
+        draw(
+            terminal.backend_mut(),
+            vec![
+                DrawCommand::Put {
+                    x: 0,
+                    y,
+                    cell: cell_with_symbol(text),
+                },
+                DrawCommand::ClearToEnd {
+                    x: u16::try_from(display_width(text)).expect("test text should fit"),
+                    y,
+                    bg: Color::Reset,
+                },
+            ]
+            .into_iter(),
+        )
+        .expect("corrupt backend row");
+        std::io::Write::flush(terminal.backend_mut()).expect("flush corrupted row");
+    }
+
     #[test]
     fn display_width_ignores_osc_sequences() {
         assert_eq!(
@@ -829,6 +858,79 @@ mod tests {
                 "width {width} moved the Chinese predicate after crates.io: {contents:?}"
             );
         }
+    }
+
+    #[test]
+    fn custom_terminal_repairs_ascii_row_after_screen_buffer_divergence() {
+        let backend = crate::product::tui_app::test_backend::VT100Backend::new(120, 4);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 120, 4));
+
+        terminal
+            .draw(|frame| {
+                frame.buffer.set_string(
+                    0,
+                    0,
+                    "fix(cybergym): harden scoped threat-model graph seeding",
+                    Style::default(),
+                );
+                frame
+                    .buffer
+                    .set_string(0, 1, "- git diff --check", Style::default());
+            })
+            .expect("draw correct baseline");
+
+        corrupt_backend_row(
+            &mut terminal,
+            0,
+            "fix(cybergym):en hard scoped threat-model graph seeding",
+        );
+        corrupt_backend_row(&mut terminal, 1, "- git diffcheck");
+        let corrupted = terminal.backend().vt100().screen().contents();
+        assert!(
+            corrupted.contains("fix(cybergym):en hard"),
+            "test setup should corrupt subject row: {corrupted:?}"
+        );
+        assert!(
+            corrupted.contains("- git diffcheck"),
+            "test setup should corrupt validation row: {corrupted:?}"
+        );
+
+        terminal
+            .draw(|frame| {
+                frame.buffer.set_string(
+                    0,
+                    0,
+                    "fix(cybergym): harden scoped threat-model graph seeding.",
+                    Style::default(),
+                );
+                frame
+                    .buffer
+                    .set_string(0, 1, "- git diff --check.", Style::default());
+            })
+            .expect("draw corrected dirty rows");
+
+        let contents = terminal.backend().vt100().screen().contents();
+        assert!(
+            contents.contains("fix(cybergym): harden scoped threat-model graph seeding."),
+            "terminal should repaint stale ASCII subject cells: {contents:?}"
+        );
+        assert!(
+            contents.contains("- git diff --check."),
+            "terminal should repaint stale ASCII validation cells: {contents:?}"
+        );
+        assert!(
+            !contents.contains("fix(cybergym):en hard"),
+            "terminal kept stale subject corruption: {contents:?}"
+        );
+        assert!(
+            !contents.contains("en hard scoped"),
+            "terminal kept stale harden/scoped corruption: {contents:?}"
+        );
+        assert!(
+            !contents.contains("git diffcheck"),
+            "terminal kept stale git diff corruption: {contents:?}"
+        );
     }
 
     #[test]

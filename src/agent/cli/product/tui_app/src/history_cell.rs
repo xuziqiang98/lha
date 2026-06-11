@@ -91,6 +91,30 @@ use tracing::error;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+#[cfg(test)]
+pub(crate) const FEEDBACK_COMMIT_MESSAGE_WORD_ORDER_TEXT: &str = r#"fix(cybergym): harden scoped threat-model graph seeding
+
+Require CyberGym threat-model runs to return parseable canonical Markdown through
+workflow_output, including the entry-point, focus-path, and downstream-hook
+sections used by audit graph initialization.
+
+Teach the audit graph parser to tolerate scoped heading drift from older/model
+outputs, preserve explicit `.` focus paths, and ignore `In scope = No` rows so
+Desktop CyberGym runs do not fall back to repository-wide placeholder surfaces.
+
+Also document the CyberGym threat-model contract and make local usage tests use
+date-relative fixtures so the full all-features suite stays stable across days.
+
+Validation:
+- just fmt
+- cargo test -p codex-core audit_graph
+- cargo test -p codex-core cybergym
+- just fix -p codex-core
+- cargo test -p codex-app-server --test all local_usage
+- just fix -p codex-app-server
+- cargo test --all-features
+- git diff --check"#;
+
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
 /// scrollable list.
@@ -3009,6 +3033,33 @@ mod tests {
         text.chars().filter(|c| !c.is_whitespace()).collect()
     }
 
+    fn assert_feedback_commit_message_word_order(rendered: &str, context: &str) {
+        assert!(
+            rendered.contains("fix(cybergym): harden scoped threat-model graph seeding"),
+            "{context} missing feedback commit subject: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("workflow_output"),
+            "{context} missing workflow_output marker: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("git diff --check"),
+            "{context} missing git diff --check validation line: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("fix(cybergym):en hard"),
+            "{context} rendered known subject corruption: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("en hard scoped"),
+            "{context} rendered known harden/scoped corruption: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("git diffcheck"),
+            "{context} rendered known git diff corruption: {rendered:?}"
+        );
+    }
+
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines(u16::MAX))
     }
@@ -3440,6 +3491,22 @@ mod tests {
         let wide = render_lines(&cell.display_lines(100)).join("\n");
         assert!(wide.contains("Git 依赖；我说的是"));
         assert!(wide.contains("被认为是 crates.io 发布就绪"));
+    }
+
+    #[test]
+    fn agent_message_markdown_preserves_feedback_commit_message_word_order() {
+        let cell = AgentMessageCell::new_markdown(
+            FEEDBACK_COMMIT_MESSAGE_WORD_ORDER_TEXT.to_string(),
+            true,
+        );
+
+        for width in [80, 100, 120, 160] {
+            let rendered = render_lines(&cell.display_lines(width)).join("\n");
+            assert_feedback_commit_message_word_order(
+                &rendered,
+                &format!("history cell width {width}"),
+            );
+        }
     }
 
     #[test]

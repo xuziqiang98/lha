@@ -83,6 +83,7 @@ use crate::product::tui_app::app_event::ExitMode;
 use crate::product::tui_app::app_event_sender::AppEventSender;
 use crate::product::tui_app::bottom_pane::IdentityIndicator;
 use crate::product::tui_app::bottom_pane::LocalImageAttachment;
+use crate::product::tui_app::history_cell::FEEDBACK_COMMIT_MESSAGE_WORD_ORDER_TEXT;
 use crate::product::tui_app::history_cell::PlainHistoryCell;
 use crate::product::tui_app::history_cell::UserHistoryCell;
 use crate::product::tui_app::sidebar::SidebarWidget;
@@ -2797,6 +2798,43 @@ fn lines_to_strings(lines: &[ratatui::text::Line<'static>]) -> Vec<String> {
                 .collect::<String>()
         })
         .collect()
+}
+
+fn assert_feedback_commit_message_word_order(rendered: &str, context: &str) {
+    assert!(
+        rendered.contains("fix(cybergym): harden scoped threat-model graph seeding"),
+        "{context} missing feedback commit subject: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("workflow_output"),
+        "{context} missing workflow_output marker: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("git diff --check"),
+        "{context} missing git diff --check validation line: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("fix(cybergym):en hard"),
+        "{context} rendered known subject corruption: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("en hard scoped"),
+        "{context} rendered known harden/scoped corruption: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("git diffcheck"),
+        "{context} rendered known git diff corruption: {rendered:?}"
+    );
+}
+
+fn render_chat_to_vt100_screen(
+    chat: &ChatWidget,
+    terminal: &mut crate::product::tui_app::custom_terminal::Terminal<VT100Backend>,
+) -> String {
+    terminal
+        .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
+        .expect("draw chat widget");
+    terminal.backend().vt100().screen().contents()
 }
 
 fn buffer_to_string(buf: &Buffer) -> String {
@@ -9707,6 +9745,139 @@ async fn deltas_then_same_final_message_are_rendered_snapshot() {
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
     assert_snapshot!(combined);
+}
+
+#[tokio::test]
+async fn live_agent_message_preserves_feedback_commit_message_word_order() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 120;
+    let height = 48;
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
+        VT100Backend::new(width, height),
+    )
+    .expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+    chat.handle_codex_event(Event {
+        id: "feedback-turn".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "feedback-final".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: FEEDBACK_COMMIT_MESSAGE_WORD_ORDER_TEXT.to_string(),
+            memory_citation: None,
+        }),
+    });
+
+    let mut saw_agent_message = false;
+    for event in drain_events(&mut rx) {
+        if let Some(cell) = into_insert_history_cell(event) {
+            let rendered = lines_to_single_string(&cell.display_lines(width));
+            if cell.as_any().is::<AgentMessageCell>() {
+                saw_agent_message = true;
+                assert_feedback_commit_message_word_order(&rendered, "final AgentMessage cell");
+            }
+            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
+            chat.insert_transcript_cell(cell);
+        }
+    }
+    assert!(
+        saw_agent_message,
+        "expected final AgentMessage history cell"
+    );
+
+    let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    assert_feedback_commit_message_word_order(&screen, "final AgentMessage VT100 screen");
+}
+
+#[tokio::test]
+async fn streamed_agent_message_preserves_feedback_commit_message_word_order() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 120;
+    let height = 48;
+    chat.last_rendered_width.set(Some(usize::from(width)));
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
+        VT100Backend::new(width, height),
+    )
+    .expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+    chat.handle_codex_event(Event {
+        id: "feedback-turn".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+
+    let mut saw_live_subject = false;
+    for chunk in FEEDBACK_COMMIT_MESSAGE_WORD_ORDER_TEXT
+        .as_bytes()
+        .chunks(11)
+    {
+        let delta = std::str::from_utf8(chunk).expect("feedback text should be ASCII");
+        chat.handle_codex_event(Event {
+            id: "feedback-delta".into(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: delta.to_string(),
+            }),
+        });
+        chat.on_commit_tick();
+
+        let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+        if screen.contains("fix(cybergym): harden scoped") {
+            saw_live_subject = true;
+            assert!(
+                !screen.contains("fix(cybergym):en hard"),
+                "streamed VT100 screen rendered known subject corruption: {screen:?}"
+            );
+            assert!(
+                !screen.contains("en hard scoped"),
+                "streamed VT100 screen rendered known harden/scoped corruption: {screen:?}"
+            );
+        }
+        if screen.contains("git diff") {
+            assert!(
+                !screen.contains("git diffcheck"),
+                "streamed VT100 screen rendered known git diff corruption: {screen:?}"
+            );
+        }
+    }
+    assert!(
+        saw_live_subject,
+        "expected streamed subject to become visible"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "feedback-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    let mut saw_committed_answer = false;
+    for event in drain_events(&mut rx) {
+        if let Some(cell) = into_insert_history_cell(event) {
+            let rendered = lines_to_single_string(&cell.display_lines(width));
+            if cell.as_any().is::<AgentMessageCell>() {
+                saw_committed_answer = true;
+                assert_feedback_commit_message_word_order(&rendered, "streamed committed cell");
+            }
+            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
+            chat.insert_transcript_cell(cell);
+        }
+    }
+    assert!(
+        saw_committed_answer,
+        "expected streamed answer to flush into history"
+    );
+
+    let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    assert_feedback_commit_message_word_order(&screen, "streamed committed VT100 screen");
 }
 
 #[tokio::test]
