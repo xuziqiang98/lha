@@ -40,7 +40,7 @@ pub struct ProcessHandle {
     exit_code: Arc<StdMutex<Option<i32>>>,
     // PtyHandles must be preserved because the process will receive Control+C if the
     // slave is closed
-    _pty_handles: StdMutex<Option<PtyHandles>>,
+    pty_handles: StdMutex<Option<PtyHandles>>,
 }
 
 impl fmt::Debug for ProcessHandle {
@@ -75,7 +75,7 @@ impl ProcessHandle {
                 wait_handle: StdMutex::new(Some(wait_handle)),
                 exit_status,
                 exit_code,
-                _pty_handles: StdMutex::new(pty_handles),
+                pty_handles: StdMutex::new(pty_handles),
             },
             initial_output_rx,
         )
@@ -107,6 +107,10 @@ impl ProcessHandle {
             && let Some(mut killer) = killer_opt.take()
         {
             let _ = killer.kill();
+        }
+
+        if let Ok(mut pty_handles) = self.pty_handles.lock() {
+            pty_handles.take();
         }
 
         if let Ok(mut h) = self.reader_handle.lock()

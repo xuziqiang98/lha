@@ -1,6 +1,8 @@
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::product::agent::CODEX_APPLY_PATCH_ARG1;
 use clap::Parser;
@@ -16,6 +18,7 @@ const APP_SERVER_ARG0: &str = "lha-app-server";
 const MCP_SERVER_ARG0: &str = "lha-mcp-server";
 const STDIO_TO_UDS_ARG0: &str = "lha-stdio-to-uds";
 const CODEX_RESPONSES_API_PROXY_ARG0: &str = "codex-responses-api-proxy";
+const RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(500);
 #[cfg(any(test, debug_assertions))]
 const TEST_STDIO_SERVER_ARG0: &str = "test_stdio_server";
 #[cfg(any(test, debug_assertions))]
@@ -174,12 +177,8 @@ fn exit_after_block_on<F>(future: F) -> !
 where
     F: Future<Output = anyhow::Result<()>>,
 {
-    let result = tokio::runtime::Runtime::new().and_then(|runtime| {
-        runtime
-            .block_on(future)
-            .map_err(|err| std::io::Error::other(format!("{err:?}")))
-    });
-    exit_with_result(result.map_err(anyhow::Error::from));
+    let result = block_on_with_shutdown_timeout(future).and_then(|result| result);
+    exit_with_result(result);
 }
 
 fn exit_with_result(result: anyhow::Result<()>) -> ! {
@@ -225,8 +224,7 @@ where
 
     // Regular invocation – create a Tokio runtime and execute the provided
     // async entry-point.
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async move {
+    block_on_with_shutdown_timeout(async move {
         let codex_linux_sandbox_exe: Option<PathBuf> = if cfg!(target_os = "linux") {
             std::env::current_exe().ok()
         } else {
@@ -234,7 +232,31 @@ where
         };
 
         main_fn(codex_linux_sandbox_exe).await
-    })
+    })?
+}
+
+fn block_on_with_shutdown_timeout<F>(future: F) -> anyhow::Result<F::Output>
+where
+    F: Future,
+{
+    block_on_with_shutdown_timeout_for(future, RUNTIME_SHUTDOWN_TIMEOUT)
+}
+
+fn block_on_with_shutdown_timeout_for<F>(
+    future: F,
+    shutdown_timeout: Duration,
+) -> anyhow::Result<F::Output>
+where
+    F: Future,
+{
+    let runtime = tokio::runtime::Runtime::new()?;
+    let output = std::panic::catch_unwind(AssertUnwindSafe(|| runtime.block_on(future)));
+    runtime.shutdown_timeout(shutdown_timeout);
+
+    match output {
+        Ok(output) => Ok(output),
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
 const ILLEGAL_ENV_VAR_PREFIX: &str = "CODEX_";
@@ -367,9 +389,62 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn codex_responses_proxy_is_sensitive_early_alias() {
         assert!(is_sensitive_early_alias("codex-responses-api-proxy"));
+    }
+
+    #[test]
+    fn block_on_with_shutdown_timeout_returns_future_output() {
+        let result = block_on_with_shutdown_timeout_for(
+            async { Ok::<_, anyhow::Error>(42) },
+            Duration::from_millis(20),
+        )
+        .expect("runtime should start")
+        .expect("future should succeed");
+
+        assert_eq!(result, 42);
+    }
+
+    #[test]
+    fn block_on_with_shutdown_timeout_does_not_wait_forever_for_started_blocking_task() {
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let started_rx = std::sync::Arc::new(std::sync::Mutex::new(started_rx));
+
+        let started_rx_for_future = std::sync::Arc::clone(&started_rx);
+        let start = std::time::Instant::now();
+        block_on_with_shutdown_timeout_for(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.recv();
+                });
+                let started_rx_for_wait = std::sync::Arc::clone(&started_rx_for_future);
+                tokio::task::spawn_blocking(move || {
+                    started_rx_for_wait
+                        .lock()
+                        .expect("started receiver mutex poisoned")
+                        .recv()
+                })
+                .await
+                .expect("started wait task should join")
+                .expect("blocking task should start");
+                Ok::<(), anyhow::Error>(())
+            },
+            Duration::from_millis(20),
+        )
+        .expect("runtime should start")
+        .expect("future should succeed");
+
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "runtime shutdown waited too long for a started blocking task: {:?}",
+            start.elapsed()
+        );
+
+        let _ = release_tx.send(());
     }
 }
