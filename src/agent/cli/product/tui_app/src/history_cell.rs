@@ -731,6 +731,9 @@ pub(crate) struct UpdateAvailableHistoryCell {
     update_action: Option<UpdateAction>,
 }
 
+const LHA_INSTALL_URL: &str = "https://github.com/xuziqiang98/lha";
+const LHA_RELEASE_NOTES_URL: &str = "https://github.com/xuziqiang98/lha/releases/latest";
+
 #[cfg_attr(debug_assertions, allow(dead_code))]
 impl UpdateAvailableHistoryCell {
     pub(crate) fn new(latest_version: String, update_action: Option<UpdateAction>) -> Self {
@@ -750,7 +753,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         } else {
             line![
                 "See ",
-                "https://github.com/openai/codex".cyan().underlined(),
+                LHA_INSTALL_URL.cyan().underlined(),
                 " for installation options."
             ]
         };
@@ -758,23 +761,22 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         let content = text![
             line![
                 padded_emoji("✨").bold().cyan(),
-                "Update available!".bold().cyan(),
+                "LHA update available!".bold().cyan(),
                 " ",
                 format!("{CODEX_CLI_VERSION} -> {}", self.latest_version).bold(),
             ],
             update_instruction,
             "",
             "See full release notes:",
-            "https://github.com/openai/codex/releases/latest"
-                .cyan()
-                .underlined(),
+            LHA_RELEASE_NOTES_URL.cyan().underlined(),
         ];
 
         let inner_width = content
             .width()
             .min(usize::from(width.saturating_sub(4)))
             .max(1);
-        with_border_with_inner_width(content.lines, inner_width)
+        let content = word_wrap_lines(content.lines, RtOptions::new(inner_width));
+        with_border_with_inner_width(content, inner_width)
     }
 }
 
@@ -3027,6 +3029,15 @@ mod tests {
                     .collect::<String>()
             })
             .collect()
+    }
+
+    #[test]
+    fn update_available_history_cell_snapshot() {
+        let cell =
+            UpdateAvailableHistoryCell::new("9.9.9".to_string(), Some(UpdateAction::CargoInstall));
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+
+        insta::assert_snapshot!(rendered);
     }
 
     fn compact_text(text: &str) -> String {

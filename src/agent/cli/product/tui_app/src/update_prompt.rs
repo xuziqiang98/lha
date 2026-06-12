@@ -27,6 +27,8 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::WidgetRef;
 use tokio_stream::StreamExt;
 
+const LHA_RELEASE_NOTES_URL: &str = "https://github.com/xuziqiang98/lha/releases/latest";
+
 pub(crate) enum UpdatePromptOutcome {
     Continue,
     RunUpdate(UpdateAction),
@@ -192,7 +194,7 @@ impl WidgetRef for &UpdatePromptScreen {
         column.push("");
         column.push(Line::from(vec![
             padded_emoji("  ✨").bold().cyan(),
-            "Update available!".bold(),
+            "LHA update available!".bold(),
             " ".into(),
             format!(
                 "{current} -> {latest}",
@@ -205,9 +207,7 @@ impl WidgetRef for &UpdatePromptScreen {
         column.push(
             Line::from(vec![
                 "Release notes: ".dim(),
-                "https://github.com/openai/codex/releases/latest"
-                    .dim()
-                    .underlined(),
+                LHA_RELEASE_NOTES_URL.dim().underlined(),
             ])
             .inset(Insets::tlbr(0, 2, 0, 0)),
         );
@@ -254,7 +254,7 @@ mod tests {
         UpdatePromptScreen::new(
             FrameRequester::test_dummy(),
             "9.9.9".into(),
-            UpdateAction::NpmGlobalLatest,
+            UpdateAction::CargoInstall,
         )
     }
 

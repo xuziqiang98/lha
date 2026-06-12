@@ -1,9 +1,10 @@
-#![cfg(not(debug_assertions))]
+#![cfg(any(not(debug_assertions), test))]
 
 use crate::product::agent::config::Config;
 use crate::product::agent::default_client::create_client;
-use crate::product::tui_app::update_action;
-use crate::product::tui_app::update_action::UpdateAction;
+use crate::product::tui_app::app_event::AppEvent;
+use crate::product::tui_app::app_event_sender::AppEventSender;
+use crate::product::tui_app::history_cell::UpdateAvailableHistoryCell;
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
@@ -14,44 +15,55 @@ use std::path::PathBuf;
 
 use crate::product::tui_app::version::CODEX_CLI_VERSION;
 
-// Temporarily suppress update notifications entirely. While this remains
-// `false`, the TUI neither displays update prompts nor checks for newer
-// versions in the background.
-const SHOW_UPDATE_NOTIFICATIONS: bool = false;
-
-pub fn get_upgrade_version(config: &Config) -> Option<String> {
-    if !SHOW_UPDATE_NOTIFICATIONS {
-        return None;
-    }
-
+pub(crate) fn spawn_update_check(config: Config, app_event_tx: AppEventSender) {
     if !config.check_for_update_on_startup {
-        return None;
+        return;
     }
 
-    let version_file = version_filepath(config);
+    let version_file = version_filepath(&config);
     let info = read_version_info(&version_file).ok();
+    let latest_notified = notify_if_newer(info.as_ref(), &app_event_tx);
 
     if match &info {
         None => true,
         Some(info) => info.last_checked_at < Utc::now() - Duration::hours(20),
     } {
-        // Refresh the cached latest version in the background so TUI startup
-        // isn’t blocked by a network call. The UI reads the previously cached
-        // value (if any) for this run; the next run shows the banner if needed.
+        // Refresh the cached latest version without blocking TUI startup.
+        // If the fresh result is newer, insert the same update card in this session.
         tokio::spawn(async move {
-            check_for_update(&version_file)
-                .await
-                .inspect_err(|e| tracing::error!("Failed to update version: {e}"))
+            match check_for_update(&version_file).await {
+                Ok(info) => {
+                    if latest_notified.as_deref() != Some(info.latest_version.as_str()) {
+                        notify_if_newer(Some(&info), &app_event_tx);
+                    }
+                }
+                Err(err) => {
+                    tracing::error!("Failed to check for LHA update: {err}");
+                }
+            }
         });
     }
+}
 
-    info.and_then(|info| {
-        if is_newer(&info.latest_version, CODEX_CLI_VERSION).unwrap_or(false) {
-            Some(info.latest_version)
-        } else {
-            None
-        }
-    })
+fn notify_if_newer(info: Option<&VersionInfo>, app_event_tx: &AppEventSender) -> Option<String> {
+    let info = info?;
+    if should_show_update_notice(info) {
+        let latest_version = info.latest_version.clone();
+        app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            UpdateAvailableHistoryCell::new(
+                latest_version.clone(),
+                crate::product::tui_app::update_action::get_update_action(),
+            ),
+        )));
+        Some(latest_version)
+    } else {
+        None
+    }
+}
+
+fn should_show_update_notice(info: &VersionInfo) -> bool {
+    is_newer(&info.latest_version, CODEX_CLI_VERSION).unwrap_or(false)
+        && info.dismissed_version.as_deref() != Some(info.latest_version.as_str())
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -64,10 +76,7 @@ struct VersionInfo {
 }
 
 const VERSION_FILENAME: &str = "version.json";
-// We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
-const HOMEBREW_CASK_URL: &str =
-    "https://raw.githubusercontent.com/Homebrew/homebrew-cask/HEAD/Casks/c/codex.rb";
-const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
+const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/xuziqiang98/lha/releases/latest";
 
 #[derive(Deserialize, Debug, Clone)]
 struct ReleaseInfo {
@@ -83,31 +92,17 @@ fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
     Ok(serde_json::from_str(&contents)?)
 }
 
-async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
-    let latest_version = match update_action::get_update_action() {
-        Some(UpdateAction::BrewUpgrade) => {
-            let cask_contents = create_client()
-                .get(HOMEBREW_CASK_URL)
-                .send()
-                .await?
-                .error_for_status()?
-                .text()
-                .await?;
-            extract_version_from_cask(&cask_contents)?
-        }
-        _ => {
-            let ReleaseInfo {
-                tag_name: latest_tag_name,
-            } = create_client()
-                .get(LATEST_RELEASE_URL)
-                .send()
-                .await?
-                .error_for_status()?
-                .json::<ReleaseInfo>()
-                .await?;
-            extract_version_from_latest_tag(&latest_tag_name)?
-        }
-    };
+async fn check_for_update(version_file: &Path) -> anyhow::Result<VersionInfo> {
+    let ReleaseInfo {
+        tag_name: latest_tag_name,
+    } = create_client()
+        .get(LATEST_RELEASE_URL)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<ReleaseInfo>()
+        .await?;
+    let latest_version = extract_version_from_latest_tag(&latest_tag_name)?;
 
     // Preserve any previously dismissed version if present.
     let prev_info = read_version_info(version_file).ok();
@@ -117,12 +112,10 @@ async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
         dismissed_version: prev_info.and_then(|p| p.dismissed_version),
     };
 
-    let json_line = format!("{}\n", serde_json::to_string(&info)?);
-    if let Some(parent) = version_file.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+    if let Err(err) = write_version_info(version_file, &info).await {
+        tracing::error!("Failed to write update cache: {err}");
     }
-    tokio::fs::write(version_file, json_line).await?;
-    Ok(())
+    Ok(info)
 }
 
 fn is_newer(latest: &str, current: &str) -> Option<bool> {
@@ -132,23 +125,27 @@ fn is_newer(latest: &str, current: &str) -> Option<bool> {
     }
 }
 
-fn extract_version_from_cask(cask_contents: &str) -> anyhow::Result<String> {
-    cask_contents
-        .lines()
-        .find_map(|line| {
-            let line = line.trim();
-            line.strip_prefix("version \"")
-                .and_then(|rest| rest.strip_suffix('"'))
-                .map(ToString::to_string)
-        })
-        .ok_or_else(|| anyhow::anyhow!("Failed to find version in Homebrew cask file"))
+async fn write_version_info(version_file: &Path, info: &VersionInfo) -> anyhow::Result<()> {
+    let json_line = format!("{}\n", serde_json::to_string(info)?);
+    if let Some(parent) = version_file.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(version_file, json_line).await?;
+    Ok(())
 }
 
 fn extract_version_from_latest_tag(latest_tag_name: &str) -> anyhow::Result<String> {
-    latest_tag_name
-        .strip_prefix("rust-v")
-        .map(str::to_owned)
-        .ok_or_else(|| anyhow::anyhow!("Failed to parse latest tag name '{latest_tag_name}'"))
+    let version = latest_tag_name
+        .trim()
+        .strip_prefix('v')
+        .unwrap_or_else(|| latest_tag_name.trim());
+    if parse_version(version).is_some() {
+        Ok(version.to_string())
+    } else {
+        Err(anyhow::anyhow!(
+            "Failed to parse latest tag name '{latest_tag_name}'"
+        ))
+    }
 }
 
 /// Returns the latest version to show in a popup, if it should be shown.
@@ -159,14 +156,12 @@ pub fn get_upgrade_version_for_popup(config: &Config) -> Option<String> {
     }
 
     let version_file = version_filepath(config);
-    let latest = get_upgrade_version(config)?;
-    // If the user dismissed this exact version previously, do not show the popup.
-    if let Ok(info) = read_version_info(&version_file)
-        && info.dismissed_version.as_deref() == Some(latest.as_str())
-    {
-        return None;
+    let info = read_version_info(&version_file).ok()?;
+    if should_show_update_notice(&info) {
+        Some(info.latest_version)
+    } else {
+        None
     }
-    Some(latest)
 }
 
 /// Persist a dismissal for the current latest version so we don't show
@@ -178,12 +173,7 @@ pub async fn dismiss_version(config: &Config, version: &str) -> anyhow::Result<(
         Err(_) => return Ok(()),
     };
     info.dismissed_version = Some(version.to_string());
-    let json_line = format!("{}\n", serde_json::to_string(&info)?);
-    if let Some(parent) = version_file.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    tokio::fs::write(version_file, json_line).await?;
-    Ok(())
+    write_version_info(&version_file, &info).await
 }
 
 fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
@@ -191,6 +181,9 @@ fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
     let maj = iter.next()?.parse::<u64>().ok()?;
     let min = iter.next()?.parse::<u64>().ok()?;
     let pat = iter.next()?.parse::<u64>().ok()?;
+    if iter.next().is_some() {
+        return None;
+    }
     Some((maj, min, pat))
 }
 
@@ -198,33 +191,33 @@ fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
 mod tests {
     use super::*;
     use crate::product::agent::config::ConfigBuilder;
+    use crate::product::tui_app::app_event::AppEvent;
+    use crate::product::tui_app::app_event_sender::AppEventSender;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
+    use tokio::sync::mpsc::unbounded_channel;
+    use toml::Value as TomlValue;
 
     #[test]
-    fn parses_version_from_cask_contents() {
-        let cask = r#"
-            cask "codex" do
-              version "0.55.0"
-            end
-        "#;
+    fn extracts_plain_semver_release_tag() {
         assert_eq!(
-            extract_version_from_cask(cask).expect("failed to parse version"),
-            "0.55.0"
+            extract_version_from_latest_tag("1.2.3").expect("failed to parse version"),
+            "1.2.3"
         );
     }
 
     #[test]
-    fn extracts_version_from_latest_tag() {
+    fn extracts_v_prefixed_release_tag() {
         assert_eq!(
-            extract_version_from_latest_tag("rust-v1.5.0").expect("failed to parse version"),
-            "1.5.0"
+            extract_version_from_latest_tag("v1.2.3").expect("failed to parse version"),
+            "1.2.3"
         );
     }
 
     #[test]
-    fn latest_tag_without_prefix_is_invalid() {
-        assert!(extract_version_from_latest_tag("v1.5.0").is_err());
+    fn rejects_non_semver_release_tag() {
+        assert!(extract_version_from_latest_tag("rust-v1.2.3").is_err());
+        assert!(extract_version_from_latest_tag("nightly").is_err());
     }
 
     #[test]
@@ -239,6 +232,7 @@ mod tests {
         assert_eq!(is_newer("0.11.0", "0.11.1"), Some(false));
         assert_eq!(is_newer("1.0.0", "0.9.9"), Some(true));
         assert_eq!(is_newer("0.9.9", "1.0.0"), Some(false));
+        assert_eq!(is_newer("1.0.4-beta.1", "1.0.3"), None);
     }
 
     #[test]
@@ -248,7 +242,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_notifications_are_suppressed_even_when_newer_version_is_cached() {
+    async fn cached_newer_version_emits_update_history_cell() {
         let lha_home = tempdir().expect("tempdir");
         let config = ConfigBuilder::default()
             .lha_home(lha_home.path().to_path_buf())
@@ -271,7 +265,88 @@ mod tests {
         )
         .expect("write version file");
 
-        assert_eq!(get_upgrade_version(&config), None);
-        assert_eq!(get_upgrade_version_for_popup(&config), None);
+        let (tx, mut rx) = unbounded_channel();
+        spawn_update_check(config, AppEventSender::new(tx));
+
+        assert!(matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_))));
+    }
+
+    #[tokio::test]
+    async fn cached_dismissed_newer_version_emits_no_update_history_cell() {
+        let lha_home = tempdir().expect("tempdir");
+        let config = ConfigBuilder::default()
+            .lha_home(lha_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+
+        let info = VersionInfo {
+            latest_version: "999.0.0".to_string(),
+            last_checked_at: Utc::now(),
+            dismissed_version: Some("999.0.0".to_string()),
+        };
+        let version_file = lha_home.path().join(VERSION_FILENAME);
+        std::fs::write(
+            &version_file,
+            format!(
+                "{}\n",
+                serde_json::to_string(&info).expect("serialize version info")
+            ),
+        )
+        .expect("write version file");
+
+        let (tx, mut rx) = unbounded_channel();
+        spawn_update_check(config, AppEventSender::new(tx));
+
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn newer_version_after_dismissed_version_emits_update_history_cell() {
+        let lha_home = tempdir().expect("tempdir");
+        let config = ConfigBuilder::default()
+            .lha_home(lha_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+
+        let info = VersionInfo {
+            latest_version: "999.0.0".to_string(),
+            last_checked_at: Utc::now(),
+            dismissed_version: Some("998.0.0".to_string()),
+        };
+        let version_file = lha_home.path().join(VERSION_FILENAME);
+        std::fs::write(
+            &version_file,
+            format!(
+                "{}\n",
+                serde_json::to_string(&info).expect("serialize version info")
+            ),
+        )
+        .expect("write version file");
+
+        let (tx, mut rx) = unbounded_channel();
+        spawn_update_check(config, AppEventSender::new(tx));
+
+        assert!(matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_))));
+    }
+
+    #[tokio::test]
+    async fn disabled_update_check_emits_no_event() {
+        let lha_home = tempdir().expect("tempdir");
+        let config = ConfigBuilder::default()
+            .lha_home(lha_home.path().to_path_buf())
+            .cli_overrides(vec![(
+                "check_for_update_on_startup".to_string(),
+                TomlValue::Boolean(false),
+            )])
+            .build()
+            .await
+            .expect("config");
+
+        let (tx, mut rx) = unbounded_channel();
+        spawn_update_check(config, AppEventSender::new(tx));
+
+        assert!(rx.try_recv().is_err());
     }
 }

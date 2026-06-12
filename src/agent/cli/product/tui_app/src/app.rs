@@ -80,8 +80,6 @@ use crate::product::tui_app::external_editor;
 use crate::product::tui_app::file_search::FileSearchManager;
 use crate::product::tui_app::history_cell;
 use crate::product::tui_app::history_cell::HistoryCell;
-#[cfg(not(debug_assertions))]
-use crate::product::tui_app::history_cell::UpdateAvailableHistoryCell;
 use crate::product::tui_app::identities;
 use crate::product::tui_app::identity_modal::IdentityModal;
 use crate::product::tui_app::identity_modal::IdentityModalAction;
@@ -1811,8 +1809,6 @@ impl App {
             }
         };
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
-        #[cfg(not(debug_assertions))]
-        let upgrade_version = crate::product::tui_app::updates::get_upgrade_version(&config);
         let provider_config_modal =
             show_provider_popup_on_startup.then(|| ProviderConfigModalState {
                 mode: ProviderConfigModalMode::Startup,
@@ -1879,6 +1875,12 @@ impl App {
         #[cfg(target_os = "windows")]
         app.maybe_prompt_windows_sandbox_enable_modal();
 
+        #[cfg(not(debug_assertions))]
+        crate::product::tui_app::updates::spawn_update_check(
+            app.config.clone(),
+            app.app_event_tx.clone(),
+        );
+
         if let Err(err) = app
             .ensure_non_git_changelog_baseline(app.config.cwd.clone())
             .await
@@ -1912,28 +1914,6 @@ impl App {
                 let logs_base_dir = app.config.lha_home.clone();
                 let sandbox_policy = app.config.sandbox_policy.get().clone();
                 Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
-            }
-        }
-
-        #[cfg(not(debug_assertions))]
-        if let Some(latest_version) = upgrade_version {
-            let control = app
-                .handle_event(
-                    tui,
-                    AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
-                        latest_version,
-                        crate::product::tui_app::update_action::get_update_action(),
-                    ))),
-                )
-                .await?;
-            if let AppRunControl::Exit(exit_reason) = control {
-                return Ok(AppExitInfo {
-                    token_usage: app.token_usage(),
-                    thread_id: app.chat_widget.thread_id(),
-                    thread_name: app.chat_widget.thread_name(),
-                    update_action: app.pending_update_action,
-                    exit_reason,
-                });
             }
         }
 
