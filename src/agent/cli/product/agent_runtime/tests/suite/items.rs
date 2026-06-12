@@ -688,6 +688,173 @@ async fn plan_mode_strips_plan_from_agent_messages() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plan_mode_completes_streamed_intro_before_plan_item() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let TestCodex {
+        codex,
+        session_configured,
+        ..
+    } = test_codex().build(&server).await?;
+
+    let full_message = "现在我给完整计划。\n<proposed_plan>\n# Plan\n- Step 1\n</proposed_plan>\n";
+    let stream = sse(vec![
+        ev_response_created("resp-1"),
+        ev_message_item_added("msg-1", ""),
+        ev_output_text_delta(full_message),
+        ev_assistant_message("msg-1", full_message),
+        ev_completed("resp-1"),
+    ]);
+    mount_sse_once(&server, stream).await;
+
+    let identity = Identity {
+        kind: IdentityKind::Planner,
+        settings: Settings {
+            model: session_configured.model.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "please plan".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: std::env::current_dir()?,
+            approval_policy: crate::product::agent::protocol::AskForApproval::Never,
+            sandbox_policy: crate::product::agent::protocol::SandboxPolicy::DangerFullAccess,
+            model: session_configured.model.clone(),
+            effort: None,
+            summary: crate::product::protocol::config_types::ReasoningSummary::Auto,
+            identity: Some(identity),
+            personality: None,
+            tui_buddy: None,
+        })
+        .await?;
+
+    let mut completed_order = Vec::new();
+    loop {
+        let ev = wait_for_event(&codex, |_| true).await;
+        match ev {
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::AgentMessage(item),
+                ..
+            }) => {
+                completed_order.push(("agent", agent_message_text(&item)));
+            }
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::Plan(item),
+                ..
+            }) => {
+                completed_order.push(("plan", item.text));
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        completed_order,
+        vec![
+            ("agent", "现在我给完整计划。\n".to_string()),
+            ("plan", "# Plan\n- Step 1\n".to_string()),
+        ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plan_mode_treats_inline_plan_open_tag_as_normal_text() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let TestCodex {
+        codex,
+        session_configured,
+        ..
+    } = test_codex().build(&server).await?;
+
+    let full_message = "现在我给完整计划。<proposed_plan>\n# Plan\n</proposed_plan>\n";
+    let stream = sse(vec![
+        ev_response_created("resp-1"),
+        ev_message_item_added("msg-1", ""),
+        ev_output_text_delta(full_message),
+        ev_assistant_message("msg-1", full_message),
+        ev_completed("resp-1"),
+    ]);
+    mount_sse_once(&server, stream).await;
+
+    let identity = Identity {
+        kind: IdentityKind::Planner,
+        settings: Settings {
+            model: session_configured.model.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "please plan".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: std::env::current_dir()?,
+            approval_policy: crate::product::agent::protocol::AskForApproval::Never,
+            sandbox_policy: crate::product::agent::protocol::SandboxPolicy::DangerFullAccess,
+            model: session_configured.model.clone(),
+            effort: None,
+            summary: crate::product::protocol::config_types::ReasoningSummary::Auto,
+            identity: Some(identity),
+            personality: None,
+            tui_buddy: None,
+        })
+        .await?;
+
+    let mut completed_agent_text = None;
+    let mut saw_plan_item = false;
+    loop {
+        let ev = wait_for_event(&codex, |_| true).await;
+        match ev {
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::AgentMessage(item),
+                ..
+            }) => {
+                completed_agent_text = Some(agent_message_text(&item));
+            }
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::Plan(_),
+                ..
+            }) => {
+                saw_plan_item = true;
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        completed_agent_text,
+        Some(full_message.to_string()),
+        "inline proposed_plan tags should remain ordinary text"
+    );
+    assert!(
+        !saw_plan_item,
+        "inline proposed_plan tags must not create a plan"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plan_mode_keeps_non_streamed_agent_message_visible() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 

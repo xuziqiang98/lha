@@ -647,6 +647,8 @@ pub(crate) struct ChatWidget {
     saw_plan_update_this_turn: bool,
     // Whether the current turn emitted a proposed plan item.
     saw_plan_item_this_turn: bool,
+    // Whether the current turn's proposed plan has already been rendered in history.
+    pending_proposed_plan_rendered_this_turn: bool,
     // Incremental buffer for streamed plan content.
     plan_delta_buffer: String,
     // True while a plan item is streaming.
@@ -927,29 +929,37 @@ impl ChatWidget {
     }
 
     fn flush_answer_stream_with_separator(&mut self) {
-        self.flush_answer_stream_with_separator_impl(false);
+        let _ = self.flush_answer_stream_with_separator_impl(false, None);
     }
 
     fn flush_answer_stream_for_blocking_prompt(&mut self) {
-        self.flush_answer_stream_with_separator_impl(true);
+        let _ = self.flush_answer_stream_with_separator_impl(true, None);
     }
 
-    fn flush_answer_stream_with_separator_impl(&mut self, remember_final_echo: bool) {
+    fn flush_answer_stream_with_separator_impl(
+        &mut self,
+        remember_final_echo: bool,
+        leading_separator: Option<history_cell::FinalMessageSeparator>,
+    ) -> (bool, Option<history_cell::FinalMessageSeparator>) {
         let Some(controller) = self.stream_controller.take() else {
-            return;
+            return (false, leading_separator);
         };
 
         self.app_event_tx.send(AppEvent::StopCommitAnimation);
 
         let source = controller.finalize();
         if source.is_empty() {
-            return;
+            return (false, leading_separator);
         }
 
         if remember_final_echo {
             self.pending_streamed_agent_message_echo
                 .get_or_insert_with(String::new)
                 .push_str(&source);
+        }
+
+        if let Some(separator) = leading_separator {
+            self.app_event_tx.send_history_cell(Box::new(separator));
         }
 
         if !self.active_cell_is_answer_stream() {
@@ -961,13 +971,14 @@ impl ChatWidget {
             cell.show_all_markdown(source)
         } else {
             self.add_boxed_history(Box::new(AgentMessageCell::new_markdown(source, true)));
-            return;
+            return (true, None);
         };
 
         if updated {
             self.bump_active_cell_revision();
         }
         self.flush_active_cell();
+        (true, None)
     }
 
     fn active_cell_is_answer_stream(&self) -> bool {
@@ -1115,6 +1126,42 @@ impl ChatWidget {
         true
     }
 
+    fn pending_proposed_plan_text(&self) -> Option<String> {
+        if !self.saw_plan_item_this_turn {
+            return None;
+        }
+        self.latest_proposed_plan_text
+            .as_ref()
+            .filter(|text| !text.trim().is_empty())
+            .cloned()
+    }
+
+    fn flush_pending_proposed_plan(&mut self) -> bool {
+        if self.pending_proposed_plan_rendered_this_turn {
+            return false;
+        }
+        let Some(plan_text) = self.pending_proposed_plan_text() else {
+            return false;
+        };
+        self.flush_plan_stream();
+        self.flush_active_cell();
+        self.add_to_history(history_cell::new_proposed_plan(plan_text));
+        self.pending_proposed_plan_rendered_this_turn = true;
+        true
+    }
+
+    fn final_message_separator(&self) -> Option<history_cell::FinalMessageSeparator> {
+        let runtime_metrics = self.otel_manager.runtime_metrics_summary()?;
+        let elapsed_seconds = self
+            .bottom_pane
+            .status_widget()
+            .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
+        Some(history_cell::FinalMessageSeparator::new(
+            elapsed_seconds,
+            Some(runtime_metrics),
+        ))
+    }
+
     /// Update the status indicator header and details.
     ///
     /// Passing `None` clears any existing details.
@@ -1205,6 +1252,7 @@ impl ChatWidget {
         self.current_rollout_path = event.rollout_path.clone();
         self.current_goal = None;
         self.current_goal_state_known = false;
+        self.pending_proposed_plan_rendered_this_turn = false;
         self.latest_proposed_plan_text = None;
         self.latest_proposed_plan_title = None;
         let initial_messages = event.initial_messages.clone();
@@ -1431,25 +1479,6 @@ impl ChatWidget {
             self.plan_delta_buffer.clear();
         }
         self.plan_delta_buffer.push_str(&delta);
-        // Before streaming plan content, flush any active exec cell group.
-        self.flush_unified_exec_wait_streak();
-        if !self.active_cell_is_plan_stream() {
-            self.flush_active_cell();
-        }
-
-        if self.plan_stream_controller.is_none() {
-            self.plan_stream_controller = Some(PlanStreamController::new());
-        }
-        let stream_width = self.last_rendered_width.get().map(|w| w.saturating_sub(4));
-        let should_start_animation = self
-            .plan_stream_controller
-            .as_mut()
-            .is_some_and(|controller| controller.push(&delta, stream_width));
-        self.sync_plan_stream_active_cell_from_controller();
-        if should_start_animation {
-            self.app_event_tx.send(AppEvent::StartCommitAnimation);
-            self.on_commit_tick();
-        }
         self.request_redraw();
     }
 
@@ -1466,15 +1495,7 @@ impl ChatWidget {
         self.latest_proposed_plan_title = extract_first_markdown_heading(&plan_text);
         self.latest_proposed_plan_text =
             (!plan_text.trim().is_empty()).then_some(plan_text.clone());
-        if self.flush_plan_stream() {
-            // TODO: Replace streamed output with the final plan item text if plan streaming is
-            // removed or if we need to reconcile mismatches between streamed and final content.
-            return;
-        }
-        if plan_text.is_empty() {
-            return;
-        }
-        self.add_to_history(history_cell::new_proposed_plan(plan_text));
+        self.request_redraw();
     }
 
     fn on_agent_reasoning_delta(&mut self, delta: String) {
@@ -1571,6 +1592,7 @@ impl ChatWidget {
             .set_turn_running(/* turn_running */ true);
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
+        self.pending_proposed_plan_rendered_this_turn = false;
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.plan_stream_controller = None;
@@ -1600,20 +1622,23 @@ impl ChatWidget {
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
         // If a stream is currently active, finalize it.
-        self.flush_answer_stream_with_separator();
-        self.flush_plan_stream();
+        let final_separator = if from_replay {
+            None
+        } else {
+            self.final_message_separator()
+        };
+        let (_flushed_answer, mut final_separator) =
+            self.flush_answer_stream_with_separator_impl(false, final_separator);
         self.flush_unified_exec_wait_streak();
+        if self.pending_proposed_plan_text().is_some()
+            && let Some(separator) = final_separator.take()
+        {
+            self.app_event_tx.send_history_cell(Box::new(separator));
+        }
+        self.flush_pending_proposed_plan();
         if !from_replay {
-            let runtime_metrics = self.otel_manager.runtime_metrics_summary();
-            if runtime_metrics.is_some() {
-                let elapsed_seconds = self
-                    .bottom_pane
-                    .status_widget()
-                    .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
-                self.add_to_history(history_cell::FinalMessageSeparator::new(
-                    elapsed_seconds,
-                    runtime_metrics,
-                ));
+            if let Some(separator) = final_separator {
+                self.add_to_history(separator);
             }
             self.needs_final_message_separator = false;
             self.had_work_activity = false;
@@ -2448,6 +2473,7 @@ impl ChatWidget {
 
     fn handle_blocking_prompt(&mut self, handle: impl FnOnce(&mut Self)) {
         self.flush_answer_stream_for_blocking_prompt();
+        self.flush_pending_proposed_plan();
         if !self.interrupts.is_empty() {
             self.flush_interrupt_queue();
         }
@@ -2935,6 +2961,7 @@ impl ChatWidget {
             had_work_activity: false,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
+            pending_proposed_plan_rendered_this_turn: false,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             latest_proposed_plan_title: None,
@@ -3112,6 +3139,7 @@ impl ChatWidget {
             had_work_activity: false,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
+            pending_proposed_plan_rendered_this_turn: false,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             latest_proposed_plan_title: None,

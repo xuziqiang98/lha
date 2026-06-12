@@ -59,6 +59,8 @@ use crate::product::agent::protocol::ViewImageToolCallEvent;
 use crate::product::agent::protocol::WarningEvent;
 use crate::product::common::approval_presets::builtin_approval_presets;
 use crate::product::otel::OtelManager;
+use crate::product::otel::metrics::MetricsClient;
+use crate::product::otel::metrics::MetricsConfig;
 use crate::product::protocol::ThreadId;
 use crate::product::protocol::config_types::Identity;
 use crate::product::protocol::config_types::IdentityKind;
@@ -104,11 +106,13 @@ use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
 use dirs::home_dir;
 use insta::assert_snapshot;
+use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use pretty_assertions::assert_eq;
 #[cfg(target_os = "windows")]
 use serial_test::serial;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::time::Duration;
 use tempfile::NamedTempFile;
 use tempfile::tempdir;
 use tokio::sync::broadcast;
@@ -2296,6 +2300,25 @@ fn test_otel_manager(config: &Config, model: &str) -> OtelManager {
     )
 }
 
+fn test_otel_manager_with_runtime_reader(config: &Config, model: &str) -> OtelManager {
+    let exporter = InMemoryMetricExporter::default();
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "lha-cli", env!("CARGO_PKG_VERSION"), exporter)
+            .with_runtime_reader(),
+    )
+    .expect("metrics client");
+    test_otel_manager(config, model).with_metrics_without_metadata_tags(metrics)
+}
+
+fn record_test_runtime_metrics(manager: &OtelManager) {
+    manager.counter("codex.api_request", 1, &[]);
+    manager.record_duration(
+        "codex.api_request.duration_ms",
+        Duration::from_millis(20),
+        &[],
+    );
+}
+
 fn write_openai_model_fixture(lha_home: &std::path::Path, model: &str) {
     std::fs::write(
         lha_home.join("models.json"),
@@ -2337,6 +2360,17 @@ async fn make_chatwidget_manual_inner(
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     tokio::sync::mpsc::UnboundedReceiver<Op>,
 ) {
+    make_chatwidget_manual_inner_with_otel(model_override, None).await
+}
+
+async fn make_chatwidget_manual_inner_with_otel(
+    model_override: Option<&str>,
+    otel_manager: Option<OtelManager>,
+) -> (
+    ChatWidget,
+    tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    tokio::sync::mpsc::UnboundedReceiver<Op>,
+) {
     let (tx_raw, rx) = unbounded_channel::<AppEvent>();
     let app_event_tx = AppEventSender::new(tx_raw);
     let (op_tx, op_rx) = unbounded_channel::<Op>();
@@ -2346,7 +2380,8 @@ async fn make_chatwidget_manual_inner(
         .map(str::to_owned)
         .unwrap_or_else(|| ModelsManager::get_model_offline(cfg.model.as_deref()));
     cfg.model = Some(resolved_model.clone());
-    let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
+    let otel_manager =
+        otel_manager.unwrap_or_else(|| test_otel_manager(&cfg, resolved_model.as_str()));
     let mut bottom = BottomPane::new(BottomPaneParams {
         app_event_tx: app_event_tx.clone(),
         frame_requester: FrameRequester::test_dummy(),
@@ -2451,6 +2486,7 @@ async fn make_chatwidget_manual_inner(
         had_work_activity: false,
         saw_plan_update_this_turn: false,
         saw_plan_item_this_turn: false,
+        pending_proposed_plan_rendered_this_turn: false,
         plan_delta_buffer: String::new(),
         plan_item_active: false,
         latest_proposed_plan_title: None,
@@ -2629,6 +2665,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         had_work_activity: false,
         saw_plan_update_this_turn: false,
         saw_plan_item_this_turn: false,
+        pending_proposed_plan_rendered_this_turn: false,
         plan_delta_buffer: String::new(),
         plan_item_active: false,
         latest_proposed_plan_title: None,
@@ -3791,6 +3828,215 @@ async fn plan_implementation_popup_does_not_repeat_streamed_intro() {
 }
 
 #[tokio::test]
+async fn proposed_plan_renders_after_streamed_intro() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+
+    let intro = "现在我给完整计划。";
+    let plan = "# Plan\n- Step 1\n";
+    chat.on_task_started();
+    chat.on_agent_message_delta(intro.to_string());
+    chat.on_plan_delta(plan.to_string());
+    chat.on_plan_item_completed(plan.to_string());
+    chat.on_task_complete(None, false);
+
+    let history = drain_insert_history(&mut rx);
+    let rendered = history
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    let intro_index = rendered
+        .find(intro)
+        .unwrap_or_else(|| panic!("expected intro in history, got {rendered:?}"));
+    let plan_index = rendered
+        .find("# Plan")
+        .unwrap_or_else(|| panic!("expected plan in history, got {rendered:?}"));
+    assert!(
+        intro_index < plan_index,
+        "expected intro before proposed plan, got {rendered:?}"
+    );
+    assert_eq!(
+        rendered.matches("# Plan").count(),
+        1,
+        "expected proposed plan once, got {rendered:?}"
+    );
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected plan popup after proposed plan output, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn proposed_plan_renders_after_trailing_answer_text() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+
+    let intro = "现在我给完整计划。\n";
+    let outro = "请确认是否执行。";
+    let plan = "# Plan\n- Step 1\n";
+    chat.on_task_started();
+    chat.on_agent_message_delta(intro.to_string());
+    chat.on_plan_delta(plan.to_string());
+    chat.on_agent_message_delta(outro.to_string());
+    chat.on_plan_item_completed(plan.to_string());
+    chat.on_task_complete(None, false);
+
+    let history = drain_insert_history(&mut rx);
+    let rendered = history
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    let intro_index = rendered
+        .find(intro.trim_end())
+        .unwrap_or_else(|| panic!("expected intro in history, got {rendered:?}"));
+    let outro_index = rendered
+        .find(outro)
+        .unwrap_or_else(|| panic!("expected trailing answer in history, got {rendered:?}"));
+    let plan_index = rendered
+        .find("# Plan")
+        .unwrap_or_else(|| panic!("expected plan in history, got {rendered:?}"));
+    assert!(
+        intro_index < plan_index,
+        "expected intro before proposed plan, got {rendered:?}"
+    );
+    assert!(
+        outro_index < plan_index,
+        "expected trailing answer before proposed plan, got {rendered:?}"
+    );
+    assert_eq!(
+        rendered.matches("# Plan").count(),
+        1,
+        "expected proposed plan once, got {rendered:?}"
+    );
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected plan popup after final proposed plan, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn planner_runtime_metrics_separator_precedes_answer_and_plan() {
+    let cfg = test_config().await;
+    let model = "gpt-5";
+    let otel_manager = test_otel_manager_with_runtime_reader(&cfg, model);
+    let (mut chat, mut rx, _op_rx) =
+        make_chatwidget_manual_inner_with_otel(Some(model), Some(otel_manager.clone())).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+
+    let intro = "现在我给完整计划。\n";
+    let outro = "请确认是否执行。";
+    let plan = "# Plan\n- Step 1\n";
+    chat.on_task_started();
+    record_test_runtime_metrics(&otel_manager);
+    chat.on_agent_message_delta(intro.to_string());
+    chat.on_plan_delta(plan.to_string());
+    chat.on_agent_message_delta(outro.to_string());
+    chat.on_plan_item_completed(plan.to_string());
+    chat.on_task_complete(None, false);
+
+    let history = drain_insert_history(&mut rx);
+    let rendered = history
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    let separator_index = rendered
+        .find("Inference:")
+        .unwrap_or_else(|| panic!("expected runtime separator in history, got {rendered:?}"));
+    let intro_index = rendered
+        .find(intro.trim_end())
+        .unwrap_or_else(|| panic!("expected intro in history, got {rendered:?}"));
+    let outro_index = rendered
+        .find(outro)
+        .unwrap_or_else(|| panic!("expected trailing answer in history, got {rendered:?}"));
+    let plan_index = rendered
+        .find("# Plan")
+        .unwrap_or_else(|| panic!("expected plan in history, got {rendered:?}"));
+    assert!(
+        separator_index < intro_index,
+        "expected runtime separator before intro, got {rendered:?}"
+    );
+    assert!(
+        intro_index < plan_index,
+        "expected intro before proposed plan, got {rendered:?}"
+    );
+    assert!(
+        outro_index < plan_index,
+        "expected trailing answer before proposed plan, got {rendered:?}"
+    );
+    assert_eq!(
+        rendered.matches("# Plan").count(),
+        1,
+        "expected proposed plan once, got {rendered:?}"
+    );
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected plan popup after final proposed plan, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn planner_runtime_metrics_separator_precedes_plan_without_answer() {
+    let cfg = test_config().await;
+    let model = "gpt-5";
+    let otel_manager = test_otel_manager_with_runtime_reader(&cfg, model);
+    let (mut chat, mut rx, _op_rx) =
+        make_chatwidget_manual_inner_with_otel(Some(model), Some(otel_manager.clone())).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+
+    let plan = "# Plan\n- Step 1\n";
+    chat.on_task_started();
+    record_test_runtime_metrics(&otel_manager);
+    chat.on_plan_delta(plan.to_string());
+    chat.on_plan_item_completed(plan.to_string());
+    chat.on_task_complete(None, false);
+
+    let history = drain_insert_history(&mut rx);
+    let rendered = history
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    let separator_index = rendered
+        .find("Inference:")
+        .unwrap_or_else(|| panic!("expected runtime separator in history, got {rendered:?}"));
+    let plan_index = rendered
+        .find("# Plan")
+        .unwrap_or_else(|| panic!("expected plan in history, got {rendered:?}"));
+    assert!(
+        separator_index < plan_index,
+        "expected runtime separator before proposed plan, got {rendered:?}"
+    );
+    assert_eq!(
+        rendered.matches("# Plan").count(),
+        1,
+        "expected proposed plan once, got {rendered:?}"
+    );
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected plan popup after final proposed plan, got {popup:?}"
+    );
+}
+
+#[tokio::test]
 async fn streamed_proposed_plan_background_fills_rendered_row() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::Identities, true);
@@ -3889,14 +4135,15 @@ async fn streamed_proposed_plan_reflows_after_narrow_stream_width() {
         "This streamed proposed plan should become a single wide line after the terminal grows.";
     chat.on_plan_delta(format!("{source}\n"));
     chat.on_plan_item_completed(format!("{source}\n"));
+    chat.on_task_complete(None, false);
 
     let cells = std::iter::from_fn(|| rx.try_recv().ok())
         .filter_map(into_insert_history_cell)
         .collect::<Vec<_>>();
     let plan = cells
         .into_iter()
-        .find(|cell| cell.as_any().is::<ProposedPlanStreamCell>())
-        .expect("streamed proposed plan cell");
+        .find(|cell| crate::product::tui_app::history_cell::is_proposed_plan_cell(cell.as_ref()))
+        .expect("proposed plan cell");
 
     let narrow = lines_to_strings(&plan.display_lines(32));
     let wide = lines_to_strings(&plan.display_lines(120));
@@ -3912,7 +4159,7 @@ async fn streamed_proposed_plan_reflows_after_narrow_stream_width() {
 }
 
 #[tokio::test]
-async fn streamed_proposed_plan_live_tail_reflows_after_width_change() {
+async fn streamed_proposed_plan_is_not_inserted_before_completion() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::Identities, true);
     let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
@@ -3921,27 +4168,14 @@ async fn streamed_proposed_plan_live_tail_reflows_after_width_change() {
     chat.last_rendered_width.set(Some(32));
 
     chat.on_task_started();
-    let source =
-        "This live proposed plan tail should reflow when display width grows during streaming.";
+    let source = "This pending proposed plan should stay out of history until completion.";
     chat.on_plan_delta(format!("{source}\n"));
 
     assert!(drain_insert_history(&mut rx).is_empty());
-    let narrow = chat
-        .transcript_live_tail_for_mode(32, TranscriptRenderMode::Display)
-        .map(|tail| lines_to_strings(&tail.lines))
-        .expect("narrow live tail");
-    let wide = chat
-        .transcript_live_tail_for_mode(120, TranscriptRenderMode::Display)
-        .map(|tail| lines_to_strings(&tail.lines))
-        .expect("wide live tail");
-
     assert!(
-        !narrow.iter().any(|line| line == &format!("  {source}")),
-        "expected narrow live tail to wrap the proposed plan line; narrow={narrow:?}"
-    );
-    assert!(
-        wide.iter().any(|line| line == &format!("  {source}")),
-        "expected wide live tail to contain the full proposed plan line; wide={wide:?}"
+        chat.transcript_live_tail_for_mode(32, TranscriptRenderMode::Display)
+            .is_none(),
+        "expected no live tail while proposed plan is only pending"
     );
 }
 
