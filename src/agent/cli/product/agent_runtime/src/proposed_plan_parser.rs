@@ -232,4 +232,140 @@ mod tests {
         );
         assert_eq!(strip_proposed_plan_blocks(text), "before\nafter");
     }
+
+    #[test]
+    fn keeps_four_space_indented_literal_plan_tags() {
+        let text = concat!(
+            "before\n",
+            "<proposed_plan>\n",
+            "# Title\n",
+            "    <proposed_plan>\n",
+            "    </proposed_plan>\n",
+            "After indented tags\n",
+            "</proposed_plan>\n",
+            "after",
+        );
+        let expected_plan = concat!(
+            "# Title\n",
+            "    <proposed_plan>\n",
+            "    </proposed_plan>\n",
+            "After indented tags\n",
+        );
+
+        assert_eq!(
+            extract_proposed_plan_text(text),
+            Some(expected_plan.to_string())
+        );
+        assert_eq!(strip_proposed_plan_blocks(text), "before\nafter");
+    }
+
+    #[test]
+    fn extracts_deeply_indented_outer_plan_tags() {
+        let text = concat!(
+            "before\n",
+            "    <proposed_plan>\n",
+            "# Plan\n",
+            "- step\n",
+            "    </proposed_plan>\n",
+            "after",
+        );
+        let expected_plan = concat!("# Plan\n", "- step\n");
+
+        assert_eq!(
+            extract_proposed_plan_text(text),
+            Some(expected_plan.to_string())
+        );
+        assert_eq!(strip_proposed_plan_blocks(text), "before\nafter");
+    }
+
+    #[test]
+    fn extracts_tab_indented_outer_plan_tags() {
+        let text = concat!(
+            "before\n",
+            "\t<proposed_plan>\n",
+            "# Plan\n",
+            "- step\n",
+            "\t</proposed_plan>\n",
+            "after",
+        );
+        let expected_plan = concat!("# Plan\n", "- step\n");
+
+        assert_eq!(
+            extract_proposed_plan_text(text),
+            Some(expected_plan.to_string())
+        );
+        assert_eq!(strip_proposed_plan_blocks(text), "before\nafter");
+    }
+
+    #[test]
+    fn keeps_nested_literal_plan_tags() {
+        let text = concat!(
+            "before\n",
+            "<proposed_plan>\n",
+            "# Plan\n",
+            "<proposed_plan>\n",
+            "# Inner\n",
+            "</proposed_plan>\n",
+            "## Tests\n",
+            "- still inside plan\n",
+            "</proposed_plan>\n",
+            "after",
+        );
+        let expected_plan = concat!(
+            "# Plan\n",
+            "<proposed_plan>\n",
+            "# Inner\n",
+            "</proposed_plan>\n",
+            "## Tests\n",
+            "- still inside plan\n",
+        );
+
+        assert_eq!(
+            extract_proposed_plan_text(text),
+            Some(expected_plan.to_string())
+        );
+        assert_eq!(strip_proposed_plan_blocks(text), "before\nafter");
+    }
+
+    #[test]
+    fn keeps_list_nested_literal_plan_tags() {
+        let text = concat!(
+            "before\n",
+            "<proposed_plan>\n",
+            "# Plan\n",
+            "\n",
+            "1. Case\n",
+            "\n",
+            "     ```text\n",
+            "     Intro<proposed_plan>\n",
+            "     # Inner\n",
+            "     </proposed_plan>\n",
+            "     ```\n",
+            "\n",
+            "## Tests\n",
+            "- still inside plan\n",
+            "</proposed_plan>\n",
+            "after",
+        );
+        let expected_plan = concat!(
+            "# Plan\n",
+            "\n",
+            "1. Case\n",
+            "\n",
+            "     ```text\n",
+            "     Intro<proposed_plan>\n",
+            "     # Inner\n",
+            "     </proposed_plan>\n",
+            "     ```\n",
+            "\n",
+            "## Tests\n",
+            "- still inside plan\n",
+        );
+
+        assert_eq!(
+            extract_proposed_plan_text(text),
+            Some(expected_plan.to_string())
+        );
+        assert_eq!(strip_proposed_plan_blocks(text), "before\nafter");
+    }
 }

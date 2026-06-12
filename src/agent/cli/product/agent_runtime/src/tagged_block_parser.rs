@@ -24,7 +24,8 @@ pub(crate) enum TaggedLineSegment<T> {
 ///
 /// How it works:
 /// - While reading a line, we buffer characters until the line either finishes
-///   (`\n`) or stops matching any tag prefix (after `trim_start`).
+///   (`\n`) or stops matching any tag prefix (after `trim_start`) or Markdown
+///   fence prefix.
 /// - If it stops matching a tag prefix, the buffered line is immediately
 ///   emitted as text and we continue in "plain text" mode until the next
 ///   newline.
@@ -41,6 +42,8 @@ where
 {
     specs: Vec<TagSpec<T>>,
     active_tag: Option<T>,
+    active_tag_indent: String,
+    nested_tag_depth: usize,
     detect_tag: bool,
     line_buffer: String,
     markdown_fence: Option<MarkdownFence>,
@@ -54,6 +57,8 @@ where
         Self {
             specs,
             active_tag: None,
+            active_tag_indent: String::new(),
+            nested_tag_depth: 0,
             detect_tag: true,
             line_buffer: String::new(),
             markdown_fence: None,
@@ -75,11 +80,12 @@ where
                     self.finish_line(&mut segments);
                     continue;
                 }
-                let slug = self.line_buffer.trim_start();
-                if slug.is_empty()
-                    || self.markdown_fence.is_some()
-                    || self.is_tag_prefix(slug)
-                    || is_markdown_fence_prefix(&self.line_buffer)
+                let tag_slug = self.line_buffer.trim_start();
+                let fence_slug = markdown_fence_slug(&self.line_buffer);
+                if self.markdown_fence.is_some()
+                    || tag_slug.is_empty()
+                    || self.is_tag_prefix(tag_slug)
+                    || fence_slug.is_some_and(|slug| slug.is_empty() || is_fence_prefix(slug))
                 {
                     continue;
                 }
@@ -109,30 +115,13 @@ where
         let mut segments = Vec::new();
         if !self.line_buffer.is_empty() {
             let buffered = std::mem::take(&mut self.line_buffer);
-            let without_newline = buffered.strip_suffix('\n').unwrap_or(&buffered);
-            let tag_slug = without_newline.trim_start().trim_end();
-            let fence_slug = markdown_fence_slug(without_newline);
-
-            if self.update_markdown_fence(fence_slug) || self.markdown_fence.is_some() {
-                self.push_text(buffered, &mut segments);
-            } else if let Some(tag) = self.match_open(tag_slug)
-                && self.active_tag.is_none()
-            {
-                push_segment(&mut segments, TaggedLineSegment::TagStart(tag));
-                self.active_tag = Some(tag);
-            } else if let Some(tag) = self.match_close(tag_slug)
-                && self.active_tag == Some(tag)
-            {
-                push_segment(&mut segments, TaggedLineSegment::TagEnd(tag));
-                self.active_tag = None;
-            } else {
-                // The buffered line never proved to be a tag line.
-                self.push_text(buffered, &mut segments);
-            }
+            self.process_line(buffered, &mut segments);
         }
         if let Some(tag) = self.active_tag.take() {
             push_segment(&mut segments, TaggedLineSegment::TagEnd(tag));
         }
+        self.active_tag_indent.clear();
+        self.nested_tag_depth = 0;
         self.markdown_fence = None;
         self.detect_tag = true;
         segments
@@ -140,41 +129,60 @@ where
 
     fn finish_line(&mut self, segments: &mut Vec<TaggedLineSegment<T>>) {
         let line = std::mem::take(&mut self.line_buffer);
+        self.process_line(line, segments);
+        self.detect_tag = true;
+    }
+
+    fn process_line(&mut self, line: String, segments: &mut Vec<TaggedLineSegment<T>>) {
         let without_newline = line.strip_suffix('\n').unwrap_or(&line);
-        let tag_slug = without_newline.trim_start().trim_end();
+        let tag_slug = tag_line_slug(without_newline);
         let fence_slug = markdown_fence_slug(without_newline);
 
         if self.update_markdown_fence(fence_slug) {
-            self.detect_tag = true;
             self.push_text(line, segments);
             return;
         }
 
         if self.markdown_fence.is_some() {
-            self.detect_tag = true;
             self.push_text(line, segments);
             return;
         }
 
-        if let Some(tag) = self.match_open(tag_slug)
-            && self.active_tag.is_none()
-        {
+        if let Some(active_tag) = self.active_tag {
+            if self.match_open(tag_slug) == Some(active_tag) {
+                self.nested_tag_depth += 1;
+                self.push_text(line, segments);
+                return;
+            }
+
+            if self.match_close(tag_slug) == Some(active_tag) {
+                if self.nested_tag_depth > 0 {
+                    self.nested_tag_depth -= 1;
+                    self.push_text(line, segments);
+                    return;
+                }
+                if self.can_close_active_tag(without_newline) {
+                    push_segment(segments, TaggedLineSegment::TagEnd(active_tag));
+                    self.active_tag = None;
+                    self.active_tag_indent.clear();
+                    return;
+                }
+                self.push_text(line, segments);
+                return;
+            }
+
+            self.push_text(line, segments);
+            return;
+        }
+
+        if let Some(tag) = self.match_open(tag_slug) {
             push_segment(segments, TaggedLineSegment::TagStart(tag));
             self.active_tag = Some(tag);
-            self.detect_tag = true;
+            self.active_tag_indent = tag_line_indent(without_newline).to_string();
+            self.nested_tag_depth = 0;
             return;
         }
 
-        if let Some(tag) = self.match_close(tag_slug)
-            && self.active_tag == Some(tag)
-        {
-            push_segment(segments, TaggedLineSegment::TagEnd(tag));
-            self.active_tag = None;
-            self.detect_tag = true;
-            return;
-        }
-
-        self.detect_tag = true;
         self.push_text(line, segments);
     }
 
@@ -225,6 +233,11 @@ where
 
         false
     }
+
+    fn can_close_active_tag(&self, line: &str) -> bool {
+        let indent = tag_line_indent(line);
+        indent == self.active_tag_indent || is_markdown_control_indent(indent)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -244,6 +257,19 @@ fn fence_opens(slug: &str) -> Option<MarkdownFence> {
     (len >= 3).then_some(MarkdownFence { marker, len })
 }
 
+fn tag_line_slug(line: &str) -> &str {
+    line.trim_start().trim_end()
+}
+
+fn tag_line_indent(line: &str) -> &str {
+    let slug = line.trim_start();
+    &line[..line.len() - slug.len()]
+}
+
+fn is_markdown_control_indent(indent: &str) -> bool {
+    indent.len() <= 3 && indent.bytes().all(|byte| byte == b' ')
+}
+
 fn markdown_fence_slug(line: &str) -> Option<&str> {
     let mut indent = 0;
     for (idx, byte) in line.bytes().enumerate() {
@@ -255,10 +281,6 @@ fn markdown_fence_slug(line: &str) -> Option<&str> {
         }
     }
     Some("")
-}
-
-fn is_markdown_fence_prefix(line: &str) -> bool {
-    markdown_fence_slug(line).is_some_and(is_fence_prefix)
 }
 
 fn is_fence_prefix(slug: &str) -> bool {
@@ -455,6 +477,127 @@ mod tests {
                 TaggedLineSegment::TagDelta(Tag::Block, "    ```\n".to_string()),
                 TaggedLineSegment::TagEnd(Tag::Block),
                 TaggedLineSegment::Normal("normal".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn ignores_four_space_indented_close_tag() {
+        let mut parser = parser();
+        let mut segments = parser.parse("<tag>\n    </tag>\nstill plan\n</tag>\n");
+        segments.extend(parser.finish());
+
+        assert_eq!(
+            segments,
+            vec![
+                TaggedLineSegment::TagStart(Tag::Block),
+                TaggedLineSegment::TagDelta(Tag::Block, "    </tag>\nstill plan\n".to_string()),
+                TaggedLineSegment::TagEnd(Tag::Block),
+            ]
+        );
+    }
+
+    #[test]
+    fn ignores_nested_list_code_block_literal_tags() {
+        let mut parser = parser();
+        let mut segments = parser.parse(concat!(
+            "<tag>\n",
+            "  - example:\n",
+            "     ```text\n",
+            "     <tag>\n",
+            "     </tag>\n",
+            "     ```\n",
+            "after\n",
+            "</tag>\n",
+        ));
+        segments.extend(parser.finish());
+
+        assert_eq!(
+            segments,
+            vec![
+                TaggedLineSegment::TagStart(Tag::Block),
+                TaggedLineSegment::TagDelta(
+                    Tag::Block,
+                    concat!(
+                        "  - example:\n",
+                        "     ```text\n",
+                        "     <tag>\n",
+                        "     </tag>\n",
+                        "     ```\n",
+                        "after\n",
+                    )
+                    .to_string()
+                ),
+                TaggedLineSegment::TagEnd(Tag::Block),
+            ]
+        );
+    }
+
+    #[test]
+    fn still_accepts_three_space_indented_tags() {
+        let mut parser = parser();
+        let mut segments = parser.parse("   <tag>\nline\n   </tag>\n");
+        segments.extend(parser.finish());
+
+        assert_eq!(
+            segments,
+            vec![
+                TaggedLineSegment::TagStart(Tag::Block),
+                TaggedLineSegment::TagDelta(Tag::Block, "line\n".to_string()),
+                TaggedLineSegment::TagEnd(Tag::Block),
+            ]
+        );
+    }
+
+    #[test]
+    fn accepts_deeply_indented_outer_tag_delimiters() {
+        let mut parser = parser();
+        let mut segments = parser.parse("    <tag>\nline\n    </tag>\n");
+        segments.extend(parser.finish());
+
+        assert_eq!(
+            segments,
+            vec![
+                TaggedLineSegment::TagStart(Tag::Block),
+                TaggedLineSegment::TagDelta(Tag::Block, "line\n".to_string()),
+                TaggedLineSegment::TagEnd(Tag::Block),
+            ]
+        );
+    }
+
+    #[test]
+    fn accepts_tab_indented_outer_tag_delimiters() {
+        let mut parser = parser();
+        let mut segments = parser.parse("\t<tag>\nline\n\t</tag>\n");
+        segments.extend(parser.finish());
+
+        assert_eq!(
+            segments,
+            vec![
+                TaggedLineSegment::TagStart(Tag::Block),
+                TaggedLineSegment::TagDelta(Tag::Block, "line\n".to_string()),
+                TaggedLineSegment::TagEnd(Tag::Block),
+            ]
+        );
+    }
+
+    #[test]
+    fn preserves_nested_literal_tags_inside_active_block() {
+        let mut parser = parser();
+        let mut segments = parser.parse(concat!(
+            "<tag>\n", "before\n", "<tag>\n", "inner\n", "</tag>\n", "after\n", "</tag>\n",
+        ));
+        segments.extend(parser.finish());
+
+        assert_eq!(
+            segments,
+            vec![
+                TaggedLineSegment::TagStart(Tag::Block),
+                TaggedLineSegment::TagDelta(
+                    Tag::Block,
+                    concat!("before\n", "<tag>\n", "inner\n", "</tag>\n", "after\n",).to_string()
+                ),
+                TaggedLineSegment::TagEnd(Tag::Block),
             ]
         );
     }

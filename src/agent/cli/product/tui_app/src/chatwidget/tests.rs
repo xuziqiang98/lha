@@ -4122,6 +4122,142 @@ async fn streamed_proposed_plan_background_covers_lines_after_literal_plan_tags(
 }
 
 #[tokio::test]
+async fn streamed_proposed_plan_background_covers_indented_literal_plan_tags() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+
+    let plan = concat!(
+        "# Plan\n",
+        "\n",
+        "1. Case\n",
+        "\n",
+        "     ```text\n",
+        "     Intro<proposed_plan>\n",
+        "     # Inner\n",
+        "     </proposed_plan>\n",
+        "     ```\n",
+        "\n",
+        "## Tests\n",
+        "- still inside plan\n",
+    );
+    chat.on_task_started();
+    chat.on_plan_delta(plan.to_string());
+    chat.on_plan_item_completed(plan.to_string());
+    chat.on_task_complete(None, false);
+
+    let area = Rect::new(0, 0, 80, 30);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+
+    let Some(plan_bg) = proposed_plan_style().bg else {
+        return;
+    };
+    let rendered = (0..area.height)
+        .map(|y| {
+            (0..area.width)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        rendered.matches("# Plan").count(),
+        1,
+        "expected proposed plan once, got {rendered:?}"
+    );
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected plan popup after final proposed plan, got {popup:?}"
+    );
+
+    let tests_row = (0..area.height)
+        .find(|y| {
+            (0..area.width)
+                .map(|x| buf[(x, *y)].symbol())
+                .collect::<String>()
+                .contains("## Tests")
+        })
+        .expect("expected trailing proposed plan heading");
+
+    for x in 0..area.width {
+        assert_eq!(
+            buf[(x, tests_row)].style().bg,
+            Some(plan_bg),
+            "expected trailing proposed plan background at x={x}, y={tests_row}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn streamed_proposed_plan_background_covers_nested_literal_plan_tags() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::Identities, true);
+    let plan_mask = identities::mask_for_kind(chat.thread_manager.as_ref(), IdentityKind::Planner)
+        .expect("expected planner identity mask");
+    chat.set_identity_mask(plan_mask);
+
+    let plan = concat!(
+        "# Plan\n",
+        "<proposed_plan>\n",
+        "# Inner\n",
+        "</proposed_plan>\n",
+        "## Tests\n",
+        "- still inside plan\n",
+    );
+    chat.on_task_started();
+    chat.on_plan_delta(plan.to_string());
+    chat.on_plan_item_completed(plan.to_string());
+    chat.on_task_complete(None, false);
+
+    let area = Rect::new(0, 0, 80, 26);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+
+    let Some(plan_bg) = proposed_plan_style().bg else {
+        return;
+    };
+    let rendered = (0..area.height)
+        .map(|y| {
+            (0..area.width)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        rendered.matches("# Plan").count(),
+        1,
+        "expected proposed plan once, got {rendered:?}"
+    );
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected plan popup after final proposed plan, got {popup:?}"
+    );
+
+    let tests_row = (0..area.height)
+        .find(|y| {
+            (0..area.width)
+                .map(|x| buf[(x, *y)].symbol())
+                .collect::<String>()
+                .contains("## Tests")
+        })
+        .expect("expected trailing proposed plan heading");
+
+    for x in 0..area.width {
+        assert_eq!(
+            buf[(x, tests_row)].style().bg,
+            Some(plan_bg),
+            "expected trailing proposed plan background at x={x}, y={tests_row}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn streamed_proposed_plan_reflows_after_narrow_stream_width() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::Identities, true);
