@@ -37,6 +37,7 @@ The resulting binary is written to `target/release/lha`.
 - [Identities](./docs/identities.md)
 - [Slash commands](./docs/slash-commands.md)
 - [MCP configuration](./docs/mcp.md)
+- [SDK: Building agents with lha-llm and lha-core](./docs/sdk-building-agents.md)
 
 ## Structure
 
@@ -45,6 +46,9 @@ The workspace is organized under [`src/`](./src) around three crates.io publish 
 - `src/llm`: `lha-llm`, the reusable model runtime SDK, provider adapters, and wire-level API clients
 - `src/core`: `lha-core`, the reusable agent core APIs
 - `src/agent/cli`: `lha`, the LHA product package that installs the `lha` command; its private `product/` modules include the TUI, runtime, state, app-server, MCP, sandboxing, and related tooling
+
+To build your own agent on the reusable SDK crates, start with
+[`docs/sdk-building-agents.md`](./docs/sdk-building-agents.md).
 
 ## TUI Copying
 

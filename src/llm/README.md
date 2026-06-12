@@ -37,6 +37,16 @@ tool descriptors, turn requests, and turn events. The runtime layer exposes
 semantic sessions that can stream model output without depending on LHA product
 state or UI code.
 
+## Use with lha-core
+
+Use `DefaultRuntimeClientFactory` with `RuntimeBuildSpec` to construct a real
+provider-backed `SemanticRuntime`, then pass that runtime into
+`lha_core::AgentBuilder`. If you already have a custom model backend, implement
+`SemanticRuntime` and `SemanticRuntimeSession` directly instead.
+
+For a complete downstream-agent walkthrough, see
+[Building Agents with lha-llm and lha-core](../../docs/sdk-building-agents.md).
+
 ## Telemetry hooks
 
 The crate exposes product-neutral telemetry hooks. The `lha` product layer

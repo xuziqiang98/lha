@@ -69,6 +69,12 @@ runtime bridge APIs.
 
 ## Minimal SDK shape
 
+For a complete downstream-user tutorial with a provider runtime, tool
+registration, and event loop, see
+[Building Agents with lha-llm and lha-core](./sdk-building-agents.md). The
+snippet below is a fake-runtime shape check for the SDK boundary, not the
+recommended production setup.
+
 A downstream crate can build a minimal in-memory agent using `lha-llm` and `lha-core` without importing `lha_protocol::*` directly:
 
 ```rust

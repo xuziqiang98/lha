@@ -13,6 +13,24 @@ product-specific orchestration in `lha`.
 - primary, steering, and follow-up input queues
 - session snapshots and cancellation plumbing
 
+## Getting started
+
+Downstream applications usually combine `lha-core` with a runtime from
+`lha-llm`:
+
+```rust
+let manager = lha_core::AgentBuilder::new(runtime).build();
+let session = manager.create_session();
+session
+    .run(lha_core::SessionInput::from_user_text("hello"))
+    .await?;
+let event = session.next_event().await?;
+```
+
+For a complete walkthrough that builds a runtime, registers a tool, starts a
+session, and consumes `AgentEvent` values, see
+[Building Agents with lha-llm and lha-core](../../docs/sdk-building-agents.md).
+
 ## Tools, skills, and MCP
 
 The crate includes generic tool registration and execution APIs, lightweight
