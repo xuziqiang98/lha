@@ -31,6 +31,7 @@ mod grep_files;
 mod hierarchical_agents;
 mod identity_instructions;
 mod image_rollout;
+mod input_slimming;
 mod items;
 mod json_result;
 mod list_dir;

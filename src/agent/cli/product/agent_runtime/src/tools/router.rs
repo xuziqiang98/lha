@@ -6,6 +6,7 @@ use crate::product::agent::tools::context::SharedTurnDiffTracker;
 use crate::product::agent::tools::context::ToolInvocation;
 use crate::product::agent::tools::context::ToolPayload;
 use crate::product::agent::tools::registry::ConfiguredToolSpec;
+use crate::product::agent::tools::registry::ToolHandler;
 use crate::product::agent::tools::registry::ToolRegistry;
 use crate::product::agent::tools::registry::unsupported_tool_call_message;
 use crate::product::agent::tools::spec::ToolsConfig;
@@ -55,6 +56,18 @@ impl ToolRouter {
             .iter()
             .map(|config| config.spec.clone())
             .collect()
+    }
+
+    pub(crate) fn register_extra_tool(
+        &mut self,
+        spec: ToolDescriptor,
+        supports_parallel_tool_calls: bool,
+        handler_name: impl Into<String>,
+        handler: Arc<dyn ToolHandler>,
+    ) {
+        self.specs
+            .push(ConfiguredToolSpec::new(spec, supports_parallel_tool_calls));
+        self.registry.register(handler_name, handler);
     }
 
     pub fn tool_supports_parallel(&self, tool_name: &str) -> bool {
@@ -406,6 +419,114 @@ mod tests {
                     content: "alias ok".to_string(),
                     content_items: None,
                     success: Some(true),
+                },
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn register_extra_tool_adds_spec_and_handler_for_declared_runtime() {
+        let (session, turn) = make_session_and_context().await;
+        let called = Arc::new(AtomicBool::new(false));
+        let mut router = ToolRouter {
+            registry: ToolRegistry::new(HashMap::new()),
+            specs: vec![function_spec("update_plan")],
+            enforce_declared_tool_names: true,
+        };
+
+        router.register_extra_tool(
+            function_spec("lha_input_retrieve").spec,
+            true,
+            "lha_input_retrieve",
+            Arc::new(StubHandler {
+                called: Arc::clone(&called),
+                output: "retrieved",
+                accepts_custom_payload: false,
+            }),
+        );
+
+        assert!(
+            router
+                .specs()
+                .iter()
+                .any(|spec| spec.name() == "lha_input_retrieve")
+        );
+        assert!(router.tool_supports_parallel("lha_input_retrieve"));
+
+        let response = router
+            .dispatch_tool_call(
+                Arc::new(session),
+                Arc::new(turn),
+                tracker(),
+                ToolCall {
+                    tool_name: "lha_input_retrieve".to_string(),
+                    call_id: "call-4".to_string(),
+                    payload: ToolPayload::Function {
+                        arguments: "{}".to_string(),
+                    },
+                },
+            )
+            .await
+            .expect("extra tool should dispatch");
+
+        assert!(called.load(Ordering::SeqCst));
+        assert_eq!(
+            response,
+            ToolResultItem {
+                call_id: "call-4".to_string(),
+                tool_name: "lha_input_retrieve".to_string(),
+                payload: ToolResultPayload::Structured {
+                    content: "retrieved".to_string(),
+                    content_items: None,
+                    success: Some(true),
+                },
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn declared_runtime_rejects_input_retrieve_without_registration() {
+        let (session, turn) = make_session_and_context().await;
+        let called = Arc::new(AtomicBool::new(false));
+        let router = ToolRouter {
+            registry: ToolRegistry::new(HashMap::from([(
+                "lha_input_retrieve".to_string(),
+                Arc::new(StubHandler {
+                    called: Arc::clone(&called),
+                    output: "should not run",
+                    accepts_custom_payload: false,
+                }) as Arc<dyn ToolHandler>,
+            )])),
+            specs: vec![function_spec("update_plan")],
+            enforce_declared_tool_names: true,
+        };
+
+        let response = router
+            .dispatch_tool_call(
+                Arc::new(session),
+                Arc::new(turn),
+                tracker(),
+                ToolCall {
+                    tool_name: "lha_input_retrieve".to_string(),
+                    call_id: "call-5".to_string(),
+                    payload: ToolPayload::Function {
+                        arguments: r#"{"hash":"abc"}"#.to_string(),
+                    },
+                },
+            )
+            .await
+            .expect("router should return tool failure output");
+
+        assert!(!called.load(Ordering::SeqCst));
+        assert_eq!(
+            response,
+            ToolResultItem {
+                call_id: "call-5".to_string(),
+                tool_name: "lha_input_retrieve".to_string(),
+                payload: ToolResultPayload::Structured {
+                    content: "unsupported call: lha_input_retrieve".to_string(),
+                    content_items: None,
+                    success: Some(false),
                 },
             }
         );

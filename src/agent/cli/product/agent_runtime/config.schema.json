@@ -235,6 +235,9 @@
             "include_apply_patch_tool": {
               "type": "boolean"
             },
+            "input_slimming": {
+              "type": "boolean"
+            },
             "memories": {
               "type": "boolean"
             },
@@ -1293,6 +1296,9 @@
           "type": "boolean"
         },
         "include_apply_patch_tool": {
+          "type": "boolean"
+        },
+        "input_slimming": {
           "type": "boolean"
         },
         "memories": {

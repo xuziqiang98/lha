@@ -137,6 +137,8 @@ pub enum Feature {
     PreventIdleSleep,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
+    /// Slim large old tool results in model requests without rewriting history.
+    InputSlimming,
 }
 
 impl Feature {
@@ -526,6 +528,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::InputSlimming,
+        key: "input_slimming",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::RemoteModels,
         key: "remote_models",
         stage: Stage::UnderDevelopment,
@@ -841,6 +849,40 @@ mod tests {
             Features::from_config(&cfg, &ConfigProfile::default(), FeatureOverrides::default());
 
         assert!(features.enabled(Feature::ForceHttp1Streaming));
+    }
+
+    #[test]
+    fn input_slimming_feature_defaults_off() {
+        let stage = Feature::InputSlimming.stage();
+
+        assert_eq!(Stage::UnderDevelopment, stage);
+        assert!(!Feature::InputSlimming.default_enabled());
+        assert_eq!(None, stage.experimental_menu_name());
+        assert_eq!(None, stage.experimental_menu_description());
+        assert_eq!(None, stage.experimental_announcement());
+        assert!(!Features::with_defaults().enabled(Feature::InputSlimming));
+    }
+
+    #[test]
+    fn features_table_accepts_input_slimming() {
+        let cfg = ConfigToml {
+            features: Some(FeaturesToml {
+                entries: BTreeMap::from([("input_slimming".to_string(), true)]),
+            }),
+            ..Default::default()
+        };
+
+        let features =
+            Features::from_config(&cfg, &ConfigProfile::default(), FeatureOverrides::default());
+
+        assert!(features.enabled(Feature::InputSlimming));
+    }
+
+    #[test]
+    fn generated_config_schema_contains_input_slimming() {
+        let schema = include_str!("../config.schema.json");
+
+        assert!(schema.contains("\"input_slimming\""));
     }
 
     #[test]

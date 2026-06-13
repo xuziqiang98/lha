@@ -4,6 +4,7 @@ use crate::product::agent::AuthManager;
 use crate::product::agent::RolloutRecorder;
 use crate::product::agent::agent_jobs::AgentJobManager;
 use crate::product::agent::exec_policy::ExecPolicyManager;
+use crate::product::agent::input_slimming::InputSlimmingStore;
 use crate::product::agent::mcp_connection_manager::McpConnectionManager;
 use crate::product::agent::models_manager::manager::ModelsManager;
 use crate::product::agent::skills::SkillsManager;
@@ -34,4 +35,5 @@ pub(crate) struct SessionServices {
     pub(crate) agent_jobs: AgentJobManager,
     pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) runtime_factory: Arc<dyn RuntimeClientFactory>,
+    pub(crate) input_slimming_store: InputSlimmingStore,
 }

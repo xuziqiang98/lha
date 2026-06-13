@@ -56,13 +56,12 @@ impl ToolRegistry {
         self.handlers.get(name).map(Arc::clone)
     }
 
-    // TODO(jif) for dynamic tools.
-    // pub fn register(&mut self, name: impl Into<String>, handler: Arc<dyn ToolHandler>) {
-    //     let name = name.into();
-    //     if self.handlers.insert(name.clone(), handler).is_some() {
-    //         warn!("overwriting handler for tool {name}");
-    //     }
-    // }
+    pub(crate) fn register(&mut self, name: impl Into<String>, handler: Arc<dyn ToolHandler>) {
+        let name = name.into();
+        if self.handlers.insert(name.clone(), handler).is_some() {
+            warn!("overwriting handler for tool {name}");
+        }
+    }
 
     pub async fn dispatch(
         &self,

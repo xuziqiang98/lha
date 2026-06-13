@@ -140,6 +140,10 @@ use crate::product::agent::error::Result as CodexResult;
 use crate::product::agent::exec::StreamOutput;
 use crate::product::agent::exec_policy::ExecPolicyUpdateError;
 use crate::product::agent::git_info::get_git_repo_root;
+use crate::product::agent::input_slimming::INPUT_RETRIEVE_TOOL_NAME;
+use crate::product::agent::input_slimming::InputRetrieveHandler;
+use crate::product::agent::input_slimming::InputSlimmer;
+use crate::product::agent::input_slimming::create_lha_input_retrieve_tool;
 use crate::product::agent::instructions::UserInstructions;
 use crate::product::agent::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::product::agent::mcp::auth::compute_auth_statuses;
@@ -1657,6 +1661,8 @@ impl Session {
             ),
             state_db: state_db_ctx.clone(),
             runtime_factory: Arc::new(DefaultRuntimeClientFactory::new()),
+            input_slimming_store:
+                crate::product::agent::input_slimming::InputSlimmingStore::default(),
         };
 
         let sess = Arc::new(Session {
@@ -5842,7 +5848,7 @@ async fn run_sampling_request(
     if let Some(connectors) = connectors_for_tools.as_ref() {
         mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, connectors);
     }
-    let router = Arc::new(ToolRouter::from_config(
+    let mut router = ToolRouter::from_config(
         &turn_context.tools_config,
         Some(
             mcp_tools
@@ -5851,7 +5857,7 @@ async fn run_sampling_request(
                 .collect(),
         ),
         turn_context.dynamic_tools.as_slice(),
-    ));
+    );
 
     let model_supports_parallel = turn_context
         .runtime
@@ -5860,7 +5866,7 @@ async fn run_sampling_request(
 
     let base_instructions = sess.get_base_instructions().await;
 
-    let prompt = TurnRequest {
+    let mut prompt = TurnRequest {
         conversation: input.into_iter().collect(),
         tools: router.specs(),
         parallel_tool_calls: model_supports_parallel,
@@ -5873,9 +5879,59 @@ async fn run_sampling_request(
         .await
         .estimate_token_count(turn_context.as_ref())
         .map(|tokens| tokens.max(0));
+    let mut slimming_fallback_tokens = None;
+    if sess.enabled(Feature::InputSlimming) {
+        let slimming_start = Instant::now();
+        let model = turn_context.runtime.get_model();
+        match InputSlimmer::default()
+            .slim_request(&prompt, &sess.services.input_slimming_store)
+            .await
+        {
+            Ok(outcome) => {
+                InputSlimmer::emit_metrics(
+                    &outcome,
+                    &turn_context.runtime.get_otel_manager(),
+                    model.as_str(),
+                );
+                turn_context.runtime.get_otel_manager().histogram(
+                    "lha.input_slimming.latency_ms",
+                    i64::try_from(slimming_start.elapsed().as_millis()).unwrap_or(i64::MAX),
+                    &[("model", model.as_str()), ("feature_enabled", "true")],
+                );
+                if outcome.approx_tokens_saved > 0 {
+                    slimming_fallback_tokens = history_input_tokens.map(|tokens| {
+                        tokens.saturating_sub(
+                            i64::try_from(outcome.approx_tokens_saved).unwrap_or(i64::MAX),
+                        )
+                    });
+                }
+                if outcome.requires_retrieval_tool {
+                    router.register_extra_tool(
+                        create_lha_input_retrieve_tool(),
+                        true,
+                        INPUT_RETRIEVE_TOOL_NAME,
+                        Arc::new(InputRetrieveHandler),
+                    );
+                    prompt = outcome.request;
+                    prompt.tools = router.specs();
+                } else {
+                    prompt = outcome.request;
+                }
+            }
+            Err(err) => {
+                turn_context.runtime.get_otel_manager().counter(
+                    "lha.input_slimming.fail_open",
+                    1,
+                    &[("model", model.as_str()), ("feature_enabled", "true")],
+                );
+                warn!("input slimming failed open: {err}");
+            }
+        }
+    }
     let request_input_tokens = turn_context
         .runtime
         .estimated_input_tokens_for_turn_request(&prompt)
+        .or(slimming_fallback_tokens)
         .or(history_input_tokens);
 
     if tool_selection.allow_preflight_compact
@@ -5883,6 +5939,8 @@ async fn run_sampling_request(
     {
         return Err(SamplingRequestError::PreflightCompactRequired);
     }
+
+    let router = Arc::new(router);
 
     match try_run_sampling_request(
         Arc::clone(&router),
@@ -8796,6 +8854,8 @@ mod tests {
             ),
             state_db: None,
             runtime_factory: Arc::new(DefaultRuntimeClientFactory::new()),
+            input_slimming_store:
+                crate::product::agent::input_slimming::InputSlimmingStore::default(),
         };
 
         let turn_context = Session::make_turn_context(
@@ -9072,6 +9132,8 @@ mod tests {
             ),
             state_db: None,
             runtime_factory: Arc::new(DefaultRuntimeClientFactory::new()),
+            input_slimming_store:
+                crate::product::agent::input_slimming::InputSlimmingStore::default(),
         };
 
         let turn_context = Arc::new(Session::make_turn_context(

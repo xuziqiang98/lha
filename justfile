@@ -15,7 +15,7 @@ exec *args:
 
 # Run the CLI version of the file-search crate.
 file-search *args:
-    cargo run -p lha-cli -- dev file-search "$@"
+    cargo run -p lha -- dev file-search "$@"
 
 # format code
 fmt:
@@ -40,18 +40,18 @@ test:
 
 # Regenerate the json schema for config.toml from the current config types.
 write-config-schema:
-    cargo run -p lha-cli -- dev write-config-schema
+    cargo run -p lha -- dev write-config-schema
 
 write-models-schema:
-    cargo run -p lha-cli -- dev write-models-schema
+    cargo run -p lha -- dev write-models-schema
 
 write-state-schema:
-    cargo run -p lha-cli -- dev write-state-schema
+    cargo run -p lha -- dev write-state-schema
 
 # Regenerate vendored app-server protocol schema artifacts.
 write-app-server-schema:
-    cargo run -p lha-cli -- dev write-app-server-schema
+    cargo run -p lha -- dev write-app-server-schema
 
 # Tail logs from the state SQLite database
 log *args:
-    if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p lha-cli -- dev logs "$@"
+    if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p lha -- dev logs "$@"
