@@ -11,6 +11,7 @@ pub(crate) fn is_persisted_response_item(item: &RolloutItem) -> bool {
         RolloutItem::GhostSnapshot(_) => true,
         // Persist LHA executive markers so we can analyze flows (e.g., compaction, API turns).
         RolloutItem::Compacted(_)
+        | RolloutItem::InputSlimmingStoredInput(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::Workflow(_)
         | RolloutItem::SessionMeta(_) => true,
@@ -114,13 +115,17 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::is_persisted_response_item;
     use super::should_persist_event_msg;
     use crate::product::agent::protocol::EventMsg;
     use crate::product::agent::protocol::ItemCompletedEvent;
+    use crate::product::agent::protocol::RolloutItem;
     use crate::product::protocol::ThreadId;
     use crate::product::protocol::items::ContextCompactionItem;
     use crate::product::protocol::items::PlanItem;
     use crate::product::protocol::items::TurnItem;
+    use crate::product::protocol::protocol::InputSlimmingStoredInputItem;
+    use crate::product::protocol::protocol::InputSlimmingStoredInputMetadata;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -146,5 +151,23 @@ mod tests {
         });
 
         assert_eq!(should_persist_event_msg(&event), true);
+    }
+
+    #[test]
+    fn persists_input_slimming_stored_input_sidecars() {
+        let item = RolloutItem::InputSlimmingStoredInput(InputSlimmingStoredInputItem {
+            hash: "abc123".to_string(),
+            original: "original".to_string(),
+            metadata: InputSlimmingStoredInputMetadata {
+                strategy: "plain_text_head_tail".to_string(),
+                tool_name: "shell".to_string(),
+                original_tokens: 10,
+                compressed_tokens: 3,
+                created_turn_id: "turn-1".to_string(),
+            },
+        });
+
+        assert_eq!(is_persisted_response_item(&item), true);
+        assert!(!matches!(item, RolloutItem::TranscriptItem(_)));
     }
 }

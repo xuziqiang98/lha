@@ -151,9 +151,10 @@ async fn input_slimming_slims_live_and_historical_tool_outputs() -> Result<()> {
     assert!(!second_turn_text.contains("old-tool-line-2500"));
 
     let rollout_path = test.codex.rollout_path().expect("rollout path");
-    let rollout = tokio::fs::read_to_string(rollout_path).await?;
+    let rollout = tokio::fs::read_to_string(&rollout_path).await?;
     assert!(rollout.contains("old-tool-line-2500"));
     assert!(!rollout.contains("<<lha-input:"));
+    assert!(rollout.contains("input_slimming_stored_input"));
 
     let hash = extract_input_slimming_hash(&second_turn_text);
     mount_sse_once(
@@ -164,7 +165,7 @@ async fn input_slimming_slims_live_and_historical_tool_outputs() -> Result<()> {
                 "retrieve-call",
                 "lha_input_retrieve",
                 &serde_json::to_string(&json!({
-                    "hash": hash,
+                    "hash": hash.clone(),
                     "query": "old-tool-line-2500",
                 }))?,
             ),
@@ -186,6 +187,65 @@ async fn input_slimming_slims_live_and_historical_tool_outputs() -> Result<()> {
     let retrieve_follow_up_text = body_text(&retrieve_follow_up);
     assert!(retrieve_follow_up_text.contains("old-tool-line-2500"));
     assert!(!retrieve_follow_up_text.contains("store miss"));
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-4", "marker noted"),
+            ev_completed("resp-6"),
+        ]),
+    )
+    .await;
+    test.submit_turn(&format!("remember marker <<lha-input:{hash}>>"))
+        .await?;
+
+    let resumed_retrieve = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-7"),
+            ev_function_call(
+                "resume-retrieve-call",
+                "lha_input_retrieve",
+                &serde_json::to_string(&json!({
+                    "hash": hash.clone(),
+                    "query": "old-tool-line-2500",
+                }))?,
+            ),
+            ev_completed("resp-7"),
+        ]),
+    )
+    .await;
+    let resumed_after_retrieve = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-5", "resumed retrieval worked"),
+            ev_completed("resp-8"),
+        ]),
+    )
+    .await;
+    let mut resume_builder = test_codex().with_model("gpt-5.1").with_config(|config| {
+        config.features.enable(Feature::InputSlimming);
+        config.tool_output_token_limit = Some(64);
+    });
+    let resumed = resume_builder
+        .resume(&server, test.home.clone(), rollout_path)
+        .await?;
+
+    resumed
+        .submit_turn("retrieve the remembered marker")
+        .await?;
+    let resumed_body = resumed_retrieve.single_request().body_json();
+    let resumed_text = body_text(&resumed_body);
+    assert!(resumed_text.contains(&format!("<<lha-input:{hash}>>")));
+    assert!(
+        tool_identifiers(&resumed_body)
+            .iter()
+            .any(|tool| tool == "lha_input_retrieve")
+    );
+    let resumed_follow_up = resumed_after_retrieve.single_request().body_json();
+    let resumed_follow_up_text = body_text(&resumed_follow_up);
+    assert!(resumed_follow_up_text.contains("old-tool-line-2500"));
+    assert!(!resumed_follow_up_text.contains("store miss"));
 
     Ok(())
 }

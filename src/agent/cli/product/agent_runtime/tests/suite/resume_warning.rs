@@ -285,6 +285,7 @@ async fn override_identity_without_turn_is_persisted_and_restored() {
         | RolloutItem::TranscriptItem(_)
         | RolloutItem::GhostSnapshot(_)
         | RolloutItem::Compacted(_)
+        | RolloutItem::InputSlimmingStoredInput(_)
         | RolloutItem::Workflow(_)
         | RolloutItem::EventMsg(_) => None,
     });

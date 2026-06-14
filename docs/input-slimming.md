@@ -48,6 +48,8 @@ input_slimming = true
 - 只在至少一个 payload 被接受压缩时注入 `lha_input_retrieve`；
 - 原文存入 session-scoped in-memory store，默认 capacity 为 1000，TTL 为 300
   seconds；
+- accepted replacements 会把原文和 metadata 写入 rollout sidecar item，用于 resume
+  后恢复 session store；压缩后的 request clone 仍不写入 transcript history；
 - marker 格式为 `<<lha-input:{hash}>>`；
 - hash 使用 repo 已有的 `sha2::Sha256`，截断为 24 个 lowercase hex characters。
 
@@ -508,12 +510,16 @@ fail-open 护栏。
   line contains + 上下文行。
 - TTL/LRU miss 返回包含 missing hash 的明确错误，不伪造内容。
 - retrieval metrics 记录 hit/miss/query matched，并带 strategy/tool labels。
-
-仍需后续实现：
-
 - Resume-safe retrieval：resume 已包含 input-slimming marker 的 thread 时，对应原文
-  仍应可取回；如果原文无法恢复，resume 逻辑必须避免产生“marker 存在但 retrieval
-  永久 miss”的不一致状态。
+  仍可通过 rollout sidecar entry 恢复到当前 session store；如果原文无法恢复，miss
+  文案会明确说明可能是旧 marker、TTL 过期或缺少 rollout entry。
+
+实现边界：
+
+- LHA 使用 rollout sidecar entries 恢复当前 thread 的 input-slimming store，而不是把
+  compressed prompt clone 持久化为历史。
+- resume/fork hydration 会刷新当前进程内 store 的 TTL；长期 durable、多会话共享
+  store 不在当前范围。
 
 ### Safety Protection
 
@@ -662,10 +668,11 @@ product-private：
 - History preservation：`ContextManager` 和 rollout history 不持久化压缩文本。
 - Preflight accounting：context-window 检查使用压缩后 request 的 token estimate。
 - Telemetry：saved、skipped、fail-open、retrieval metrics 会被记录。
+- Resume-safe retrieval：resume 后已有 `<<lha-input:...>>` marker 的原文可通过
+  sidecar-hydrated store 取回；旧 marker 无 sidecar 时返回明确 miss，不阻断请求。
 
 待补测试场景：
 
-- resume 后已有 `<<lha-input:...>>` marker 的 retrieval 原文仍可取回。
 - Headroom parity fixtures 的系统性回归覆盖。
 - LHA built-in tool output before/after eval。
 - recent output protection window 的行为测试。

@@ -1074,6 +1074,7 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             }
             RolloutItem::GhostSnapshot(_)
             | RolloutItem::Compacted(_)
+            | RolloutItem::InputSlimmingStoredInput(_)
             | RolloutItem::Workflow(_) => {
                 // Not included in `head`; skip.
             }

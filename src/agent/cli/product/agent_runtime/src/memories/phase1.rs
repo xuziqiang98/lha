@@ -274,6 +274,7 @@ fn serialize_filtered_rollout_items_with_budget(
             RolloutItem::SessionMeta(_)
             | RolloutItem::GhostSnapshot(_)
             | RolloutItem::Compacted(_)
+            | RolloutItem::InputSlimmingStoredInput(_)
             | RolloutItem::TurnContext(_)
             | RolloutItem::Workflow(_)
             | RolloutItem::EventMsg(_) => None,

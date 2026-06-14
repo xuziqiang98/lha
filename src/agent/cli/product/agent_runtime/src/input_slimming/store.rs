@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::fmt;
 use std::num::NonZeroUsize;
 use std::time::Duration;
 use std::time::Instant;
@@ -55,6 +56,26 @@ pub(crate) struct RetrieveResult {
     pub(crate) query_matched: Option<bool>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum InputSlimmingStoreError {
+    HashMismatch { expected: String, actual: String },
+}
+
+impl fmt::Display for InputSlimmingStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::HashMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "input slimming store hash mismatch: expected {expected}, got {actual}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for InputSlimmingStoreError {}
+
 impl Default for InputSlimmingStore {
     fn default() -> Self {
         Self::new(
@@ -76,9 +97,31 @@ impl InputSlimmingStore {
 
     pub(crate) async fn put(&self, original: String, metadata: StoredInputMetadata) -> String {
         let hash = hash_text(&original);
+        self.put_validated(hash.clone(), original, metadata).await;
+        hash
+    }
+
+    pub(crate) async fn put_with_hash(
+        &self,
+        hash: String,
+        original: String,
+        metadata: StoredInputMetadata,
+    ) -> Result<(), InputSlimmingStoreError> {
+        let expected = hash_text(&original);
+        if hash != expected {
+            return Err(InputSlimmingStoreError::HashMismatch {
+                expected,
+                actual: hash,
+            });
+        }
+        self.put_validated(hash, original, metadata).await;
+        Ok(())
+    }
+
+    async fn put_validated(&self, hash: String, original: String, metadata: StoredInputMetadata) {
         let mut guard = self.inner.lock().await;
         guard.entries.put(
-            hash.clone(),
+            hash,
             StoredInput {
                 original,
                 metadata,
@@ -86,7 +129,6 @@ impl InputSlimmingStore {
                 created_at: Instant::now(),
             },
         );
-        hash
     }
 
     pub(crate) async fn get(&self, hash: &str) -> Option<StoredInput> {
@@ -103,7 +145,9 @@ impl InputSlimmingStore {
     pub(crate) async fn retrieve(&self, hash: &str, query: Option<&str>) -> RetrieveResult {
         let Some(entry) = self.get_for_retrieval(hash).await else {
             return RetrieveResult {
-                content: format!("Input Slimming store miss for hash `{hash}`."),
+                content: format!(
+                    "Input Slimming store miss for hash `{hash}`. The original may be unavailable because the marker predates resume-safe storage, expired, or the rollout entry is missing."
+                ),
                 success: false,
                 strategy: None,
                 tool_name: None,
@@ -391,6 +435,50 @@ mod tests {
         assert_eq!(got.original, "alpha\nbeta");
         assert_eq!(got.metadata, metadata());
         assert_eq!(got.retrieval_count, 0);
+    }
+
+    #[tokio::test]
+    async fn put_with_hash_accepts_matching_hash() {
+        let store = InputSlimmingStore::default();
+        let original = "alpha\nbeta".to_string();
+        let hash = hash_text(&original);
+
+        store
+            .put_with_hash(hash.clone(), original.clone(), metadata())
+            .await
+            .expect("matching hash should store");
+
+        assert_eq!(
+            store.get(&hash).await.map(|entry| entry.original),
+            Some(original)
+        );
+    }
+
+    #[tokio::test]
+    async fn put_with_hash_rejects_mismatched_hash() {
+        let store = InputSlimmingStore::default();
+        let err = store
+            .put_with_hash("abc123".to_string(), "alpha".to_string(), metadata())
+            .await
+            .expect_err("mismatched hash should fail");
+
+        assert!(matches!(err, InputSlimmingStoreError::HashMismatch { .. }));
+        assert_eq!(store.get("abc123").await, None);
+    }
+
+    #[tokio::test]
+    async fn put_reuses_hash_text_and_retrieves() {
+        let store = InputSlimmingStore::default();
+        let original = "same payload".to_string();
+        let expected_hash = hash_text(&original);
+
+        let hash = store.put(original.clone(), metadata()).await;
+
+        assert_eq!(hash, expected_hash);
+        assert_eq!(
+            store.get(&hash).await.map(|entry| entry.original),
+            Some(original)
+        );
     }
 
     #[tokio::test]

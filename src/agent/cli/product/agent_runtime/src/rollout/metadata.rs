@@ -63,6 +63,7 @@ pub(crate) fn builder_from_items(
         RolloutItem::TranscriptItem(_)
         | RolloutItem::GhostSnapshot(_)
         | RolloutItem::Compacted(_)
+        | RolloutItem::InputSlimmingStoredInput(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::Workflow(_)
         | RolloutItem::EventMsg(_) => None,

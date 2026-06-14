@@ -166,6 +166,7 @@ async fn assistant_memory_citation_is_persisted_and_replayed() -> Result<()> {
         | RolloutItem::TranscriptItem(_)
         | RolloutItem::GhostSnapshot(_)
         | RolloutItem::Compacted(_)
+        | RolloutItem::InputSlimmingStoredInput(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::Workflow(_)
         | RolloutItem::EventMsg(_) => None,
@@ -182,6 +183,7 @@ async fn assistant_memory_citation_is_persisted_and_replayed() -> Result<()> {
             | RolloutItem::TranscriptItem(_)
             | RolloutItem::GhostSnapshot(_)
             | RolloutItem::Compacted(_)
+            | RolloutItem::InputSlimmingStoredInput(_)
             | RolloutItem::TurnContext(_)
             | RolloutItem::Workflow(_) => None,
         })

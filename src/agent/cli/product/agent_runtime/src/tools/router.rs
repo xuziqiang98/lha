@@ -70,6 +70,10 @@ impl ToolRouter {
         self.registry.register(handler_name, handler);
     }
 
+    pub(crate) fn has_tool(&self, tool_name: &str) -> bool {
+        self.tool_is_declared(tool_name)
+    }
+
     pub fn tool_supports_parallel(&self, tool_name: &str) -> bool {
         self.specs
             .iter()

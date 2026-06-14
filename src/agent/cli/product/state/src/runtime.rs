@@ -2234,6 +2234,7 @@ fn extract_memory_mode(items: &[RolloutItem]) -> Option<String> {
         RolloutItem::TranscriptItem(_)
         | RolloutItem::GhostSnapshot(_)
         | RolloutItem::Compacted(_)
+        | RolloutItem::InputSlimmingStoredInput(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::Workflow(_)
         | RolloutItem::EventMsg(_) => None,

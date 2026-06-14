@@ -96,6 +96,7 @@ use lha_llm::RuntimeEndpoint;
 use lha_llm::RuntimeNotice;
 use lha_llm::RuntimeNoticeKind;
 use lha_llm::RuntimeSession;
+use lha_llm::ToolCallPayload;
 use lha_llm::ToolResultItem;
 use lha_llm::TurnEvent;
 use lha_llm::TurnRequest;
@@ -141,10 +142,12 @@ use crate::product::agent::exec::StreamOutput;
 use crate::product::agent::exec_policy::ExecPolicyUpdateError;
 use crate::product::agent::git_info::get_git_repo_root;
 use crate::product::agent::input_slimming::INPUT_RETRIEVE_TOOL_NAME;
+use crate::product::agent::input_slimming::INPUT_SLIMMING_MARKER_PREFIX;
 use crate::product::agent::input_slimming::InputRetrieveHandler;
 use crate::product::agent::input_slimming::InputSlimmer;
 use crate::product::agent::input_slimming::InputSlimmingContext;
 use crate::product::agent::input_slimming::InputSlimmingMode;
+use crate::product::agent::input_slimming::InputSlimmingPersistedEntry;
 use crate::product::agent::input_slimming::create_lha_input_retrieve_tool;
 use crate::product::agent::instructions::UserInstructions;
 use crate::product::agent::mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -247,11 +250,16 @@ use crate::product::protocol::config_types::ReasoningSummary as ReasoningSummary
 use crate::product::protocol::config_types::WindowsSandboxLevel;
 use crate::product::protocol::models::ContentItem;
 use crate::product::protocol::models::DeveloperInstructions;
+use crate::product::protocol::models::ReasoningItemContent;
+use crate::product::protocol::models::ReasoningItemReasoningSummary;
+use crate::product::protocol::models::ToolResultContentItem;
+use crate::product::protocol::models::ToolResultPayload;
 use crate::product::protocol::models::TranscriptItem;
 use crate::product::protocol::models::transcript_item_from_user_input;
 use crate::product::protocol::openai_models::ReasoningEffort;
 use crate::product::protocol::protocol::CodexErrorInfo;
 use crate::product::protocol::protocol::InitialHistory;
+use crate::product::protocol::protocol::InputSlimmingStoredInputItem;
 use crate::product::protocol::user_input::UserInput;
 use crate::product::utils_readiness::Readiness;
 use crate::product::utils_readiness::ReadinessFlag;
@@ -413,9 +421,131 @@ fn proposed_plan_text_from_rollout_item(item: &RolloutItem) -> Option<String> {
         },
         RolloutItem::SessionMeta(_)
         | RolloutItem::GhostSnapshot(_)
+        | RolloutItem::InputSlimmingStoredInput(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::Workflow(_)
         | RolloutItem::EventMsg(_) => None,
+    }
+}
+
+fn ensure_input_retrieve_tool(router: &mut ToolRouter) {
+    if router.has_tool(INPUT_RETRIEVE_TOOL_NAME) {
+        return;
+    }
+    router.register_extra_tool(
+        create_lha_input_retrieve_tool(),
+        true,
+        INPUT_RETRIEVE_TOOL_NAME,
+        Arc::new(InputRetrieveHandler),
+    );
+}
+
+fn turn_request_contains_input_slimming_marker(request: &TurnRequest) -> bool {
+    request
+        .conversation
+        .iter()
+        .any(transcript_item_contains_input_slimming_marker)
+}
+
+fn transcript_item_contains_input_slimming_marker(item: &TranscriptItem) -> bool {
+    match item {
+        TranscriptItem::Message { content, .. } => content
+            .iter()
+            .any(content_item_contains_input_slimming_marker),
+        TranscriptItem::Reasoning {
+            summary,
+            content,
+            encrypted_content,
+            ..
+        } => {
+            summary
+                .iter()
+                .any(reasoning_summary_contains_input_slimming_marker)
+                || content.as_deref().is_some_and(|content| {
+                    content
+                        .iter()
+                        .any(reasoning_content_contains_input_slimming_marker)
+                })
+                || encrypted_content
+                    .as_deref()
+                    .is_some_and(text_contains_input_slimming_marker)
+        }
+        TranscriptItem::HostedActivity { payload, .. } => {
+            json_value_contains_input_slimming_marker(payload)
+        }
+        TranscriptItem::ToolCall { payload, .. } => match payload {
+            ToolCallPayload::JsonArguments { arguments } => {
+                text_contains_input_slimming_marker(arguments)
+            }
+            ToolCallPayload::TextInput { input } => text_contains_input_slimming_marker(input),
+        },
+        TranscriptItem::ToolResult { payload, .. } => {
+            tool_result_payload_contains_input_slimming_marker(payload)
+        }
+        TranscriptItem::Unknown { raw } => json_value_contains_input_slimming_marker(raw),
+    }
+}
+
+fn content_item_contains_input_slimming_marker(item: &ContentItem) -> bool {
+    match item {
+        ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+            text_contains_input_slimming_marker(text)
+        }
+        ContentItem::InputImage { .. } => false,
+    }
+}
+
+fn reasoning_summary_contains_input_slimming_marker(item: &ReasoningItemReasoningSummary) -> bool {
+    match item {
+        ReasoningItemReasoningSummary::SummaryText { text } => {
+            text_contains_input_slimming_marker(text)
+        }
+    }
+}
+
+fn reasoning_content_contains_input_slimming_marker(item: &ReasoningItemContent) -> bool {
+    match item {
+        ReasoningItemContent::ReasoningText { text } | ReasoningItemContent::Text { text } => {
+            text_contains_input_slimming_marker(text)
+        }
+    }
+}
+
+fn tool_result_payload_contains_input_slimming_marker(payload: &ToolResultPayload) -> bool {
+    match payload {
+        ToolResultPayload::Text { output } => text_contains_input_slimming_marker(output),
+        ToolResultPayload::Structured {
+            content,
+            content_items,
+            ..
+        } => {
+            text_contains_input_slimming_marker(content)
+                || content_items.as_deref().is_some_and(|items| {
+                    items
+                        .iter()
+                        .any(tool_result_content_item_contains_input_slimming_marker)
+                })
+        }
+    }
+}
+
+fn tool_result_content_item_contains_input_slimming_marker(item: &ToolResultContentItem) -> bool {
+    match item {
+        ToolResultContentItem::InputText { text } => text_contains_input_slimming_marker(text),
+        ToolResultContentItem::InputImage { .. } => false,
+    }
+}
+
+fn text_contains_input_slimming_marker(text: &str) -> bool {
+    text.contains(INPUT_SLIMMING_MARKER_PREFIX)
+}
+
+fn json_value_contains_input_slimming_marker(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text_contains_input_slimming_marker(text),
+        Value::Array(items) => items.iter().any(json_value_contains_input_slimming_marker),
+        Value::Object(map) => map.values().any(json_value_contains_input_slimming_marker),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
     }
 }
 
@@ -459,6 +589,7 @@ fn latest_thread_goal_from_rollout(rollout_items: &[RolloutItem]) -> Option<Fork
             | RolloutItem::TranscriptItem(_)
             | RolloutItem::GhostSnapshot(_)
             | RolloutItem::Compacted(_)
+            | RolloutItem::InputSlimmingStoredInput(_)
             | RolloutItem::TurnContext(_)
             | RolloutItem::Workflow(_)
             | RolloutItem::EventMsg(_) => {}
@@ -951,6 +1082,7 @@ fn latest_identity_from_rollout_items(items: &[RolloutItem]) -> Option<Identity>
         | RolloutItem::TranscriptItem(_)
         | RolloutItem::GhostSnapshot(_)
         | RolloutItem::Compacted(_)
+        | RolloutItem::InputSlimmingStoredInput(_)
         | RolloutItem::Workflow(_)
         | RolloutItem::EventMsg(_) => None,
     })
@@ -1023,6 +1155,7 @@ fn rollout_history_may_have_active_identity(rollout_items: &[RolloutItem]) -> bo
             }
             RolloutItem::SessionMeta(_)
             | RolloutItem::GhostSnapshot(_)
+            | RolloutItem::InputSlimmingStoredInput(_)
             | RolloutItem::TurnContext(_)
             | RolloutItem::Workflow(_)
             | RolloutItem::EventMsg(_) => {}
@@ -2559,6 +2692,8 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
+                self.hydrate_input_slimming_store_from_rollout(&rollout_items)
+                    .await;
                 let pending_identity_clear_from_history =
                     rollout_history_may_have_active_identity(&rollout_items);
                 {
@@ -2618,6 +2753,8 @@ impl Session {
                 self.flush_rollout().await;
             }
             InitialHistory::Forked(rollout_items) => {
+                self.hydrate_input_slimming_store_from_rollout(&rollout_items)
+                    .await;
                 let pending_identity_clear_from_history =
                     rollout_history_may_have_active_identity(&rollout_items);
                 // Always add response items to conversation history
@@ -3724,6 +3861,69 @@ impl Session {
             && let Err(e) = rec.record_items(items).await
         {
             error!("failed to record rollout items: {e:#}");
+        }
+    }
+
+    async fn persist_input_slimming_entries(&self, entries: Vec<InputSlimmingPersistedEntry>) {
+        if entries.is_empty() {
+            return;
+        }
+        let items = entries
+            .into_iter()
+            .map(InputSlimmingStoredInputItem::from)
+            .map(RolloutItem::InputSlimmingStoredInput)
+            .collect::<Vec<_>>();
+        self.persist_rollout_items(&items).await;
+    }
+
+    async fn hydrate_input_slimming_store_from_rollout(&self, items: &[RolloutItem]) {
+        for item in items {
+            let RolloutItem::InputSlimmingStoredInput(stored) = item else {
+                continue;
+            };
+            let hash = stored.hash.clone();
+            let restored = match InputSlimmingPersistedEntry::try_from(stored.clone()) {
+                Ok(restored) => restored,
+                Err(err) => {
+                    warn!(
+                        hash = %hash,
+                        error = %err,
+                        "skipping invalid input slimming stored input"
+                    );
+                    self.services.otel_manager.counter(
+                        "lha.input_slimming.resume_hydrate",
+                        1,
+                        &[("status", "invalid_metadata")],
+                    );
+                    continue;
+                }
+            };
+            match self
+                .services
+                .input_slimming_store
+                .put_with_hash(restored.hash, restored.original, restored.metadata)
+                .await
+            {
+                Ok(()) => {
+                    self.services.otel_manager.counter(
+                        "lha.input_slimming.resume_hydrate",
+                        1,
+                        &[("status", "restored")],
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        hash = %hash,
+                        error = %err,
+                        "skipping input slimming stored input with invalid hash"
+                    );
+                    self.services.otel_manager.counter(
+                        "lha.input_slimming.resume_hydrate",
+                        1,
+                        &[("status", "hash_mismatch")],
+                    );
+                }
+            }
         }
     }
 
@@ -5927,7 +6127,7 @@ async fn run_sampling_request(
             )
             .await
         {
-            Ok(outcome) => {
+            Ok(mut outcome) => {
                 InputSlimmer::emit_metrics(
                     &outcome,
                     &turn_context.runtime.get_otel_manager(),
@@ -5948,14 +6148,13 @@ async fn run_sampling_request(
                 if outcome.metrics.approx_tokens_saved > 0 && outcome.metrics.slimmed > 0 {
                     sess.record_input_slimming(turn_context.as_ref(), outcome.token_stats())
                         .await;
+                    sess.persist_input_slimming_entries(std::mem::take(
+                        &mut outcome.persisted_entries,
+                    ))
+                    .await;
                 }
                 if outcome.requires_retrieval_tool {
-                    router.register_extra_tool(
-                        create_lha_input_retrieve_tool(),
-                        true,
-                        INPUT_RETRIEVE_TOOL_NAME,
-                        Arc::new(InputRetrieveHandler),
-                    );
+                    ensure_input_retrieve_tool(&mut router);
                     prompt = outcome.request;
                     prompt.tools = router.specs();
                 } else {
@@ -5971,6 +6170,11 @@ async fn run_sampling_request(
                 warn!("input slimming failed open: {err}");
             }
         }
+    }
+    if sess.enabled(Feature::InputSlimming) && turn_request_contains_input_slimming_marker(&prompt)
+    {
+        ensure_input_retrieve_tool(&mut router);
+        prompt.tools = router.specs();
     }
     let request_input_tokens = turn_context
         .runtime

@@ -1724,8 +1724,25 @@ pub enum RolloutItem {
     GhostSnapshot(GhostSnapshotRecord),
     Compacted(CompactedItem),
     TurnContext(TurnContextItem),
+    InputSlimmingStoredInput(InputSlimmingStoredInputItem),
     Workflow(WorkflowRolloutItem),
     EventMsg(EventMsg),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS, PartialEq, Eq)]
+pub struct InputSlimmingStoredInputItem {
+    pub hash: String,
+    pub original: String,
+    pub metadata: InputSlimmingStoredInputMetadata,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS, PartialEq, Eq)]
+pub struct InputSlimmingStoredInputMetadata {
+    pub strategy: String,
+    pub tool_name: String,
+    pub original_tokens: usize,
+    pub compressed_tokens: usize,
+    pub created_turn_id: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS, PartialEq, Eq)]
@@ -1766,9 +1783,10 @@ impl From<CompactedItem> for TranscriptItem {
 
 pub const ROLLOUT_SCHEMA_VERSION_V3: u32 = 3;
 pub const ROLLOUT_SCHEMA_VERSION_V4: u32 = 4;
+pub const ROLLOUT_SCHEMA_VERSION_V5: u32 = 5;
 
 pub fn current_rollout_schema_version() -> u32 {
-    ROLLOUT_SCHEMA_VERSION_V4
+    ROLLOUT_SCHEMA_VERSION_V5
 }
 
 fn default_rollout_schema_version() -> u32 {
@@ -2434,9 +2452,9 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn current_rollout_schema_version_is_v4() {
-        assert_eq!(current_rollout_schema_version(), ROLLOUT_SCHEMA_VERSION_V4);
-        assert_eq!(current_rollout_schema_version(), 4);
+    fn current_rollout_schema_version_is_v5() {
+        assert_eq!(current_rollout_schema_version(), ROLLOUT_SCHEMA_VERSION_V5);
+        assert_eq!(current_rollout_schema_version(), 5);
     }
 
     #[test]
@@ -2459,7 +2477,7 @@ mod tests {
         let value = serde_json::to_value(SessionMeta::default())?;
         assert_eq!(
             value.get("rollout_schema_version"),
-            Some(&json!(ROLLOUT_SCHEMA_VERSION_V4))
+            Some(&json!(ROLLOUT_SCHEMA_VERSION_V5))
         );
         Ok(())
     }

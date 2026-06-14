@@ -39,6 +39,7 @@ use crate::product::agent::state_db;
 use crate::product::agent::state_db::StateDbHandle;
 use crate::product::protocol::protocol::InitialHistory;
 use crate::product::protocol::protocol::ROLLOUT_SCHEMA_VERSION_V3;
+use crate::product::protocol::protocol::ROLLOUT_SCHEMA_VERSION_V4;
 use crate::product::protocol::protocol::ResumedHistory;
 use crate::product::protocol::protocol::RolloutItem;
 use crate::product::protocol::protocol::RolloutLine;
@@ -94,7 +95,9 @@ pub(crate) fn unsupported_rollout_schema_missing_error() -> IoError {
 }
 
 pub(crate) fn is_supported_rollout_schema_version(version: u32) -> bool {
-    version == ROLLOUT_SCHEMA_VERSION_V3 || version == current_rollout_schema_version()
+    version == ROLLOUT_SCHEMA_VERSION_V3
+        || version == ROLLOUT_SCHEMA_VERSION_V4
+        || version == current_rollout_schema_version()
 }
 
 pub fn is_unsupported_rollout_schema_error(err: &IoError) -> bool {
@@ -540,6 +543,9 @@ impl RolloutRecorder {
                     }
                     RolloutItem::TurnContext(item) => {
                         items.push(RolloutItem::TurnContext(item));
+                    }
+                    RolloutItem::InputSlimmingStoredInput(item) => {
+                        items.push(RolloutItem::InputSlimmingStoredInput(item));
                     }
                     RolloutItem::Workflow(item) => {
                         items.push(RolloutItem::Workflow(item));

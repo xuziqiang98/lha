@@ -25,9 +25,12 @@ use crate::product::agent::input_slimming::strategy::slim_text_for_tool;
 use crate::product::agent::protocol::InputSlimmingTokenStats;
 use crate::product::agent::truncate::approx_token_count;
 use crate::product::otel::OtelManager;
+use crate::product::protocol::protocol::InputSlimmingStoredInputItem;
+use crate::product::protocol::protocol::InputSlimmingStoredInputMetadata;
 
 pub(crate) use candidate::CandidateZone;
 pub(crate) use store::InputSlimmingStore;
+pub(crate) use store::InputSlimmingStoreError;
 pub(crate) use store::StoredInputMetadata;
 use store::hash_text;
 pub(crate) use tool::INPUT_RETRIEVE_TOOL_NAME;
@@ -109,6 +112,7 @@ impl InputSlimmer {
     ) -> Result<InputSlimmingOutcome, InputSlimmingError> {
         let mut slimmed_request = request.clone();
         let mut metrics = InputSlimmingMetrics::default();
+        let mut persisted_entries = Vec::new();
 
         let Some(latest_user_index) = latest_user_message_index(&request.conversation) else {
             metrics.approx_tokens_after = metrics.approx_tokens_before;
@@ -116,6 +120,7 @@ impl InputSlimmer {
                 slimmed_request,
                 metrics,
                 context.mode,
+                persisted_entries,
             ));
         };
 
@@ -182,6 +187,9 @@ impl InputSlimmer {
                         match context.mode {
                             InputSlimmingMode::Apply => {
                                 metrics.slimmed += 1;
+                                if let Some(entry) = accepted.persisted_entry {
+                                    persisted_entries.push(entry);
+                                }
                                 metrics.refs.push(accepted.reference);
                                 replace_candidate_text(
                                     &mut slimmed_request.conversation[candidate.index],
@@ -215,6 +223,7 @@ impl InputSlimmer {
             slimmed_request,
             metrics,
             context.mode,
+            persisted_entries,
         ))
     }
 
@@ -267,24 +276,29 @@ impl InputSlimmer {
         }
 
         let replacement_tokens_approx = approx_token_count(&replacement);
-        if context.mode == InputSlimmingMode::Apply {
+        let metadata = StoredInputMetadata {
+            strategy: strategy_output.strategy,
+            tool_name: candidate.tool_name.clone(),
+            original_tokens: candidate.original_tokens_approx,
+            compressed_tokens: replacement_tokens_approx,
+            created_turn_id: context.turn_id.to_string(),
+        };
+        let persisted_entry = if context.mode == InputSlimmingMode::Apply {
             let stored_hash = context
                 .store
-                .put(
-                    candidate.text.clone(),
-                    StoredInputMetadata {
-                        strategy: strategy_output.strategy,
-                        tool_name: candidate.tool_name.clone(),
-                        original_tokens: candidate.original_tokens_approx,
-                        compressed_tokens: replacement_tokens_approx,
-                        created_turn_id: context.turn_id.to_string(),
-                    },
-                )
+                .put(candidate.text.clone(), metadata.clone())
                 .await;
             if stored_hash != hash {
                 return Err(candidate.reject(InputSlimmingSkipReason::RetrievalUnavailable));
             }
-        }
+            Some(InputSlimmingPersistedEntry {
+                hash: hash.clone(),
+                original: candidate.text.clone(),
+                metadata,
+            })
+        } else {
+            None
+        };
 
         Ok(Some(AcceptedSlimming {
             replacement,
@@ -297,6 +311,7 @@ impl InputSlimmer {
                 compressed_tokens: replacement_tokens_approx,
                 zone: candidate.zone,
             },
+            persisted_entry,
             replacement_tokens_approx,
         }))
     }
@@ -373,10 +388,16 @@ pub(crate) struct InputSlimmingOutcome {
     pub(crate) metrics: InputSlimmingMetrics,
     pub(crate) requires_retrieval_tool: bool,
     pub(crate) approx_tokens_saved: usize,
+    pub(crate) persisted_entries: Vec<InputSlimmingPersistedEntry>,
 }
 
 impl InputSlimmingOutcome {
-    fn new(request: TurnRequest, metrics: InputSlimmingMetrics, mode: InputSlimmingMode) -> Self {
+    fn new(
+        request: TurnRequest,
+        metrics: InputSlimmingMetrics,
+        mode: InputSlimmingMode,
+        persisted_entries: Vec<InputSlimmingPersistedEntry>,
+    ) -> Self {
         let approx_tokens_saved = metrics.approx_tokens_saved;
         let requires_retrieval_tool = mode == InputSlimmingMode::Apply && metrics.slimmed > 0;
         Self {
@@ -384,6 +405,7 @@ impl InputSlimmingOutcome {
             metrics,
             requires_retrieval_tool,
             approx_tokens_saved,
+            persisted_entries,
         }
     }
 
@@ -394,6 +416,67 @@ impl InputSlimmingOutcome {
             tokens_saved: usize_to_i64(self.metrics.approx_tokens_saved),
             replacements: usize_to_i64(self.metrics.slimmed),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InputSlimmingPersistedEntry {
+    pub(crate) hash: String,
+    pub(crate) original: String,
+    pub(crate) metadata: StoredInputMetadata,
+}
+
+impl From<InputSlimmingPersistedEntry> for InputSlimmingStoredInputItem {
+    fn from(value: InputSlimmingPersistedEntry) -> Self {
+        Self {
+            hash: value.hash,
+            original: value.original,
+            metadata: value.metadata.into(),
+        }
+    }
+}
+
+impl From<StoredInputMetadata> for InputSlimmingStoredInputMetadata {
+    fn from(value: StoredInputMetadata) -> Self {
+        Self {
+            strategy: value.strategy.as_str().to_string(),
+            tool_name: value.tool_name,
+            original_tokens: value.original_tokens,
+            compressed_tokens: value.compressed_tokens,
+            created_turn_id: value.created_turn_id,
+        }
+    }
+}
+
+impl TryFrom<InputSlimmingStoredInputMetadata> for StoredInputMetadata {
+    type Error = String;
+
+    fn try_from(value: InputSlimmingStoredInputMetadata) -> Result<Self, Self::Error> {
+        let Some(strategy) = InputSlimmingStrategy::from_str(value.strategy.as_str()) else {
+            return Err(format!(
+                "unknown input slimming strategy `{}`",
+                value.strategy
+            ));
+        };
+        Ok(Self {
+            strategy,
+            tool_name: value.tool_name,
+            original_tokens: value.original_tokens,
+            compressed_tokens: value.compressed_tokens,
+            created_turn_id: value.created_turn_id,
+        })
+    }
+}
+
+impl TryFrom<InputSlimmingStoredInputItem> for InputSlimmingPersistedEntry {
+    type Error = String;
+
+    fn try_from(value: InputSlimmingStoredInputItem) -> Result<Self, Self::Error> {
+        Ok(Self {
+            hash: value.hash,
+            original: value.original,
+            metadata: value.metadata.try_into()?,
+        })
     }
 }
 
@@ -494,6 +577,17 @@ impl InputSlimmingStrategy {
             Self::PlainTextHeadTail => "plain_text_head_tail",
         }
     }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "json_array_sample" => Some(Self::JsonArraySample),
+            "search_result_compact" => Some(Self::SearchResultCompact),
+            "log_compact" => Some(Self::LogCompact),
+            "diff_compact" => Some(Self::DiffCompact),
+            "plain_text_head_tail" => Some(Self::PlainTextHeadTail),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -534,6 +628,7 @@ struct AcceptedSlimming {
     replacement: String,
     gate: InputSlimmingTokenGateDecision,
     reference: InputSlimmingRef,
+    persisted_entry: Option<InputSlimmingPersistedEntry>,
     replacement_tokens_approx: usize,
 }
 
@@ -797,6 +892,12 @@ mod tests {
 
         assert!(outcome.requires_retrieval_tool);
         assert!(outcome.approx_tokens_saved > 0);
+        assert_eq!(outcome.persisted_entries.len(), 1);
+        assert_eq!(outcome.persisted_entries[0].original, original_text);
+        assert_eq!(
+            outcome.persisted_entries[0].metadata.strategy,
+            InputSlimmingStrategy::PlainTextHeadTail
+        );
         assert_eq!(
             request.conversation[0],
             tool_text("apply_patch", original_text.clone())
@@ -826,6 +927,7 @@ mod tests {
         assert_eq!(outcome.request.conversation, request.conversation);
         assert!(!outcome.requires_retrieval_tool);
         assert_eq!(outcome.approx_tokens_saved, 0);
+        assert_eq!(outcome.persisted_entries, Vec::new());
     }
 
     #[tokio::test]
@@ -1193,6 +1295,46 @@ mod tests {
         assert_eq!(outcome.metrics.measured_only, 1);
         assert_eq!(outcome.metrics.slimmed, 0);
         assert_eq!(outcome.metrics.refs, Vec::new());
+        assert_eq!(outcome.persisted_entries, Vec::new());
+    }
+
+    #[test]
+    fn strategy_round_trips_through_stored_metadata() {
+        for strategy in [
+            InputSlimmingStrategy::JsonArraySample,
+            InputSlimmingStrategy::SearchResultCompact,
+            InputSlimmingStrategy::LogCompact,
+            InputSlimmingStrategy::DiffCompact,
+            InputSlimmingStrategy::PlainTextHeadTail,
+        ] {
+            let metadata = StoredInputMetadata {
+                strategy,
+                tool_name: "shell".to_string(),
+                original_tokens: 10,
+                compressed_tokens: 3,
+                created_turn_id: "turn-1".to_string(),
+            };
+
+            let serialized = InputSlimmingStoredInputMetadata::from(metadata.clone());
+            let restored =
+                StoredInputMetadata::try_from(serialized).expect("known strategy should restore");
+
+            assert_eq!(restored, metadata);
+        }
+    }
+
+    #[test]
+    fn unknown_stored_strategy_is_rejected() {
+        let serialized = InputSlimmingStoredInputMetadata {
+            strategy: "unknown".to_string(),
+            tool_name: "shell".to_string(),
+            original_tokens: 10,
+            compressed_tokens: 3,
+            created_turn_id: "turn-1".to_string(),
+        };
+
+        assert!(StoredInputMetadata::try_from(serialized).is_err());
+        assert_eq!(InputSlimmingStrategy::from_str("unknown"), None);
     }
 
     #[tokio::test]
