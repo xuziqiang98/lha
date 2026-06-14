@@ -438,6 +438,12 @@ mod tests {
                 "Allow the model to run shell commands.",
                 true,
             ),
+            item(
+                Feature::InputSlimming,
+                "Input slimming",
+                "Slim large tool results in model requests to reduce token usage while keeping originals retrievable.",
+                false,
+            ),
         ]);
 
         let mut terminal = Terminal::new(VT100Backend::new(100, 32)).expect("terminal");
@@ -449,6 +455,8 @@ mod tests {
         assert!(rendered.contains("Experimental features"));
         assert!(rendered.contains("Ghost snapshots"));
         assert!(rendered.contains("Shell tool"));
+        assert!(rendered.contains("Input slimming"));
+        assert!(rendered.contains("Slim large tool results"));
         assert!(rendered.contains("[ ]"));
         assert!(rendered.contains("[x]"));
         assert!(rendered.contains("Enter"));

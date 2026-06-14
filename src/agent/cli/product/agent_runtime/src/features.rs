@@ -530,7 +530,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::InputSlimming,
         key: "input_slimming",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Input slimming",
+            menu_description: "Slim large tool results in model requests to reduce token usage while keeping originals retrievable.",
+            announcement: "NEW: Input slimming can reduce model input size for large tool outputs. Enable in /experimental.",
+        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -855,11 +859,28 @@ mod tests {
     fn input_slimming_feature_defaults_off() {
         let stage = Feature::InputSlimming.stage();
 
-        assert_eq!(Stage::UnderDevelopment, stage);
+        assert_eq!(
+            Stage::Experimental {
+                name: "Input slimming",
+                menu_description: "Slim large tool results in model requests to reduce token usage while keeping originals retrievable.",
+                announcement: "NEW: Input slimming can reduce model input size for large tool outputs. Enable in /experimental.",
+            },
+            stage
+        );
         assert!(!Feature::InputSlimming.default_enabled());
-        assert_eq!(None, stage.experimental_menu_name());
-        assert_eq!(None, stage.experimental_menu_description());
-        assert_eq!(None, stage.experimental_announcement());
+        assert_eq!(Some("Input slimming"), stage.experimental_menu_name());
+        assert_eq!(
+            Some(
+                "Slim large tool results in model requests to reduce token usage while keeping originals retrievable.",
+            ),
+            stage.experimental_menu_description()
+        );
+        assert_eq!(
+            Some(
+                "NEW: Input slimming can reduce model input size for large tool outputs. Enable in /experimental.",
+            ),
+            stage.experimental_announcement()
+        );
         assert!(!Features::with_defaults().enabled(Feature::InputSlimming));
     }
 
