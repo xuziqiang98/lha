@@ -82,7 +82,16 @@ pub(crate) struct StatusPanelSnapshot {
     pub(crate) left_context_tokens: Option<i64>,
     pub(crate) total_usage_tokens: i64,
     pub(crate) cache_hit_percent: Option<i64>,
+    pub(crate) input_slimming: Option<InputSlimmingPanelSnapshot>,
     pub(crate) context_compact_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct InputSlimmingPanelSnapshot {
+    pub(crate) last_before_tokens: i64,
+    pub(crate) last_after_tokens: i64,
+    pub(crate) last_saved_tokens: i64,
+    pub(crate) total_saved_tokens: i64,
 }
 
 pub(crate) fn sidebar_width(total_width: u16) -> Option<u16> {
@@ -315,6 +324,21 @@ fn push_status(lines: &mut Vec<Line<'static>>, status: Option<&StatusPanelSnapsh
             format!("{cache_hit_percent}%").into(),
         ]));
     }
+    if let Some(input_slimming) = &context.input_slimming {
+        lines.push(Line::from(vec![
+            "  slim ".dim(),
+            format_tokens_compact(input_slimming.last_before_tokens).into(),
+            " -> ".dim(),
+            format_tokens_compact(input_slimming.last_after_tokens).into(),
+        ]));
+        lines.push(Line::from(vec![
+            "  saved ".dim(),
+            format_tokens_compact(input_slimming.last_saved_tokens).into(),
+            " this / ".dim(),
+            format_tokens_compact(input_slimming.total_saved_tokens).into(),
+            " total".dim(),
+        ]));
+    }
     if context.context_compact_count > 0 {
         lines.push(Line::from(vec![
             "  compact ".dim(),
@@ -388,7 +412,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     fn render_sidebar(snapshot: &SidebarSnapshot) -> String {
-        let area = Rect::new(0, 0, 42, 30);
+        let area = Rect::new(0, 0, 42, 34);
         let mut buf = Buffer::empty(area);
         SidebarWidget {
             snapshot,
@@ -454,6 +478,12 @@ mod tests {
                 left_context_tokens: Some(55),
                 total_usage_tokens: 45,
                 cache_hit_percent: Some(25),
+                input_slimming: Some(InputSlimmingPanelSnapshot {
+                    last_before_tokens: 12_400,
+                    last_after_tokens: 4_100,
+                    last_saved_tokens: 8_300,
+                    total_saved_tokens: 18_700,
+                }),
                 context_compact_count: 1,
             }),
         };
@@ -489,6 +519,8 @@ mod tests {
         assert!(rendered.contains("left 55"));
         assert!(rendered.contains("total 45"));
         assert!(rendered.contains("cached 25%"));
+        assert!(rendered.contains("slim 12.4K -> 4.1K"));
+        assert!(rendered.contains("saved 8.3K this / 18.7K total"));
         assert!(rendered.contains("compact 1"));
         assert!(!rendered.contains("used"));
         assert!(!rendered.contains("tokens"));
@@ -504,6 +536,7 @@ mod tests {
                 left_context_tokens: Some(19_800),
                 total_usage_tokens: 12_345,
                 cache_hit_percent: Some(25),
+                input_slimming: None,
                 context_compact_count: 2,
             }),
             ..Default::default()
@@ -527,6 +560,7 @@ mod tests {
                 left_context_tokens: None,
                 total_usage_tokens: 12_345,
                 cache_hit_percent: None,
+                input_slimming: None,
                 context_compact_count: 0,
             }),
             ..Default::default()

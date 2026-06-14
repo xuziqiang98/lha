@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod bench_eval;
 mod candidate;
 mod metrics;
 mod store;
@@ -6,21 +8,25 @@ mod tool;
 
 use std::fmt;
 
+use lha_llm::ToolResultContentItem;
 use lha_llm::ToolResultPayload;
 use lha_llm::TranscriptItem;
 use lha_llm::TurnRequest;
 
 use crate::product::agent::input_slimming::candidate::Candidate;
-use crate::product::agent::input_slimming::candidate::candidate_from_item;
+use crate::product::agent::input_slimming::candidate::CandidateTarget;
+use crate::product::agent::input_slimming::candidate::candidates_from_item;
 use crate::product::agent::input_slimming::candidate::latest_user_message_index;
-use crate::product::agent::input_slimming::candidate::skip_for_current_turn_item;
+use crate::product::agent::input_slimming::candidate::skip_for_current_user_item;
 use crate::product::agent::input_slimming::candidate::skip_for_protected_item;
 use crate::product::agent::input_slimming::metrics::emit_metrics;
 use crate::product::agent::input_slimming::strategy::StrategyOutput;
-use crate::product::agent::input_slimming::strategy::slim_text;
+use crate::product::agent::input_slimming::strategy::slim_text_for_tool;
+use crate::product::agent::protocol::InputSlimmingTokenStats;
 use crate::product::agent::truncate::approx_token_count;
 use crate::product::otel::OtelManager;
 
+pub(crate) use candidate::CandidateZone;
 pub(crate) use store::InputSlimmingStore;
 pub(crate) use store::StoredInputMetadata;
 use store::hash_text;
@@ -32,6 +38,8 @@ pub(crate) const INPUT_SLIMMING_MARKER_PREFIX: &str = "<<lha-input:";
 const INPUT_SLIMMING_MARKER_SUFFIX: &str = ">>";
 pub(crate) const DEFAULT_STORE_CAPACITY: usize = 1000;
 pub(crate) const DEFAULT_STORE_TTL_SECONDS: u64 = 300;
+
+type RequestTokenEstimator<'a> = dyn Fn(&TurnRequest) -> Option<usize> + Send + Sync + 'a;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct InputSlimmingOptions {
@@ -50,6 +58,21 @@ impl Default for InputSlimmingOptions {
     }
 }
 
+pub(crate) struct InputSlimmingContext<'a> {
+    pub(crate) store: &'a InputSlimmingStore,
+    pub(crate) turn_id: &'a str,
+    pub(crate) estimate_request_tokens: Option<&'a RequestTokenEstimator<'a>>,
+    pub(crate) mode: InputSlimmingMode,
+    pub(crate) context_window: Option<i64>,
+    pub(crate) estimated_input_tokens: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InputSlimmingMode {
+    Apply,
+    MeasureOnly,
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct InputSlimmer {
     options: InputSlimmingOptions,
@@ -65,59 +88,122 @@ impl InputSlimmer {
         request: &TurnRequest,
         store: &InputSlimmingStore,
     ) -> Result<InputSlimmingOutcome, InputSlimmingError> {
+        self.slim_request_with_context(
+            request,
+            InputSlimmingContext {
+                store,
+                turn_id: "test",
+                estimate_request_tokens: None,
+                mode: InputSlimmingMode::Apply,
+                context_window: None,
+                estimated_input_tokens: None,
+            },
+        )
+        .await
+    }
+
+    pub(crate) async fn slim_request_with_context(
+        &self,
+        request: &TurnRequest,
+        context: InputSlimmingContext<'_>,
+    ) -> Result<InputSlimmingOutcome, InputSlimmingError> {
         let mut slimmed_request = request.clone();
         let mut metrics = InputSlimmingMetrics::default();
 
         let Some(latest_user_index) = latest_user_message_index(&request.conversation) else {
             metrics.approx_tokens_after = metrics.approx_tokens_before;
-            return Ok(InputSlimmingOutcome::new(slimmed_request, metrics));
+            return Ok(InputSlimmingOutcome::new(
+                slimmed_request,
+                metrics,
+                context.mode,
+            ));
         };
 
         for (idx, item) in request.conversation.iter().enumerate() {
-            if idx >= latest_user_index {
-                if let Some(skip) = skip_for_current_turn_item(item) {
+            if idx == latest_user_index {
+                if let Some(skip) = skip_for_current_user_item(item) {
                     metrics.skipped.push(skip);
                 }
                 continue;
             }
 
-            let candidate = match candidate_from_item(idx, item, self.options.min_candidate_tokens)
-            {
-                Ok(candidate) => candidate,
-                Err(Some(skip)) => {
-                    metrics.skipped.push(skip);
-                    continue;
-                }
-                Err(None) => {
+            let zone = if idx < latest_user_index {
+                CandidateZone::HistoricalToolOutput
+            } else {
+                CandidateZone::LiveToolOutput
+            };
+
+            let collection =
+                candidates_from_item(idx, item, zone, self.options.min_candidate_tokens);
+            if collection.candidates.is_empty() {
+                if collection.skips.is_empty() {
                     if let Some(skip) = skip_for_protected_item(item) {
                         metrics.skipped.push(skip);
                     }
-                    continue;
+                } else {
+                    metrics.skipped.extend(collection.skips);
                 }
-            };
+                continue;
+            }
+            metrics.skipped.extend(collection.skips);
 
-            metrics.candidates += 1;
-            metrics.approx_tokens_before = metrics
-                .approx_tokens_before
-                .saturating_add(candidate.original_tokens);
+            for candidate in collection.candidates {
+                metrics.candidates += 1;
+                metrics.approx_tokens_before = metrics
+                    .approx_tokens_before
+                    .saturating_add(candidate.original_tokens_approx);
 
-            match self.slim_candidate(&candidate, store).await {
-                Ok(Some(accepted)) => {
-                    metrics.slimmed += 1;
-                    metrics.approx_tokens_after = metrics
-                        .approx_tokens_after
-                        .saturating_add(accepted.after_tokens);
-                    metrics.approx_tokens_saved = metrics
-                        .approx_tokens_saved
-                        .saturating_add(accepted.saved_tokens);
-                    metrics.refs.push(accepted.reference);
-                    replace_candidate_text(
-                        &mut slimmed_request.conversation[candidate.index],
-                        accepted.replacement,
-                    );
+                match self
+                    .slim_candidate(&slimmed_request, &candidate, &context)
+                    .await
+                {
+                    Ok(Some(accepted)) => {
+                        let strategy_metric = InputSlimmingStrategyMetric {
+                            strategy: accepted.reference.strategy,
+                            tool_name: accepted.reference.tool_name.clone(),
+                            zone: candidate.zone,
+                            gate_method: accepted.gate.method,
+                            tokens_before: accepted.gate.tokens_before,
+                            tokens_after: accepted.gate.tokens_after,
+                            tokens_saved: accepted.gate.tokens_saved,
+                        };
+                        metrics.strategy_metrics.push(strategy_metric);
+                        if accepted.gate.method == InputSlimmingTokenGateMethod::ApproxTextFallback
+                        {
+                            metrics.token_gate_fallbacks += 1;
+                        }
+                        metrics.approx_tokens_after = metrics
+                            .approx_tokens_after
+                            .saturating_add(accepted.replacement_tokens_approx);
+                        metrics.approx_tokens_saved = metrics
+                            .approx_tokens_saved
+                            .saturating_add(accepted.gate.tokens_saved);
+
+                        match context.mode {
+                            InputSlimmingMode::Apply => {
+                                metrics.slimmed += 1;
+                                metrics.refs.push(accepted.reference);
+                                replace_candidate_text(
+                                    &mut slimmed_request.conversation[candidate.index],
+                                    candidate.target,
+                                    accepted.replacement,
+                                );
+                            }
+                            InputSlimmingMode::MeasureOnly => {
+                                metrics.measured_only += 1;
+                            }
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(rejected) => {
+                        if rejected.gate_method
+                            == Some(InputSlimmingTokenGateMethod::ApproxTextFallback)
+                        {
+                            metrics.token_gate_fallbacks += 1;
+                        }
+                        metrics.skipped.push(rejected.skip);
+                    }
                 }
-                Ok(None) => {}
-                Err(skip) => metrics.skipped.push(skip),
             }
         }
 
@@ -125,70 +211,160 @@ impl InputSlimmer {
             .approx_tokens_before
             .saturating_sub(metrics.approx_tokens_saved);
 
-        Ok(InputSlimmingOutcome::new(slimmed_request, metrics))
+        Ok(InputSlimmingOutcome::new(
+            slimmed_request,
+            metrics,
+            context.mode,
+        ))
     }
 
     async fn slim_candidate(
         &self,
+        current_request: &TurnRequest,
         candidate: &Candidate,
-        store: &InputSlimmingStore,
-    ) -> Result<Option<AcceptedSlimming>, InputSlimmingSkip> {
-        let Some(strategy_output) =
-            slim_text(candidate.text.as_str(), candidate.success, self.options)
-        else {
+        context: &InputSlimmingContext<'_>,
+    ) -> Result<Option<AcceptedSlimming>, RejectedSlimming> {
+        let options = input_slimming_options_for_context(
+            context.context_window,
+            context.estimated_input_tokens,
+            candidate.tool_name.as_str(),
+            candidate.zone,
+        );
+        let options = merge_options(self.options, options);
+        let Some(strategy_output) = slim_text_for_tool(
+            candidate.text.as_str(),
+            candidate.success,
+            options,
+            candidate.tool_name.as_str(),
+        ) else {
             if candidate.success == Some(false) {
-                return Err(candidate.skip(InputSlimmingSkipReason::FailedNonLogResult));
+                return Err(candidate.reject(InputSlimmingSkipReason::FailedNonLogResult));
             }
-            return Err(candidate.skip(InputSlimmingSkipReason::CompressionError));
+            return Err(candidate.reject(InputSlimmingSkipReason::CompressionError));
         };
 
         if candidate.success == Some(false)
             && strategy_output.strategy != InputSlimmingStrategy::LogCompact
         {
-            return Err(candidate.skip(InputSlimmingSkipReason::FailedNonLogResult));
+            return Err(candidate.reject(InputSlimmingSkipReason::FailedNonLogResult));
         }
 
         let hash = hash_text(candidate.text.as_str());
-        let replacement = build_replacement(candidate.original_tokens, &hash, &strategy_output);
-        let after_tokens = approx_token_count(&replacement);
+        let replacement =
+            build_replacement(candidate.original_tokens_approx, &hash, &strategy_output);
+        let gate = token_gate_decision(
+            current_request,
+            candidate,
+            &replacement,
+            context.estimate_request_tokens,
+        );
 
-        if after_tokens >= candidate.original_tokens
-            || candidate.original_tokens.saturating_sub(after_tokens)
-                < self.options.min_saved_tokens
-        {
-            return Err(candidate.skip(InputSlimmingSkipReason::NotTokenSaving));
+        if gate.tokens_after >= gate.tokens_before || gate.tokens_saved < options.min_saved_tokens {
+            return Err(RejectedSlimming {
+                skip: candidate.skip(InputSlimmingSkipReason::NotTokenSaving),
+                gate_method: Some(gate.method),
+            });
         }
 
-        let stored_hash = store
-            .put(
-                candidate.text.clone(),
-                StoredInputMetadata {
-                    strategy: strategy_output.strategy,
-                    tool_name: candidate.tool_name.clone(),
-                    original_tokens: candidate.original_tokens,
-                },
-            )
-            .await;
-        if stored_hash != hash {
-            return Err(candidate.skip(InputSlimmingSkipReason::RetrievalUnavailable));
+        let replacement_tokens_approx = approx_token_count(&replacement);
+        if context.mode == InputSlimmingMode::Apply {
+            let stored_hash = context
+                .store
+                .put(
+                    candidate.text.clone(),
+                    StoredInputMetadata {
+                        strategy: strategy_output.strategy,
+                        tool_name: candidate.tool_name.clone(),
+                        original_tokens: candidate.original_tokens_approx,
+                        compressed_tokens: replacement_tokens_approx,
+                        created_turn_id: context.turn_id.to_string(),
+                    },
+                )
+                .await;
+            if stored_hash != hash {
+                return Err(candidate.reject(InputSlimmingSkipReason::RetrievalUnavailable));
+            }
         }
 
         Ok(Some(AcceptedSlimming {
             replacement,
-            after_tokens,
-            saved_tokens: candidate.original_tokens.saturating_sub(after_tokens),
+            gate,
             reference: InputSlimmingRef {
                 hash,
                 strategy: strategy_output.strategy,
                 tool_name: candidate.tool_name.clone(),
-                original_tokens: candidate.original_tokens,
+                original_tokens: candidate.original_tokens_approx,
+                compressed_tokens: replacement_tokens_approx,
+                zone: candidate.zone,
             },
+            replacement_tokens_approx,
         }))
     }
 
     pub(crate) fn emit_metrics(outcome: &InputSlimmingOutcome, otel: &OtelManager, model: &str) {
         emit_metrics(&outcome.metrics, otel, model);
     }
+}
+
+fn merge_options(
+    base: InputSlimmingOptions,
+    contextual: InputSlimmingOptions,
+) -> InputSlimmingOptions {
+    InputSlimmingOptions {
+        min_candidate_tokens: base
+            .min_candidate_tokens
+            .min(contextual.min_candidate_tokens),
+        target_tokens: base.target_tokens.min(contextual.target_tokens),
+        min_saved_tokens: base.min_saved_tokens.min(contextual.min_saved_tokens),
+    }
+}
+
+pub(crate) fn input_slimming_options_for_context(
+    context_window: Option<i64>,
+    estimated_input_tokens: Option<i64>,
+    tool_name: &str,
+    zone: CandidateZone,
+) -> InputSlimmingOptions {
+    let mut options = InputSlimmingOptions::default();
+    let pressure = match (context_window, estimated_input_tokens) {
+        (Some(window), Some(tokens)) if window > 0 && tokens > 0 => {
+            (tokens as f64 / window as f64).clamp(0.0, 1.0)
+        }
+        _ => 0.0,
+    };
+
+    if pressure >= 0.8 {
+        options.min_candidate_tokens = 512;
+        options.target_tokens = 384;
+        options.min_saved_tokens = 64;
+    } else if pressure >= 0.3 {
+        options.min_candidate_tokens = 768;
+        options.target_tokens = 448;
+        options.min_saved_tokens = 96;
+    }
+
+    if matches!(zone, CandidateZone::LiveToolOutput) {
+        options.min_candidate_tokens = options.min_candidate_tokens.max(1_024);
+        options.min_saved_tokens = options.min_saved_tokens.max(128);
+    }
+
+    let lower_tool = tool_name.to_lowercase();
+    if lower_tool.contains("shell")
+        || lower_tool.contains("unified_exec")
+        || lower_tool.contains("cargo")
+        || lower_tool.contains("test")
+    {
+        options.target_tokens = options.target_tokens.min(384);
+    } else if lower_tool.contains("rg")
+        || lower_tool.contains("grep")
+        || lower_tool.contains("search")
+    {
+        options.target_tokens = options.target_tokens.min(448);
+    } else if lower_tool.contains("diff") || lower_tool.contains("apply_patch") {
+        options.target_tokens = options.target_tokens.min(512);
+    }
+
+    options
 }
 
 #[derive(Debug, Clone)]
@@ -200,9 +376,9 @@ pub(crate) struct InputSlimmingOutcome {
 }
 
 impl InputSlimmingOutcome {
-    fn new(request: TurnRequest, metrics: InputSlimmingMetrics) -> Self {
+    fn new(request: TurnRequest, metrics: InputSlimmingMetrics, mode: InputSlimmingMode) -> Self {
         let approx_tokens_saved = metrics.approx_tokens_saved;
-        let requires_retrieval_tool = metrics.slimmed > 0;
+        let requires_retrieval_tool = mode == InputSlimmingMode::Apply && metrics.slimmed > 0;
         Self {
             request,
             metrics,
@@ -210,17 +386,44 @@ impl InputSlimmingOutcome {
             approx_tokens_saved,
         }
     }
+
+    pub(crate) fn token_stats(&self) -> InputSlimmingTokenStats {
+        InputSlimmingTokenStats {
+            tokens_before: usize_to_i64(self.metrics.approx_tokens_before),
+            tokens_after: usize_to_i64(self.metrics.approx_tokens_after),
+            tokens_saved: usize_to_i64(self.metrics.approx_tokens_saved),
+            replacements: usize_to_i64(self.metrics.slimmed),
+        }
+    }
+}
+
+fn usize_to_i64(value: usize) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct InputSlimmingMetrics {
     pub(crate) candidates: usize,
     pub(crate) slimmed: usize,
+    pub(crate) measured_only: usize,
     pub(crate) skipped: Vec<InputSlimmingSkip>,
     pub(crate) refs: Vec<InputSlimmingRef>,
     pub(crate) approx_tokens_before: usize,
     pub(crate) approx_tokens_after: usize,
     pub(crate) approx_tokens_saved: usize,
+    pub(crate) token_gate_fallbacks: usize,
+    pub(crate) strategy_metrics: Vec<InputSlimmingStrategyMetric>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InputSlimmingStrategyMetric {
+    pub(crate) strategy: InputSlimmingStrategy,
+    pub(crate) tool_name: String,
+    pub(crate) zone: CandidateZone,
+    pub(crate) gate_method: InputSlimmingTokenGateMethod,
+    pub(crate) tokens_before: usize,
+    pub(crate) tokens_after: usize,
+    pub(crate) tokens_saved: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,6 +432,8 @@ pub(crate) struct InputSlimmingRef {
     pub(crate) strategy: InputSlimmingStrategy,
     pub(crate) tool_name: String,
     pub(crate) original_tokens: usize,
+    pub(crate) compressed_tokens: usize,
+    pub(crate) zone: CandidateZone,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -291,6 +496,29 @@ impl InputSlimmingStrategy {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InputSlimmingTokenGateMethod {
+    ModelRequestEstimate,
+    ApproxTextFallback,
+}
+
+impl InputSlimmingTokenGateMethod {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::ModelRequestEstimate => "model_request_estimate",
+            Self::ApproxTextFallback => "approx_text_fallback",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InputSlimmingTokenGateDecision {
+    pub(crate) method: InputSlimmingTokenGateMethod,
+    pub(crate) tokens_before: usize,
+    pub(crate) tokens_after: usize,
+    pub(crate) tokens_saved: usize,
+}
+
 #[derive(Debug)]
 pub(crate) struct InputSlimmingError {
     message: String,
@@ -304,9 +532,14 @@ impl fmt::Display for InputSlimmingError {
 
 struct AcceptedSlimming {
     replacement: String,
-    after_tokens: usize,
-    saved_tokens: usize,
+    gate: InputSlimmingTokenGateDecision,
     reference: InputSlimmingRef,
+    replacement_tokens_approx: usize,
+}
+
+struct RejectedSlimming {
+    skip: InputSlimmingSkip,
+    gate_method: Option<InputSlimmingTokenGateMethod>,
 }
 
 fn build_replacement(before_tokens: usize, hash: &str, strategy_output: &StrategyOutput) -> String {
@@ -320,40 +553,132 @@ fn build_replacement(before_tokens: usize, hash: &str, strategy_output: &Strateg
     )
 }
 
-fn replace_candidate_text(item: &mut TranscriptItem, replacement: String) {
-    match item {
-        TranscriptItem::ToolResult {
-            payload: ToolResultPayload::Text { output },
-            ..
-        } => {
+fn token_gate_decision(
+    current_request: &TurnRequest,
+    candidate: &Candidate,
+    replacement: &str,
+    estimate_request_tokens: Option<&RequestTokenEstimator<'_>>,
+) -> InputSlimmingTokenGateDecision {
+    if let Some(estimate_request_tokens) = estimate_request_tokens {
+        let mut trial_request = current_request.clone();
+        replace_candidate_text(
+            &mut trial_request.conversation[candidate.index],
+            candidate.target,
+            replacement.to_string(),
+        );
+        if let (Some(tokens_before), Some(tokens_after)) = (
+            estimate_request_tokens(current_request),
+            estimate_request_tokens(&trial_request),
+        ) {
+            return InputSlimmingTokenGateDecision {
+                method: InputSlimmingTokenGateMethod::ModelRequestEstimate,
+                tokens_before,
+                tokens_after,
+                tokens_saved: tokens_before.saturating_sub(tokens_after),
+            };
+        }
+    }
+
+    let tokens_after = approx_token_count(replacement);
+    InputSlimmingTokenGateDecision {
+        method: InputSlimmingTokenGateMethod::ApproxTextFallback,
+        tokens_before: candidate.original_tokens_approx,
+        tokens_after,
+        tokens_saved: candidate
+            .original_tokens_approx
+            .saturating_sub(tokens_after),
+    }
+}
+
+fn replace_candidate_text(item: &mut TranscriptItem, target: CandidateTarget, replacement: String) {
+    match (item, target) {
+        (
+            TranscriptItem::ToolResult {
+                payload: ToolResultPayload::Text { output },
+                ..
+            },
+            CandidateTarget::TextToolOutput,
+        ) => {
             *output = replacement;
         }
-        TranscriptItem::ToolResult {
-            payload:
-                ToolResultPayload::Structured {
-                    content,
-                    content_items: None,
-                    ..
-                },
-            ..
-        } => {
+        (
+            TranscriptItem::ToolResult {
+                payload:
+                    ToolResultPayload::Structured {
+                        content,
+                        content_items: None,
+                        ..
+                    },
+                ..
+            },
+            CandidateTarget::StructuredContent,
+        ) => {
             *content = replacement;
         }
-        TranscriptItem::Message { .. }
-        | TranscriptItem::Reasoning { .. }
-        | TranscriptItem::HostedActivity { .. }
-        | TranscriptItem::ToolCall { .. }
-        | TranscriptItem::ToolResult { .. }
-        | TranscriptItem::Unknown { .. } => {}
+        (
+            TranscriptItem::ToolResult {
+                payload:
+                    ToolResultPayload::Structured {
+                        content,
+                        content_items: Some(items),
+                        ..
+                    },
+                ..
+            },
+            CandidateTarget::StructuredContentItem { item_index },
+        ) => {
+            replace_structured_content_item_text(content, items, item_index, replacement);
+        }
+        _ => {}
     }
+}
+
+fn replace_structured_content_item_text(
+    content: &mut String,
+    items: &mut [ToolResultContentItem],
+    item_index: usize,
+    replacement: String,
+) {
+    let old_text_join = join_text_items(items);
+    let all_items_are_text = items
+        .iter()
+        .all(|item| matches!(item, ToolResultContentItem::InputText { .. }));
+
+    if let Some(ToolResultContentItem::InputText { text }) = items.get_mut(item_index) {
+        *text = replacement;
+    }
+
+    if all_items_are_text || *content == old_text_join {
+        *content = join_text_items(items);
+    }
+}
+
+fn join_text_items(items: &[ToolResultContentItem]) -> String {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            ToolResultContentItem::InputText { text } => Some(text.as_str()),
+            ToolResultContentItem::InputImage { .. } => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use lha_llm::ContentItem;
-    use lha_llm::ToolResultContentItem;
+    use lha_llm::ToolCallPayload;
+    use lha_llm::api::provider::Provider;
+    use lha_llm::api::provider::RetryConfig;
+    use lha_llm::api::provider::WireApi;
+    use lha_llm::api::requests::messages::MessagesRequestBuilder;
+    use lha_llm::api::requests::responses::ResponsesRequestBuilder;
+    use lha_llm::types::ReasoningItemContent;
     use pretty_assertions::assert_eq;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
 
     fn request_with(conversation: Vec<TranscriptItem>) -> TurnRequest {
         TurnRequest {
@@ -370,6 +695,48 @@ mod tests {
                 text: text.to_string(),
             }],
             end_turn: None,
+        }
+    }
+
+    fn assistant(text: &str) -> TranscriptItem {
+        TranscriptItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: text.to_string(),
+            }],
+            end_turn: None,
+        }
+    }
+
+    fn reasoning(text: &str) -> TranscriptItem {
+        TranscriptItem::Reasoning {
+            id: "reasoning".to_string(),
+            summary: Vec::new(),
+            content: Some(vec![ReasoningItemContent::Text {
+                text: text.to_string(),
+            }]),
+            encrypted_content: None,
+        }
+    }
+
+    fn hosted_activity() -> TranscriptItem {
+        TranscriptItem::HostedActivity {
+            id: Some("hosted".to_string()),
+            activity_type: "web_search".to_string(),
+            status: Some("done".to_string()),
+            payload: serde_json::json!({"text":"do not slim"}),
+        }
+    }
+
+    fn tool_call(tool_name: &str) -> TranscriptItem {
+        TranscriptItem::ToolCall {
+            id: None,
+            call_id: "call".to_string(),
+            tool_name: tool_name.to_string(),
+            payload: ToolCallPayload::JsonArguments {
+                arguments: "{}".to_string(),
+            },
         }
     }
 
@@ -393,6 +760,24 @@ mod tests {
                 content_items,
                 success: Some(true),
             },
+        }
+    }
+
+    fn provider(wire: WireApi) -> Provider {
+        Provider {
+            name: "test".to_string(),
+            base_url: "https://example.invalid/v1".to_string(),
+            query_params: None,
+            wire,
+            headers: Default::default(),
+            retry: RetryConfig {
+                max_attempts: 1,
+                base_delay: Duration::from_millis(1),
+                retry_429: false,
+                retry_5xx: false,
+                retry_transport: false,
+            },
+            stream_idle_timeout: Duration::from_secs(5),
         }
     }
 
@@ -497,12 +882,154 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn structured_content_items_are_skipped() {
+    async fn structured_text_content_item_can_be_slimmed() {
         let request = request_with(vec![
             structured_tool(
-                "x".repeat(8_000),
+                "visible".to_string(),
                 Some(vec![ToolResultContentItem::InputText {
-                    text: "visible".to_string(),
+                    text: "structured item ".repeat(5_000),
+                }]),
+            ),
+            user("next"),
+        ]);
+        let store = InputSlimmingStore::default();
+
+        let outcome = InputSlimmer::default()
+            .slim_request(&request, &store)
+            .await
+            .expect("slimming succeeds");
+
+        assert!(outcome.requires_retrieval_tool);
+        let TranscriptItem::ToolResult {
+            payload:
+                ToolResultPayload::Structured {
+                    content,
+                    content_items: Some(items),
+                    ..
+                },
+            ..
+        } = &outcome.request.conversation[0]
+        else {
+            panic!("expected structured tool result");
+        };
+        assert!(content.contains("<<lha-input:"));
+        assert!(matches!(
+            &items[0],
+            ToolResultContentItem::InputText { text } if text.contains("<<lha-input:")
+        ));
+    }
+
+    #[tokio::test]
+    async fn mixed_structured_content_items_keep_images_unchanged() {
+        let image_url = "data:image/png;base64,abc".to_string();
+        let request = request_with(vec![
+            structured_tool(
+                "Generated image".to_string(),
+                Some(vec![
+                    ToolResultContentItem::InputText {
+                        text: "image metadata ".repeat(5_000),
+                    },
+                    ToolResultContentItem::InputImage {
+                        image_url: image_url.clone(),
+                    },
+                ]),
+            ),
+            user("next"),
+        ]);
+        let store = InputSlimmingStore::default();
+
+        let outcome = InputSlimmer::default()
+            .slim_request(&request, &store)
+            .await
+            .expect("slimming succeeds");
+
+        let TranscriptItem::ToolResult {
+            payload:
+                ToolResultPayload::Structured {
+                    content,
+                    content_items: Some(items),
+                    ..
+                },
+            ..
+        } = &outcome.request.conversation[0]
+        else {
+            panic!("expected structured tool result");
+        };
+        assert_eq!(content, "Generated image");
+        assert!(matches!(
+            &items[0],
+            ToolResultContentItem::InputText { text } if text.contains("<<lha-input:")
+        ));
+        assert_eq!(items[1], ToolResultContentItem::InputImage { image_url });
+    }
+
+    #[tokio::test]
+    async fn responses_serialization_sees_slimmed_structured_content_item() {
+        let request = request_with(vec![
+            structured_tool(
+                "visible".to_string(),
+                Some(vec![ToolResultContentItem::InputText {
+                    text: "provider visible ".repeat(5_000),
+                }]),
+            ),
+            user("next"),
+        ]);
+        let store = InputSlimmingStore::default();
+
+        let outcome = InputSlimmer::default()
+            .slim_request(&request, &store)
+            .await
+            .expect("slimming succeeds");
+        let provider_request =
+            ResponsesRequestBuilder::new("gpt-test", "inst", &outcome.request.conversation)
+                .build(&provider(WireApi::Responses))
+                .expect("provider request");
+
+        assert!(
+            provider_request.body["input"][0]["output"][0]["text"]
+                .as_str()
+                .expect("text item")
+                .contains("<<lha-input:")
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_serialization_sees_slimmed_structured_content_item() {
+        let request = request_with(vec![
+            structured_tool(
+                "visible".to_string(),
+                Some(vec![ToolResultContentItem::InputText {
+                    text: "messages visible ".repeat(5_000),
+                }]),
+            ),
+            user("next"),
+        ]);
+        let store = InputSlimmingStore::default();
+
+        let outcome = InputSlimmer::default()
+            .slim_request(&request, &store)
+            .await
+            .expect("slimming succeeds");
+        let provider_request =
+            MessagesRequestBuilder::new("claude-test", "inst", &outcome.request.conversation, &[])
+                .build(&provider(WireApi::Messages))
+                .expect("provider request");
+
+        assert!(
+            provider_request.body["messages"][0]["content"][0]["content"][0]["text"]
+                .as_str()
+                .expect("text item")
+                .contains("<<lha-input:")
+        );
+    }
+
+    #[tokio::test]
+    async fn image_only_structured_content_items_are_skipped() {
+        let request = request_with(vec![
+            structured_tool(
+                "image".to_string(),
+                Some(vec![ToolResultContentItem::InputImage {
+                    image_url: "data:image/png;base64,abc".to_string(),
                 }]),
             ),
             user("next"),
@@ -517,15 +1044,21 @@ mod tests {
         assert_eq!(outcome.request.conversation, request.conversation);
         assert_eq!(
             outcome.metrics.skipped,
-            vec![InputSlimmingSkip {
-                reason: InputSlimmingSkipReason::StructuredContentItems,
-                tool_name: Some("shell".to_string()),
-            }]
+            vec![
+                InputSlimmingSkip {
+                    reason: InputSlimmingSkipReason::StructuredContentItems,
+                    tool_name: Some("shell".to_string()),
+                },
+                InputSlimmingSkip {
+                    reason: InputSlimmingSkipReason::CurrentUserTurn,
+                    tool_name: None,
+                },
+            ]
         );
     }
 
     #[tokio::test]
-    async fn tool_results_after_latest_user_message_are_not_candidates() {
+    async fn live_tool_results_after_latest_user_message_are_candidates() {
         let text = "after user".repeat(5000);
         let request = request_with(vec![user("first"), tool_text("shell", text)]);
         let store = InputSlimmingStore::default();
@@ -535,7 +1068,284 @@ mod tests {
             .await
             .expect("slimming succeeds");
 
-        assert_eq!(outcome.metrics.candidates, 0);
+        assert_eq!(outcome.metrics.candidates, 1);
+        assert_eq!(outcome.metrics.slimmed, 1);
+        assert_eq!(outcome.metrics.refs[0].zone, CandidateZone::LiveToolOutput);
+    }
+
+    #[tokio::test]
+    async fn live_zone_safety_only_modifies_tool_result() {
+        let request = request_with(vec![
+            assistant("old assistant"),
+            user("current prompt"),
+            reasoning("private reasoning"),
+            hosted_activity(),
+            tool_call("shell"),
+            tool_text("shell", "live output ".repeat(5_000)),
+        ]);
+        let store = InputSlimmingStore::default();
+
+        let outcome = InputSlimmer::default()
+            .slim_request(&request, &store)
+            .await
+            .expect("slimming succeeds");
+
+        assert_eq!(outcome.request.conversation[1], request.conversation[1]);
+        assert_eq!(outcome.request.conversation[2], request.conversation[2]);
+        assert_eq!(outcome.request.conversation[3], request.conversation[3]);
+        assert_eq!(outcome.request.conversation[4], request.conversation[4]);
+        assert_ne!(outcome.request.conversation[5], request.conversation[5]);
+    }
+
+    #[tokio::test]
+    async fn model_estimator_token_gate_is_preferred() {
+        let request = request_with(vec![
+            tool_text("shell", "alpha ".repeat(5_000)),
+            user("next"),
+        ]);
+        let store = InputSlimmingStore::default();
+        let calls = AtomicUsize::new(0);
+        let estimator = |request: &TurnRequest| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let text = serde_json::to_string(&request.conversation).ok()?;
+            Some(approx_token_count(&text))
+        };
+
+        let outcome = InputSlimmer::default()
+            .slim_request_with_context(
+                &request,
+                InputSlimmingContext {
+                    store: &store,
+                    turn_id: "turn",
+                    estimate_request_tokens: Some(&estimator),
+                    mode: InputSlimmingMode::Apply,
+                    context_window: None,
+                    estimated_input_tokens: None,
+                },
+            )
+            .await
+            .expect("slimming succeeds");
+
+        assert!(calls.load(Ordering::SeqCst) >= 2);
+        assert_eq!(
+            outcome.metrics.strategy_metrics[0].gate_method,
+            InputSlimmingTokenGateMethod::ModelRequestEstimate
+        );
+        assert_eq!(outcome.metrics.token_gate_fallbacks, 0);
+    }
+
+    #[tokio::test]
+    async fn token_gate_fallback_is_recorded_when_estimator_is_unavailable() {
+        let request = request_with(vec![
+            tool_text("shell", "alpha ".repeat(5_000)),
+            user("next"),
+        ]);
+        let store = InputSlimmingStore::default();
+        let estimator = |_request: &TurnRequest| None;
+
+        let outcome = InputSlimmer::default()
+            .slim_request_with_context(
+                &request,
+                InputSlimmingContext {
+                    store: &store,
+                    turn_id: "turn",
+                    estimate_request_tokens: Some(&estimator),
+                    mode: InputSlimmingMode::Apply,
+                    context_window: None,
+                    estimated_input_tokens: None,
+                },
+            )
+            .await
+            .expect("slimming succeeds");
+
+        assert_eq!(outcome.metrics.token_gate_fallbacks, 1);
+        assert_eq!(
+            outcome.metrics.strategy_metrics[0].gate_method,
+            InputSlimmingTokenGateMethod::ApproxTextFallback
+        );
+    }
+
+    #[tokio::test]
+    async fn measure_only_does_not_modify_or_store() {
+        let request = request_with(vec![
+            tool_text("shell", "measure ".repeat(5_000)),
+            user("next"),
+        ]);
+        let store = InputSlimmingStore::default();
+
+        let outcome = InputSlimmer::default()
+            .slim_request_with_context(
+                &request,
+                InputSlimmingContext {
+                    store: &store,
+                    turn_id: "turn",
+                    estimate_request_tokens: None,
+                    mode: InputSlimmingMode::MeasureOnly,
+                    context_window: None,
+                    estimated_input_tokens: None,
+                },
+            )
+            .await
+            .expect("slimming succeeds");
+
         assert_eq!(outcome.request.conversation, request.conversation);
+        assert!(!outcome.requires_retrieval_tool);
+        assert_eq!(outcome.metrics.measured_only, 1);
+        assert_eq!(outcome.metrics.slimmed, 0);
+        assert_eq!(outcome.metrics.refs, Vec::new());
+    }
+
+    #[tokio::test]
+    async fn token_gate_rejects_replacement_when_model_estimator_says_not_smaller() {
+        let request = request_with(vec![
+            tool_text("shell", "alpha ".repeat(5_000)),
+            user("next"),
+        ]);
+        let store = InputSlimmingStore::default();
+        let estimator = |_request: &TurnRequest| Some(10_000);
+
+        let outcome = InputSlimmer::default()
+            .slim_request_with_context(
+                &request,
+                InputSlimmingContext {
+                    store: &store,
+                    turn_id: "turn",
+                    estimate_request_tokens: Some(&estimator),
+                    mode: InputSlimmingMode::Apply,
+                    context_window: None,
+                    estimated_input_tokens: None,
+                },
+            )
+            .await
+            .expect("slimming succeeds");
+
+        assert_eq!(outcome.request.conversation, request.conversation);
+        assert_eq!(outcome.metrics.slimmed, 0);
+        assert!(outcome.metrics.skipped.iter().any(|skip| {
+            skip.reason == InputSlimmingSkipReason::NotTokenSaving
+                && skip.tool_name.as_deref() == Some("shell")
+        }));
+    }
+
+    #[tokio::test]
+    async fn rejected_fallback_gate_is_recorded() {
+        let request = request_with(vec![
+            tool_text(
+                "rg",
+                "src/main.rs:1:needle\nsrc/main.rs:2:needle\nsrc/main.rs:3:needle".to_string(),
+            ),
+            user("next"),
+        ]);
+        let store = InputSlimmingStore::default();
+        let estimator = |_request: &TurnRequest| None;
+
+        let outcome = InputSlimmer::new(InputSlimmingOptions {
+            min_candidate_tokens: 1,
+            target_tokens: 512,
+            min_saved_tokens: 128,
+        })
+        .slim_request_with_context(
+            &request,
+            InputSlimmingContext {
+                store: &store,
+                turn_id: "turn",
+                estimate_request_tokens: Some(&estimator),
+                mode: InputSlimmingMode::Apply,
+                context_window: None,
+                estimated_input_tokens: None,
+            },
+        )
+        .await
+        .expect("slimming succeeds");
+
+        assert_eq!(outcome.metrics.slimmed, 0);
+        assert_eq!(outcome.metrics.token_gate_fallbacks, 1);
+        assert!(outcome.metrics.skipped.iter().any(|skip| {
+            skip.reason == InputSlimmingSkipReason::NotTokenSaving
+                && skip.tool_name.as_deref() == Some("rg")
+        }));
+    }
+
+    #[tokio::test]
+    async fn eval_retrieval_recovers_omitted_middle_needle() {
+        let request = request_with(vec![
+            tool_text(
+                "shell",
+                format!(
+                    "{}\nNEEDLE_IN_OMITTED_MIDDLE\n{}",
+                    "head ".repeat(5_000),
+                    "tail ".repeat(5_000)
+                ),
+            ),
+            user("next"),
+        ]);
+        let store = InputSlimmingStore::default();
+
+        let outcome = InputSlimmer::default()
+            .slim_request(&request, &store)
+            .await
+            .expect("slimming succeeds");
+        let hash = outcome.metrics.refs[0].hash.clone();
+        let retrieval = store
+            .retrieve(&hash, Some("NEEDLE_IN_OMITTED_MIDDLE"))
+            .await;
+
+        assert!(retrieval.success);
+        assert_eq!(retrieval.query_matched, Some(true));
+        assert!(retrieval.content.contains("NEEDLE_IN_OMITTED_MIDDLE"));
+    }
+
+    #[tokio::test]
+    async fn eval_high_entropy_text_requires_marker_when_compressed() {
+        let text = (0..8_000)
+            .map(|idx| format!("{idx:04x}Qz9+/AaBbCcDdEeFfGgHhIiJjKkLlMmNn=="))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let request = request_with(vec![tool_text("shell", text), user("next")]);
+        let store = InputSlimmingStore::default();
+
+        let outcome = InputSlimmer::default()
+            .slim_request(&request, &store)
+            .await
+            .expect("slimming succeeds");
+
+        if outcome.metrics.slimmed == 0 {
+            assert_eq!(outcome.request.conversation, request.conversation);
+        } else if let TranscriptItem::ToolResult {
+            payload: ToolResultPayload::Text { output },
+            ..
+        } = &outcome.request.conversation[0]
+        {
+            assert!(output.contains("<<lha-input:"));
+            assert!(outcome.requires_retrieval_tool);
+        } else {
+            panic!("expected text tool result");
+        }
+    }
+
+    #[test]
+    fn adaptive_policy_changes_with_context_pressure() {
+        let low = input_slimming_options_for_context(
+            Some(100_000),
+            Some(10_000),
+            "shell",
+            CandidateZone::HistoricalToolOutput,
+        );
+        let high = input_slimming_options_for_context(
+            Some(100_000),
+            Some(90_000),
+            "shell",
+            CandidateZone::HistoricalToolOutput,
+        );
+        let live = input_slimming_options_for_context(
+            Some(100_000),
+            Some(90_000),
+            "shell",
+            CandidateZone::LiveToolOutput,
+        );
+
+        assert!(high.min_candidate_tokens < low.min_candidate_tokens);
+        assert!(high.min_saved_tokens < low.min_saved_tokens);
+        assert!(live.min_candidate_tokens >= high.min_candidate_tokens);
     }
 }

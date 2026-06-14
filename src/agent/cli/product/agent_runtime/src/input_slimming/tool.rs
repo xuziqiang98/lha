@@ -54,16 +54,32 @@ impl ToolHandler for InputRetrieveHandler {
             .retrieve(args.hash.as_str(), args.query.as_deref())
             .await;
 
+        let strategy = result
+            .strategy
+            .map(super::InputSlimmingStrategy::as_str)
+            .unwrap_or("unknown");
+        let tool_name = result.tool_name.as_deref().unwrap_or("unknown");
         invocation.turn.runtime.get_otel_manager().counter(
             "lha.input_slimming.retrieve",
             1,
-            &[("success", if result.success { "true" } else { "false" })],
+            &[
+                ("success", if result.success { "true" } else { "false" }),
+                ("strategy", strategy),
+                ("tool_name", tool_name),
+            ],
         );
         if !result.success {
             invocation.turn.runtime.get_otel_manager().counter(
                 "lha.input_slimming.retrieve_miss",
                 1,
                 &[],
+            );
+        }
+        if let Some(matched) = result.query_matched {
+            invocation.turn.runtime.get_otel_manager().counter(
+                "lha.input_slimming.retrieve_query",
+                1,
+                &[("matched", if matched { "true" } else { "false" })],
             );
         }
 
@@ -157,6 +173,8 @@ mod tests {
                     strategy: InputSlimmingStrategy::PlainTextHeadTail,
                     tool_name: "shell".to_string(),
                     original_tokens: 3,
+                    compressed_tokens: 1,
+                    created_turn_id: "turn-1".to_string(),
                 },
             )
             .await;

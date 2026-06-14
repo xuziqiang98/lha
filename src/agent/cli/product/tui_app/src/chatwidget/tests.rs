@@ -1981,6 +1981,7 @@ async fn sidebar_status_uses_status_token_semantics() {
             left_context_tokens: Some(19_800),
             total_usage_tokens: 17_000,
             cache_hit_percent: Some(25),
+            input_slimming: None,
             context_compact_count: 0,
         }
     );
@@ -2014,8 +2015,91 @@ async fn sidebar_status_omits_cache_hit_percent_when_cached_input_is_zero() {
             left_context_tokens: None,
             total_usage_tokens: 22_000,
             cache_hit_percent: None,
+            input_slimming: None,
             context_compact_count: 0,
         }
+    );
+}
+
+#[tokio::test]
+async fn sidebar_status_tracks_input_slimming_savings() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "input-slimming-empty".into(),
+        msg: EventMsg::InputSlimming(crate::product::agent::protocol::InputSlimmingEvent {
+            last: crate::product::agent::protocol::InputSlimmingTokenStats {
+                tokens_before: 1_000,
+                tokens_after: 1_000,
+                tokens_saved: 0,
+                replacements: 1,
+            },
+            total: crate::product::agent::protocol::InputSlimmingTokenStats {
+                tokens_before: 1_000,
+                tokens_after: 1_000,
+                tokens_saved: 0,
+                replacements: 1,
+            },
+        }),
+    });
+
+    assert!(
+        chat.sidebar_snapshot()
+            .status
+            .expect("sidebar status should be present")
+            .input_slimming
+            .is_none()
+    );
+
+    chat.handle_codex_event(Event {
+        id: "input-slimming-saved".into(),
+        msg: EventMsg::InputSlimming(crate::product::agent::protocol::InputSlimmingEvent {
+            last: crate::product::agent::protocol::InputSlimmingTokenStats {
+                tokens_before: 12_400,
+                tokens_after: 4_100,
+                tokens_saved: 8_300,
+                replacements: 2,
+            },
+            total: crate::product::agent::protocol::InputSlimmingTokenStats {
+                tokens_before: 27_800,
+                tokens_after: 9_100,
+                tokens_saved: 18_700,
+                replacements: 5,
+            },
+        }),
+    });
+
+    let snapshot = chat.sidebar_snapshot();
+    let slimming = snapshot
+        .status
+        .as_ref()
+        .and_then(|status| status.input_slimming.as_ref())
+        .expect("input slimming should be visible");
+    assert_eq!(
+        slimming,
+        &crate::product::tui_app::sidebar::InputSlimmingPanelSnapshot {
+            last_before_tokens: 12_400,
+            last_after_tokens: 4_100,
+            last_saved_tokens: 8_300,
+            total_saved_tokens: 18_700,
+        }
+    );
+
+    let rendered = render_sidebar_snapshot(&snapshot);
+    assert!(rendered.contains("slim 12.4K -> 4.1K"));
+    assert!(rendered.contains("saved 8.3K this / 18.7K total"));
+
+    chat.handle_codex_event(Event {
+        id: "token-usage".into(),
+        msg: EventMsg::TokenCount(TokenCountEvent { info: None }),
+    });
+
+    assert!(
+        chat.sidebar_snapshot()
+            .status
+            .expect("sidebar status should be present")
+            .input_slimming
+            .is_some()
     );
 }
 
@@ -2437,6 +2521,7 @@ async fn make_chatwidget_manual_inner_with_otel(
         session_header: SessionHeader::new(resolved_model.clone()),
         initial_user_message: None,
         token_info: None,
+        input_slimming: None,
         stream_controller: None,
         pending_streamed_agent_message_echo: None,
         plan_stream_controller: None,
@@ -2616,6 +2701,7 @@ async fn make_chatwidget_manual_with_frame_requester(
         session_header: SessionHeader::new(resolved_model.clone()),
         initial_user_message: None,
         token_info: None,
+        input_slimming: None,
         stream_controller: None,
         pending_streamed_agent_message_echo: None,
         plan_stream_controller: None,

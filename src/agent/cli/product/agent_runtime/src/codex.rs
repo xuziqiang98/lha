@@ -143,6 +143,8 @@ use crate::product::agent::git_info::get_git_repo_root;
 use crate::product::agent::input_slimming::INPUT_RETRIEVE_TOOL_NAME;
 use crate::product::agent::input_slimming::InputRetrieveHandler;
 use crate::product::agent::input_slimming::InputSlimmer;
+use crate::product::agent::input_slimming::InputSlimmingContext;
+use crate::product::agent::input_slimming::InputSlimmingMode;
 use crate::product::agent::input_slimming::create_lha_input_retrieve_tool;
 use crate::product::agent::instructions::UserInstructions;
 use crate::product::agent::mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -170,6 +172,8 @@ use crate::product::agent::protocol::EventMsg;
 use crate::product::agent::protocol::ExecApprovalRequestEvent;
 use crate::product::agent::protocol::IDENTITY_CLOSE_TAG;
 use crate::product::agent::protocol::IDENTITY_OPEN_TAG;
+use crate::product::agent::protocol::InputSlimmingEvent;
+use crate::product::agent::protocol::InputSlimmingTokenStats;
 use crate::product::agent::protocol::McpServerRefreshConfig;
 use crate::product::agent::protocol::Op;
 use crate::product::agent::protocol::PlanDeltaEvent;
@@ -3889,6 +3893,26 @@ impl Session {
         self.send_event(turn_context, event).await;
     }
 
+    pub(crate) async fn record_input_slimming(
+        &self,
+        turn_context: &TurnContext,
+        last: InputSlimmingTokenStats,
+    ) {
+        if last.tokens_saved <= 0 || last.replacements <= 0 {
+            return;
+        }
+
+        let total = {
+            let mut state = self.state.lock().await;
+            state.record_input_slimming(last)
+        };
+        self.send_event(
+            turn_context,
+            EventMsg::InputSlimming(InputSlimmingEvent { last, total }),
+        )
+        .await;
+    }
+
     async fn maybe_start_ghost_snapshot(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
@@ -5883,8 +5907,24 @@ async fn run_sampling_request(
     if sess.enabled(Feature::InputSlimming) {
         let slimming_start = Instant::now();
         let model = turn_context.runtime.get_model();
+        let estimate_request_tokens = |request: &TurnRequest| {
+            turn_context
+                .runtime
+                .estimated_input_tokens_for_turn_request(request)
+                .and_then(|value| usize::try_from(value).ok())
+        };
         match InputSlimmer::default()
-            .slim_request(&prompt, &sess.services.input_slimming_store)
+            .slim_request_with_context(
+                &prompt,
+                InputSlimmingContext {
+                    store: &sess.services.input_slimming_store,
+                    turn_id: turn_context.sub_id.as_str(),
+                    estimate_request_tokens: Some(&estimate_request_tokens),
+                    mode: InputSlimmingMode::Apply,
+                    context_window: turn_context.runtime.get_model_context_window(),
+                    estimated_input_tokens: history_input_tokens,
+                },
+            )
             .await
         {
             Ok(outcome) => {
@@ -5904,6 +5944,10 @@ async fn run_sampling_request(
                             i64::try_from(outcome.approx_tokens_saved).unwrap_or(i64::MAX),
                         )
                     });
+                }
+                if outcome.metrics.approx_tokens_saved > 0 && outcome.metrics.slimmed > 0 {
+                    sess.record_input_slimming(turn_context.as_ref(), outcome.token_stats())
+                        .await;
                 }
                 if outcome.requires_retrieval_tool {
                     router.register_extra_tool(
@@ -8701,6 +8745,100 @@ mod tests {
                 return payload;
             }
         }
+    }
+
+    async fn wait_for_input_slimming(rx: &async_channel::Receiver<Event>) -> InputSlimmingEvent {
+        let deadline = StdDuration::from_secs(2);
+        let start = std::time::Instant::now();
+        loop {
+            let remaining = deadline.saturating_sub(start.elapsed());
+            let evt = tokio::time::timeout(remaining, rx.recv())
+                .await
+                .expect("timeout waiting for event")
+                .expect("event");
+            if let EventMsg::InputSlimming(payload) = evt.msg {
+                return payload;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn record_input_slimming_ignores_zero_saved() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        sess.record_input_slimming(
+            tc.as_ref(),
+            InputSlimmingTokenStats {
+                tokens_before: 1_000,
+                tokens_after: 1_000,
+                tokens_saved: 0,
+                replacements: 1,
+            },
+        )
+        .await;
+
+        assert!(
+            rx.try_recv().is_err(),
+            "zero-saving input slimming should not emit an event"
+        );
+    }
+
+    #[tokio::test]
+    async fn record_input_slimming_accumulates_session_totals() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        sess.record_input_slimming(
+            tc.as_ref(),
+            InputSlimmingTokenStats {
+                tokens_before: 12_400,
+                tokens_after: 4_100,
+                tokens_saved: 8_300,
+                replacements: 2,
+            },
+        )
+        .await;
+        sess.record_input_slimming(
+            tc.as_ref(),
+            InputSlimmingTokenStats {
+                tokens_before: 15_400,
+                tokens_after: 5_000,
+                tokens_saved: 10_400,
+                replacements: 3,
+            },
+        )
+        .await;
+
+        let first = wait_for_input_slimming(&rx).await;
+        assert_eq!(
+            first.last,
+            InputSlimmingTokenStats {
+                tokens_before: 12_400,
+                tokens_after: 4_100,
+                tokens_saved: 8_300,
+                replacements: 2,
+            }
+        );
+        assert_eq!(first.total, first.last);
+
+        let second = wait_for_input_slimming(&rx).await;
+        assert_eq!(
+            second.last,
+            InputSlimmingTokenStats {
+                tokens_before: 15_400,
+                tokens_after: 5_000,
+                tokens_saved: 10_400,
+                replacements: 3,
+            }
+        );
+        assert_eq!(
+            second.total,
+            InputSlimmingTokenStats {
+                tokens_before: 27_800,
+                tokens_after: 9_100,
+                tokens_saved: 18_700,
+                replacements: 5,
+            }
+        );
     }
 
     async fn wait_for_thread_rollback_failed(rx: &async_channel::Receiver<Event>) -> ErrorEvent {

@@ -82,6 +82,8 @@ export type { ImageContent } from "./ImageContent";
 export type { InitializeParams } from "./InitializeParams";
 export type { InitializeResponse } from "./InitializeResponse";
 export type { InputItem } from "./InputItem";
+export type { InputSlimmingEvent } from "./InputSlimmingEvent";
+export type { InputSlimmingTokenStats } from "./InputSlimmingTokenStats";
 export type { InterruptConversationParams } from "./InterruptConversationParams";
 export type { InterruptConversationResponse } from "./InterruptConversationResponse";
 export type { ItemCompletedEvent } from "./ItemCompletedEvent";

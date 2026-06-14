@@ -13,6 +13,7 @@ use crate::product::agent::codex::SessionConfiguration;
 use crate::product::agent::context_manager::ContextManager;
 use crate::product::agent::dynamic_context_window::DynamicContextWindowKey;
 use crate::product::agent::dynamic_context_window::DynamicContextWindowState;
+use crate::product::agent::protocol::InputSlimmingTokenStats;
 use crate::product::agent::protocol::TokenUsage;
 use crate::product::agent::protocol::TokenUsageInfo;
 use crate::product::agent::truncate::TruncationPolicy;
@@ -41,6 +42,7 @@ pub(crate) struct SessionState {
     /// Whether reconstructed history may need an explicit identity clear when the
     /// next seeded context has no preset identity.
     pub(crate) pending_identity_clear_from_history: bool,
+    pub(crate) input_slimming_total: InputSlimmingTokenStats,
 }
 
 impl SessionState {
@@ -60,6 +62,7 @@ impl SessionState {
             prompt_settings_snapshot: None,
             memory_citations_enabled: false,
             pending_identity_clear_from_history: false,
+            input_slimming_total: InputSlimmingTokenStats::default(),
         }
     }
 
@@ -128,6 +131,14 @@ impl SessionState {
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
         self.history.set_token_usage_full(context_window);
+    }
+
+    pub(crate) fn record_input_slimming(
+        &mut self,
+        last: InputSlimmingTokenStats,
+    ) -> InputSlimmingTokenStats {
+        self.input_slimming_total.add_assign(&last);
+        self.input_slimming_total
     }
 
     pub(crate) fn get_total_token_usage(&self, server_reasoning_included: bool) -> i64 {

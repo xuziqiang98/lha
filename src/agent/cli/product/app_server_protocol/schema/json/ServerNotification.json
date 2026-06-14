@@ -94,6 +94,26 @@
         "method": {
           "type": "string",
           "enum": [
+            "thread/inputSlimming/updated"
+          ],
+          "title": "Thread/inputSlimming/updatedNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/InputSlimmingUpdatedNotification"
+        }
+      },
+      "title": "Thread/inputSlimming/updatedNotification"
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
             "turn/started"
           ],
           "title": "Turn/startedNotificationMethod"
@@ -1642,6 +1662,31 @@
             }
           },
           "title": "TokenCountEventMsg"
+        },
+        {
+          "description": "Approximate request-shaping savings from input slimming.",
+          "type": "object",
+          "required": [
+            "last",
+            "total",
+            "type"
+          ],
+          "properties": {
+            "last": {
+              "$ref": "#/definitions/InputSlimmingTokenStats2"
+            },
+            "total": {
+              "$ref": "#/definitions/InputSlimmingTokenStats2"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "input_slimming"
+              ],
+              "title": "InputSlimmingEventMsgType"
+            }
+          },
+          "title": "InputSlimmingEventMsg"
         },
         {
           "description": "Tiny TUI buddy companion reaction. This is UI-only and not part of the model transcript.",
@@ -3834,6 +3879,94 @@
           "type": "string"
         },
         "type": {
+          "type": "string"
+        }
+      }
+    },
+    "InputSlimmingStats": {
+      "type": "object",
+      "required": [
+        "last",
+        "total"
+      ],
+      "properties": {
+        "last": {
+          "$ref": "#/definitions/InputSlimmingTokenStats"
+        },
+        "total": {
+          "$ref": "#/definitions/InputSlimmingTokenStats"
+        }
+      }
+    },
+    "InputSlimmingTokenStats": {
+      "type": "object",
+      "required": [
+        "replacements",
+        "tokensAfter",
+        "tokensBefore",
+        "tokensSaved"
+      ],
+      "properties": {
+        "replacements": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tokensAfter": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tokensBefore": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tokensSaved": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "InputSlimmingTokenStats2": {
+      "type": "object",
+      "required": [
+        "replacements",
+        "tokens_after",
+        "tokens_before",
+        "tokens_saved"
+      ],
+      "properties": {
+        "replacements": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tokens_after": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tokens_before": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tokens_saved": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "InputSlimmingUpdatedNotification": {
+      "type": "object",
+      "required": [
+        "inputSlimming",
+        "threadId",
+        "turnId"
+      ],
+      "properties": {
+        "inputSlimming": {
+          "$ref": "#/definitions/InputSlimmingStats"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
           "type": "string"
         }
       }

@@ -23,6 +23,8 @@ use crate::product::protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use crate::product::protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use crate::product::protocol::protocol::AskForApproval as CoreAskForApproval;
 use crate::product::protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
+use crate::product::protocol::protocol::InputSlimmingEvent as CoreInputSlimmingEvent;
+use crate::product::protocol::protocol::InputSlimmingTokenStats as CoreInputSlimmingTokenStats;
 use crate::product::protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use crate::product::protocol::protocol::SessionSource as CoreSessionSource;
 use crate::product::protocol::protocol::SkillDependencies as CoreSkillDependencies;
@@ -1526,6 +1528,57 @@ pub struct ThreadTokenUsageUpdatedNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub token_usage: ThreadTokenUsage,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct InputSlimmingUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub input_slimming: InputSlimmingStats,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct InputSlimmingStats {
+    pub last: InputSlimmingTokenStats,
+    pub total: InputSlimmingTokenStats,
+}
+
+impl From<CoreInputSlimmingEvent> for InputSlimmingStats {
+    fn from(value: CoreInputSlimmingEvent) -> Self {
+        Self {
+            last: value.last.into(),
+            total: value.total.into(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct InputSlimmingTokenStats {
+    #[ts(type = "number")]
+    pub tokens_before: i64,
+    #[ts(type = "number")]
+    pub tokens_after: i64,
+    #[ts(type = "number")]
+    pub tokens_saved: i64,
+    #[ts(type = "number")]
+    pub replacements: i64,
+}
+
+impl From<CoreInputSlimmingTokenStats> for InputSlimmingTokenStats {
+    fn from(value: CoreInputSlimmingTokenStats) -> Self {
+        Self {
+            tokens_before: value.tokens_before,
+            tokens_after: value.tokens_after,
+            tokens_saved: value.tokens_saved,
+            replacements: value.replacements,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

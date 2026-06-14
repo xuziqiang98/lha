@@ -337,6 +337,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::BuddyReaction(_)
                     | EventMsg::TurnStarted(_)
                     | EventMsg::TokenCount(_)
+                    | EventMsg::InputSlimming(_)
                     | EventMsg::AgentReasoning(_)
                     | EventMsg::AgentReasoningSectionBreak(_)
                     | EventMsg::McpToolCallBegin(_)

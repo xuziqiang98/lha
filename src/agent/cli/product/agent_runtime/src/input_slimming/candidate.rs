@@ -1,3 +1,4 @@
+use lha_llm::ToolResultContentItem;
 use lha_llm::ToolResultPayload;
 use lha_llm::TranscriptItem;
 
@@ -10,10 +11,12 @@ use crate::product::agent::truncate::approx_token_count;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Candidate {
     pub(super) index: usize,
+    pub(super) target: CandidateTarget,
+    pub(super) zone: CandidateZone,
     pub(super) tool_name: String,
     pub(super) text: String,
     pub(super) success: Option<bool>,
-    pub(super) original_tokens: usize,
+    pub(super) original_tokens_approx: usize,
 }
 
 impl Candidate {
@@ -23,6 +26,44 @@ impl Candidate {
             tool_name: Some(self.tool_name.clone()),
         }
     }
+
+    pub(super) fn reject(
+        &self,
+        reason: InputSlimmingSkipReason,
+    ) -> crate::product::agent::input_slimming::RejectedSlimming {
+        crate::product::agent::input_slimming::RejectedSlimming {
+            skip: self.skip(reason),
+            gate_method: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CandidateTarget {
+    TextToolOutput,
+    StructuredContent,
+    StructuredContentItem { item_index: usize },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CandidateZone {
+    HistoricalToolOutput,
+    LiveToolOutput,
+}
+
+impl CandidateZone {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::HistoricalToolOutput => "historical_tool_output",
+            Self::LiveToolOutput => "live_tool_output",
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(super) struct CandidateCollection {
+    pub(super) candidates: Vec<Candidate>,
+    pub(super) skips: Vec<InputSlimmingSkip>,
 }
 
 pub(super) fn latest_user_message_index(items: &[TranscriptItem]) -> Option<usize> {
@@ -36,77 +77,178 @@ pub(super) fn latest_user_message_index(items: &[TranscriptItem]) -> Option<usiz
     })
 }
 
-pub(super) fn candidate_from_item(
+pub(super) fn candidates_from_item(
     index: usize,
     item: &TranscriptItem,
+    zone: CandidateZone,
     min_candidate_tokens: usize,
-) -> Result<Candidate, Option<InputSlimmingSkip>> {
+) -> CandidateCollection {
     let TranscriptItem::ToolResult {
         tool_name, payload, ..
     } = item
     else {
-        return Err(None);
+        return CandidateCollection::default();
     };
 
     if tool_name == INPUT_RETRIEVE_TOOL_NAME {
-        return Err(Some(InputSlimmingSkip {
-            reason: InputSlimmingSkipReason::AlreadySlimmed,
-            tool_name: Some(tool_name.clone()),
-        }));
+        return CandidateCollection {
+            candidates: Vec::new(),
+            skips: vec![InputSlimmingSkip {
+                reason: InputSlimmingSkipReason::AlreadySlimmed,
+                tool_name: Some(tool_name.clone()),
+            }],
+        };
     }
 
-    let (text, success) = match payload {
-        ToolResultPayload::Text { output } => (output, None),
+    match payload {
+        ToolResultPayload::Text { output } => single_text_candidate(
+            index,
+            CandidateTarget::TextToolOutput,
+            zone,
+            tool_name,
+            output,
+            None,
+            min_candidate_tokens,
+        ),
         ToolResultPayload::Structured {
             content,
             content_items: None,
             success,
-        } => (content, *success),
+        } => single_text_candidate(
+            index,
+            CandidateTarget::StructuredContent,
+            zone,
+            tool_name,
+            content,
+            *success,
+            min_candidate_tokens,
+        ),
         ToolResultPayload::Structured {
-            content_items: Some(_),
+            content_items: Some(items),
+            success,
             ..
-        } => {
-            return Err(Some(InputSlimmingSkip {
-                reason: InputSlimmingSkipReason::StructuredContentItems,
-                tool_name: Some(tool_name.clone()),
-            }));
-        }
-    };
-
-    if text.contains(INPUT_SLIMMING_MARKER_PREFIX) {
-        return Err(Some(InputSlimmingSkip {
-            reason: InputSlimmingSkipReason::AlreadySlimmed,
-            tool_name: Some(tool_name.clone()),
-        }));
+        } => content_item_candidates(
+            index,
+            zone,
+            tool_name,
+            items,
+            *success,
+            min_candidate_tokens,
+        ),
     }
-
-    let original_tokens = approx_token_count(text);
-    if original_tokens < min_candidate_tokens {
-        return Err(Some(InputSlimmingSkip {
-            reason: InputSlimmingSkipReason::BelowSizeFloor,
-            tool_name: Some(tool_name.clone()),
-        }));
-    }
-
-    Ok(Candidate {
-        index,
-        tool_name: tool_name.clone(),
-        text: text.clone(),
-        success,
-        original_tokens,
-    })
 }
 
-pub(super) fn skip_for_current_turn_item(item: &TranscriptItem) -> Option<InputSlimmingSkip> {
+fn single_text_candidate(
+    index: usize,
+    target: CandidateTarget,
+    zone: CandidateZone,
+    tool_name: &str,
+    text: &str,
+    success: Option<bool>,
+    min_candidate_tokens: usize,
+) -> CandidateCollection {
+    if text_contains_protected_marker(text) {
+        return CandidateCollection {
+            candidates: Vec::new(),
+            skips: vec![InputSlimmingSkip {
+                reason: InputSlimmingSkipReason::AlreadySlimmed,
+                tool_name: Some(tool_name.to_string()),
+            }],
+        };
+    }
+
+    let original_tokens_approx = approx_token_count(text);
+    if original_tokens_approx < min_candidate_tokens {
+        return CandidateCollection {
+            candidates: Vec::new(),
+            skips: vec![InputSlimmingSkip {
+                reason: InputSlimmingSkipReason::BelowSizeFloor,
+                tool_name: Some(tool_name.to_string()),
+            }],
+        };
+    }
+
+    CandidateCollection {
+        candidates: vec![Candidate {
+            index,
+            target,
+            zone,
+            tool_name: tool_name.to_string(),
+            text: text.to_string(),
+            success,
+            original_tokens_approx,
+        }],
+        skips: Vec::new(),
+    }
+}
+
+fn text_contains_protected_marker(text: &str) -> bool {
+    text.contains(INPUT_SLIMMING_MARKER_PREFIX)
+        || text.starts_with(
+            "Another language model started to solve this problem and produced a summary",
+        )
+        || text.starts_with("A proposed plan from before compaction is preserved below.")
+        || text.starts_with(
+            "Runtime note: the active programmer goal references a user-provided proposed plan",
+        )
+        || text.starts_with("The active programmer goal references a proposed plan stored at:")
+        || text.starts_with("<skill>\n")
+        || text.starts_with("<skill source=\"compact_backfill\">\n")
+        || text.starts_with("# AGENTS.md instructions for ")
+}
+
+fn content_item_candidates(
+    index: usize,
+    zone: CandidateZone,
+    tool_name: &str,
+    items: &[ToolResultContentItem],
+    success: Option<bool>,
+    min_candidate_tokens: usize,
+) -> CandidateCollection {
+    let mut collection = CandidateCollection::default();
+    let mut saw_text = false;
+
+    for (item_index, item) in items.iter().enumerate() {
+        let ToolResultContentItem::InputText { text } = item else {
+            continue;
+        };
+        saw_text = true;
+        let mut item_collection = single_text_candidate(
+            index,
+            CandidateTarget::StructuredContentItem { item_index },
+            zone,
+            tool_name,
+            text,
+            success,
+            min_candidate_tokens,
+        );
+        collection
+            .candidates
+            .append(&mut item_collection.candidates);
+        collection.skips.append(&mut item_collection.skips);
+    }
+
+    if !saw_text {
+        collection.skips.push(InputSlimmingSkip {
+            reason: InputSlimmingSkipReason::StructuredContentItems,
+            tool_name: Some(tool_name.to_string()),
+        });
+    }
+
+    collection
+}
+
+pub(super) fn skip_for_current_user_item(item: &TranscriptItem) -> Option<InputSlimmingSkip> {
     match item {
-        TranscriptItem::ToolResult { tool_name, .. } => Some(InputSlimmingSkip {
+        TranscriptItem::Message { role, .. } if role == "user" => Some(InputSlimmingSkip {
             reason: InputSlimmingSkipReason::CurrentUserTurn,
-            tool_name: Some(tool_name.clone()),
+            tool_name: None,
         }),
         TranscriptItem::Message { .. }
         | TranscriptItem::Reasoning { .. }
         | TranscriptItem::HostedActivity { .. }
         | TranscriptItem::ToolCall { .. }
+        | TranscriptItem::ToolResult { .. }
         | TranscriptItem::Unknown { .. } => None,
     }
 }
@@ -137,7 +279,6 @@ pub(super) fn skip_for_protected_item(item: &TranscriptItem) -> Option<InputSlim
 mod tests {
     use super::*;
     use lha_llm::ContentItem;
-    use lha_llm::ToolResultContentItem;
     use pretty_assertions::assert_eq;
 
     fn user(text: &str) -> TranscriptItem {
@@ -183,40 +324,76 @@ mod tests {
         let text = "x".repeat(8_000);
         let item = tool_text("shell", &text);
 
-        let candidate = candidate_from_item(3, &item, 1).expect("candidate");
+        let collection = candidates_from_item(3, &item, CandidateZone::HistoricalToolOutput, 1);
 
         assert_eq!(
-            candidate,
-            Candidate {
+            collection.candidates,
+            vec![Candidate {
                 index: 3,
+                target: CandidateTarget::TextToolOutput,
+                zone: CandidateZone::HistoricalToolOutput,
                 tool_name: "shell".to_string(),
                 text,
                 success: None,
-                original_tokens: 2_000,
-            }
+                original_tokens_approx: 2_000,
+            }]
         );
+        assert_eq!(collection.skips, Vec::new());
     }
 
     #[test]
-    fn skips_structured_content_items() {
+    fn selects_structured_text_content_items() {
         let item = TranscriptItem::ToolResult {
             call_id: "call".to_string(),
             tool_name: "mcp".to_string(),
             payload: ToolResultPayload::Structured {
-                content: "long".repeat(3000),
-                content_items: Some(vec![ToolResultContentItem::InputText {
-                    text: "visible".to_string(),
+                content: "visible".to_string(),
+                content_items: Some(vec![
+                    ToolResultContentItem::InputText {
+                        text: "long".repeat(3000),
+                    },
+                    ToolResultContentItem::InputImage {
+                        image_url: "data:image/png;base64,abc".to_string(),
+                    },
+                ]),
+                success: Some(true),
+            },
+        };
+
+        let collection = candidates_from_item(0, &item, CandidateZone::LiveToolOutput, 1);
+
+        assert_eq!(collection.candidates.len(), 1);
+        assert_eq!(
+            collection.candidates[0].target,
+            CandidateTarget::StructuredContentItem { item_index: 0 }
+        );
+        assert_eq!(collection.candidates[0].zone, CandidateZone::LiveToolOutput);
+        assert_eq!(collection.skips, Vec::new());
+    }
+
+    #[test]
+    fn skips_structured_content_items_without_text() {
+        let item = TranscriptItem::ToolResult {
+            call_id: "call".to_string(),
+            tool_name: "mcp".to_string(),
+            payload: ToolResultPayload::Structured {
+                content: "image".to_string(),
+                content_items: Some(vec![ToolResultContentItem::InputImage {
+                    image_url: "data:image/png;base64,abc".to_string(),
                 }]),
                 success: Some(true),
             },
         };
 
+        let collection = candidates_from_item(0, &item, CandidateZone::HistoricalToolOutput, 1);
+
+        assert_eq!(collection.candidates, Vec::new());
         assert_eq!(
-            candidate_from_item(0, &item, 1),
-            Err(Some(InputSlimmingSkip {
+            collection.skips,
+            vec![InputSlimmingSkip {
                 reason: InputSlimmingSkipReason::StructuredContentItems,
                 tool_name: Some("mcp".to_string()),
-            }))
+            }]
         );
     }
 
@@ -224,13 +401,43 @@ mod tests {
     fn skips_existing_marker() {
         let item = tool_text("shell", "before <<lha-input:abcdef>> after");
 
+        let collection = candidates_from_item(0, &item, CandidateZone::HistoricalToolOutput, 1);
+
+        assert_eq!(collection.candidates, Vec::new());
         assert_eq!(
-            candidate_from_item(0, &item, 1),
-            Err(Some(InputSlimmingSkip {
+            collection.skips,
+            vec![InputSlimmingSkip {
                 reason: InputSlimmingSkipReason::AlreadySlimmed,
                 tool_name: Some("shell".to_string()),
-            }))
+            }]
         );
+    }
+
+    #[test]
+    fn skips_protected_runtime_markers() {
+        let protected = [
+            "Another language model started to solve this problem and produced a summary",
+            "A proposed plan from before compaction is preserved below.",
+            "Runtime note: the active programmer goal references a user-provided proposed plan",
+            "The active programmer goal references a proposed plan stored at:",
+            "<skill>\n<name>demo</name>",
+            "<skill source=\"compact_backfill\">\n<name>demo</name>",
+            "# AGENTS.md instructions for /tmp/project",
+        ];
+
+        for text in protected {
+            let item = tool_text("shell", &format!("{text}\n{}", "x".repeat(8_000)));
+            let collection = candidates_from_item(0, &item, CandidateZone::HistoricalToolOutput, 1);
+
+            assert_eq!(collection.candidates, Vec::new());
+            assert_eq!(
+                collection.skips,
+                vec![InputSlimmingSkip {
+                    reason: InputSlimmingSkipReason::AlreadySlimmed,
+                    tool_name: Some("shell".to_string()),
+                }]
+            );
+        }
     }
 
     #[test]
@@ -252,12 +459,12 @@ mod tests {
     }
 
     #[test]
-    fn current_turn_tool_results_are_reported_with_skip_reason() {
+    fn current_user_message_is_reported_with_skip_reason() {
         assert_eq!(
-            skip_for_current_turn_item(&tool_text("shell", "later")),
+            skip_for_current_user_item(&user("now")),
             Some(InputSlimmingSkip {
                 reason: InputSlimmingSkipReason::CurrentUserTurn,
-                tool_name: Some("shell".to_string()),
+                tool_name: None,
             })
         );
     }

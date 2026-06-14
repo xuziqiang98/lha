@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "InputSlimmingUpdatedNotification",
+  "type": "object",
+  "required": [
+    "inputSlimming",
+    "threadId",
+    "turnId"
+  ],
+  "properties": {
+    "inputSlimming": {
+      "$ref": "#/definitions/InputSlimmingStats"
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "turnId": {
+      "type": "string"
+    }
+  },
+  "definitions": {
+    "InputSlimmingStats": {
+      "type": "object",
+      "required": [
+        "last",
+        "total"
+      ],
+      "properties": {
+        "last": {
+          "$ref": "#/definitions/InputSlimmingTokenStats"
+        },
+        "total": {
+          "$ref": "#/definitions/InputSlimmingTokenStats"
+        }
+      }
+    },
+    "InputSlimmingTokenStats": {
+      "type": "object",
+      "required": [
+        "replacements",
+        "tokensAfter",
+        "tokensBefore",
+        "tokensSaved"
+      ],
+      "properties": {
+        "replacements": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tokensAfter": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tokensBefore": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tokensSaved": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    }
+  }
+}

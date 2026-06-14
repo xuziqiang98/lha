@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 use std::time::Duration;
 use std::time::Instant;
@@ -31,6 +33,7 @@ struct StoreInner {
 pub(crate) struct StoredInput {
     pub(crate) original: String,
     pub(crate) metadata: StoredInputMetadata,
+    pub(crate) retrieval_count: u64,
     created_at: Instant,
 }
 
@@ -39,12 +42,17 @@ pub(crate) struct StoredInputMetadata {
     pub(crate) strategy: InputSlimmingStrategy,
     pub(crate) tool_name: String,
     pub(crate) original_tokens: usize,
+    pub(crate) compressed_tokens: usize,
+    pub(crate) created_turn_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RetrieveResult {
     pub(crate) content: String,
     pub(crate) success: bool,
+    pub(crate) strategy: Option<InputSlimmingStrategy>,
+    pub(crate) tool_name: Option<String>,
+    pub(crate) query_matched: Option<bool>,
 }
 
 impl Default for InputSlimmingStore {
@@ -74,6 +82,7 @@ impl InputSlimmingStore {
             StoredInput {
                 original,
                 metadata,
+                retrieval_count: 0,
                 created_at: Instant::now(),
             },
         );
@@ -92,22 +101,44 @@ impl InputSlimmingStore {
     }
 
     pub(crate) async fn retrieve(&self, hash: &str, query: Option<&str>) -> RetrieveResult {
-        let Some(entry) = self.get(hash).await else {
+        let Some(entry) = self.get_for_retrieval(hash).await else {
             return RetrieveResult {
                 content: format!("Input Slimming store miss for hash `{hash}`."),
                 success: false,
+                strategy: None,
+                tool_name: None,
+                query_matched: query.map(|_| false),
             };
         };
 
-        let content = match query.map(str::trim).filter(|query| !query.is_empty()) {
-            Some(query) => retrieve_query(&entry.original, hash, query),
-            None => retrieve_full(&entry.original, hash),
+        let (content, query_matched) = match query.map(str::trim).filter(|query| !query.is_empty())
+        {
+            Some(query) => {
+                let query_result = retrieve_query(&entry, hash, query);
+                (query_result.content, Some(query_result.matched))
+            }
+            None => (retrieve_full(&entry, hash), None),
         };
 
         RetrieveResult {
             content,
             success: true,
+            strategy: Some(entry.metadata.strategy),
+            tool_name: Some(entry.metadata.tool_name),
+            query_matched,
         }
+    }
+
+    async fn get_for_retrieval(&self, hash: &str) -> Option<StoredInput> {
+        let mut guard = self.inner.lock().await;
+        let ttl = guard.ttl;
+        let entry = guard.entries.get_mut(hash)?;
+        if entry.created_at.elapsed() >= ttl {
+            guard.entries.pop(hash);
+            return None;
+        }
+        entry.retrieval_count = entry.retrieval_count.saturating_add(1);
+        Some(entry.clone())
     }
 }
 
@@ -117,24 +148,166 @@ pub(crate) fn hash_text(text: &str) -> String {
     hex[..24].to_string()
 }
 
-fn retrieve_full(original: &str, hash: &str) -> String {
+fn retrieve_full(entry: &StoredInput, hash: &str) -> String {
+    let header = metadata_header(entry, hash);
     let truncated = truncate_text(
-        original,
+        &entry.original,
         TruncationPolicy::Tokens(INPUT_RETRIEVE_MAX_TOKENS),
     );
-    if truncated == original {
-        format!("Original input for <<lha-input:{hash}>>:\n\n{original}")
+    if truncated == entry.original {
+        format!("{header}\n\n{}", entry.original)
     } else {
         format!(
-            "Original input for <<lha-input:{hash}>> was larger than the retrieval budget; returning a head/tail view.\n\n{truncated}"
+            "{header}\n\nOriginal input was larger than the retrieval budget; returning a head/tail view.\n\n{truncated}"
         )
     }
 }
 
-fn retrieve_query(original: &str, hash: &str, query: &str) -> String {
+struct QueryRetrieveResult {
+    content: String,
+    matched: bool,
+}
+
+fn retrieve_query(entry: &StoredInput, hash: &str, query: &str) -> QueryRetrieveResult {
+    if let Some(content) = retrieve_path_query(entry, hash, query) {
+        return QueryRetrieveResult {
+            content,
+            matched: true,
+        };
+    }
+    if let Some(content) = retrieve_section_query(entry, hash, query) {
+        return QueryRetrieveResult {
+            content,
+            matched: true,
+        };
+    }
+    retrieve_line_query(entry, hash, query)
+}
+
+fn metadata_header(entry: &StoredInput, hash: &str) -> String {
+    format!(
+        "Original input for <<lha-input:{hash}>>:\nstrategy={}\ntool_name={}\noriginal_tokens={}\ncompressed_tokens={}\ncreated_turn_id={}",
+        entry.metadata.strategy.as_str(),
+        entry.metadata.tool_name,
+        entry.metadata.original_tokens,
+        entry.metadata.compressed_tokens,
+        entry.metadata.created_turn_id
+    )
+}
+
+fn retrieve_path_query(entry: &StoredInput, hash: &str, query: &str) -> Option<String> {
     let query_lower = query.to_lowercase();
-    let lines: Vec<&str> = original.lines().collect();
-    let mut selected = std::collections::BTreeSet::new();
+    let lines: Vec<&str> = entry.original.lines().collect();
+    let mut grouped: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
+    for (idx, line) in lines.iter().enumerate() {
+        let Some(path) = path_line_prefix(line) else {
+            continue;
+        };
+        if line.to_lowercase().contains(&query_lower) || path.to_lowercase().contains(&query_lower)
+        {
+            let start = idx.saturating_sub(QUERY_CONTEXT_LINES);
+            let end = (idx + QUERY_CONTEXT_LINES + 1).min(lines.len());
+            grouped
+                .entry(path.to_string())
+                .or_default()
+                .extend(start..end);
+        }
+    }
+    if grouped.is_empty() {
+        return None;
+    }
+
+    let mut out = format!(
+        "{}\n\nPath-grouped matches for query `{query}`:\n",
+        metadata_header(entry, hash)
+    );
+    for (path, indices) in grouped {
+        out.push_str(&format!("\n# {path}\n"));
+        let mut last = None;
+        for idx in indices {
+            if let Some(prev) = last
+                && idx > prev + 1
+            {
+                out.push_str("...\n");
+            }
+            last = Some(idx);
+            out.push_str(&format!("{}:{}\n", idx + 1, lines[idx]));
+        }
+    }
+    Some(truncate_text(
+        &out,
+        TruncationPolicy::Tokens(INPUT_RETRIEVE_MAX_TOKENS),
+    ))
+}
+
+fn path_line_prefix(line: &str) -> Option<&str> {
+    let mut parts = line.splitn(3, ':');
+    let path = parts.next()?;
+    let line_number = parts.next()?;
+    if path.is_empty() || line_number.is_empty() || !line_number.chars().all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(path)
+}
+
+fn retrieve_section_query(entry: &StoredInput, hash: &str, query: &str) -> Option<String> {
+    let query_lower = query.to_lowercase();
+    let lines: Vec<&str> = entry.original.lines().collect();
+    let mut sections = Vec::new();
+    let mut start = 0usize;
+    let mut saw_heading = false;
+    for (idx, line) in lines.iter().enumerate() {
+        if line.starts_with('#') {
+            saw_heading = true;
+            if idx > start {
+                sections.push((start, idx));
+            }
+            start = idx;
+        }
+    }
+    if !saw_heading {
+        return None;
+    }
+    if start < lines.len() {
+        sections.push((start, lines.len()));
+    }
+
+    let mut selected = Vec::new();
+    for (start, end) in sections {
+        let section_text = lines[start..end].join("\n");
+        if section_text.to_lowercase().contains(&query_lower) {
+            selected.push((start, end.min(start + 80)));
+        }
+    }
+    if selected.is_empty() {
+        return None;
+    }
+
+    let mut out = format!(
+        "{}\n\nSection matches for query `{query}`:\n",
+        metadata_header(entry, hash)
+    );
+    for (start, end) in selected {
+        out.push_str("\n--- section ---\n");
+        for line in lines.iter().take(end).skip(start) {
+            out.push_str(line);
+            out.push('\n');
+        }
+        if end < lines.len() {
+            out.push_str("...\n");
+        }
+    }
+    Some(truncate_text(
+        &out,
+        TruncationPolicy::Tokens(INPUT_RETRIEVE_MAX_TOKENS),
+    ))
+}
+
+fn retrieve_line_query(entry: &StoredInput, hash: &str, query: &str) -> QueryRetrieveResult {
+    let query_lower = query.to_lowercase();
+    let lines: Vec<&str> = entry.original.lines().collect();
+    let mut selected = BTreeSet::new();
     for (idx, line) in lines.iter().enumerate() {
         if line.to_lowercase().contains(&query_lower) {
             let start = idx.saturating_sub(QUERY_CONTEXT_LINES);
@@ -144,12 +317,19 @@ fn retrieve_query(original: &str, hash: &str, query: &str) -> String {
     }
 
     if selected.is_empty() {
-        return format!(
-            "Input Slimming entry <<lha-input:{hash}>> exists, but query `{query}` did not match any lines."
-        );
+        return QueryRetrieveResult {
+            content: format!(
+                "{}\n\nInput Slimming entry <<lha-input:{hash}>> exists, but query `{query}` did not match any lines or sections.",
+                metadata_header(entry, hash)
+            ),
+            matched: false,
+        };
     }
 
-    let mut out = format!("Matches for query `{query}` in <<lha-input:{hash}>>:\n");
+    let mut out = format!(
+        "{}\n\nMatches for query `{query}` in <<lha-input:{hash}>>:\n",
+        metadata_header(entry, hash)
+    );
     let mut last = None;
     for idx in selected {
         if let Some(prev) = last
@@ -161,7 +341,10 @@ fn retrieve_query(original: &str, hash: &str, query: &str) -> String {
         out.push_str(&format!("{}:{}\n", idx + 1, lines[idx]));
     }
 
-    truncate_text(&out, TruncationPolicy::Tokens(INPUT_RETRIEVE_MAX_TOKENS))
+    QueryRetrieveResult {
+        content: truncate_text(&out, TruncationPolicy::Tokens(INPUT_RETRIEVE_MAX_TOKENS)),
+        matched: true,
+    }
 }
 
 #[cfg(test)]
@@ -175,6 +358,8 @@ mod tests {
             strategy: InputSlimmingStrategy::PlainTextHeadTail,
             tool_name: "shell".to_string(),
             original_tokens: 42,
+            compressed_tokens: 7,
+            created_turn_id: "turn-1".to_string(),
         }
     }
 
@@ -205,6 +390,22 @@ mod tests {
 
         assert_eq!(got.original, "alpha\nbeta");
         assert_eq!(got.metadata, metadata());
+        assert_eq!(got.retrieval_count, 0);
+    }
+
+    #[tokio::test]
+    async fn retrieval_increments_count_and_returns_metadata() {
+        let store = InputSlimmingStore::default();
+        let hash = store.put("alpha\nbeta".to_string(), metadata()).await;
+
+        let result = store.retrieve(&hash, None).await;
+        let got = store.get(&hash).await.expect("entry");
+
+        assert!(result.success);
+        assert!(result.content.contains("strategy=plain_text_head_tail"));
+        assert!(result.content.contains("tool_name=shell"));
+        assert!(result.content.contains("created_turn_id=turn-1"));
+        assert_eq!(got.retrieval_count, 1);
     }
 
     #[tokio::test]
@@ -216,6 +417,9 @@ mod tests {
         let hash = store.put("alpha".to_string(), metadata()).await;
 
         assert_eq!(store.get(&hash).await, None);
+        let result = store.retrieve(&hash, None).await;
+        assert!(!result.success);
+        assert!(result.content.contains(&hash));
     }
 
     #[tokio::test]
@@ -244,9 +448,43 @@ mod tests {
         let result = store.retrieve(&hash, Some("needle")).await;
 
         assert!(result.success);
+        assert_eq!(result.query_matched, Some(true));
         assert!(result.content.contains("3:needle"));
         assert!(result.content.contains("1:one"));
         assert!(result.content.contains("5:five"));
+    }
+
+    #[tokio::test]
+    async fn path_query_retrieval_groups_matches() {
+        let store = InputSlimmingStore::default();
+        let hash = store
+            .put(
+                "src/main.rs:10:alpha\nsrc/main.rs:20:needle\nsrc/lib.rs:3:needle".to_string(),
+                metadata(),
+            )
+            .await;
+
+        let result = store.retrieve(&hash, Some("src/main.rs")).await;
+
+        assert!(result.success);
+        assert!(result.content.contains("Path-grouped matches"));
+        assert!(result.content.contains("# src/main.rs"));
+        assert!(result.content.contains("src/main.rs:20:needle"));
+    }
+
+    #[tokio::test]
+    async fn section_query_retrieval_returns_section() {
+        let store = InputSlimmingStore::default();
+        let hash = store
+            .put("# Alpha\none\n# Beta\nneedle\nmore".to_string(), metadata())
+            .await;
+
+        let result = store.retrieve(&hash, Some("needle")).await;
+
+        assert!(result.success);
+        assert!(result.content.contains("Section matches"));
+        assert!(result.content.contains("# Beta"));
+        assert!(result.content.contains("needle"));
     }
 
     #[tokio::test]
@@ -257,33 +495,33 @@ mod tests {
         let result = store.retrieve(&hash, Some("missing")).await;
 
         assert!(result.success);
-        assert!(result.content.contains("did not match"));
+        assert_eq!(result.query_matched, Some(false));
+        assert!(
+            result
+                .content
+                .contains("did not match any lines or sections")
+        );
     }
 
     #[tokio::test]
     async fn missing_hash_returns_failure() {
         let store = InputSlimmingStore::default();
 
-        let result = store.retrieve("abc123", None).await;
+        let result = store.retrieve("missing", None).await;
 
-        assert_eq!(
-            result,
-            RetrieveResult {
-                content: "Input Slimming store miss for hash `abc123`.".to_string(),
-                success: false,
-            }
-        );
+        assert!(!result.success);
+        assert!(result.content.contains("missing"));
     }
 
     #[tokio::test]
     async fn large_retrieval_is_truncated_to_budget() {
         let store = InputSlimmingStore::default();
-        let hash = store.put("x".repeat(100_000), metadata()).await;
+        let hash = store.put("abcdef".repeat(100_000), metadata()).await;
 
         let result = store.retrieve(&hash, None).await;
 
         assert!(result.success);
         assert!(result.content.contains("larger than the retrieval budget"));
-        assert!(result.content.len() < 100_000);
+        assert!(result.content.contains("truncated"));
     }
 }

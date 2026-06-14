@@ -7,6 +7,7 @@ use crate::product::agent::protocol::EventMsg;
 use crate::product::agent::protocol::ExecApprovalRequestEvent;
 use crate::product::agent::protocol::ExecCommandEndEvent;
 use crate::product::agent::protocol::FileChange as CoreFileChange;
+use crate::product::agent::protocol::InputSlimmingEvent;
 use crate::product::agent::protocol::McpToolCallBeginEvent;
 use crate::product::agent::protocol::McpToolCallEndEvent;
 use crate::product::agent::protocol::Op;
@@ -48,6 +49,8 @@ use crate::product::app_server_protocol::FileChangeOutputDeltaNotification;
 use crate::product::app_server_protocol::FileChangeRequestApprovalParams;
 use crate::product::app_server_protocol::FileChangeRequestApprovalResponse;
 use crate::product::app_server_protocol::FileUpdateChange;
+use crate::product::app_server_protocol::InputSlimmingStats;
+use crate::product::app_server_protocol::InputSlimmingUpdatedNotification;
 use crate::product::app_server_protocol::InterruptConversationResponse;
 use crate::product::app_server_protocol::ItemCompletedNotification;
 use crate::product::app_server_protocol::ItemStartedNotification;
@@ -470,6 +473,15 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::TokenCount(token_count_event) => {
             handle_token_count_event(conversation_id, event_turn_id, token_count_event, &outgoing)
                 .await;
+        }
+        EventMsg::InputSlimming(input_slimming_event) => {
+            handle_input_slimming_event(
+                conversation_id,
+                event_turn_id,
+                input_slimming_event,
+                &outgoing,
+            )
+            .await;
         }
         EventMsg::Error(ev) => {
             let message = ev.message.clone();
@@ -1175,6 +1187,22 @@ async fn handle_token_count_event(
             .send_server_notification(ServerNotification::ThreadTokenUsageUpdated(notification))
             .await;
     }
+}
+
+async fn handle_input_slimming_event(
+    conversation_id: ThreadId,
+    turn_id: String,
+    input_slimming_event: InputSlimmingEvent,
+    outgoing: &OutgoingMessageSender,
+) {
+    let notification = InputSlimmingUpdatedNotification {
+        thread_id: conversation_id.to_string(),
+        turn_id,
+        input_slimming: InputSlimmingStats::from(input_slimming_event),
+    };
+    outgoing
+        .send_server_notification(ServerNotification::InputSlimmingUpdated(notification))
+        .await;
 }
 
 async fn handle_error(
@@ -1920,6 +1948,57 @@ mod tests {
             rx.try_recv().is_err(),
             "no notifications should be emitted when token usage info is absent"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_input_slimming_event_emits_update() -> Result<()> {
+        let conversation_id = ThreadId::new();
+        let turn_id = "turn-789".to_string();
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+
+        handle_input_slimming_event(
+            conversation_id,
+            turn_id.clone(),
+            InputSlimmingEvent {
+                last: crate::product::agent::protocol::InputSlimmingTokenStats {
+                    tokens_before: 12_400,
+                    tokens_after: 4_100,
+                    tokens_saved: 8_300,
+                    replacements: 2,
+                },
+                total: crate::product::agent::protocol::InputSlimmingTokenStats {
+                    tokens_before: 27_800,
+                    tokens_after: 9_100,
+                    tokens_saved: 18_700,
+                    replacements: 5,
+                },
+            },
+            &outgoing,
+        )
+        .await;
+
+        let first = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("expected input slimming notification"))?;
+        match first {
+            OutgoingMessage::AppServerNotification(ServerNotification::InputSlimmingUpdated(
+                payload,
+            )) => {
+                assert_eq!(payload.thread_id, conversation_id.to_string());
+                assert_eq!(payload.turn_id, turn_id);
+                assert_eq!(payload.input_slimming.last.tokens_before, 12_400);
+                assert_eq!(payload.input_slimming.last.tokens_after, 4_100);
+                assert_eq!(payload.input_slimming.last.tokens_saved, 8_300);
+                assert_eq!(payload.input_slimming.last.replacements, 2);
+                assert_eq!(payload.input_slimming.total.tokens_saved, 18_700);
+                assert_eq!(payload.input_slimming.total.replacements, 5);
+            }
+            other => bail!("unexpected notification: {other:?}"),
+        }
+
         Ok(())
     }
 

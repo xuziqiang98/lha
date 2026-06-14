@@ -779,6 +779,9 @@ pub enum EventMsg {
     /// Optional means unknown — UIs should not display when `None`.
     TokenCount(TokenCountEvent),
 
+    /// Approximate request-shaping savings from input slimming.
+    InputSlimming(InputSlimmingEvent),
+
     /// Tiny TUI buddy companion reaction. This is UI-only and not part of the model transcript.
     BuddyReaction(BuddyReactionEvent),
 
@@ -1224,6 +1227,29 @@ impl TokenUsageInfo {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TokenCountEvent {
     pub info: Option<TokenUsageInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct InputSlimmingEvent {
+    pub last: InputSlimmingTokenStats,
+    pub total: InputSlimmingTokenStats,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct InputSlimmingTokenStats {
+    pub tokens_before: i64,
+    pub tokens_after: i64,
+    pub tokens_saved: i64,
+    pub replacements: i64,
+}
+
+impl InputSlimmingTokenStats {
+    pub fn add_assign(&mut self, other: &Self) {
+        self.tokens_before = self.tokens_before.saturating_add(other.tokens_before);
+        self.tokens_after = self.tokens_after.saturating_add(other.tokens_after);
+        self.tokens_saved = self.tokens_saved.saturating_add(other.tokens_saved);
+        self.replacements = self.replacements.saturating_add(other.replacements);
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

@@ -605,6 +605,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::BuddyReaction(_)
             | EventMsg::ExecApprovalRequest(_)
             | EventMsg::ApplyPatchApprovalRequest(_)
+            | EventMsg::InputSlimming(_)
             | EventMsg::TerminalInteraction(_)
             | EventMsg::ExecCommandOutputDelta(_)
             | EventMsg::GetHistoryEntryResponse(_)

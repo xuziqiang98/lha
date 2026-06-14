@@ -742,6 +742,31 @@
           "title": "TokenCountEventMsg"
         },
         {
+          "description": "Approximate request-shaping savings from input slimming.",
+          "type": "object",
+          "required": [
+            "last",
+            "total",
+            "type"
+          ],
+          "properties": {
+            "last": {
+              "$ref": "#/definitions/InputSlimmingTokenStats"
+            },
+            "total": {
+              "$ref": "#/definitions/InputSlimmingTokenStats"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "input_slimming"
+              ],
+              "title": "InputSlimmingEventMsgType"
+            }
+          },
+          "title": "InputSlimmingEventMsg"
+        },
+        {
           "description": "Tiny TUI buddy companion reaction. This is UI-only and not part of the model transcript.",
           "type": "object",
           "required": [
@@ -2868,6 +2893,33 @@
         },
         "type": {
           "type": "string"
+        }
+      }
+    },
+    "InputSlimmingTokenStats": {
+      "type": "object",
+      "required": [
+        "replacements",
+        "tokens_after",
+        "tokens_before",
+        "tokens_saved"
+      ],
+      "properties": {
+        "replacements": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tokens_after": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tokens_before": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tokens_saved": {
+          "type": "integer",
+          "format": "int64"
         }
       }
     },

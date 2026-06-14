@@ -56,6 +56,7 @@ use crate::product::agent::protocol::ExecCommandEndEvent;
 use crate::product::agent::protocol::ExecCommandOutputDeltaEvent;
 use crate::product::agent::protocol::ExecCommandSource;
 use crate::product::agent::protocol::ExitedReviewModeEvent;
+use crate::product::agent::protocol::InputSlimmingEvent;
 use crate::product::agent::protocol::ListCustomPromptsResponseEvent;
 use crate::product::agent::protocol::ListSkillsResponseEvent;
 use crate::product::agent::protocol::McpListToolsResponseEvent;
@@ -187,6 +188,7 @@ use crate::product::tui_app::mouse::MouseScrollState;
 use crate::product::tui_app::render::renderable::ColumnRenderable;
 use crate::product::tui_app::render::renderable::Renderable;
 use crate::product::tui_app::sidebar::AgentPanelEntry;
+use crate::product::tui_app::sidebar::InputSlimmingPanelSnapshot;
 use crate::product::tui_app::sidebar::McpPanelSnapshot;
 use crate::product::tui_app::sidebar::SIDEBAR_VISIBLE_FILES_LIMIT;
 use crate::product::tui_app::sidebar::SidebarSnapshot;
@@ -598,6 +600,7 @@ pub(crate) struct ChatWidget {
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
     context_compact_count: usize,
+    input_slimming: Option<InputSlimmingPanelSnapshot>,
     // Structured compactions are counted by item id so multiple compactions in the same turn
     // are all reflected in `/status`.
     counted_context_compaction_item_ids: HashSet<String>,
@@ -1246,6 +1249,7 @@ impl ChatWidget {
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
         self.context_compact_count = 0;
+        self.input_slimming = None;
         self.counted_context_compaction_item_ids.clear();
         self.pending_live_legacy_context_compactions.clear();
         self.pending_replay_legacy_context_compactions = 0;
@@ -1769,6 +1773,20 @@ impl ChatWidget {
                 self.token_info = None;
             }
         }
+    }
+
+    fn on_input_slimming(&mut self, event: InputSlimmingEvent) {
+        if event.last.tokens_saved <= 0 || event.last.replacements <= 0 {
+            return;
+        }
+
+        self.input_slimming = Some(InputSlimmingPanelSnapshot {
+            last_before_tokens: event.last.tokens_before,
+            last_after_tokens: event.last.tokens_after,
+            last_saved_tokens: event.last.tokens_saved,
+            total_saved_tokens: event.total.tokens_saved,
+        });
+        self.request_redraw();
     }
 
     fn apply_token_info(&mut self, info: TokenUsageInfo) {
@@ -2945,6 +2963,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             context_compact_count: 0,
+            input_slimming: None,
             counted_context_compaction_item_ids: HashSet::new(),
             pending_live_legacy_context_compactions: HashMap::new(),
             pending_replay_legacy_context_compactions: 0,
@@ -3123,6 +3142,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             context_compact_count: 0,
+            input_slimming: None,
             counted_context_compaction_item_ids: HashSet::new(),
             pending_live_legacy_context_compactions: HashMap::new(),
             pending_replay_legacy_context_compactions: 0,
@@ -4410,6 +4430,7 @@ impl ChatWidget {
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
             }
+            EventMsg::InputSlimming(ev) => self.on_input_slimming(ev),
             EventMsg::BuddyReaction(ev) => {
                 self.bottom_pane.set_buddy_reaction(ev.text);
             }
@@ -7185,6 +7206,7 @@ impl ChatWidget {
                 .token_info
                 .as_ref()
                 .and_then(|info| cache_hit_percent(&info.total_token_usage)),
+            input_slimming: self.input_slimming.clone(),
             context_compact_count: self.context_compact_count,
         });
 
