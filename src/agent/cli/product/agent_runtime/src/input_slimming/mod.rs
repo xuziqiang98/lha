@@ -19,6 +19,7 @@ use crate::product::agent::input_slimming::candidate::candidates_from_item;
 use crate::product::agent::input_slimming::candidate::latest_user_message_index;
 use crate::product::agent::input_slimming::candidate::skip_for_current_user_item;
 use crate::product::agent::input_slimming::candidate::skip_for_protected_item;
+use crate::product::agent::input_slimming::candidate::skip_for_recent_live_output_item;
 use crate::product::agent::input_slimming::metrics::emit_metrics;
 use crate::product::agent::input_slimming::strategy::StrategyOutput;
 use crate::product::agent::input_slimming::strategy::slim_text_for_tool;
@@ -145,6 +146,20 @@ impl InputSlimmer {
 
             let collection =
                 candidates_from_item(idx, item, zone, self.options.min_candidate_tokens);
+            if matches!(zone, CandidateZone::LiveToolOutput) {
+                if collection
+                    .skips
+                    .iter()
+                    .any(|skip| skip.reason == InputSlimmingSkipReason::AlreadySlimmed)
+                {
+                    metrics.skipped.extend(collection.skips);
+                    continue;
+                }
+                if let Some(skip) = skip_for_recent_live_output_item(item) {
+                    metrics.skipped.push(skip);
+                    continue;
+                }
+            }
             if collection.candidates.is_empty() {
                 if collection.skips.is_empty() {
                     if let Some(skip) = skip_for_protected_item(item) {
@@ -1365,7 +1380,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn live_tool_results_after_latest_user_message_are_candidates() {
+    async fn live_tool_results_after_latest_user_message_are_protected() {
         let text = "after user".repeat(5000);
         let request = request_with(vec![user("first"), tool_text("shell", text)]);
         let store = InputSlimmingStore::default();
@@ -1375,13 +1390,55 @@ mod tests {
             .await
             .expect("slimming succeeds");
 
-        assert_eq!(outcome.metrics.candidates, 1);
-        assert_eq!(outcome.metrics.slimmed, 1);
-        assert_eq!(outcome.metrics.refs[0].zone, CandidateZone::LiveToolOutput);
+        assert_eq!(outcome.request.conversation, request.conversation);
+        assert_eq!(outcome.metrics.candidates, 0);
+        assert_eq!(outcome.metrics.slimmed, 0);
+        assert_eq!(
+            outcome.metrics.skipped,
+            vec![
+                InputSlimmingSkip {
+                    reason: InputSlimmingSkipReason::CurrentUserTurn,
+                    tool_name: None,
+                },
+                InputSlimmingSkip {
+                    reason: InputSlimmingSkipReason::RecentAssistant,
+                    tool_name: Some("shell".to_string()),
+                },
+            ]
+        );
     }
 
     #[tokio::test]
-    async fn live_zone_safety_only_modifies_tool_result() {
+    async fn existing_marker_after_latest_user_keeps_already_slimmed_skip() {
+        let request = request_with(vec![
+            user("first"),
+            tool_text("shell", "before <<lha-input:abcdef>> after".to_string()),
+        ]);
+        let store = InputSlimmingStore::default();
+
+        let outcome = InputSlimmer::default()
+            .slim_request(&request, &store)
+            .await
+            .expect("slimming succeeds");
+
+        assert_eq!(outcome.request.conversation, request.conversation);
+        assert_eq!(
+            outcome.metrics.skipped,
+            vec![
+                InputSlimmingSkip {
+                    reason: InputSlimmingSkipReason::CurrentUserTurn,
+                    tool_name: None,
+                },
+                InputSlimmingSkip {
+                    reason: InputSlimmingSkipReason::AlreadySlimmed,
+                    tool_name: Some("shell".to_string()),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn live_zone_safety_preserves_recent_tool_result() {
         let request = request_with(vec![
             assistant("old assistant"),
             user("current prompt"),
@@ -1397,11 +1454,11 @@ mod tests {
             .await
             .expect("slimming succeeds");
 
-        assert_eq!(outcome.request.conversation[1], request.conversation[1]);
-        assert_eq!(outcome.request.conversation[2], request.conversation[2]);
-        assert_eq!(outcome.request.conversation[3], request.conversation[3]);
-        assert_eq!(outcome.request.conversation[4], request.conversation[4]);
-        assert_ne!(outcome.request.conversation[5], request.conversation[5]);
+        assert_eq!(outcome.request.conversation, request.conversation);
+        assert!(outcome.metrics.skipped.contains(&InputSlimmingSkip {
+            reason: InputSlimmingSkipReason::RecentAssistant,
+            tool_name: Some("shell".to_string()),
+        }));
     }
 
     #[tokio::test]

@@ -44,7 +44,7 @@ fn extract_input_slimming_hash(text: &str) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn input_slimming_slims_live_and_historical_tool_outputs() -> Result<()> {
+async fn input_slimming_protects_recent_then_slims_historical_tool_outputs() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -89,37 +89,51 @@ async fn input_slimming_slims_live_and_historical_tool_outputs() -> Result<()> {
 
     test.submit_turn_with_policy("make a large shell output", SandboxPolicy::DangerFullAccess)
         .await?;
-    let same_turn_slimming = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::InputSlimming(event) => Some(event.clone()),
-        _ => None,
-    })
-    .await;
-    assert!(same_turn_slimming.last.tokens_before > same_turn_slimming.last.tokens_after);
-    assert_eq!(
-        same_turn_slimming.last.tokens_saved,
-        same_turn_slimming
-            .last
-            .tokens_before
-            .saturating_sub(same_turn_slimming.last.tokens_after)
-    );
-    assert!(same_turn_slimming.last.replacements > 0);
-    assert_eq!(
-        same_turn_slimming.total.tokens_saved,
-        same_turn_slimming.last.tokens_saved
+
+    let no_same_turn_slimming_event =
+        tokio::time::timeout(std::time::Duration::from_millis(100), async {
+            wait_for_event_match(&test.codex, |event| match event {
+                EventMsg::InputSlimming(event) => Some(event.clone()),
+                _ => None,
+            })
+            .await
+        })
+        .await;
+    assert!(
+        no_same_turn_slimming_event.is_err(),
+        "recent live output should be protected from same-turn slimming"
     );
 
     let same_turn_body = same_turn_follow_up.single_request().body_json();
     let same_turn_text = body_text(&same_turn_body);
-    assert!(same_turn_text.contains("<<lha-input:"));
-    assert!(same_turn_text.contains("Input Slimming"));
+    assert!(same_turn_text.contains("old-tool-line-2500"));
+    assert!(!same_turn_text.contains("<<lha-input:"));
     assert!(
-        tool_identifiers(&same_turn_body)
+        !tool_identifiers(&same_turn_body)
             .iter()
             .any(|tool| tool == "lha_input_retrieve")
     );
-    assert!(!same_turn_text.contains("old-tool-line-2500"));
 
     test.submit_turn("now inspect the previous output").await?;
+    let historical_slimming = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::InputSlimming(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert!(historical_slimming.last.tokens_before > historical_slimming.last.tokens_after);
+    assert_eq!(
+        historical_slimming.last.tokens_saved,
+        historical_slimming
+            .last
+            .tokens_before
+            .saturating_sub(historical_slimming.last.tokens_after)
+    );
+    assert!(historical_slimming.last.replacements > 0);
+    assert_eq!(
+        historical_slimming.total.tokens_saved,
+        historical_slimming.last.tokens_saved
+    );
+
     let no_new_slimming_event =
         tokio::time::timeout(std::time::Duration::from_millis(100), async {
             wait_for_event_match(&test.codex, |event| match event {

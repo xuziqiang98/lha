@@ -33,8 +33,10 @@ input_slimming = true
 
 当前实现范围：
 
-- 压缩 latest user message 之前的 historical tool results，也压缩 latest user
-  message 之后的 live-zone tool results；
+- 压缩 latest user message 之前的 historical tool results；
+- latest user message 之后的 live-zone tool results 默认受 recent output protection
+  window 保护，不在同 turn follow-up request 中立即压缩；下一次用户 turn 后，这些
+  output 变为 historical tool results 后仍可被压缩；
 - 跳过 user/system/developer/assistant/reasoning/hosted activity；
 - 只压缩当前 request 内安全的 tool results，不改写当前用户输入、reasoning、
   hosted activity、tool call 或 assistant message；
@@ -453,15 +455,17 @@ fail-open 护栏。
 已实现：
 
 - `idx < latest_user_index` 的 tool results 标记为 historical candidates。
-- `idx > latest_user_index` 的 tool results 标记为 live-zone candidates。
+- `idx > latest_user_index` 的 tool results 受 recent output protection window 保护，
+  默认记录 `recent_assistant` skip，不进入压缩候选。
 - latest user message、assistant/reasoning/hosted activity/tool call 等非 tool-result
   items 保持保护。
 - 只改写 `TurnRequest` clone，rollout 和 `ContextManager` history 仍保留原文。
 
 仍需后续评估：
 
-- 更精细的 recent-output protection window，避免用户刚聚焦的 live output 被过早
-  压缩。
+- configurable N / high-pressure override：当前默认保护 latest user message 之后的
+  全部 live-zone tool results，后续如 telemetry 证明有必要，再评估在高 context
+  pressure 下放开部分 live output。
 
 ### Model-Aware Token Gate
 
@@ -544,10 +548,8 @@ fail-open 护栏。
 - shell/build/test、search、diff/apply_patch 等工具名有 product-private policy bias。
 - measure-only 模式会收集 candidate/gate/savings metrics，但不替换、不存储、不注入
   retrieval tool。
-
-仍 deferred：
-
-- recent output protection window。
+- recent output protection window 默认保护 latest user message 之后的 live-zone tool
+  results，避免刚产生、可能正在被模型分析的输出被同 turn 立即压缩。
 
 ### Observability And Eval
 
@@ -676,12 +678,13 @@ product-private：
 - Telemetry：saved、skipped、fail-open、retrieval metrics 会被记录。
 - Resume-safe retrieval：resume 后已有 `<<lha-input:...>>` marker 的原文可通过
   sidecar-hydrated store 取回；旧 marker 无 sidecar 时返回明确 miss，不阻断请求。
+- Recent output protection window：latest user message 之后的 live-zone tool results
+  同 turn 保留原文；下一次用户 turn 后成为 historical tool result 时可被压缩。
 
 待补测试场景：
 
 - Headroom parity fixtures 的系统性回归覆盖。
 - LHA built-in tool output before/after eval。
-- recent output protection window 的行为测试。
 
 ## Validation
 

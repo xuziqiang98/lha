@@ -286,6 +286,20 @@ pub(super) fn skip_for_current_user_item(item: &TranscriptItem) -> Option<InputS
     }
 }
 
+pub(super) fn skip_for_recent_live_output_item(item: &TranscriptItem) -> Option<InputSlimmingSkip> {
+    match item {
+        TranscriptItem::ToolResult { tool_name, .. } => Some(InputSlimmingSkip {
+            reason: InputSlimmingSkipReason::RecentAssistant,
+            tool_name: Some(tool_name.clone()),
+        }),
+        TranscriptItem::Message { .. }
+        | TranscriptItem::Reasoning { .. }
+        | TranscriptItem::HostedActivity { .. }
+        | TranscriptItem::ToolCall { .. }
+        | TranscriptItem::Unknown { .. } => None,
+    }
+}
+
 pub(super) fn skip_for_protected_item(item: &TranscriptItem) -> Option<InputSlimmingSkip> {
     match item {
         TranscriptItem::Message { role, .. } if role == "assistant" => Some(InputSlimmingSkip {
@@ -490,6 +504,23 @@ mod tests {
                 tool_name: None,
             })
         );
+    }
+
+    #[test]
+    fn skip_for_recent_live_output_item_marks_tool_result_recent() {
+        assert_eq!(
+            skip_for_recent_live_output_item(&tool_text("shell", "recent output")),
+            Some(InputSlimmingSkip {
+                reason: InputSlimmingSkipReason::RecentAssistant,
+                tool_name: Some("shell".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn skip_for_recent_live_output_item_ignores_non_tool_items() {
+        assert_eq!(skip_for_recent_live_output_item(&user("now")), None);
+        assert_eq!(skip_for_recent_live_output_item(&assistant("old")), None);
     }
 
     #[test]
