@@ -50,6 +50,12 @@ input_slimming = true
   seconds；
 - accepted replacements 会把原文和 metadata 写入 rollout sidecar item，用于 resume
   后恢复 session store；压缩后的 request clone 仍不写入 transcript history；
+- session-scoped replacement cache 会按原文 hash、tool、zone、策略版本和压缩参数复用
+  已生成的 slimmed replacement，避免跨 turn 对同一 tool output 重复执行压缩策略；
+- Sidebar `saved xxxK context` 表示当前 session 中已被 slimmed context 采用过的
+  tool-result occurrence 去重累计 saved，不是 provider billing / non-cached usage 的
+  反事实节约值；同一 occurrence 跨 turn 复用 replacement 不重复累计，compact 后也不重置
+  该 session 统计；
 - marker 格式为 `<<lha-input:{hash}>>`；
 - hash 使用 repo 已有的 `sha2::Sha256`，截断为 24 个 lowercase hex characters。
 

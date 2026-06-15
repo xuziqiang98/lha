@@ -2087,7 +2087,8 @@ async fn sidebar_status_tracks_input_slimming_savings() {
 
     let rendered = render_sidebar_snapshot(&snapshot);
     assert!(rendered.contains("slim 12.4K -> 4.1K"));
-    assert!(rendered.contains("saved 8.3K this / 18.7K total"));
+    assert!(rendered.contains("saved 18.7K context"));
+    assert!(!rendered.contains("this /"));
 
     chat.handle_codex_event(Event {
         id: "token-usage".into(),

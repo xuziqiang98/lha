@@ -13,6 +13,8 @@ use crate::product::agent::codex::SessionConfiguration;
 use crate::product::agent::context_manager::ContextManager;
 use crate::product::agent::dynamic_context_window::DynamicContextWindowKey;
 use crate::product::agent::dynamic_context_window::DynamicContextWindowState;
+use crate::product::agent::input_slimming::InputSlimmingContextStatCandidate;
+use crate::product::agent::input_slimming::InputSlimmingOccurrenceKey;
 use crate::product::agent::protocol::InputSlimmingTokenStats;
 use crate::product::agent::protocol::TokenUsage;
 use crate::product::agent::protocol::TokenUsageInfo;
@@ -43,6 +45,7 @@ pub(crate) struct SessionState {
     /// next seeded context has no preset identity.
     pub(crate) pending_identity_clear_from_history: bool,
     pub(crate) input_slimming_total: InputSlimmingTokenStats,
+    pub(crate) input_slimming_counted_occurrences: HashSet<InputSlimmingOccurrenceKey>,
 }
 
 impl SessionState {
@@ -63,6 +66,7 @@ impl SessionState {
             memory_citations_enabled: false,
             pending_identity_clear_from_history: false,
             input_slimming_total: InputSlimmingTokenStats::default(),
+            input_slimming_counted_occurrences: HashSet::new(),
         }
     }
 
@@ -133,12 +137,31 @@ impl SessionState {
         self.history.set_token_usage_full(context_window);
     }
 
-    pub(crate) fn record_input_slimming(
+    pub(crate) fn record_input_slimming_context(
         &mut self,
-        last: InputSlimmingTokenStats,
-    ) -> InputSlimmingTokenStats {
+        candidates: &[InputSlimmingContextStatCandidate],
+    ) -> Option<(InputSlimmingTokenStats, InputSlimmingTokenStats)> {
+        let mut last = InputSlimmingTokenStats::default();
+        for candidate in candidates {
+            if candidate.tokens_saved <= 0 {
+                continue;
+            }
+            if !self
+                .input_slimming_counted_occurrences
+                .insert(candidate.occurrence_key.clone())
+            {
+                continue;
+            }
+            last.tokens_before = last.tokens_before.saturating_add(candidate.tokens_before);
+            last.tokens_after = last.tokens_after.saturating_add(candidate.tokens_after);
+            last.tokens_saved = last.tokens_saved.saturating_add(candidate.tokens_saved);
+            last.replacements = last.replacements.saturating_add(1);
+        }
+        if last.tokens_saved <= 0 || last.replacements <= 0 {
+            return None;
+        }
         self.input_slimming_total.add_assign(&last);
-        self.input_slimming_total
+        Some((last, self.input_slimming_total))
     }
 
     pub(crate) fn get_total_token_usage(&self, server_reasoning_included: bool) -> i64 {

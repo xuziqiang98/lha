@@ -146,7 +146,9 @@ use crate::product::agent::input_slimming::INPUT_SLIMMING_MARKER_PREFIX;
 use crate::product::agent::input_slimming::InputRetrieveHandler;
 use crate::product::agent::input_slimming::InputSlimmer;
 use crate::product::agent::input_slimming::InputSlimmingContext;
+use crate::product::agent::input_slimming::InputSlimmingContextStatCandidate;
 use crate::product::agent::input_slimming::InputSlimmingMode;
+use crate::product::agent::input_slimming::InputSlimmingOccurrenceKey;
 use crate::product::agent::input_slimming::InputSlimmingPersistedEntry;
 use crate::product::agent::input_slimming::create_lha_input_retrieve_tool;
 use crate::product::agent::instructions::UserInstructions;
@@ -4096,15 +4098,13 @@ impl Session {
     pub(crate) async fn record_input_slimming(
         &self,
         turn_context: &TurnContext,
-        last: InputSlimmingTokenStats,
+        candidates: &[InputSlimmingContextStatCandidate],
     ) {
-        if last.tokens_saved <= 0 || last.replacements <= 0 {
-            return;
-        }
-
-        let total = {
+        let Some((last, total)) = ({
             let mut state = self.state.lock().await;
-            state.record_input_slimming(last)
+            state.record_input_slimming_context(candidates)
+        }) else {
+            return;
         };
         self.send_event(
             turn_context,
@@ -6146,8 +6146,11 @@ async fn run_sampling_request(
                     });
                 }
                 if outcome.metrics.approx_tokens_saved > 0 && outcome.metrics.slimmed > 0 {
-                    sess.record_input_slimming(turn_context.as_ref(), outcome.token_stats())
-                        .await;
+                    sess.record_input_slimming(
+                        turn_context.as_ref(),
+                        outcome.context_stats_candidates.as_slice(),
+                    )
+                    .await;
                     sess.persist_input_slimming_entries(std::mem::take(
                         &mut outcome.persisted_entries,
                     ))
@@ -8972,12 +8975,12 @@ mod tests {
 
         sess.record_input_slimming(
             tc.as_ref(),
-            InputSlimmingTokenStats {
+            &[InputSlimmingContextStatCandidate {
+                occurrence_key: input_slimming_occurrence("call-1"),
                 tokens_before: 1_000,
                 tokens_after: 1_000,
                 tokens_saved: 0,
-                replacements: 1,
-            },
+            }],
         )
         .await;
 
@@ -8993,22 +8996,38 @@ mod tests {
 
         sess.record_input_slimming(
             tc.as_ref(),
-            InputSlimmingTokenStats {
-                tokens_before: 12_400,
-                tokens_after: 4_100,
-                tokens_saved: 8_300,
-                replacements: 2,
-            },
+            &[
+                InputSlimmingContextStatCandidate {
+                    occurrence_key: input_slimming_occurrence("call-1"),
+                    tokens_before: 7_400,
+                    tokens_after: 2_100,
+                    tokens_saved: 5_300,
+                },
+                InputSlimmingContextStatCandidate {
+                    occurrence_key: input_slimming_occurrence("call-2"),
+                    tokens_before: 5_000,
+                    tokens_after: 2_000,
+                    tokens_saved: 3_000,
+                },
+            ],
         )
         .await;
         sess.record_input_slimming(
             tc.as_ref(),
-            InputSlimmingTokenStats {
-                tokens_before: 15_400,
-                tokens_after: 5_000,
-                tokens_saved: 10_400,
-                replacements: 3,
-            },
+            &[
+                InputSlimmingContextStatCandidate {
+                    occurrence_key: input_slimming_occurrence("call-2"),
+                    tokens_before: 5_000,
+                    tokens_after: 2_000,
+                    tokens_saved: 3_000,
+                },
+                InputSlimmingContextStatCandidate {
+                    occurrence_key: input_slimming_occurrence("call-3"),
+                    tokens_before: 15_400,
+                    tokens_after: 5_000,
+                    tokens_saved: 10_400,
+                },
+            ],
         )
         .await;
 
@@ -9031,7 +9050,7 @@ mod tests {
                 tokens_before: 15_400,
                 tokens_after: 5_000,
                 tokens_saved: 10_400,
-                replacements: 3,
+                replacements: 1,
             }
         );
         assert_eq!(
@@ -9040,9 +9059,102 @@ mod tests {
                 tokens_before: 27_800,
                 tokens_after: 9_100,
                 tokens_saved: 18_700,
-                replacements: 5,
+                replacements: 3,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn record_input_slimming_counts_same_hash_different_occurrences() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        sess.record_input_slimming(
+            tc.as_ref(),
+            &[
+                InputSlimmingContextStatCandidate {
+                    occurrence_key: input_slimming_occurrence_with_hash("call-1", "same-hash"),
+                    tokens_before: 1_000,
+                    tokens_after: 250,
+                    tokens_saved: 750,
+                },
+                InputSlimmingContextStatCandidate {
+                    occurrence_key: input_slimming_occurrence_with_hash("call-2", "same-hash"),
+                    tokens_before: 1_000,
+                    tokens_after: 250,
+                    tokens_saved: 750,
+                },
+            ],
+        )
+        .await;
+
+        let event = wait_for_input_slimming(&rx).await;
+        assert_eq!(
+            event.total,
+            InputSlimmingTokenStats {
+                tokens_before: 2_000,
+                tokens_after: 500,
+                tokens_saved: 1_500,
+                replacements: 2,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn record_input_slimming_total_survives_token_usage_reset() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        sess.record_input_slimming(
+            tc.as_ref(),
+            &[InputSlimmingContextStatCandidate {
+                occurrence_key: input_slimming_occurrence("call-1"),
+                tokens_before: 1_000,
+                tokens_after: 250,
+                tokens_saved: 750,
+            }],
+        )
+        .await;
+        {
+            let mut state = sess.state.lock().await;
+            state.set_token_usage_full(128_000);
+        }
+        sess.record_input_slimming(
+            tc.as_ref(),
+            &[InputSlimmingContextStatCandidate {
+                occurrence_key: input_slimming_occurrence("call-2"),
+                tokens_before: 2_000,
+                tokens_after: 500,
+                tokens_saved: 1_500,
+            }],
+        )
+        .await;
+
+        let first = wait_for_input_slimming(&rx).await;
+        assert_eq!(first.total.tokens_saved, 750);
+        let second = wait_for_input_slimming(&rx).await;
+        assert_eq!(
+            second.total,
+            InputSlimmingTokenStats {
+                tokens_before: 3_000,
+                tokens_after: 750,
+                tokens_saved: 2_250,
+                replacements: 2,
+            }
+        );
+    }
+
+    fn input_slimming_occurrence(call_id: &str) -> InputSlimmingOccurrenceKey {
+        input_slimming_occurrence_with_hash(call_id, &format!("hash-{call_id}"))
+    }
+
+    fn input_slimming_occurrence_with_hash(
+        call_id: &str,
+        original_hash: &str,
+    ) -> InputSlimmingOccurrenceKey {
+        InputSlimmingOccurrenceKey {
+            call_id: call_id.to_string(),
+            target: "text_tool_output".to_string(),
+            original_hash: original_hash.to_string(),
+        }
     }
 
     async fn wait_for_thread_rollback_failed(rx: &async_channel::Receiver<Event>) -> ErrorEvent {

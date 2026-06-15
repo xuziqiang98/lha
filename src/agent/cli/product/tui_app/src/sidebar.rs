@@ -333,10 +333,8 @@ fn push_status(lines: &mut Vec<Line<'static>>, status: Option<&StatusPanelSnapsh
         ]));
         lines.push(Line::from(vec![
             "  saved ".dim(),
-            format_tokens_compact(input_slimming.last_saved_tokens).into(),
-            " this / ".dim(),
             format_tokens_compact(input_slimming.total_saved_tokens).into(),
-            " total".dim(),
+            " context".dim(),
         ]));
     }
     if context.context_compact_count > 0 {
@@ -520,7 +518,8 @@ mod tests {
         assert!(rendered.contains("total 45"));
         assert!(rendered.contains("cached 25%"));
         assert!(rendered.contains("slim 12.4K -> 4.1K"));
-        assert!(rendered.contains("saved 8.3K this / 18.7K total"));
+        assert!(rendered.contains("saved 18.7K context"));
+        assert!(!rendered.contains("this /"));
         assert!(rendered.contains("compact 1"));
         assert!(!rendered.contains("used"));
         assert!(!rendered.contains("tokens"));

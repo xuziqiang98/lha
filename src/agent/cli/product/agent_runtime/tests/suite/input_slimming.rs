@@ -120,22 +120,18 @@ async fn input_slimming_slims_live_and_historical_tool_outputs() -> Result<()> {
     assert!(!same_turn_text.contains("old-tool-line-2500"));
 
     test.submit_turn("now inspect the previous output").await?;
-    let second_turn_slimming = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::InputSlimming(event) => Some(event.clone()),
-        _ => None,
-    })
-    .await;
-    assert!(second_turn_slimming.last.tokens_saved > 0);
-    assert_eq!(
-        second_turn_slimming.total.tokens_saved,
-        same_turn_slimming
-            .total
-            .tokens_saved
-            .saturating_add(second_turn_slimming.last.tokens_saved)
-    );
-    assert_ne!(
-        second_turn_slimming.last.tokens_saved,
-        second_turn_slimming.total.tokens_saved
+    let no_new_slimming_event =
+        tokio::time::timeout(std::time::Duration::from_millis(100), async {
+            wait_for_event_match(&test.codex, |event| match event {
+                EventMsg::InputSlimming(event) => Some(event.clone()),
+                _ => None,
+            })
+            .await
+        })
+        .await;
+    assert!(
+        no_new_slimming_event.is_err(),
+        "reusing the same occurrence should not emit a second context saved event"
     );
 
     let second_turn_body = second_turn.single_request().body_json();

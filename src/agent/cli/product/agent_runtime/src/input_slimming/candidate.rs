@@ -13,6 +13,7 @@ pub(super) struct Candidate {
     pub(super) index: usize,
     pub(super) target: CandidateTarget,
     pub(super) zone: CandidateZone,
+    pub(super) call_id: String,
     pub(super) tool_name: String,
     pub(super) text: String,
     pub(super) success: Option<bool>,
@@ -45,7 +46,19 @@ pub(super) enum CandidateTarget {
     StructuredContentItem { item_index: usize },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+impl CandidateTarget {
+    pub(super) fn stable_key(self) -> String {
+        match self {
+            Self::TextToolOutput => "text_tool_output".to_string(),
+            Self::StructuredContent => "structured_content".to_string(),
+            Self::StructuredContentItem { item_index } => {
+                format!("structured_content_item:{item_index}")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum CandidateZone {
     HistoricalToolOutput,
     LiveToolOutput,
@@ -84,7 +97,9 @@ pub(super) fn candidates_from_item(
     min_candidate_tokens: usize,
 ) -> CandidateCollection {
     let TranscriptItem::ToolResult {
-        tool_name, payload, ..
+        call_id,
+        tool_name,
+        payload,
     } = item
     else {
         return CandidateCollection::default();
@@ -104,11 +119,14 @@ pub(super) fn candidates_from_item(
         ToolResultPayload::Text { output } => single_text_candidate(
             index,
             CandidateTarget::TextToolOutput,
-            zone,
-            tool_name,
+            CandidateSource {
+                zone,
+                call_id,
+                tool_name,
+                min_candidate_tokens,
+            },
             output,
             None,
-            min_candidate_tokens,
         ),
         ToolResultPayload::Structured {
             content,
@@ -117,11 +135,14 @@ pub(super) fn candidates_from_item(
         } => single_text_candidate(
             index,
             CandidateTarget::StructuredContent,
-            zone,
-            tool_name,
+            CandidateSource {
+                zone,
+                call_id,
+                tool_name,
+                min_candidate_tokens,
+            },
             content,
             *success,
-            min_candidate_tokens,
         ),
         ToolResultPayload::Structured {
             content_items: Some(items),
@@ -130,6 +151,7 @@ pub(super) fn candidates_from_item(
         } => content_item_candidates(
             index,
             zone,
+            call_id,
             tool_name,
             items,
             *success,
@@ -138,32 +160,38 @@ pub(super) fn candidates_from_item(
     }
 }
 
+#[derive(Clone, Copy)]
+struct CandidateSource<'a> {
+    zone: CandidateZone,
+    call_id: &'a str,
+    tool_name: &'a str,
+    min_candidate_tokens: usize,
+}
+
 fn single_text_candidate(
     index: usize,
     target: CandidateTarget,
-    zone: CandidateZone,
-    tool_name: &str,
+    source: CandidateSource<'_>,
     text: &str,
     success: Option<bool>,
-    min_candidate_tokens: usize,
 ) -> CandidateCollection {
     if text_contains_protected_marker(text) {
         return CandidateCollection {
             candidates: Vec::new(),
             skips: vec![InputSlimmingSkip {
                 reason: InputSlimmingSkipReason::AlreadySlimmed,
-                tool_name: Some(tool_name.to_string()),
+                tool_name: Some(source.tool_name.to_string()),
             }],
         };
     }
 
     let original_tokens_approx = approx_token_count(text);
-    if original_tokens_approx < min_candidate_tokens {
+    if original_tokens_approx < source.min_candidate_tokens {
         return CandidateCollection {
             candidates: Vec::new(),
             skips: vec![InputSlimmingSkip {
                 reason: InputSlimmingSkipReason::BelowSizeFloor,
-                tool_name: Some(tool_name.to_string()),
+                tool_name: Some(source.tool_name.to_string()),
             }],
         };
     }
@@ -172,8 +200,9 @@ fn single_text_candidate(
         candidates: vec![Candidate {
             index,
             target,
-            zone,
-            tool_name: tool_name.to_string(),
+            zone: source.zone,
+            call_id: source.call_id.to_string(),
+            tool_name: source.tool_name.to_string(),
             text: text.to_string(),
             success,
             original_tokens_approx,
@@ -200,6 +229,7 @@ fn text_contains_protected_marker(text: &str) -> bool {
 fn content_item_candidates(
     index: usize,
     zone: CandidateZone,
+    call_id: &str,
     tool_name: &str,
     items: &[ToolResultContentItem],
     success: Option<bool>,
@@ -216,11 +246,14 @@ fn content_item_candidates(
         let mut item_collection = single_text_candidate(
             index,
             CandidateTarget::StructuredContentItem { item_index },
-            zone,
-            tool_name,
+            CandidateSource {
+                zone,
+                call_id,
+                tool_name,
+                min_candidate_tokens,
+            },
             text,
             success,
-            min_candidate_tokens,
         );
         collection
             .candidates
@@ -332,6 +365,7 @@ mod tests {
                 index: 3,
                 target: CandidateTarget::TextToolOutput,
                 zone: CandidateZone::HistoricalToolOutput,
+                call_id: "call".to_string(),
                 tool_name: "shell".to_string(),
                 text,
                 success: None,

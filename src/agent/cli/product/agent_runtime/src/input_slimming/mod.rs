@@ -31,6 +31,8 @@ use crate::product::protocol::protocol::InputSlimmingStoredInputMetadata;
 pub(crate) use candidate::CandidateZone;
 pub(crate) use store::InputSlimmingStore;
 pub(crate) use store::InputSlimmingStoreError;
+use store::SlimmedReplacement;
+use store::SlimmedReplacementCacheKey;
 pub(crate) use store::StoredInputMetadata;
 use store::hash_text;
 pub(crate) use tool::INPUT_RETRIEVE_TOOL_NAME;
@@ -41,6 +43,7 @@ pub(crate) const INPUT_SLIMMING_MARKER_PREFIX: &str = "<<lha-input:";
 const INPUT_SLIMMING_MARKER_SUFFIX: &str = ">>";
 pub(crate) const DEFAULT_STORE_CAPACITY: usize = 1000;
 pub(crate) const DEFAULT_STORE_TTL_SECONDS: u64 = 300;
+const INPUT_SLIMMING_STRATEGY_VERSION: u32 = 1;
 
 type RequestTokenEstimator<'a> = dyn Fn(&TurnRequest) -> Option<usize> + Send + Sync + 'a;
 
@@ -113,6 +116,7 @@ impl InputSlimmer {
         let mut slimmed_request = request.clone();
         let mut metrics = InputSlimmingMetrics::default();
         let mut persisted_entries = Vec::new();
+        let mut context_stats_candidates = Vec::new();
 
         let Some(latest_user_index) = latest_user_message_index(&request.conversation) else {
             metrics.approx_tokens_after = metrics.approx_tokens_before;
@@ -121,6 +125,7 @@ impl InputSlimmer {
                 metrics,
                 context.mode,
                 persisted_entries,
+                context_stats_candidates,
             ));
         };
 
@@ -177,12 +182,26 @@ impl InputSlimmer {
                         {
                             metrics.token_gate_fallbacks += 1;
                         }
+                        if accepted.from_cache {
+                            metrics.cache_hits += 1;
+                        }
                         metrics.approx_tokens_after = metrics
                             .approx_tokens_after
                             .saturating_add(accepted.replacement_tokens_approx);
                         metrics.approx_tokens_saved = metrics
                             .approx_tokens_saved
                             .saturating_add(accepted.gate.tokens_saved);
+                        context_stats_candidates.push(InputSlimmingContextStatCandidate {
+                            occurrence_key: accepted.occurrence_key.clone(),
+                            tokens_before: usize_to_i64(accepted.reference.original_tokens),
+                            tokens_after: usize_to_i64(accepted.reference.compressed_tokens),
+                            tokens_saved: usize_to_i64(
+                                accepted
+                                    .reference
+                                    .original_tokens
+                                    .saturating_sub(accepted.reference.compressed_tokens),
+                            ),
+                        });
 
                         match context.mode {
                             InputSlimmingMode::Apply => {
@@ -224,6 +243,7 @@ impl InputSlimmer {
             metrics,
             context.mode,
             persisted_entries,
+            context_stats_candidates,
         ))
     }
 
@@ -240,6 +260,52 @@ impl InputSlimmer {
             candidate.zone,
         );
         let options = merge_options(self.options, options);
+        let hash = hash_text(candidate.text.as_str());
+        let occurrence_key = InputSlimmingOccurrenceKey {
+            call_id: candidate.call_id.clone(),
+            target: candidate.target.stable_key(),
+            original_hash: hash.clone(),
+        };
+        let cache_key = SlimmedReplacementCacheKey {
+            original_hash: hash.clone(),
+            tool_name: candidate.tool_name.clone(),
+            zone: candidate.zone,
+            success: candidate.success,
+            strategy_version: INPUT_SLIMMING_STRATEGY_VERSION,
+            min_candidate_tokens: options.min_candidate_tokens,
+            target_tokens: options.target_tokens,
+            min_saved_tokens: options.min_saved_tokens,
+        };
+        if context.mode == InputSlimmingMode::Apply
+            && let Some(cached) = context.store.get_slimmed_replacement(&cache_key).await
+        {
+            let gate = token_gate_decision(
+                current_request,
+                candidate,
+                &cached.replacement,
+                context.estimate_request_tokens,
+            );
+            if gate.tokens_after >= gate.tokens_before
+                || gate.tokens_saved < options.min_saved_tokens
+            {
+                return Err(RejectedSlimming {
+                    skip: candidate.skip(InputSlimmingSkipReason::NotTokenSaving),
+                    gate_method: Some(gate.method),
+                });
+            }
+            let persisted_entry =
+                ensure_persisted_entry(context, &hash, candidate, cached.metadata.clone()).await?;
+            return Ok(Some(AcceptedSlimming {
+                replacement: cached.replacement,
+                gate,
+                reference: cached.reference,
+                persisted_entry,
+                replacement_tokens_approx: cached.replacement_tokens_approx,
+                occurrence_key,
+                from_cache: true,
+            }));
+        }
+
         let Some(strategy_output) = slim_text_for_tool(
             candidate.text.as_str(),
             candidate.success,
@@ -258,7 +324,6 @@ impl InputSlimmer {
             return Err(candidate.reject(InputSlimmingSkipReason::FailedNonLogResult));
         }
 
-        let hash = hash_text(candidate.text.as_str());
         let replacement =
             build_replacement(candidate.original_tokens_approx, &hash, &strategy_output);
         let gate = token_gate_decision(
@@ -283,36 +348,40 @@ impl InputSlimmer {
             compressed_tokens: replacement_tokens_approx,
             created_turn_id: context.turn_id.to_string(),
         };
-        let persisted_entry = if context.mode == InputSlimmingMode::Apply {
-            let stored_hash = context
-                .store
-                .put(candidate.text.clone(), metadata.clone())
-                .await;
-            if stored_hash != hash {
-                return Err(candidate.reject(InputSlimmingSkipReason::RetrievalUnavailable));
-            }
-            Some(InputSlimmingPersistedEntry {
-                hash: hash.clone(),
-                original: candidate.text.clone(),
-                metadata,
-            })
-        } else {
-            None
+        let persisted_entry =
+            ensure_persisted_entry(context, &hash, candidate, metadata.clone()).await?;
+        let reference = InputSlimmingRef {
+            hash: hash.clone(),
+            strategy: strategy_output.strategy,
+            tool_name: candidate.tool_name.clone(),
+            original_tokens: candidate.original_tokens_approx,
+            compressed_tokens: replacement_tokens_approx,
+            zone: candidate.zone,
         };
+        if context.mode == InputSlimmingMode::Apply {
+            context
+                .store
+                .put_slimmed_replacement(
+                    cache_key,
+                    SlimmedReplacement {
+                        replacement: replacement.clone(),
+                        reference: reference.clone(),
+                        gate,
+                        metadata,
+                        replacement_tokens_approx,
+                    },
+                )
+                .await;
+        }
 
         Ok(Some(AcceptedSlimming {
             replacement,
             gate,
-            reference: InputSlimmingRef {
-                hash,
-                strategy: strategy_output.strategy,
-                tool_name: candidate.tool_name.clone(),
-                original_tokens: candidate.original_tokens_approx,
-                compressed_tokens: replacement_tokens_approx,
-                zone: candidate.zone,
-            },
+            reference,
             persisted_entry,
             replacement_tokens_approx,
+            occurrence_key,
+            from_cache: false,
         }))
     }
 
@@ -389,6 +458,7 @@ pub(crate) struct InputSlimmingOutcome {
     pub(crate) requires_retrieval_tool: bool,
     pub(crate) approx_tokens_saved: usize,
     pub(crate) persisted_entries: Vec<InputSlimmingPersistedEntry>,
+    pub(crate) context_stats_candidates: Vec<InputSlimmingContextStatCandidate>,
 }
 
 impl InputSlimmingOutcome {
@@ -397,6 +467,7 @@ impl InputSlimmingOutcome {
         metrics: InputSlimmingMetrics,
         mode: InputSlimmingMode,
         persisted_entries: Vec<InputSlimmingPersistedEntry>,
+        context_stats_candidates: Vec<InputSlimmingContextStatCandidate>,
     ) -> Self {
         let approx_tokens_saved = metrics.approx_tokens_saved;
         let requires_retrieval_tool = mode == InputSlimmingMode::Apply && metrics.slimmed > 0;
@@ -406,6 +477,7 @@ impl InputSlimmingOutcome {
             requires_retrieval_tool,
             approx_tokens_saved,
             persisted_entries,
+            context_stats_candidates,
         }
     }
 
@@ -417,6 +489,21 @@ impl InputSlimmingOutcome {
             replacements: usize_to_i64(self.metrics.slimmed),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct InputSlimmingOccurrenceKey {
+    pub(crate) call_id: String,
+    pub(crate) target: String,
+    pub(crate) original_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InputSlimmingContextStatCandidate {
+    pub(crate) occurrence_key: InputSlimmingOccurrenceKey,
+    pub(crate) tokens_before: i64,
+    pub(crate) tokens_after: i64,
+    pub(crate) tokens_saved: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -489,6 +576,7 @@ pub(crate) struct InputSlimmingMetrics {
     pub(crate) candidates: usize,
     pub(crate) slimmed: usize,
     pub(crate) measured_only: usize,
+    pub(crate) cache_hits: usize,
     pub(crate) skipped: Vec<InputSlimmingSkip>,
     pub(crate) refs: Vec<InputSlimmingRef>,
     pub(crate) approx_tokens_before: usize,
@@ -630,6 +718,8 @@ struct AcceptedSlimming {
     reference: InputSlimmingRef,
     persisted_entry: Option<InputSlimmingPersistedEntry>,
     replacement_tokens_approx: usize,
+    occurrence_key: InputSlimmingOccurrenceKey,
+    from_cache: bool,
 }
 
 struct RejectedSlimming {
@@ -646,6 +736,33 @@ fn build_replacement(before_tokens: usize, hash: &str, strategy_output: &Strateg
         INPUT_SLIMMING_MARKER_SUFFIX,
         strategy_output.body
     )
+}
+
+async fn ensure_persisted_entry(
+    context: &InputSlimmingContext<'_>,
+    hash: &str,
+    candidate: &Candidate,
+    metadata: StoredInputMetadata,
+) -> Result<Option<InputSlimmingPersistedEntry>, RejectedSlimming> {
+    if context.mode != InputSlimmingMode::Apply {
+        return Ok(None);
+    }
+
+    if context.store.get(hash).await.is_some() {
+        return Ok(None);
+    }
+
+    context
+        .store
+        .put_with_hash(hash.to_string(), candidate.text.clone(), metadata.clone())
+        .await
+        .map_err(|_| candidate.reject(InputSlimmingSkipReason::RetrievalUnavailable))?;
+
+    Ok(Some(InputSlimmingPersistedEntry {
+        hash: hash.to_string(),
+        original: candidate.text.clone(),
+        metadata,
+    }))
 }
 
 fn token_gate_decision(
@@ -912,6 +1029,94 @@ mod tests {
         };
         assert!(output.contains("<<lha-input:"));
         assert!(output.contains("plain_text_head_tail"));
+    }
+
+    #[tokio::test]
+    async fn reuses_cached_replacement_for_same_candidate_and_options() {
+        let request = request_with(vec![
+            tool_text("shell", "alpha ".repeat(5_000)),
+            user("next"),
+        ]);
+        let store = InputSlimmingStore::default();
+
+        let first = InputSlimmer::default()
+            .slim_request(&request, &store)
+            .await
+            .expect("first slimming succeeds");
+        let second = InputSlimmer::default()
+            .slim_request(&request, &store)
+            .await
+            .expect("second slimming succeeds");
+
+        assert_eq!(first.request.conversation, second.request.conversation);
+        assert_eq!(first.metrics.cache_hits, 0);
+        assert_eq!(second.metrics.cache_hits, 1);
+        assert_eq!(second.persisted_entries, Vec::new());
+        assert_eq!(
+            first.context_stats_candidates,
+            second.context_stats_candidates
+        );
+    }
+
+    #[tokio::test]
+    async fn different_options_do_not_reuse_cached_replacement() {
+        let request = request_with(vec![
+            tool_text("shell", "alpha ".repeat(5_000)),
+            user("next"),
+        ]);
+        let store = InputSlimmingStore::default();
+
+        let default_outcome = InputSlimmer::default()
+            .slim_request(&request, &store)
+            .await
+            .expect("default slimming succeeds");
+        let tighter_outcome = InputSlimmer::new(InputSlimmingOptions {
+            min_candidate_tokens: 1,
+            target_tokens: 256,
+            min_saved_tokens: 1,
+        })
+        .slim_request(&request, &store)
+        .await
+        .expect("tighter slimming succeeds");
+
+        assert_eq!(default_outcome.metrics.cache_hits, 0);
+        assert_eq!(tighter_outcome.metrics.cache_hits, 0);
+        assert_ne!(
+            default_outcome.request.conversation,
+            tighter_outcome.request.conversation
+        );
+    }
+
+    #[tokio::test]
+    async fn different_success_status_does_not_reuse_cached_replacement() {
+        let output = "alpha ".repeat(5_000);
+        let success_request =
+            request_with(vec![structured_tool(output.clone(), None), user("next")]);
+        let failed_request = request_with(vec![
+            TranscriptItem::ToolResult {
+                call_id: "call".to_string(),
+                tool_name: "shell".to_string(),
+                payload: ToolResultPayload::Structured {
+                    content: output,
+                    content_items: None,
+                    success: Some(false),
+                },
+            },
+            user("next"),
+        ]);
+        let store = InputSlimmingStore::default();
+
+        let success_outcome = InputSlimmer::default()
+            .slim_request(&success_request, &store)
+            .await
+            .expect("success slimming succeeds");
+        let failed_outcome = InputSlimmer::default()
+            .slim_request(&failed_request, &store)
+            .await
+            .expect("failed-result slimming succeeds");
+
+        assert_eq!(success_outcome.metrics.cache_hits, 0);
+        assert_eq!(failed_outcome.metrics.cache_hits, 0);
     }
 
     #[tokio::test]

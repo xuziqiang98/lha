@@ -12,7 +12,10 @@ use tokio::sync::Mutex;
 
 use crate::product::agent::input_slimming::DEFAULT_STORE_CAPACITY;
 use crate::product::agent::input_slimming::DEFAULT_STORE_TTL_SECONDS;
+use crate::product::agent::input_slimming::InputSlimmingRef;
 use crate::product::agent::input_slimming::InputSlimmingStrategy;
+use crate::product::agent::input_slimming::InputSlimmingTokenGateDecision;
+use crate::product::agent::input_slimming::candidate::CandidateZone;
 use crate::product::agent::truncate::TruncationPolicy;
 use crate::product::agent::truncate::truncate_text;
 
@@ -27,6 +30,7 @@ pub(crate) struct InputSlimmingStore {
 #[derive(Debug)]
 struct StoreInner {
     entries: LruCache<String, StoredInput>,
+    slimmed_replacements: LruCache<SlimmedReplacementCacheKey, CachedSlimmedReplacement>,
     ttl: Duration,
 }
 
@@ -45,6 +49,33 @@ pub(crate) struct StoredInputMetadata {
     pub(crate) original_tokens: usize,
     pub(crate) compressed_tokens: usize,
     pub(crate) created_turn_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct SlimmedReplacementCacheKey {
+    pub(crate) original_hash: String,
+    pub(crate) tool_name: String,
+    pub(crate) zone: CandidateZone,
+    pub(crate) success: Option<bool>,
+    pub(crate) strategy_version: u32,
+    pub(crate) min_candidate_tokens: usize,
+    pub(crate) target_tokens: usize,
+    pub(crate) min_saved_tokens: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SlimmedReplacement {
+    pub(crate) replacement: String,
+    pub(crate) reference: InputSlimmingRef,
+    pub(crate) gate: InputSlimmingTokenGateDecision,
+    pub(crate) metadata: StoredInputMetadata,
+    pub(crate) replacement_tokens_approx: usize,
+}
+
+#[derive(Debug, Clone)]
+struct CachedSlimmedReplacement {
+    replacement: SlimmedReplacement,
+    created_at: Instant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +121,7 @@ impl InputSlimmingStore {
         Self {
             inner: Mutex::new(StoreInner {
                 entries: LruCache::new(capacity),
+                slimmed_replacements: LruCache::new(capacity),
                 ttl,
             }),
         }
@@ -140,6 +172,35 @@ impl InputSlimmingStore {
             return None;
         }
         Some(entry)
+    }
+
+    pub(crate) async fn get_slimmed_replacement(
+        &self,
+        key: &SlimmedReplacementCacheKey,
+    ) -> Option<SlimmedReplacement> {
+        let mut guard = self.inner.lock().await;
+        let ttl = guard.ttl;
+        let entry = guard.slimmed_replacements.get(key).cloned()?;
+        if entry.created_at.elapsed() >= ttl {
+            guard.slimmed_replacements.pop(key);
+            return None;
+        }
+        Some(entry.replacement)
+    }
+
+    pub(crate) async fn put_slimmed_replacement(
+        &self,
+        key: SlimmedReplacementCacheKey,
+        replacement: SlimmedReplacement,
+    ) {
+        let mut guard = self.inner.lock().await;
+        guard.slimmed_replacements.put(
+            key,
+            CachedSlimmedReplacement {
+                replacement,
+                created_at: Instant::now(),
+            },
+        );
     }
 
     pub(crate) async fn retrieve(&self, hash: &str, query: Option<&str>) -> RetrieveResult {
