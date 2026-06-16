@@ -98,12 +98,16 @@ use crate::product::tui_app::tui::FrameRequester;
 use crate::product::utils_absolute_path::AbsolutePathBuf;
 use crate::product::utils_sleep_inhibitor::SleepInhibitor;
 use assert_matches::assert_matches;
+use crossterm::cursor::MoveTo;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use crossterm::event::MouseButton;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
+use crossterm::style::Print;
+use crossterm::terminal::Clear;
+use crossterm::terminal::ClearType;
 use dirs::home_dir;
 use insta::assert_snapshot;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
@@ -111,6 +115,7 @@ use pretty_assertions::assert_eq;
 #[cfg(target_os = "windows")]
 use serial_test::serial;
 use std::collections::HashSet;
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 use tempfile::NamedTempFile;
@@ -2837,13 +2842,21 @@ pub(crate) async fn make_chatwidget_manual_with_sender() -> (
     (widget, app_event_tx, rx, op_rx)
 }
 
-fn into_insert_history_cell(event: AppEvent) -> Option<Box<dyn HistoryCell>> {
+fn into_insert_history_cell_with_viewport_repaint(
+    event: AppEvent,
+) -> Option<(Box<dyn HistoryCell>, bool)> {
     match event {
         AppEvent::InsertHistoryCell(cell) | AppEvent::InsertThreadHistoryCell { cell, .. } => {
-            Some(cell)
+            Some((cell, false))
         }
+        AppEvent::InsertHistoryCellWithViewportRepaint(cell)
+        | AppEvent::InsertThreadHistoryCellWithViewportRepaint { cell, .. } => Some((cell, true)),
         _ => None,
     }
+}
+
+fn into_insert_history_cell(event: AppEvent) -> Option<Box<dyn HistoryCell>> {
+    into_insert_history_cell_with_viewport_repaint(event).map(|(cell, _)| cell)
 }
 
 fn drain_insert_history(
@@ -2962,6 +2975,30 @@ fn render_chat_to_vt100_screen(
         .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
         .expect("draw chat widget");
     terminal.backend().vt100().screen().contents()
+}
+
+fn corrupt_vt100_row(
+    terminal: &mut crate::product::tui_app::custom_terminal::Terminal<VT100Backend>,
+    y: u16,
+    text: &str,
+) {
+    let backend = terminal.backend_mut();
+    crossterm::queue!(
+        backend,
+        MoveTo(0, y),
+        Clear(ClearType::UntilNewLine),
+        Print(text)
+    )
+    .expect("corrupt VT100 row");
+    backend.flush().expect("flush corrupted VT100 row");
+}
+
+fn screen_row_containing(contents: &str, needle: &str) -> u16 {
+    contents
+        .lines()
+        .position(|line| line.contains(needle))
+        .and_then(|row| u16::try_from(row).ok())
+        .unwrap_or_else(|| panic!("screen should contain {needle:?}: {contents:?}"))
 }
 
 fn buffer_to_string(buf: &Buffer) -> String {
@@ -10338,6 +10375,156 @@ async fn streamed_agent_message_preserves_feedback_commit_message_word_order() {
 
     let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
     assert_feedback_commit_message_word_order(&screen, "streamed committed VT100 screen");
+}
+
+#[tokio::test]
+async fn streamed_answer_finalize_requests_viewport_repaint_for_cjk_text() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.last_rendered_width.set(Some(120));
+
+    chat.handle_codex_event(Event {
+        id: "cjk-repaint-turn".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+
+    for delta in [
+        "我按工具输出理解：看到的",
+        "“大",
+        "工具输出”",
+        "细节已经保留。\n",
+    ] {
+        chat.handle_codex_event(Event {
+            id: "cjk-repaint-delta".into(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: delta.to_string(),
+            }),
+        });
+        chat.on_commit_tick();
+    }
+
+    chat.handle_codex_event(Event {
+        id: "cjk-repaint-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    let mut saw_committed_answer = false;
+    let mut saw_repaint_request = false;
+    for event in drain_events(&mut rx) {
+        if let Some((cell, repaint_viewport)) =
+            into_insert_history_cell_with_viewport_repaint(event)
+        {
+            let rendered = lines_to_single_string(&cell.display_lines(120));
+            if cell.as_any().is::<AgentMessageCell>() {
+                saw_committed_answer = true;
+                saw_repaint_request |= repaint_viewport;
+                assert!(
+                    rendered.contains("看到的“大工具输出”细节"),
+                    "committed answer should preserve CJK quote order: {rendered:?}"
+                );
+            }
+        }
+    }
+
+    assert!(
+        saw_committed_answer,
+        "expected streamed answer to flush into history"
+    );
+    assert!(
+        saw_repaint_request,
+        "expected streamed answer finalize to request viewport repaint"
+    );
+}
+
+#[tokio::test]
+async fn streamed_answer_viewport_repaint_repairs_cjk_vt100_screen_divergence() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let width = 120;
+    let height = 48;
+    chat.last_rendered_width.set(Some(usize::from(width)));
+    let mut terminal = crate::product::tui_app::custom_terminal::Terminal::with_options(
+        VT100Backend::new(width, height),
+    )
+    .expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+    chat.handle_codex_event(Event {
+        id: "cjk-vt100-turn".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            identity_kind: IdentityKind::Nobody,
+        }),
+    });
+
+    for delta in ["看到的", "“大", "工具输出”", "细节\n"] {
+        chat.handle_codex_event(Event {
+            id: "cjk-vt100-delta".into(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: delta.to_string(),
+            }),
+        });
+        chat.on_commit_tick();
+        let _ = render_chat_to_vt100_screen(&chat, &mut terminal);
+    }
+
+    let live_screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    let live_row = screen_row_containing(&live_screen, "看到的“大工具输出”细节");
+    corrupt_vt100_row(&mut terminal, live_row, "看到的工具输出”细“大节");
+    let corrupted_screen = terminal.backend().vt100().screen().contents();
+    assert!(
+        corrupted_screen.contains("看到的工具输出”细“大节"),
+        "test setup should corrupt streamed VT100 row: {corrupted_screen:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "cjk-vt100-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    let mut saw_committed_answer = false;
+    for event in drain_events(&mut rx) {
+        if let Some((cell, repaint_viewport)) =
+            into_insert_history_cell_with_viewport_repaint(event)
+        {
+            let rendered = lines_to_single_string(&cell.display_lines(width));
+            if cell.as_any().is::<AgentMessageCell>() {
+                saw_committed_answer = true;
+                assert!(
+                    repaint_viewport,
+                    "streamed final answer should request viewport repaint"
+                );
+                assert!(
+                    rendered.contains("看到的“大工具输出”细节"),
+                    "streamed committed cell should preserve CJK quote order: {rendered:?}"
+                );
+            }
+            let cell: Arc<dyn HistoryCell> = Arc::from(cell);
+            chat.insert_transcript_cell(cell);
+            if repaint_viewport {
+                terminal.invalidate_viewport();
+            }
+        }
+    }
+    assert!(
+        saw_committed_answer,
+        "expected streamed answer to flush into history"
+    );
+
+    let screen = render_chat_to_vt100_screen(&chat, &mut terminal);
+    assert!(
+        screen.contains("看到的“大工具输出”细节"),
+        "viewport repaint should restore correct CJK quote order: {screen:?}"
+    );
+    assert!(
+        !screen.contains("工具输出”细“大节"),
+        "viewport repaint kept stale CJK corruption: {screen:?}"
+    );
 }
 
 #[tokio::test]

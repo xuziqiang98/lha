@@ -973,14 +973,16 @@ impl ChatWidget {
         let updated = if let Some(cell) = self.active_answer_stream_cell_mut() {
             cell.show_all_markdown(source)
         } else {
-            self.add_boxed_history(Box::new(AgentMessageCell::new_markdown(source, true)));
+            self.add_boxed_history_with_viewport_repaint(Box::new(AgentMessageCell::new_markdown(
+                source, true,
+            )));
             return (true, None);
         };
 
         if updated {
             self.bump_active_cell_revision();
         }
-        self.flush_active_cell();
+        self.flush_active_cell_with_viewport_repaint();
         (true, None)
     }
 
@@ -4149,11 +4151,27 @@ impl ChatWidget {
         }
     }
 
+    fn flush_active_cell_with_viewport_repaint(&mut self) {
+        if let Some(active) = self.active_cell.take() {
+            self.needs_final_message_separator = true;
+            self.app_event_tx
+                .send_history_cell_with_viewport_repaint(active);
+        }
+    }
+
     pub(crate) fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
         self.add_boxed_history(Box::new(cell));
     }
 
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
+        self.add_boxed_history_impl(cell, false);
+    }
+
+    fn add_boxed_history_with_viewport_repaint(&mut self, cell: Box<dyn HistoryCell>) {
+        self.add_boxed_history_impl(cell, true);
+    }
+
+    fn add_boxed_history_impl(&mut self, cell: Box<dyn HistoryCell>, repaint_viewport: bool) {
         // Keep the placeholder session header as the active cell until real session info arrives,
         // so we can merge headers instead of committing a duplicate box to history.
         let keep_placeholder_header_active = !self.is_session_configured()
@@ -4167,7 +4185,12 @@ impl ChatWidget {
             self.flush_active_cell();
             self.needs_final_message_separator = true;
         }
-        self.app_event_tx.send_history_cell(cell);
+        if repaint_viewport {
+            self.app_event_tx
+                .send_history_cell_with_viewport_repaint(cell);
+        } else {
+            self.app_event_tx.send_history_cell(cell);
+        }
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {

@@ -809,6 +809,30 @@ impl App {
         }
     }
 
+    fn insert_history_cell_with_viewport_repaint(
+        &mut self,
+        cell: Box<dyn HistoryCell>,
+        tui: &mut tui::Tui,
+    ) {
+        let cell: Arc<dyn HistoryCell> = cell.into();
+        self.insert_history_cell_state(cell);
+        tui.terminal.invalidate_viewport();
+        tui.frame_requester().schedule_frame();
+    }
+
+    fn insert_history_cell_with_viewport_repaint_for_thread(
+        &mut self,
+        thread_id: ThreadId,
+        cell: Box<dyn HistoryCell>,
+        tui: &mut tui::Tui,
+    ) {
+        let cell: Arc<dyn HistoryCell> = cell.into();
+        if self.insert_history_cell_arc_for_thread(thread_id, cell) {
+            tui.terminal.invalidate_viewport();
+            tui.frame_requester().schedule_frame();
+        }
+    }
+
     fn insert_history_cell_arc_for_thread(
         &mut self,
         thread_id: ThreadId,
@@ -2827,6 +2851,12 @@ impl App {
             AppEvent::InsertHistoryCell(cell) => self.insert_history_cell(cell, tui),
             AppEvent::InsertThreadHistoryCell { thread_id, cell } => {
                 self.insert_history_cell_for_thread(thread_id, cell, tui)
+            }
+            AppEvent::InsertHistoryCellWithViewportRepaint(cell) => {
+                self.insert_history_cell_with_viewport_repaint(cell, tui)
+            }
+            AppEvent::InsertThreadHistoryCellWithViewportRepaint { thread_id, cell } => {
+                self.insert_history_cell_with_viewport_repaint_for_thread(thread_id, cell, tui)
             }
             AppEvent::StartCommitAnimation => {
                 if self

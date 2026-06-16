@@ -934,6 +934,61 @@ mod tests {
     }
 
     #[test]
+    fn invalidate_viewport_repairs_cjk_row_after_screen_buffer_divergence() {
+        let backend = crate::product::tui_app::test_backend::VT100Backend::new(120, 4);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 120, 4));
+
+        let correct = "看到的“大工具输出”细节";
+        let corrupted = "看到的工具输出”细“大节";
+
+        terminal
+            .draw(|frame| {
+                frame.buffer.set_string(0, 0, correct, Style::default());
+            })
+            .expect("draw correct frame");
+
+        corrupt_backend_row(&mut terminal, 0, corrupted);
+        let contents = terminal.backend().vt100().screen().contents();
+        assert!(
+            contents.contains(corrupted),
+            "test setup should corrupt CJK row: {contents:?}"
+        );
+
+        terminal
+            .draw(|frame| {
+                frame.buffer.set_string(0, 0, correct, Style::default());
+            })
+            .expect("draw unchanged frame");
+        let contents = terminal.backend().vt100().screen().contents();
+        assert!(
+            contents.contains(corrupted),
+            "unchanged buffer should not repair physical-screen divergence: {contents:?}"
+        );
+
+        terminal.invalidate_viewport();
+        terminal
+            .draw(|frame| {
+                frame.buffer.set_string(0, 0, correct, Style::default());
+            })
+            .expect("draw invalidated frame");
+
+        let contents = terminal.backend().vt100().screen().contents();
+        assert!(
+            contents.contains(correct),
+            "terminal should repaint stale CJK cells: {contents:?}"
+        );
+        assert!(
+            !contents.contains("工具输出”细“大节"),
+            "terminal kept stale CJK corruption: {contents:?}"
+        );
+        assert!(
+            !contents.contains("细“大节"),
+            "terminal kept stale CJK quote/order corruption: {contents:?}"
+        );
+    }
+
+    #[test]
     fn draw_preserves_cjk_ascii_order_after_wide_cells() {
         let mut backend = crate::product::tui_app::test_backend::VT100Backend::new(24, 1);
         let commands = vec![

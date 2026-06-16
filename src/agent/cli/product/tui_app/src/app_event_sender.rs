@@ -56,6 +56,19 @@ impl AppEventSender {
         self.send(event);
     }
 
+    pub(crate) fn send_history_cell_with_viewport_repaint(&self, cell: Box<dyn HistoryCell>) {
+        let event = if let Some(thread_id) = *self
+            .history_thread_id
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+        {
+            AppEvent::InsertThreadHistoryCellWithViewportRepaint { thread_id, cell }
+        } else {
+            AppEvent::InsertHistoryCellWithViewportRepaint(cell)
+        };
+        self.send(event);
+    }
+
     /// Send an event to the app event channel. If it fails, we swallow the
     /// error and log it.
     pub(crate) fn send(&self, event: AppEvent) {

@@ -133,6 +133,14 @@ pub(crate) enum AppEvent {
         thread_id: ThreadId,
         cell: Box<dyn HistoryCell>,
     },
+    /// Insert a history cell, then force the next terminal draw to repaint the
+    /// viewport. This is used when finalizing streamed text so the physical
+    /// terminal cannot keep stale cells from earlier live frames.
+    InsertHistoryCellWithViewportRepaint(Box<dyn HistoryCell>),
+    InsertThreadHistoryCellWithViewportRepaint {
+        thread_id: ThreadId,
+        cell: Box<dyn HistoryCell>,
+    },
 
     StartCommitAnimation,
     StopCommitAnimation,
