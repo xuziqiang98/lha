@@ -453,6 +453,14 @@ fn turn_request_contains_input_slimming_marker(request: &TurnRequest) -> bool {
         .any(transcript_item_contains_input_slimming_marker)
 }
 
+fn should_advertise_input_retrieve_tool(
+    input_slimming_activation: InputSlimmingActivation,
+    request_contains_marker: bool,
+) -> bool {
+    !matches!(input_slimming_activation, InputSlimmingActivation::Disabled)
+        && request_contains_marker
+}
+
 fn transcript_item_contains_input_slimming_marker(item: &TranscriptItem) -> bool {
     match item {
         TranscriptItem::Message { content, .. } => content
@@ -6210,9 +6218,10 @@ async fn run_sampling_request(
             }
         }
     }
-    if matches!(input_slimming_activation, InputSlimmingActivation::Scope(_))
-        && turn_request_contains_input_slimming_marker(&prompt)
-    {
+    if should_advertise_input_retrieve_tool(
+        input_slimming_activation,
+        turn_request_contains_input_slimming_marker(&prompt),
+    ) {
         ensure_input_retrieve_tool(&mut router);
         prompt.tools = router.specs();
     }
@@ -7401,6 +7410,26 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
+
+    #[test]
+    fn input_retrieve_tool_is_advertised_for_existing_markers_during_conflict() {
+        assert!(should_advertise_input_retrieve_tool(
+            InputSlimmingActivation::Scope(InputSlimmingScope::HistoricalToolOutputs),
+            true,
+        ));
+        assert!(should_advertise_input_retrieve_tool(
+            InputSlimmingActivation::Conflict,
+            true,
+        ));
+        assert!(!should_advertise_input_retrieve_tool(
+            InputSlimmingActivation::Disabled,
+            true,
+        ));
+        assert!(!should_advertise_input_retrieve_tool(
+            InputSlimmingActivation::Conflict,
+            false,
+        ));
+    }
 
     struct InstructionsTestCase {
         slug: &'static str,

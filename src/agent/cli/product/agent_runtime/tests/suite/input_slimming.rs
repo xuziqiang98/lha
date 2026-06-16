@@ -521,3 +521,145 @@ async fn input_slimming_conflict_warns_and_disables_slimming() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn input_slimming_conflict_keeps_retrieve_tool_for_existing_marker() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "conflict-existing-marker-output";
+    let command = "for i in $(seq 1 5000); do echo old-tool-line-$i; done";
+    let args = json!({
+        "command": command,
+        "timeout_ms": 5_000,
+    });
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "first turn done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+    let slimming_turn = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-2", "slimming turn done"),
+            ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
+        config.features.enable(Feature::InputSlimming);
+        config.tool_output_token_limit = Some(100_000);
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_policy("make a large shell output", SandboxPolicy::DangerFullAccess)
+        .await?;
+    test.submit_turn("now inspect the previous output").await?;
+
+    let historical_slimming = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::InputSlimming(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert!(historical_slimming.last.replacements > 0);
+
+    let slimming_body = slimming_turn.single_request().body_json();
+    let slimming_text = body_text(&slimming_body);
+    assert!(slimming_text.contains("<<lha-input:"));
+    assert!(
+        tool_identifiers(&slimming_body)
+            .iter()
+            .any(|tool| tool == "lha_input_retrieve")
+    );
+
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
+    let rollout = tokio::fs::read_to_string(&rollout_path).await?;
+    assert!(rollout.contains("old-tool-line-2500"));
+    assert!(rollout.contains("input_slimming_stored_input"));
+
+    let hash = extract_input_slimming_hash(&slimming_text);
+    let conflict_retrieve = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-4"),
+            ev_function_call(
+                "conflict-retrieve-call",
+                "lha_input_retrieve",
+                &serde_json::to_string(&json!({
+                    "hash": hash.clone(),
+                    "query": "old-tool-line-2500",
+                }))?,
+            ),
+            ev_completed("resp-4"),
+        ]),
+    )
+    .await;
+    let conflict_after_retrieve = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-3", "conflict retrieval worked"),
+            ev_completed("resp-5"),
+        ]),
+    )
+    .await;
+    let mut conflict_builder = test_codex().with_model("gpt-5.1").with_config(|config| {
+        config.features.enable(Feature::InputSlimming);
+        config.features.enable(Feature::InputSlimmingLiveZone);
+        config.tool_output_token_limit = Some(64);
+    });
+    let conflict_resumed = conflict_builder
+        .resume(&server, test.home.clone(), rollout_path)
+        .await?;
+
+    conflict_resumed
+        .submit_turn(&format!("retrieve marker <<lha-input:{hash}>>"))
+        .await?;
+
+    let warning = wait_for_event_match(&conflict_resumed.codex, |event| match event {
+        EventMsg::Warning(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(warning.message, INPUT_SLIMMING_CONFLICT_WARNING);
+    let no_slimming_event = tokio::time::timeout(std::time::Duration::from_millis(100), async {
+        wait_for_event_match(&conflict_resumed.codex, |event| match event {
+            EventMsg::InputSlimming(event) => Some(event.clone()),
+            _ => None,
+        })
+        .await
+    })
+    .await;
+    assert!(
+        no_slimming_event.is_err(),
+        "conflicting strategies should not create new input slimming replacements"
+    );
+
+    let conflict_body = conflict_retrieve.single_request().body_json();
+    let conflict_text = body_text(&conflict_body);
+    assert!(conflict_text.contains(&format!("<<lha-input:{hash}>>")));
+    assert!(
+        tool_identifiers(&conflict_body)
+            .iter()
+            .any(|tool| tool == "lha_input_retrieve")
+    );
+    let conflict_follow_up = conflict_after_retrieve.single_request().body_json();
+    let conflict_follow_up_text = body_text(&conflict_follow_up);
+    assert!(conflict_follow_up_text.contains("old-tool-line-2500"));
+    assert!(!conflict_follow_up_text.contains("store miss"));
+
+    Ok(())
+}
